@@ -1,0 +1,27 @@
+{
+  "name": "pi-stock-analysis",
+  "version": "0.1.0",
+  "description": "Pi Agent extension for stock analysis, screening, and strategy backtesting across A/HK/US markets",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": [
+      "./skills/stock-analysis/SKILL.md",
+      "./skills/stock-screener/SKILL.md",
+      "./skills/strategy-backtest/SKILL.md",
+      "./skills/bull-trend/SKILL.md",
+      "./skills/shrink-pullback/SKILL.md",
+      "./skills/ma-crossover/SKILL.md",
+      "./skills/volume-breakout/SKILL.md",
+      "./skills/bottom-volume/SKILL.md",
+      "./skills/dragon-head/SKILL.md",
+      "./skills/chan-theory/SKILL.md",
+      "./skills/wave-theory/SKILL.md",
+      "./skills/box-oscillation/SKILL.md",
+      "./skills/emotion-cycle/SKILL.md",
+      "./skills/one-yang-three-yin/SKILL.md"
+    ]
+  },
+  "keywords": ["pi-agent", "stock", "analysis", "backtest", "screener"],
+  "license": "MIT"
+}

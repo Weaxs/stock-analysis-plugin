@@ -1,0 +1,34 @@
+name: "MA Golden Cross"
+version: "1.0"
+description: "均线金叉策略 — MA5上穿MA20时买入，MA5下穿MA20时卖出"
+
+parameters:
+  fast_period: 5
+  slow_period: 20
+  stop_loss: -0.08
+  take_profit: 0.20
+
+entry:
+  conditions:
+    - indicator: "ma"
+      period: "{fast_period}"
+      operator: "cross_above"
+      value: 0
+    - indicator: "volume_ratio"
+      operator: ">"
+      value: 1.2
+  logic: "all"
+
+exit:
+  conditions:
+    - indicator: "ma"
+      period: "{fast_period}"
+      operator: "cross_below"
+      value: 0
+  logic: "any"
+  stop_loss: "{stop_loss}"
+  take_profit: "{take_profit}"
+
+position:
+  size: 1.0
+  max_positions: 1
