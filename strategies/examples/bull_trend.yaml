@@ -1,0 +1,42 @@
+name: "Bull Trend Following"
+version: "1.0"
+description: "趋势追踪策略 — 均线多头排列+MACD零轴上方时入场，趋势转弱时离场"
+
+parameters:
+  stop_loss: -0.08
+  take_profit: 0.30
+
+entry:
+  conditions:
+    - indicator: "ma_diff"
+      period: 510
+      operator: ">"
+      value: 0
+    - indicator: "ma_diff"
+      period: 1020
+      operator: ">"
+      value: 0
+    - indicator: "macd_dif"
+      operator: ">"
+      value: 0
+    - indicator: "volume_ratio"
+      operator: ">"
+      value: 0.8
+  logic: "all"
+
+exit:
+  conditions:
+    - indicator: "ma_diff"
+      period: 510
+      operator: "cross_below"
+      value: 0
+    - indicator: "macd_dif"
+      operator: "cross_below"
+      value: 0
+  logic: "any"
+  stop_loss: "{stop_loss}"
+  take_profit: "{take_profit}"
+
+position:
+  size: 1.0
+  max_positions: 1

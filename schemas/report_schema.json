@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StockAnalysisReport",
+  "description": "结构化股票分析报告格式",
+  "type": "object",
+  "properties": {
+    "stock_name": { "type": "string" },
+    "stock_code": { "type": "string" },
+    "analysis_date": { "type": "string", "format": "date" },
+    "sentiment_score": {
+      "type": "integer", "minimum": 0, "maximum": 100,
+      "description": "综合情绪分(0看空-100看多)"
+    },
+    "decision_type": {
+      "type": "string",
+      "enum": ["strong_buy", "buy", "hold", "sell", "strong_sell"]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low"]
+    },
+    "core_conclusion": {
+      "type": "object",
+      "properties": {
+        "one_sentence": { "type": "string", "description": "一句话核心结论" },
+        "signal_type": { "type": "string" },
+        "time_sensitivity": { "type": "string", "description": "时效性(当日/本周/中期)" },
+        "position_advice": {
+          "type": "object",
+          "properties": {
+            "no_position": { "type": "string", "description": "空仓者建议" },
+            "has_position": { "type": "string", "description": "持仓者建议" }
+          }
+        }
+      }
+    },
+    "market_environment": {
+      "type": "object",
+      "description": "当前市场环境（来自 detect_market_regime）",
+      "properties": {
+        "regime": { "type": "string" },
+        "regime_cn": { "type": "string" },
+        "confidence": { "type": "number" },
+        "recommended_skills": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "risk_screening": {
+      "type": "object",
+      "description": "风险筛查结果（来自 screen_risk）",
+      "properties": {
+        "risk_level": { "type": "string", "enum": ["low", "medium", "high"] },
+        "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "veto_buy": { "type": "boolean" },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": { "type": "string" },
+              "severity": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "data_perspective": {
+      "type": "object",
+      "properties": {
+        "trend_status": {
+          "type": "object",
+          "properties": {
+            "ma_alignment": { "type": "string" },
+            "is_bullish": { "type": "boolean" },
+            "trend_score": { "type": "number" }
+          }
+        },
+        "price_position": {
+          "type": "object",
+          "properties": {
+            "current_price": { "type": "number" },
+            "bias_ma5": { "type": "number" },
+            "support_level": { "type": "number" },
+            "resistance_level": { "type": "number" }
+          }
+        },
+        "volume_analysis": {
+          "type": "object",
+          "properties": {
+            "volume_ratio": { "type": "number" },
+            "volume_status": { "type": "string" },
+            "turnover_rate": { "type": "number" }
+          }
+        },
+        "chip_structure": {
+          "type": "object",
+          "properties": {
+            "profit_ratio": { "type": "number" },
+            "avg_cost": { "type": "number" },
+            "concentration": { "type": "number" }
+          }
+        }
+      }
+    },
+    "intelligence": {
+      "type": "object",
+      "properties": {
+        "latest_news": { "type": "string" },
+        "risk_alerts": { "type": "array", "items": { "type": "string" } },
+        "positive_catalysts": { "type": "array", "items": { "type": "string" } },
+        "sentiment_summary": { "type": "string" }
+      }
+    },
+    "battle_plan": {
+      "type": "object",
+      "properties": {
+        "ideal_buy": { "type": ["number", "string"] },
+        "secondary_buy": { "type": ["number", "string"] },
+        "stop_loss": { "type": ["number", "string"] },
+        "take_profit": { "type": ["number", "string"] },
+        "suggested_position": { "type": "string" },
+        "entry_plan": { "type": "string" },
+        "risk_control": { "type": "string" },
+        "action_checklist": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "risk_warning": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["stock_name", "stock_code", "analysis_date", "sentiment_score",
+                "decision_type", "confidence", "core_conclusion"]
+}

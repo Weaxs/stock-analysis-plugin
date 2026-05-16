@@ -1,0 +1,45 @@
+name: "Dragon Head Momentum"
+version: "1.0"
+description: "龙头股动量策略 — 涨幅>5%+放量>2.5倍+趋势向上时追击强势股"
+
+parameters:
+  min_change: 5.0
+  volume_threshold: 2.5
+  stop_loss: -0.06
+  take_profit: 0.25
+
+entry:
+  conditions:
+    - indicator: "price_change"
+      operator: ">"
+      value: "{min_change}"
+    - indicator: "volume_ratio"
+      period: 5
+      operator: ">"
+      value: "{volume_threshold}"
+    - indicator: "ma_diff"
+      period: 510
+      operator: ">"
+      value: 0
+  logic: "all"
+
+exit:
+  conditions:
+    - indicator: "price_change"
+      operator: "<"
+      value: -3.0
+    - indicator: "volume_ratio"
+      period: 5
+      operator: ">"
+      value: 3.0
+  logic: "any"
+  stop_loss: "{stop_loss}"
+  take_profit: "{take_profit}"
+
+simulation:
+  slippage: 0.002
+  commission: 0.0015
+
+position:
+  size: 0.5
+  max_positions: 1

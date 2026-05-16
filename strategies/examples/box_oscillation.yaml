@@ -1,0 +1,41 @@
+name: "Box Oscillation"
+version: "1.0"
+description: "箱体震荡策略 — 股价在布林带下轨附近且RSI超卖时买入，在上轨附近且RSI超买时卖出"
+
+parameters:
+  boll_buy: 0.15
+  boll_sell: 0.85
+  rsi_buy: 35
+  rsi_sell: 65
+  stop_loss: -0.05
+  take_profit: 0.12
+
+entry:
+  conditions:
+    - indicator: "bollinger_position"
+      period: 20
+      operator: "<"
+      value: "{boll_buy}"
+    - indicator: "rsi"
+      period: 14
+      operator: "<"
+      value: "{rsi_buy}"
+  logic: "all"
+
+exit:
+  conditions:
+    - indicator: "bollinger_position"
+      period: 20
+      operator: ">"
+      value: "{boll_sell}"
+    - indicator: "rsi"
+      period: 14
+      operator: ">"
+      value: "{rsi_sell}"
+  logic: "any"
+  stop_loss: "{stop_loss}"
+  take_profit: "{take_profit}"
+
+position:
+  size: 0.8
+  max_positions: 1

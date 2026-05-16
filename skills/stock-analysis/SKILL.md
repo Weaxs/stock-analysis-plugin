@@ -1,6 +1,6 @@
 ---
 name: stock-analysis
-description: 综合股票分析 — 技术面+基本面+资金面+消息面多维研判
+description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判
 ---
 
 # 综合股票分析
@@ -12,16 +12,22 @@ description: 综合股票分析 — 技术面+基本面+资金面+消息面多�
 ### 第一步：获取数据
 依次调用以下工具获取数据：
 
-1. **`get_quote`** — 获取实时行情（价格、涨跌幅、成交量等）
-2. **`get_kline`** — 获取日K线数据（默认60根）
-3. **`get_technical_analysis`** — 获取技术指标分析（MA/MACD/RSI/BOLL/KDJ）
-4. **`get_financials`** — 获取关键财务指标（PE/PB/ROE等）
-5. **`get_capital_flow`** — 获取资金流向（仅A股）
-6. **`get_news`** — 获取近期财经新闻
+1. **`detect_market_regime`** — 检测当前市场状态（趋势/震荡/高波动），获取策略推荐
+2. **`get_quote`** — 获取实时行情（价格、涨跌幅、成交量等）
+3. **`get_kline`** — 获取日K线数据（默认60根）
+4. **`get_technical_analysis`** — 获取技术指标分析（MA/MACD/RSI/BOLL/KDJ）
+5. **`get_financials`** — 获取关键财务指标（PE/PB/ROE等）
+6. **`get_capital_flow`** — 获取资金流向（仅A股）
+7. **`get_news`** — 获取近期财经新闻
+8. **`screen_risk`** — 风险专项筛查（估值/技术/解禁/减持/业绩/监管/行业7维度）
 
 ### 第二步：综合研判
 
 根据获取的数据进行多维度分析：
+
+**市场环境**：
+- 当前市场处于什么阶段（上涨/下跌/震荡/高波动）
+- 该阶段下哪些策略更适合，哪些应回避
 
 **技术面**：
 - 趋势判断：均线排列、MACD方向、布林带位置
@@ -41,12 +47,51 @@ description: 综合股票分析 — 技术面+基本面+资金面+消息面多�
 - 近期重要新闻和公告
 - 可能影响股价的事件
 
+**风险筛查**：
+- 7维度风险标记（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策）
+- 风险评级（low/medium/high）和一票否决（veto_buy）
+- 如果 veto_buy=true，必须在报告中醒目提示
+
 ### 第三步：输出研报
 
-输出格式：
+先输出结构化 JSON 数据块（用于程序化消费），再输出可读的 Markdown 报告。
+
+#### JSON 结构化数据
+
+用 `<analysis_json>` 标签包裹，格式参照 `schemas/report_schema.json`：
+
+```
+<analysis_json>
+{
+  "stock_name": "贵州茅台",
+  "stock_code": "600519",
+  "analysis_date": "2025-05-15",
+  "sentiment_score": 65,
+  "decision_type": "hold",
+  "confidence": "medium",
+  "core_conclusion": {
+    "one_sentence": "...",
+    "signal_type": "...",
+    "time_sensitivity": "本周",
+    "position_advice": { "no_position": "...", "has_position": "..." }
+  },
+  "market_environment": { "regime": "...", "regime_cn": "..." },
+  "risk_screening": { "risk_level": "...", "risk_score": 0, "veto_buy": false, "flags": [] },
+  "data_perspective": { ... },
+  "intelligence": { ... },
+  "battle_plan": { ... },
+  "risk_warning": ["..."]
+}
+</analysis_json>
+```
+
+#### Markdown 可读报告
 
 ```
 ## [股票名称]（[代码]）分析报告
+
+### 市场环境
+当前市场状态、推荐策略方向
 
 ### 行情概览
 当前价格、涨跌幅、成交量等关键数据
@@ -66,6 +111,11 @@ description: 综合股票分析 — 技术面+基本面+资金面+消息面多�
 ### 消息面
 - 要点：...
 
+### 风险筛查
+- 风险等级：[low/medium/high]
+- 风险标记：...
+- ⚠️ 一票否决：[如有]
+
 ### 综合研判
 - 短期观点：...
 - 中期观点：...
@@ -74,6 +124,7 @@ description: 综合股票分析 — 技术面+基本面+资金面+消息面多�
 ### 操作建议
 - 建议仓位：...
 - 关注价位：...
+- 作战计划：理想买点 / 止损位 / 止盈位
 ```
 
 ## 注意事项
@@ -81,3 +132,4 @@ description: 综合股票分析 — 技术面+基本面+资金面+消息面多�
 - 不做绝对化的涨跌预测
 - 建议用户结合自身风险偏好做决策
 - 如果某些数据获取失败，说明情况并基于可用数据分析
+- 如果风险筛查返回 veto_buy=true，必须醒目标注并建议谨慎

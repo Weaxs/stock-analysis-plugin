@@ -1,0 +1,47 @@
+name: "Bottom Volume Reversal"
+version: "1.0"
+description: "底部放量策略 — 超跌后RSI进入超卖区，突然放量反弹时买入"
+
+parameters:
+  rsi_period: 14
+  rsi_threshold: 35
+  volume_threshold: 2.0
+  stop_loss: -0.05
+  take_profit: 0.15
+
+entry:
+  conditions:
+    - indicator: "rsi"
+      period: "{rsi_period}"
+      operator: "<"
+      value: "{rsi_threshold}"
+    - indicator: "volume_ratio"
+      period: 5
+      operator: ">"
+      value: "{volume_threshold}"
+    - indicator: "price_change"
+      operator: ">"
+      value: 1.0
+    - indicator: "bollinger_position"
+      period: 20
+      operator: "<"
+      value: 0.25
+  logic: "all"
+
+exit:
+  conditions:
+    - indicator: "rsi"
+      period: "{rsi_period}"
+      operator: ">"
+      value: 65
+    - indicator: "bollinger_position"
+      period: 20
+      operator: ">"
+      value: 0.8
+  logic: "any"
+  stop_loss: "{stop_loss}"
+  take_profit: "{take_profit}"
+
+position:
+  size: 0.6
+  max_positions: 1

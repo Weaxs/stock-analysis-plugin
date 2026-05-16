@@ -23,8 +23,12 @@ node_modules/
 *.xlsx
 *.json
 !package.json
+!schemas/**/*.json
 !strategies/**/*.yaml
 
 # Env
 .env
 .env.local
+
+# MCP config (contains API keys)
+.mcp.json

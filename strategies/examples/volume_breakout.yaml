@@ -1,0 +1,42 @@
+name: "Volume Breakout"
+version: "1.0"
+description: "放量突破策略 — 股价突破20日高点且成交量放大2倍以上时买入"
+
+parameters:
+  breakout_period: 20
+  volume_threshold: 2.0
+  stop_loss: -0.06
+  take_profit: 0.20
+
+entry:
+  conditions:
+    - indicator: "bollinger_position"
+      period: 20
+      operator: ">"
+      value: 0.95
+    - indicator: "volume_ratio"
+      period: 5
+      operator: ">"
+      value: "{volume_threshold}"
+    - indicator: "price_change"
+      operator: ">"
+      value: 2.0
+  logic: "all"
+
+exit:
+  conditions:
+    - indicator: "ma_diff"
+      period: 510
+      operator: "cross_below"
+      value: 0
+    - indicator: "rsi"
+      period: 14
+      operator: ">"
+      value: 80
+  logic: "any"
+  stop_loss: "{stop_loss}"
+  take_profit: "{take_profit}"
+
+position:
+  size: 0.8
+  max_positions: 1

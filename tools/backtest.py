@@ -132,6 +132,31 @@ def compute_bollinger_position(close: pd.Series, period: int = 20) -> pd.Series:
     return ((close - lower) / width).fillna(0.5)
 
 
+def compute_ma_diff(close: pd.Series, period: int | None = None) -> pd.Series:
+    """Difference between two MAs. Period encodes both: e.g. 510 = MA5 - MA10, 1020 = MA10 - MA20."""
+    if period and period >= 100:
+        fast = period // 100
+        slow = period % 100
+        if slow == 0:
+            slow = fast * 4
+    else:
+        fast = 5
+        slow = 20
+    return compute_ma(close, fast) - compute_ma(close, slow)
+
+
+def compute_ema_diff(close: pd.Series, period: int | None = None) -> pd.Series:
+    if period and period >= 100:
+        fast = period // 100
+        slow = period % 100
+        if slow == 0:
+            slow = fast * 4
+    else:
+        fast = 12
+        slow = 26
+    return compute_ema(close, fast) - compute_ema(close, slow)
+
+
 def get_indicator(df: pd.DataFrame, name: str, period: int | None = None) -> pd.Series:
     close = df["close"]
     dispatch = {
@@ -141,6 +166,8 @@ def get_indicator(df: pd.DataFrame, name: str, period: int | None = None) -> pd.
         "macd_dif": lambda: compute_macd_dif(close),
         "macd_dea": lambda: compute_macd_dea(close),
         "macd": lambda: compute_macd_hist(close),
+        "ma_diff": lambda: compute_ma_diff(close, period),
+        "ema_diff": lambda: compute_ema_diff(close, period),
         "volume_ratio": lambda: compute_volume_ratio(df["volume"], period or 5),
         "price_change": lambda: compute_price_change(close),
         "bollinger_position": lambda: compute_bollinger_position(close, period or 20),
@@ -212,8 +239,9 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
 def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> dict:
     market = "A" if re.match(r"^\d{6}$", symbol) else "OTHER"
     lot_size = 100 if market == "A" else 1
-    slippage = 0.001
-    commission = 0.0015
+    sim_cfg = strategy.get("simulation", {})
+    slippage = float(sim_cfg.get("slippage", 0.001))
+    commission = float(sim_cfg.get("commission", 0.0015))
 
     entry = strategy.get("entry", {})
     exit_ = strategy.get("exit", {})
@@ -458,6 +486,92 @@ def evaluate_result(path: str) -> dict:
     return data
 
 
+# --------------- Signal Evaluation ---------------
+
+SIGNAL_DEFINITIONS = {
+    "macd_golden_cross": lambda df, i: (
+        i >= 1
+        and float(compute_macd_dif(df["close"]).iloc[i]) > float(compute_macd_dea(df["close"]).iloc[i])
+        and float(compute_macd_dif(df["close"]).iloc[i - 1]) <= float(compute_macd_dea(df["close"]).iloc[i - 1])
+    ),
+    "macd_death_cross": lambda df, i: (
+        i >= 1
+        and float(compute_macd_dif(df["close"]).iloc[i]) < float(compute_macd_dea(df["close"]).iloc[i])
+        and float(compute_macd_dif(df["close"]).iloc[i - 1]) >= float(compute_macd_dea(df["close"]).iloc[i - 1])
+    ),
+    "rsi_oversold": lambda df, i: float(compute_rsi(df["close"], 14).iloc[i]) < 30,
+    "rsi_overbought": lambda df, i: float(compute_rsi(df["close"], 14).iloc[i]) > 70,
+    "breakout_20d": lambda df, i: (
+        i >= 20
+        and float(df["close"].iloc[i]) > float(df["high"].iloc[i - 20:i].max())
+        and float(df["close"].iloc[i - 1]) <= float(df["high"].iloc[i - 20:i].max())
+    ),
+    "breakdown_20d": lambda df, i: (
+        i >= 20
+        and float(df["close"].iloc[i]) < float(df["low"].iloc[i - 20:i].min())
+        and float(df["close"].iloc[i - 1]) >= float(df["low"].iloc[i - 20:i].min())
+    ),
+    "volume_surge": lambda df, i: (
+        i >= 20
+        and float(df["volume"].iloc[i]) > 2.0 * float(df["volume"].iloc[i - 20:i].mean())
+    ),
+    "ma_golden_cross": lambda df, i: (
+        i >= 20
+        and float(compute_ma(df["close"], 5).iloc[i]) > float(compute_ma(df["close"], 20).iloc[i])
+        and float(compute_ma(df["close"], 5).iloc[i - 1]) <= float(compute_ma(df["close"], 20).iloc[i - 1])
+    ),
+    "ma_death_cross": lambda df, i: (
+        i >= 20
+        and float(compute_ma(df["close"], 5).iloc[i]) < float(compute_ma(df["close"], 20).iloc[i])
+        and float(compute_ma(df["close"], 5).iloc[i - 1]) >= float(compute_ma(df["close"], 20).iloc[i - 1])
+    ),
+}
+
+
+def evaluate_signal(symbol: str, signal_name: str, forward_days: list[int] = None,
+                    lookback: int = 250) -> dict:
+    if forward_days is None:
+        forward_days = [3, 5, 10]
+    if signal_name not in SIGNAL_DEFINITIONS:
+        return {"error": f"Unknown signal: {signal_name}. Available: {list(SIGNAL_DEFINITIONS.keys())}"}
+
+    checker = SIGNAL_DEFINITIONS[signal_name]
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=int(lookback * 1.5))).strftime("%Y-%m-%d")
+    df = fetch_kline(symbol, start, end)
+    if len(df) < 30:
+        return {"error": f"Insufficient data: {len(df)} rows"}
+
+    max_fwd = max(forward_days)
+    occurrences = []
+    for i in range(20, len(df) - max_fwd):
+        try:
+            if checker(df, i):
+                entry_price = float(df["close"].iloc[i])
+                date_str = str(df["date"].iloc[i].date()) if hasattr(df["date"].iloc[i], "date") else str(df["date"].iloc[i])
+                fwd_returns = {}
+                for fd in forward_days:
+                    if i + fd < len(df):
+                        fwd_price = float(df["close"].iloc[i + fd])
+                        fwd_returns[f"return_{fd}d"] = round((fwd_price - entry_price) / entry_price * 100, 2)
+                occurrences.append({"date": date_str, "price": round(entry_price, 2), **fwd_returns})
+        except Exception:
+            continue
+
+    if not occurrences:
+        return {"signal": signal_name, "symbol": symbol, "occurrences": 0, "note": "No signal found in period"}
+
+    result = {"signal": signal_name, "symbol": symbol, "occurrences": len(occurrences)}
+    for fd in forward_days:
+        key = f"return_{fd}d"
+        vals = [o[key] for o in occurrences if key in o]
+        if vals:
+            result[f"avg_return_{fd}d"] = round(np.mean(vals), 2)
+            result[f"win_rate_{fd}d"] = round(sum(1 for v in vals if v > 0) / len(vals), 4)
+    result["samples"] = occurrences[-10:]
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description="AlphaEvo strategy backtester")
     sub = parser.add_subparsers(dest="command")
@@ -472,6 +586,12 @@ def main():
     p_eval = sub.add_parser("evaluate")
     p_eval.add_argument("result", help="Path to result JSON file")
 
+    p_sig = sub.add_parser("evaluate_signal")
+    p_sig.add_argument("symbol", help="Stock symbol")
+    p_sig.add_argument("signal", help="Signal name (e.g. macd_golden_cross)")
+    p_sig.add_argument("--forward", default="3,5,10", help="Comma-separated forward days")
+    p_sig.add_argument("--lookback", type=int, default=250)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -479,8 +599,13 @@ def main():
 
     if args.command == "run":
         result = run_backtest(args.strategy, args.symbol, args.start, args.end, args.capital)
-    else:
+    elif args.command == "evaluate":
         result = evaluate_result(args.result)
+    elif args.command == "evaluate_signal":
+        fwd = [int(x) for x in args.forward.split(",")]
+        result = evaluate_signal(args.symbol, args.signal, fwd, args.lookback)
+    else:
+        result = {"error": f"Unknown command: {args.command}"}
 
     print(json.dumps(result, ensure_ascii=False, default=str))
 
