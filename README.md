@@ -44,7 +44,7 @@ mkdir -p .pi/extensions && cd .pi/extensions
 git clone git@github.com:Weaxs/stock-analysis-plugin.git
 ```
 
-Pi 启动后自动加载，输入 `/skills` 确认。
+Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
 
 ### Hermes Agent Plugin
 
@@ -60,6 +60,8 @@ ln -s /path/to/stock-analysis/hermes ~/.hermes/plugins/stock-analysis
 from hermes import register
 register(ctx)
 ```
+
+详见 [Hermes Agent 接入指南](docs/hermes-integration.md)（[English](docs/hermes-integration.en.md)）。
 
 ### Python 依赖
 
