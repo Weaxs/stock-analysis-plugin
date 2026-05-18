@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./pi/index.ts",
   "pi": {
-    "extensions": ["./pi/index.ts"],
+    "extensions": [
+      "./pi/index.ts"
+    ],
     "skills": [
       "./skills/stock-analysis/SKILL.md",
       "./skills/stock-screener/SKILL.md",
@@ -36,10 +38,18 @@
   "scripts": {
     "postinstall": "node scripts/setup-python.mjs"
   },
-  "keywords": ["pi-agent", "stock", "analysis", "backtest", "screener"],
+  "keywords": [
+    "pi-agent",
+    "stock",
+    "analysis",
+    "backtest",
+    "screener"
+  ],
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.5.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "jiti": "^2.7.0",
+    "tsx": "^4.22.1",
+    "typescript": "^5.5.0"
   }
 }

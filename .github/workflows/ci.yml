@@ -53,9 +53,37 @@ jobs:
       - name: Run tests
         run: pytest --cov=tools --cov-report=term-missing
 
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r tools/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Test Hermes plugin registration
+        run: pytest tests/test_hermes_integration.py -v
+
+      - name: Test Pi extension registration
+        run: npx tsx tests/test_pi_integration.ts
+
   build:
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, integration]
     steps:
       - uses: actions/checkout@v4
 
