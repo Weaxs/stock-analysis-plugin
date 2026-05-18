@@ -63,9 +63,7 @@ class MockCtx:
         self.skills = []
 
     def register_tool(self, name, toolset, schema, handler):
-        self.tools.append(
-            {"name": name, "toolset": toolset, "schema": schema, "handler": handler}
-        )
+        self.tools.append({"name": name, "toolset": toolset, "schema": schema, "handler": handler})
 
     def register_skill(self, name, path):
         self.skills.append({"name": name, "path": path})
@@ -91,9 +89,7 @@ def test_tool_schemas_valid():
         assert "name" in schema, f"{tool['name']}: schema missing name"
         assert "description" in schema, f"{tool['name']}: schema missing description"
         assert "parameters" in schema, f"{tool['name']}: schema missing parameters"
-        assert (
-            schema["parameters"]["type"] == "object"
-        ), f"{tool['name']}: parameters.type != object"
+        assert schema["parameters"]["type"] == "object", f"{tool['name']}: parameters.type != object"
         assert callable(tool["handler"]), f"{tool['name']}: handler not callable"
 
 

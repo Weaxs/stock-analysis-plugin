@@ -20,9 +20,7 @@ def _run(script: str, args: str) -> str:
     python = _find_python()
     cmd = f"{python} {TOOLS_DIR / script} {args}"
     try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=120
-        )
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         return json.dumps({"error": "Command timed out after 120s"})
     except Exception as e:
