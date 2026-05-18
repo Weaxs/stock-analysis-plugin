@@ -23,6 +23,8 @@ node_modules/
 *.xlsx
 *.json
 !package.json
+!package-lock.json
+!tsconfig.json
 !schemas/**/*.json
 !strategies/**/*.yaml
 
