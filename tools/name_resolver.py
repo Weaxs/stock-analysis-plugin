@@ -7,7 +7,6 @@ import sys
 import time
 from difflib import SequenceMatcher
 
-
 _STOCK_MAP_CACHE = None
 
 
@@ -27,22 +26,26 @@ def _load_stock_map() -> list[dict]:
         return _STOCK_MAP_CACHE
     try:
         import akshare as ak
+
         df = _akshare_retry(ak.stock_zh_a_spot_em)
         records = []
         for _, row in df.iterrows():
-            records.append({
-                "code": str(row.get("代码", "")),
-                "name": str(row.get("名称", "")),
-            })
+            records.append(
+                {
+                    "code": str(row.get("代码", "")),
+                    "name": str(row.get("名称", "")),
+                }
+            )
         _STOCK_MAP_CACHE = records
         return records
     except Exception as e:
-        raise RuntimeError(f"Failed to load stock list: {e}")
+        raise RuntimeError(f"Failed to load stock list: {e}") from e
 
 
 def _to_pinyin(text: str) -> str:
     try:
         from pypinyin import lazy_pinyin
+
         return "".join(lazy_pinyin(text)).lower()
     except ImportError:
         return text.lower()
@@ -51,6 +54,7 @@ def _to_pinyin(text: str) -> str:
 def _to_pinyin_initials(text: str) -> str:
     try:
         from pypinyin import lazy_pinyin
+
         return "".join(w[0] for w in lazy_pinyin(text) if w).lower()
     except ImportError:
         return ""

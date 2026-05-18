@@ -16,3 +16,10 @@ node_modules/
 *~
 *.csv
 *.xlsx
+hermes/
+tests/
+.coverage
+.github/
+requirements-dev.txt
+pyproject.toml
+ruff.toml

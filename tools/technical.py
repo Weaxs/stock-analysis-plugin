@@ -15,7 +15,8 @@ def fetch_kline(symbol: str, period: str = "daily", count: int = 120) -> list:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
     r = subprocess.run(
         [sys.executable, script, "kline", symbol, "--period", period, "--count", str(count)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return json.loads(r.stdout)
 
@@ -32,6 +33,7 @@ def to_dataframe(records: list) -> pd.DataFrame:
 
 
 # --------------- Indicators ---------------
+
 
 def calc_ma(close: pd.Series) -> dict:
     mas = {}
@@ -60,8 +62,13 @@ def calc_macd(close: pd.Series) -> dict:
     macd = 2 * (dif - dea)
     d, de, m = float(dif.iloc[-1]), float(dea.iloc[-1]), float(macd.iloc[-1])
     signal = "bullish" if d > de else "bearish"
-    prev_cross = "golden_cross" if len(dif) >= 2 and dif.iloc[-2] <= dea.iloc[-2] and d > de else \
-                 "death_cross" if len(dif) >= 2 and dif.iloc[-2] >= dea.iloc[-2] and d < de else None
+    prev_cross = (
+        "golden_cross"
+        if len(dif) >= 2 and dif.iloc[-2] <= dea.iloc[-2] and d > de
+        else "death_cross"
+        if len(dif) >= 2 and dif.iloc[-2] >= dea.iloc[-2] and d < de
+        else None
+    )
     result = {"dif": round(d, 2), "dea": round(de, 2), "macd": round(m, 2), "signal": signal}
     if prev_cross:
         result["cross"] = prev_cross
@@ -113,8 +120,13 @@ def calc_bollinger(close: pd.Series) -> dict:
         position = "upper_half"
     else:
         position = "lower_half"
-    return {"upper": round(u, 2), "mid": round(m, 2), "lower": round(l_, 2),
-            "position": position, "bandwidth": round(bw, 2)}
+    return {
+        "upper": round(u, 2),
+        "mid": round(m, 2),
+        "lower": round(l_, 2),
+        "position": position,
+        "bandwidth": round(bw, 2),
+    }
 
 
 def calc_kdj(high: pd.Series, low: pd.Series, close: pd.Series) -> dict:
@@ -148,9 +160,13 @@ def calc_volume(volume: pd.Series) -> dict:
         signal = "light"
     else:
         signal = "normal"
-    return {"current": int(cur), "vol_ma5": round(vol_ma5, 0),
-            "vol_ma10": round(vol_ma10, 0), "volume_ratio": round(ratio, 2),
-            "signal": signal}
+    return {
+        "current": int(cur),
+        "vol_ma5": round(vol_ma5, 0),
+        "vol_ma10": round(vol_ma10, 0),
+        "volume_ratio": round(ratio, 2),
+        "signal": signal,
+    }
 
 
 def calc_support_resistance(close: pd.Series, high: pd.Series, low: pd.Series, boll: dict, ma: dict) -> dict:
@@ -223,9 +239,16 @@ def calc_ma_support(close: pd.Series, ma_data: dict) -> dict:
     return {"support_ma5": support_ma5, "support_ma10": support_ma10}
 
 
-def generate_signal_score(ma_data: dict, macd_data: dict, rsi_data: dict,
-                          vol_data: dict, trend_data: dict, bias_data: dict,
-                          close: pd.Series, volume: pd.Series) -> dict:
+def generate_signal_score(
+    ma_data: dict,
+    macd_data: dict,
+    rsi_data: dict,
+    vol_data: dict,
+    trend_data: dict,
+    bias_data: dict,
+    close: pd.Series,
+    volume: pd.Series,
+) -> dict:
     score = 0
     reasons = []
     risks = []
@@ -266,9 +289,11 @@ def generate_signal_score(ma_data: dict, macd_data: dict, rsi_data: dict,
 
     # --- Bias score (20 points) ---
     is_strong_bull = (
-        arrangement == "bullish" and bull_count == 3
+        arrangement == "bullish"
+        and bull_count == 3
         and trend_score >= 21
-        and ma_data.get("ma5") and ma_data.get("ma20")
+        and ma_data.get("ma5")
+        and ma_data.get("ma20")
         and ma_data["ma20"] > 0
         and (ma_data["ma5"] - ma_data["ma20"]) / ma_data["ma20"] > 0.05
     )
@@ -395,8 +420,9 @@ def generate_signal_score(ma_data: dict, macd_data: dict, rsi_data: dict,
     }
 
 
-def generate_signals(ma_data: dict, macd_data: dict, rsi_data: dict,
-                     boll_data: dict, kdj_data: dict, vol_data: dict, trend_data: dict) -> list:
+def generate_signals(
+    ma_data: dict, macd_data: dict, rsi_data: dict, boll_data: dict, kdj_data: dict, vol_data: dict, trend_data: dict
+) -> list:
     signals = []
     if macd_data.get("cross") == "golden_cross":
         signals.append("MACD金叉，短期看多")
@@ -448,8 +474,10 @@ def generate_signals(ma_data: dict, macd_data: dict, rsi_data: dict,
 
 # --------------- Standalone MA calculator ---------------
 
-def calculate_ma_standalone(symbol: str, periods: list[int] = None,
-                            kline_period: str = "daily", count: int = 120) -> dict:
+
+def calculate_ma_standalone(
+    symbol: str, periods: list[int] = None, kline_period: str = "daily", count: int = 120
+) -> dict:
     if periods is None:
         periods = [5, 10, 20, 30, 60, 120, 250]
 
@@ -520,6 +548,7 @@ def calculate_ma_standalone(symbol: str, periods: list[int] = None,
 
 # --------------- Main ---------------
 
+
 def analyze(symbol: str, period: str = "daily", count: int = 120) -> dict:
     records = fetch_kline(symbol, period, count)
     if isinstance(records, dict) and "error" in records:
@@ -550,7 +579,9 @@ def analyze(symbol: str, period: str = "daily", count: int = 120) -> dict:
         "period": period,
         "data_points": len(df),
         "latest": {
-            "date": str(df["date"].iloc[-1].date()) if hasattr(df["date"].iloc[-1], "date") else str(df["date"].iloc[-1]),
+            "date": str(df["date"].iloc[-1].date())
+            if hasattr(df["date"].iloc[-1], "date")
+            else str(df["date"].iloc[-1]),
             "close": round(float(close.iloc[-1]), 2),
             "volume": int(volume.iloc[-1]),
         },

@@ -1,0 +1,50 @@
+name: stock-analysis
+version: 0.1.0
+description: "Stock analysis, screening, and strategy backtesting across A/HK/US markets"
+provides_tools:
+  - get_kline
+  - get_quote
+  - get_capital_flow
+  - get_news
+  - get_financials
+  - get_technical_analysis
+  - analyze_pattern
+  - get_market_indices
+  - get_sector_rankings
+  - get_stock_info
+  - get_chip_distribution
+  - get_market_stats
+  - get_fundamental_context
+  - screen_stocks
+  - run_backtest
+  - evaluate_signal
+  - resolve_stock_name
+  - check_trading_day
+  - get_trading_days
+  - calculate_ma
+  - get_volume_analysis
+  - search_stock_news
+  - search_comprehensive_intel
+  - get_social_sentiment
+  - extract_article
+  - screen_risk
+  - detect_market_regime
+requires_env:
+  - name: TAVILY_API_KEY
+    description: "Tavily search API key (optional, one search engine is enough)"
+    url: "https://tavily.com"
+    secret: true
+  - name: BRAVE_API_KEY
+    description: "Brave search API key (optional)"
+    url: "https://brave.com/search/api/"
+    secret: true
+  - name: SERPAPI_KEY
+    description: "SerpAPI key (optional)"
+    url: "https://serpapi.com"
+    secret: true
+  - name: BOCHA_API_KEY
+    description: "Bocha AI search API key (optional)"
+    secret: true
+  - name: SENTIMENT_API_KEY
+    description: "Sentiment analysis API key (optional)"
+    secret: true

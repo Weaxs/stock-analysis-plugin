@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
 
 
 def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
@@ -14,16 +13,27 @@ def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
         return []
     try:
         import requests
-        resp = requests.post("https://api.tavily.com/search", json={
-            "api_key": api_key,
-            "query": query,
-            "max_results": max_results,
-            "search_depth": "basic",
-        }, timeout=15)
+
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": "basic",
+            },
+            timeout=15,
+        )
         data = resp.json()
-        return [{"title": r.get("title", ""), "url": r.get("url", ""),
-                 "snippet": r.get("content", "")[:200], "source": "tavily"}
-                for r in data.get("results", [])]
+        return [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("content", "")[:200],
+                "source": "tavily",
+            }
+            for r in data.get("results", [])
+        ]
     except Exception:
         return []
 
@@ -34,13 +44,23 @@ def _brave_search(query: str, count: int = 5) -> list[dict]:
         return []
     try:
         import requests
-        resp = requests.get("https://api.search.brave.com/res/v1/web/search",
-                            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-                            params={"q": query, "count": count}, timeout=15)
+
+        resp = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+            params={"q": query, "count": count},
+            timeout=15,
+        )
         data = resp.json()
-        return [{"title": r.get("title", ""), "url": r.get("url", ""),
-                 "snippet": r.get("description", "")[:200], "source": "brave"}
-                for r in data.get("web", {}).get("results", [])]
+        return [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("description", "")[:200],
+                "source": "brave",
+            }
+            for r in data.get("web", {}).get("results", [])
+        ]
     except Exception:
         return []
 
@@ -51,13 +71,27 @@ def _serpapi_search(query: str, num: int = 5) -> list[dict]:
         return []
     try:
         import requests
-        resp = requests.get("https://serpapi.com/search", params={
-            "api_key": api_key, "q": query, "num": num, "engine": "google",
-        }, timeout=15)
+
+        resp = requests.get(
+            "https://serpapi.com/search",
+            params={
+                "api_key": api_key,
+                "q": query,
+                "num": num,
+                "engine": "google",
+            },
+            timeout=15,
+        )
         data = resp.json()
-        return [{"title": r.get("title", ""), "url": r.get("link", ""),
-                 "snippet": r.get("snippet", "")[:200], "source": "serpapi"}
-                for r in data.get("organic_results", [])]
+        return [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("link", ""),
+                "snippet": r.get("snippet", "")[:200],
+                "source": "serpapi",
+            }
+            for r in data.get("organic_results", [])
+        ]
     except Exception:
         return []
 
@@ -68,16 +102,24 @@ def _bocha_search(query: str, max_results: int = 5) -> list[dict]:
         return []
     try:
         import requests
-        resp = requests.post("https://api.bochaai.com/v1/web-search",
-                             headers={"Authorization": f"Bearer {api_key}",
-                                      "Content-Type": "application/json"},
-                             json={"query": query, "count": max_results},
-                             timeout=15)
+
+        resp = requests.post(
+            "https://api.bochaai.com/v1/web-search",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"query": query, "count": max_results},
+            timeout=15,
+        )
         data = resp.json()
         results = []
         for item in data.get("web", {}).get("results", []):
-            results.append({"title": item.get("name", ""), "url": item.get("url", ""),
-                            "snippet": item.get("snippet", "")[:200], "source": "bocha"})
+            results.append(
+                {
+                    "title": item.get("name", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("snippet", "")[:200],
+                    "source": "bocha",
+                }
+            )
         return results
     except Exception:
         return []
@@ -88,8 +130,12 @@ def search_news(query: str, max_results: int = 10) -> dict:
     engines_tried = []
     engines_available = []
 
-    for name, fn in [("tavily", _tavily_search), ("brave", _brave_search),
-                      ("bocha", _bocha_search), ("serpapi", _serpapi_search)]:
+    for name, fn in [
+        ("tavily", _tavily_search),
+        ("brave", _brave_search),
+        ("bocha", _bocha_search),
+        ("serpapi", _serpapi_search),
+    ]:
         engines_tried.append(name)
         items = fn(query, max_results)
         if items:
@@ -148,27 +194,25 @@ def get_social_sentiment(symbol: str) -> dict:
 
     try:
         import requests
+
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
-            resp = requests.get(f"{api_url}/sentiment/reddit/{symbol}",
-                                headers=headers, timeout=10)
+            resp = requests.get(f"{api_url}/sentiment/reddit/{symbol}", headers=headers, timeout=10)
             if resp.ok:
                 result["sources"]["reddit"] = resp.json()
         except Exception:
             pass
 
         try:
-            resp = requests.get(f"{api_url}/sentiment/twitter/{symbol}",
-                                headers=headers, timeout=10)
+            resp = requests.get(f"{api_url}/sentiment/twitter/{symbol}", headers=headers, timeout=10)
             if resp.ok:
                 result["sources"]["twitter"] = resp.json()
         except Exception:
             pass
 
         try:
-            resp = requests.get(f"{api_url}/sentiment/polymarket/{symbol}",
-                                headers=headers, timeout=10)
+            resp = requests.get(f"{api_url}/sentiment/polymarket/{symbol}", headers=headers, timeout=10)
             if resp.ok:
                 result["sources"]["polymarket"] = resp.json()
         except Exception:
@@ -178,7 +222,9 @@ def get_social_sentiment(symbol: str) -> dict:
         result["error"] = "requests library not available"
 
     if not result["sources"]:
-        result["note"] = "No sentiment data available. Set SENTIMENT_API_URL and SENTIMENT_API_KEY, or ensure the sentiment API is accessible."
+        result["note"] = (
+            "No sentiment data available. Set SENTIMENT_API_URL and SENTIMENT_API_KEY, or ensure the sentiment API is accessible."
+        )
 
     return result
 
@@ -198,6 +244,7 @@ def cmd_sentiment(args):
 def extract_article(url: str) -> dict:
     try:
         from newspaper import Article
+
         a = Article(url, language="zh")
         a.download()
         a.parse()
@@ -242,8 +289,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    dispatch = {"search": cmd_search, "comprehensive": cmd_comprehensive,
-                "sentiment": cmd_sentiment, "extract": cmd_extract}
+    dispatch = {
+        "search": cmd_search,
+        "comprehensive": cmd_comprehensive,
+        "sentiment": cmd_sentiment,
+        "extract": cmd_extract,
+    }
     result = dispatch[args.command](args)
     print(json.dumps(result, ensure_ascii=False, default=str))
 

@@ -8,7 +8,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -35,6 +34,7 @@ def _safe_float(val) -> float | None:
 
 # --------------- Check 1: Valuation ---------------
 
+
 def check_valuation(symbol: str) -> dict:
     quote = _run_tool("stock_data.py", f"quote {symbol}")
     pe = _safe_float(quote.get("pe"))
@@ -43,26 +43,51 @@ def check_valuation(symbol: str) -> dict:
 
     if pe is not None:
         if pe < 0:
-            result["flags"].append({"category": "valuation", "severity": "medium",
-                                     "description": "PE为负，公司亏损", "source": "data"})
+            result["flags"].append(
+                {"category": "valuation", "severity": "medium", "description": "PE为负，公司亏损", "source": "data"}
+            )
             result["status"] = "warning"
         elif pe > 200:
-            result["flags"].append({"category": "valuation", "severity": "high",
-                                     "description": f"PE={pe:.1f}，估值极端偏高", "source": "data"})
+            result["flags"].append(
+                {
+                    "category": "valuation",
+                    "severity": "high",
+                    "description": f"PE={pe:.1f}，估值极端偏高",
+                    "source": "data",
+                }
+            )
             result["status"] = "extreme"
         elif pe > 100:
-            result["flags"].append({"category": "valuation", "severity": "medium",
-                                     "description": f"PE={pe:.1f}，估值偏高", "source": "data"})
+            result["flags"].append(
+                {
+                    "category": "valuation",
+                    "severity": "medium",
+                    "description": f"PE={pe:.1f}，估值偏高",
+                    "source": "data",
+                }
+            )
             result["status"] = "warning"
 
     if pb is not None:
         if pb > 15:
-            result["flags"].append({"category": "valuation", "severity": "high",
-                                     "description": f"PB={pb:.1f}，市净率极端", "source": "data"})
+            result["flags"].append(
+                {
+                    "category": "valuation",
+                    "severity": "high",
+                    "description": f"PB={pb:.1f}，市净率极端",
+                    "source": "data",
+                }
+            )
             result["status"] = "extreme"
         elif pb > 10:
-            result["flags"].append({"category": "valuation", "severity": "medium",
-                                     "description": f"PB={pb:.1f}，市净率偏高", "source": "data"})
+            result["flags"].append(
+                {
+                    "category": "valuation",
+                    "severity": "medium",
+                    "description": f"PB={pb:.1f}，市净率偏高",
+                    "source": "data",
+                }
+            )
             if result["status"] == "normal":
                 result["status"] = "warning"
 
@@ -70,6 +95,7 @@ def check_valuation(symbol: str) -> dict:
 
 
 # --------------- Check 2: Technical Warning ---------------
+
 
 def check_technical(symbol: str) -> dict:
     ta = _run_tool("technical.py", f"analyze {symbol}")
@@ -83,20 +109,39 @@ def check_technical(symbol: str) -> dict:
     trend = ta.get("trend", {}).get("overall", "")
 
     if signal in ("STRONG_SELL",):
-        result["flags"].append({"category": "technical", "severity": "high",
-                                 "description": f"技术信号: {signal}，评分 {score}", "source": "data"})
+        result["flags"].append(
+            {
+                "category": "technical",
+                "severity": "high",
+                "description": f"技术信号: {signal}，评分 {score}",
+                "source": "data",
+            }
+        )
     elif signal in ("SELL",):
-        result["flags"].append({"category": "technical", "severity": "medium",
-                                 "description": f"技术信号: {signal}，评分 {score}", "source": "data"})
+        result["flags"].append(
+            {
+                "category": "technical",
+                "severity": "medium",
+                "description": f"技术信号: {signal}，评分 {score}",
+                "source": "data",
+            }
+        )
 
     if trend == "bearish" and score is not None and score < 20:
-        result["flags"].append({"category": "technical", "severity": "high",
-                                 "description": "技术面全面走弱（趋势空头+评分<20）", "source": "data"})
+        result["flags"].append(
+            {
+                "category": "technical",
+                "severity": "high",
+                "description": "技术面全面走弱（趋势空头+评分<20）",
+                "source": "data",
+            }
+        )
 
     macd = ta.get("macd", {})
     if macd.get("signal") == "death_cross":
-        result["flags"].append({"category": "technical", "severity": "medium",
-                                 "description": "MACD死叉", "source": "data"})
+        result["flags"].append(
+            {"category": "technical", "severity": "medium", "description": "MACD死叉", "source": "data"}
+        )
 
     result["buy_signal"] = signal
     result["signal_score"] = score
@@ -106,10 +151,12 @@ def check_technical(symbol: str) -> dict:
 
 # --------------- Check 3: Lock-up Expiry ---------------
 
+
 def check_lockup(symbol: str) -> dict:
     result = {"upcoming_30d": [], "flags": []}
     try:
         import akshare as ak
+
         df = ak.stock_restricted_release_queue_em(symbol=symbol)
         if df is None or df.empty:
             return result
@@ -127,21 +174,26 @@ def check_lockup(symbol: str) -> dict:
 
         if date_col:
             import pandas as pd
+
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
             upcoming = df[(df[date_col] >= now) & (df[date_col] <= cutoff)]
             if not upcoming.empty:
                 result["upcoming_30d"] = [str(d.date()) for d in upcoming[date_col].dropna()]
-                result["flags"].append({
-                    "category": "lockup", "severity": "medium",
-                    "description": f"未来30天有{len(upcoming)}批限售股解禁",
-                    "source": "data"
-                })
+                result["flags"].append(
+                    {
+                        "category": "lockup",
+                        "severity": "medium",
+                        "description": f"未来30天有{len(upcoming)}批限售股解禁",
+                        "source": "data",
+                    }
+                )
     except Exception:
         pass
     return result
 
 
 # --------------- Check 4-7: News-based risks ---------------
+
 
 def check_news_risks(symbol: str, name: str = "") -> dict:
     search_name = name if name else symbol
@@ -162,20 +214,25 @@ def check_news_risks(symbol: str, name: str = "") -> dict:
 
         result[cat] = items
         if items:
-            result["flags"].append({
-                "category": cat, "severity": "medium",
-                "description": f"发现{len(items)}条相关{_cat_cn(cat)}信息",
-                "source": "news"
-            })
+            result["flags"].append(
+                {
+                    "category": cat,
+                    "severity": "medium",
+                    "description": f"发现{len(items)}条相关{_cat_cn(cat)}信息",
+                    "source": "news",
+                }
+            )
     return result
 
 
 def _cat_cn(cat: str) -> str:
-    return {"insider": "内部人减持", "earnings": "业绩预警",
-            "regulatory": "监管处罚", "industry": "行业政策"}.get(cat, cat)
+    return {"insider": "内部人减持", "earnings": "业绩预警", "regulatory": "监管处罚", "industry": "行业政策"}.get(
+        cat, cat
+    )
 
 
 # --------------- Scoring ---------------
+
 
 def compute_risk(flags: list) -> dict:
     score = 0
@@ -202,6 +259,7 @@ def compute_risk(flags: list) -> dict:
 
 # --------------- Main entry ---------------
 
+
 def screen_risk(symbol: str, name: str = "") -> dict:
     all_flags = []
     checks = {}
@@ -223,9 +281,7 @@ def screen_risk(symbol: str, name: str = "") -> dict:
     all_flags.extend(lockup["flags"])
 
     news = check_news_risks(symbol, name)
-    checks["news_risks"] = {
-        k: v for k, v in news.items() if k != "flags"
-    }
+    checks["news_risks"] = {k: v for k, v in news.items() if k != "flags"}
     all_flags.extend(news["flags"])
 
     risk = compute_risk(all_flags)

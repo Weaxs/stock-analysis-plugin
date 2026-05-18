@@ -15,7 +15,8 @@ def fetch_kline(symbol: str, period: str = "daily", count: int = 60) -> list:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
     r = subprocess.run(
         [sys.executable, script, "kline", symbol, "--period", period, "--count", str(count)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return json.loads(r.stdout)
 
@@ -51,10 +52,7 @@ def analyze_volume(symbol: str, period: str = "daily", count: int = 60) -> dict:
     pc = price_change.tail(min_len).values
     vc = vol_change.tail(min_len).values
     mask = ~(np.isnan(pc) | np.isnan(vc))
-    if mask.sum() > 2:
-        corr = float(np.corrcoef(pc[mask], vc[mask])[0, 1])
-    else:
-        corr = None
+    corr = float(np.corrcoef(pc[mask], vc[mask])[0, 1]) if mask.sum() > 2 else None
 
     up_days = df[close > close.shift(1)]
     down_days = df[close < close.shift(1)]
@@ -66,7 +64,11 @@ def analyze_volume(symbol: str, period: str = "daily", count: int = 60) -> dict:
     vol_ma20 = volume.rolling(20).mean()
     cur_vol = float(volume.iloc[-1])
     vol_ratio_5 = round(cur_vol / float(vol_ma5.iloc[-1]), 2) if float(vol_ma5.iloc[-1]) > 0 else None
-    vol_ratio_20 = round(cur_vol / float(vol_ma20.iloc[-1]), 2) if len(vol_ma20.dropna()) > 0 and float(vol_ma20.iloc[-1]) > 0 else None
+    vol_ratio_20 = (
+        round(cur_vol / float(vol_ma20.iloc[-1]), 2)
+        if len(vol_ma20.dropna()) > 0 and float(vol_ma20.iloc[-1]) > 0
+        else None
+    )
 
     recent_vol = volume.tail(5).mean()
     prior_vol = volume.tail(20).head(15).mean()
@@ -87,31 +89,45 @@ def analyze_volume(symbol: str, period: str = "daily", count: int = 60) -> dict:
     latest_heavy = vol_ratio_5 and vol_ratio_5 > 1.5
 
     if latest_heavy and latest_price_up:
-        patterns.append({"type": "heavy_volume_rally", "signal": "bullish",
-                         "desc": "放量上涨 — 资金积极入场，短期看多"})
+        patterns.append(
+            {"type": "heavy_volume_rally", "signal": "bullish", "desc": "放量上涨 — 资金积极入场，短期看多"}
+        )
     elif latest_heavy and latest_price_up is False:
-        patterns.append({"type": "heavy_volume_decline", "signal": "bearish",
-                         "desc": "放量下跌 — 资金出逃，短期看空"})
+        patterns.append({"type": "heavy_volume_decline", "signal": "bearish", "desc": "放量下跌 — 资金出逃，短期看空"})
     elif vol_ratio_5 and vol_ratio_5 < 0.6 and latest_price_up is False:
-        patterns.append({"type": "shrink_volume_decline", "signal": "neutral_to_bullish",
-                         "desc": "缩量回调 — 抛压减轻，可能蓄势"})
+        patterns.append(
+            {"type": "shrink_volume_decline", "signal": "neutral_to_bullish", "desc": "缩量回调 — 抛压减轻，可能蓄势"}
+        )
     elif vol_ratio_5 and vol_ratio_5 < 0.6 and latest_price_up:
-        patterns.append({"type": "shrink_volume_rally", "signal": "weak_bullish",
-                         "desc": "缩量上涨 — 追高意愿不强，持续性存疑"})
+        patterns.append(
+            {"type": "shrink_volume_rally", "signal": "weak_bullish", "desc": "缩量上涨 — 追高意愿不强，持续性存疑"}
+        )
 
     if up_down_ratio and up_down_ratio > 1.3:
-        patterns.append({"type": "bullish_volume_bias", "signal": "bullish",
-                         "desc": f"上涨日均量远高于下跌日(比值{up_down_ratio})，资金偏多"})
+        patterns.append(
+            {
+                "type": "bullish_volume_bias",
+                "signal": "bullish",
+                "desc": f"上涨日均量远高于下跌日(比值{up_down_ratio})，资金偏多",
+            }
+        )
     elif up_down_ratio and up_down_ratio < 0.7:
-        patterns.append({"type": "bearish_volume_bias", "signal": "bearish",
-                         "desc": f"下跌日均量高于上涨日(比值{up_down_ratio})，资金偏空"})
+        patterns.append(
+            {
+                "type": "bearish_volume_bias",
+                "signal": "bearish",
+                "desc": f"下跌日均量高于上涨日(比值{up_down_ratio})，资金偏空",
+            }
+        )
 
     if corr is not None and corr > 0.5:
-        patterns.append({"type": "positive_vol_price_corr", "signal": "healthy",
-                         "desc": f"量价正相关({corr:.2f})，价量配合良好"})
+        patterns.append(
+            {"type": "positive_vol_price_corr", "signal": "healthy", "desc": f"量价正相关({corr:.2f})，价量配合良好"}
+        )
     elif corr is not None and corr < -0.3:
-        patterns.append({"type": "vol_price_divergence", "signal": "warning",
-                         "desc": f"量价背离({corr:.2f})，关注趋势转折"})
+        patterns.append(
+            {"type": "vol_price_divergence", "signal": "warning", "desc": f"量价背离({corr:.2f})，关注趋势转折"}
+        )
 
     high_vol_mask = volume > vol_ma20 * 2
     high_volume_days = int(high_vol_mask.tail(20).sum()) if len(vol_ma20.dropna()) > 0 else 0

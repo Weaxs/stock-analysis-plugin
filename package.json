@@ -1,11 +1,11 @@
 {
-  "name": "@weaxs/pi-stock-analysis",
+  "name": "@weaxs/stock-analysis-plugin",
   "version": "0.1.0",
   "description": "Pi Agent extension for stock analysis, screening, and strategy backtesting across A/HK/US markets",
   "type": "module",
-  "main": "./index.ts",
+  "main": "./pi/index.ts",
   "pi": {
-    "extensions": ["./index.ts"],
+    "extensions": ["./pi/index.ts"],
     "skills": [
       "./skills/stock-analysis/SKILL.md",
       "./skills/stock-screener/SKILL.md",
@@ -25,7 +25,7 @@
     ]
   },
   "files": [
-    "index.ts",
+    "pi/",
     "tools/**/*.py",
     "tools/requirements.txt",
     "skills/",
@@ -37,5 +37,9 @@
     "postinstall": "node scripts/setup-python.mjs"
   },
   "keywords": ["pi-agent", "stock", "analysis", "backtest", "screener"],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  }
 }

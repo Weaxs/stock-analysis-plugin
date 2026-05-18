@@ -6,8 +6,6 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta
-
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -24,9 +22,9 @@ def _run_tool(script: str, args: str) -> dict | list:
 
 
 INDEX_MAP = {
-    "A":  ("000001", "上证综指"),
-    "HK": ("HSI",    "恒生指数"),
-    "US": ("^GSPC",  "标普500"),
+    "A": ("000001", "上证综指"),
+    "HK": ("HSI", "恒生指数"),
+    "US": ("^GSPC", "标普500"),
 }
 
 REGIME_CN = {
@@ -38,16 +36,14 @@ REGIME_CN = {
 }
 
 SKILL_RECOMMEND = {
-    "trending_up":   {"recommend": ["bull-trend", "volume-breakout", "ma-crossover", "dragon-head"],
-                      "avoid": ["bottom-volume"]},
-    "trending_down": {"recommend": ["shrink-pullback", "bottom-volume"],
-                      "avoid": ["bull-trend", "volume-breakout"]},
-    "sideways":      {"recommend": ["box-oscillation", "shrink-pullback"],
-                      "avoid": ["dragon-head"]},
-    "volatile":      {"recommend": ["chan-theory", "wave-theory", "emotion-cycle"],
-                      "avoid": ["bull-trend"]},
-    "mixed":         {"recommend": ["shrink-pullback", "chan-theory"],
-                      "avoid": []},
+    "trending_up": {
+        "recommend": ["bull-trend", "volume-breakout", "ma-crossover", "dragon-head"],
+        "avoid": ["bottom-volume"],
+    },
+    "trending_down": {"recommend": ["shrink-pullback", "bottom-volume"], "avoid": ["bull-trend", "volume-breakout"]},
+    "sideways": {"recommend": ["box-oscillation", "shrink-pullback"], "avoid": ["dragon-head"]},
+    "volatile": {"recommend": ["chan-theory", "wave-theory", "emotion-cycle"], "avoid": ["bull-trend"]},
+    "mixed": {"recommend": ["shrink-pullback", "chan-theory"], "avoid": []},
 }
 
 
@@ -64,6 +60,7 @@ def _get_index_kline(market: str) -> list:
 
 def _compute_indicators(klines: list) -> dict:
     import numpy as np
+
     closes = np.array([float(k["close"]) for k in klines if k.get("close") is not None])
     if len(closes) < 20:
         return {}
@@ -82,9 +79,7 @@ def _compute_indicators(klines: list) -> dict:
 
     tr_values = []
     for i in range(-min(14, len(closes) - 1), 0):
-        tr = max(highs[i] - lows[i],
-                 abs(highs[i] - closes[i - 1]),
-                 abs(lows[i] - closes[i - 1]))
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
         tr_values.append(tr)
     atr = np.mean(tr_values) if tr_values else 0
     atr_ratio = atr / close if close > 0 else 0
@@ -116,9 +111,12 @@ def _compute_indicators(klines: list) -> dict:
     change_pct = (close - prev_close) / prev_close * 100 if prev_close > 0 else 0
 
     return {
-        "ma5": round(ma5, 2), "ma10": round(ma10, 2),
-        "ma20": round(ma20, 2), "ma60": round(ma60, 2),
-        "close": round(close, 2), "change_pct": round(change_pct, 2),
+        "ma5": round(ma5, 2),
+        "ma10": round(ma10, 2),
+        "ma20": round(ma20, 2),
+        "ma60": round(ma60, 2),
+        "close": round(close, 2),
+        "change_pct": round(change_pct, 2),
         "atr_ratio": round(atr_ratio, 4),
         "boll_width": round(boll_width, 4),
         "rsi14": round(rsi14, 1),
@@ -209,8 +207,7 @@ def detect_regime(market: str = "A") -> dict:
 
     return {
         "market": market,
-        "index": {"code": code, "name": name,
-                  "close": ind["close"], "change_pct": ind["change_pct"]},
+        "index": {"code": code, "name": name, "close": ind["close"], "change_pct": ind["change_pct"]},
         "regime": regime,
         "regime_cn": REGIME_CN.get(regime, regime),
         "confidence": round(confidence, 2),

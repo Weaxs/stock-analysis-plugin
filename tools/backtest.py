@@ -14,11 +14,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
-
 # --------------- Strategy Loading ---------------
 
+
 def load_strategy(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         strat = yaml.safe_load(f)
     params = strat.get("parameters", {})
     _resolve_refs(strat, params)
@@ -45,6 +45,7 @@ def _substitute(s: str, params: dict):
         key = m.group(1)
         val = params.get(key, m.group(0))
         return str(val)
+
     result = re.sub(r"\{(\w+)\}", _repl, s)
     try:
         return float(result) if "." in result else int(result)
@@ -53,6 +54,7 @@ def _substitute(s: str, params: dict):
 
 
 # --------------- Data Fetching ---------------
+
 
 def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
@@ -64,7 +66,8 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
 
     r = subprocess.run(
         [sys.executable, script, "kline", symbol, "--period", "daily", "--count", str(count)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     data = json.loads(r.stdout)
     if isinstance(data, dict) and "error" in data:
@@ -85,6 +88,7 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
 
 
 # --------------- Indicators (inline) ---------------
+
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     delta = close.diff()
@@ -182,6 +186,7 @@ def get_indicator(df: pd.DataFrame, name: str, period: int | None = None) -> pd.
 
 # --------------- Condition Evaluation ---------------
 
+
 def check_condition(series: pd.Series, operator: str, value: float, idx: int) -> bool:
     if idx < 1 or idx >= len(series):
         return False
@@ -236,6 +241,7 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
 
 # --------------- Simulation ---------------
 
+
 def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> dict:
     market = "A" if re.match(r"^\d{6}$", symbol) else "OTHER"
     lot_size = 100 if market == "A" else 1
@@ -278,20 +284,33 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                 cost = shares * buy_price * (1 + commission)
                 cash -= cost
                 trade_id += 1
-                holding = {"id": trade_id, "buy_date": date_str, "buy_price": round(buy_price, 4),
-                           "shares": shares, "cost": cost}
-                trades.append({"id": trade_id, "type": "buy", "date": date_str,
-                               "price": round(buy_price, 2), "shares": shares,
-                               "amount": round(cost, 2), "reason": reason})
+                holding = {
+                    "id": trade_id,
+                    "buy_date": date_str,
+                    "buy_price": round(buy_price, 4),
+                    "shares": shares,
+                    "cost": cost,
+                }
+                trades.append(
+                    {
+                        "id": trade_id,
+                        "type": "buy",
+                        "date": date_str,
+                        "price": round(buy_price, 2),
+                        "shares": shares,
+                        "amount": round(cost, 2),
+                        "reason": reason,
+                    }
+                )
         else:
             pnl_pct = (price - holding["buy_price"]) / holding["buy_price"]
             sell = False
             reason = ""
 
             if pnl_pct <= stop_loss:
-                sell, reason = True, f"止损触发 ({round(pnl_pct*100,1)}% <= {round(stop_loss*100,1)}%)"
+                sell, reason = True, f"止损触发 ({round(pnl_pct * 100, 1)}% <= {round(stop_loss * 100, 1)}%)"
             elif pnl_pct >= take_profit:
-                sell, reason = True, f"止盈触发 ({round(pnl_pct*100,1)}% >= {round(take_profit*100,1)}%)"
+                sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
             elif exit_conditions:
                 sell, reason = evaluate_conditions(df, exit_conditions, exit_logic, i, cache)
 
@@ -308,12 +327,20 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                 except ValueError:
                     pass
                 trade_id_sell = holding["id"]
-                trades.append({"id": trade_id_sell, "type": "sell", "date": date_str,
-                               "price": round(sell_price, 2), "shares": holding["shares"],
-                               "amount": round(proceeds, 2), "reason": reason,
-                               "pnl": round(pnl, 2),
-                               "pnl_pct": round(pnl / holding["cost"], 4),
-                               "holding_days": days})
+                trades.append(
+                    {
+                        "id": trade_id_sell,
+                        "type": "sell",
+                        "date": date_str,
+                        "price": round(sell_price, 2),
+                        "shares": holding["shares"],
+                        "amount": round(proceeds, 2),
+                        "reason": reason,
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": round(pnl / holding["cost"], 4),
+                        "holding_days": days,
+                    }
+                )
                 holding = None
 
         equity = cash
@@ -334,6 +361,7 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
 
 
 # --------------- Metrics ---------------
+
 
 def compute_metrics(trades: list, equity_curve: list, initial: float, final: float, start: str, end: str) -> dict:
     sell_trades = [t for t in trades if t["type"] == "sell"]
@@ -357,7 +385,7 @@ def compute_metrics(trades: list, equity_curve: list, initial: float, final: flo
 
     daily_returns = equities.pct_change().dropna()
     if len(daily_returns) > 1 and daily_returns.std() > 0:
-        sharpe = (daily_returns.mean() - 0.03/252) / daily_returns.std() * math.sqrt(252)
+        sharpe = (daily_returns.mean() - 0.03 / 252) / daily_returns.std() * math.sqrt(252)
     else:
         sharpe = 0
 
@@ -399,9 +427,9 @@ def diagnose(metrics: dict) -> dict:
     strengths, weaknesses, suggestions = [], [], []
     wr = metrics["win_rate"]
     if wr >= 0.6:
-        strengths.append(f"胜率较高 ({round(wr*100,1)}%)")
+        strengths.append(f"胜率较高 ({round(wr * 100, 1)}%)")
     elif wr < 0.4:
-        weaknesses.append(f"胜率偏低 ({round(wr*100,1)}%)")
+        weaknesses.append(f"胜率偏低 ({round(wr * 100, 1)}%)")
 
     plr = metrics["profit_loss_ratio"]
     if plr >= 2:
@@ -412,10 +440,10 @@ def diagnose(metrics: dict) -> dict:
 
     mdd = abs(metrics["max_drawdown"])
     if mdd > 0.2:
-        weaknesses.append(f"最大回撤较大 ({round(mdd*100,1)}%)")
+        weaknesses.append(f"最大回撤较大 ({round(mdd * 100, 1)}%)")
         suggestions.append("建议增加止损保护或减小仓位比例")
     elif mdd < 0.1:
-        strengths.append(f"回撤控制良好 ({round(mdd*100,1)}%)")
+        strengths.append(f"回撤控制良好 ({round(mdd * 100, 1)}%)")
 
     sr = metrics["sharpe_ratio"]
     if sr > 1.5:
@@ -441,6 +469,7 @@ def sample_curve(curve: list, max_points: int = 200) -> list:
 
 
 # --------------- Entry Points ---------------
+
 
 def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | None, capital: float) -> dict:
     strategy = load_strategy(strategy_path)
@@ -472,7 +501,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
 
 
 def evaluate_result(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     trades = data.get("trades", [])
     curve = data.get("equity_curve", [])
@@ -503,17 +532,16 @@ SIGNAL_DEFINITIONS = {
     "rsi_overbought": lambda df, i: float(compute_rsi(df["close"], 14).iloc[i]) > 70,
     "breakout_20d": lambda df, i: (
         i >= 20
-        and float(df["close"].iloc[i]) > float(df["high"].iloc[i - 20:i].max())
-        and float(df["close"].iloc[i - 1]) <= float(df["high"].iloc[i - 20:i].max())
+        and float(df["close"].iloc[i]) > float(df["high"].iloc[i - 20 : i].max())
+        and float(df["close"].iloc[i - 1]) <= float(df["high"].iloc[i - 20 : i].max())
     ),
     "breakdown_20d": lambda df, i: (
         i >= 20
-        and float(df["close"].iloc[i]) < float(df["low"].iloc[i - 20:i].min())
-        and float(df["close"].iloc[i - 1]) >= float(df["low"].iloc[i - 20:i].min())
+        and float(df["close"].iloc[i]) < float(df["low"].iloc[i - 20 : i].min())
+        and float(df["close"].iloc[i - 1]) >= float(df["low"].iloc[i - 20 : i].min())
     ),
     "volume_surge": lambda df, i: (
-        i >= 20
-        and float(df["volume"].iloc[i]) > 2.0 * float(df["volume"].iloc[i - 20:i].mean())
+        i >= 20 and float(df["volume"].iloc[i]) > 2.0 * float(df["volume"].iloc[i - 20 : i].mean())
     ),
     "ma_golden_cross": lambda df, i: (
         i >= 20
@@ -528,8 +556,7 @@ SIGNAL_DEFINITIONS = {
 }
 
 
-def evaluate_signal(symbol: str, signal_name: str, forward_days: list[int] = None,
-                    lookback: int = 250) -> dict:
+def evaluate_signal(symbol: str, signal_name: str, forward_days: list[int] = None, lookback: int = 250) -> dict:
     if forward_days is None:
         forward_days = [3, 5, 10]
     if signal_name not in SIGNAL_DEFINITIONS:
@@ -548,7 +575,9 @@ def evaluate_signal(symbol: str, signal_name: str, forward_days: list[int] = Non
         try:
             if checker(df, i):
                 entry_price = float(df["close"].iloc[i])
-                date_str = str(df["date"].iloc[i].date()) if hasattr(df["date"].iloc[i], "date") else str(df["date"].iloc[i])
+                date_str = (
+                    str(df["date"].iloc[i].date()) if hasattr(df["date"].iloc[i], "date") else str(df["date"].iloc[i])
+                )
                 fwd_returns = {}
                 for fd in forward_days:
                     if i + fd < len(df):

@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import yaml
 
-
 DEFAULT_FILTERS = {
     "pe_min": 0,
     "pe_max": 100,
@@ -30,13 +29,14 @@ def fetch_snapshot(market: str) -> list:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
     r = subprocess.run(
         [sys.executable, script, "market_snapshot", "--market", market],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return json.loads(r.stdout)
 
 
 def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -106,11 +106,7 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         liq_parts.append(_minmax(df["volume"].astype(float)))
     df["liquidity_score"] = sum(liq_parts) / max(len(liq_parts), 1)
 
-    df["composite_score"] = (
-        0.4 * df["value_score"]
-        + 0.3 * df["momentum_score"]
-        + 0.3 * df["liquidity_score"]
-    )
+    df["composite_score"] = 0.4 * df["value_score"] + 0.3 * df["momentum_score"] + 0.3 * df["liquidity_score"]
     return df
 
 
@@ -122,8 +118,7 @@ def screen(market: str, top: int, config: dict | None) -> dict:
     df = pd.DataFrame(raw)
     total = len(df)
 
-    for c in ["price", "change_pct", "volume", "turnover", "pe", "pb",
-              "market_cap", "turnover_rate", "volume_ratio"]:
+    for c in ["price", "change_pct", "volume", "turnover", "pe", "pb", "market_cap", "turnover_rate", "volume_ratio"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -137,8 +132,14 @@ def screen(market: str, top: int, config: dict | None) -> dict:
     filtered_count = len(df)
 
     if df.empty:
-        return {"market": market, "total_stocks": total, "filtered_count": 0,
-                "returned_count": 0, "filters_applied": filters, "candidates": []}
+        return {
+            "market": market,
+            "total_stocks": total,
+            "filtered_count": 0,
+            "returned_count": 0,
+            "filters_applied": filters,
+            "candidates": [],
+        }
 
     df = compute_scores(df)
 
@@ -156,8 +157,18 @@ def screen(market: str, top: int, config: dict | None) -> dict:
     candidates = []
     for rank, (_, row) in enumerate(df.iterrows(), 1):
         entry = {"rank": rank}
-        for field in ["symbol", "name", "price", "change_pct", "volume",
-                      "turnover_rate", "pe", "pb", "market_cap", "volume_ratio"]:
+        for field in [
+            "symbol",
+            "name",
+            "price",
+            "change_pct",
+            "volume",
+            "turnover_rate",
+            "pe",
+            "pb",
+            "market_cap",
+            "volume_ratio",
+        ]:
             v = row.get(field)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
                 entry[field] = round(float(v), 2) if isinstance(v, (float, np.floating)) else v

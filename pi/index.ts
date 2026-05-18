@@ -2,9 +2,9 @@ import type { ExtensionAPI } from "pi-agent";
 import { existsSync } from "fs";
 
 export default (pi: ExtensionAPI) => {
-  const toolsDir = `${__dirname}/tools`;
+  const toolsDir = `${__dirname}/../tools`;
   const isWin = process.platform === "win32";
-  const venvPython = `${__dirname}/.venv/${isWin ? "Scripts" : "bin"}/python3`;
+  const venvPython = `${__dirname}/../.venv/${isWin ? "Scripts" : "bin"}/python3`;
   const python = existsSync(venvPython) ? venvPython : "python3";
   const py = (script: string, args: string) =>
     pi.exec(`${python} ${toolsDir}/${script} ${args}`);
@@ -765,21 +765,21 @@ export default (pi: ExtensionAPI) => {
 
   pi.on("resources_discover", () => ({
     skillPaths: [
-      `${__dirname}/skills/stock-analysis/SKILL.md`,
-      `${__dirname}/skills/stock-screener/SKILL.md`,
-      `${__dirname}/skills/strategy-backtest/SKILL.md`,
-      `${__dirname}/skills/bull-trend/SKILL.md`,
-      `${__dirname}/skills/shrink-pullback/SKILL.md`,
-      `${__dirname}/skills/ma-crossover/SKILL.md`,
-      `${__dirname}/skills/volume-breakout/SKILL.md`,
-      `${__dirname}/skills/bottom-volume/SKILL.md`,
-      `${__dirname}/skills/dragon-head/SKILL.md`,
-      `${__dirname}/skills/chan-theory/SKILL.md`,
-      `${__dirname}/skills/wave-theory/SKILL.md`,
-      `${__dirname}/skills/box-oscillation/SKILL.md`,
-      `${__dirname}/skills/emotion-cycle/SKILL.md`,
-      `${__dirname}/skills/one-yang-three-yin/SKILL.md`,
-      `${__dirname}/skills/wisburg-research/SKILL.md`,
+      `${__dirname}/../skills/stock-analysis/SKILL.md`,
+      `${__dirname}/../skills/stock-screener/SKILL.md`,
+      `${__dirname}/../skills/strategy-backtest/SKILL.md`,
+      `${__dirname}/../skills/bull-trend/SKILL.md`,
+      `${__dirname}/../skills/shrink-pullback/SKILL.md`,
+      `${__dirname}/../skills/ma-crossover/SKILL.md`,
+      `${__dirname}/../skills/volume-breakout/SKILL.md`,
+      `${__dirname}/../skills/bottom-volume/SKILL.md`,
+      `${__dirname}/../skills/dragon-head/SKILL.md`,
+      `${__dirname}/../skills/chan-theory/SKILL.md`,
+      `${__dirname}/../skills/wave-theory/SKILL.md`,
+      `${__dirname}/../skills/box-oscillation/SKILL.md`,
+      `${__dirname}/../skills/emotion-cycle/SKILL.md`,
+      `${__dirname}/../skills/one-yang-three-yin/SKILL.md`,
+      `${__dirname}/../skills/wisburg-research/SKILL.md`,
     ],
   }));
 };

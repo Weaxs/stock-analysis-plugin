@@ -30,5 +30,14 @@ node_modules/
 .env
 .env.local
 
+# Test / Lint artifacts
+.coverage
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+
+# Build artifacts
+*.tgz
+
 # MCP config (contains API keys)
 .mcp.json

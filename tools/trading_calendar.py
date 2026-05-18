@@ -14,6 +14,7 @@ def _is_weekend(d: datetime) -> bool:
 def _cn_holidays(year: int) -> set[str]:
     try:
         import akshare as ak
+
         df = ak.tool_trade_date_hist_sina()
         dates = set()
         for _, row in df.iterrows():
@@ -29,6 +30,7 @@ def _cn_holidays(year: int) -> set[str]:
 def _is_exchange_trading_day(exchange_code: str, date_str: str) -> bool:
     import exchange_calendars as xcals
     import pandas as pd
+
     cal = xcals.get_calendar(exchange_code)
     d = pd.Timestamp(date_str)
     return cal.is_session(d)
@@ -54,36 +56,64 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
         trading_dates = _get_cn_trading_dates(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
-            return {"date": date_str, "market": market, "is_trading_day": is_td,
-                    "reason": "trading_day" if is_td else "holiday"}
-        return {"date": date_str, "market": market, "is_trading_day": True,
-                "reason": "assumed_trading_day (calendar unavailable)"}
+            return {
+                "date": date_str,
+                "market": market,
+                "is_trading_day": is_td,
+                "reason": "trading_day" if is_td else "holiday",
+            }
+        return {
+            "date": date_str,
+            "market": market,
+            "is_trading_day": True,
+            "reason": "assumed_trading_day (calendar unavailable)",
+        }
 
     elif market == "HK":
         try:
             is_td = _is_exchange_trading_day("XHKG", date_str)
-            return {"date": date_str, "market": market, "is_trading_day": is_td,
-                    "reason": "trading_day" if is_td else "holiday", "source": "exchange-calendars"}
+            return {
+                "date": date_str,
+                "market": market,
+                "is_trading_day": is_td,
+                "reason": "trading_day" if is_td else "holiday",
+                "source": "exchange-calendars",
+            }
         except Exception:
             pass
         trading_dates = _get_cn_trading_dates(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
-            return {"date": date_str, "market": market, "is_trading_day": is_td,
-                    "reason": "trading_day" if is_td else "holiday (approx, based on CN calendar)"}
-        return {"date": date_str, "market": market, "is_trading_day": True,
-                "reason": "assumed_trading_day"}
+            return {
+                "date": date_str,
+                "market": market,
+                "is_trading_day": is_td,
+                "reason": "trading_day" if is_td else "holiday (approx, based on CN calendar)",
+            }
+        return {"date": date_str, "market": market, "is_trading_day": True, "reason": "assumed_trading_day"}
 
     elif market == "US":
         try:
             is_td = _is_exchange_trading_day("XNYS", date_str)
-            return {"date": date_str, "market": market, "is_trading_day": is_td,
-                    "reason": "trading_day" if is_td else "holiday", "source": "exchange-calendars"}
+            return {
+                "date": date_str,
+                "market": market,
+                "is_trading_day": is_td,
+                "reason": "trading_day" if is_td else "holiday",
+                "source": "exchange-calendars",
+            }
         except Exception:
             pass
         us_holidays = {
-            (1, 1), (1, 20), (2, 17), (5, 26), (6, 19),
-            (7, 4), (9, 1), (11, 27), (12, 25),
+            (1, 1),
+            (1, 20),
+            (2, 17),
+            (5, 26),
+            (6, 19),
+            (7, 4),
+            (9, 1),
+            (11, 27),
+            (12, 25),
         }
         if (d.month, d.day) in us_holidays:
             return {"date": date_str, "market": market, "is_trading_day": False, "reason": "US_holiday"}
@@ -93,10 +123,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
 
 
 def next_trading_days(market: str, count: int = 5, from_date: str = None) -> list[str]:
-    if from_date:
-        d = datetime.strptime(from_date, "%Y-%m-%d")
-    else:
-        d = datetime.now()
+    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else datetime.now()
 
     result = []
     max_search = count * 4
@@ -111,10 +138,7 @@ def next_trading_days(market: str, count: int = 5, from_date: str = None) -> lis
 
 
 def prev_trading_days(market: str, count: int = 5, from_date: str = None) -> list[str]:
-    if from_date:
-        d = datetime.strptime(from_date, "%Y-%m-%d")
-    else:
-        d = datetime.now()
+    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else datetime.now()
 
     result = []
     max_search = count * 4
