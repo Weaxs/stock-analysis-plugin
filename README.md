@@ -24,10 +24,11 @@ A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，
 
 ## 功能概览
 
-- **27 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
+- **28 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
 - **15 个 Skills** — 综合分析、全市场选股、策略回测 + 12 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
-- **多市场支持** — A 股 (akshare) / 港股 / 美股 (yfinance)，按代码格式自动路由
+- **多数据源 Failover** — 9 个数据源自动容灾切换（akshare / tushare / efinance / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage）
+- **社交舆情增强** — A 股（东财股吧 + 雪球）/ 美港股（Reddit / X / Polymarket），市场自动路由
 - **双平台适配** — 同一套工具同时支持 Pi Agent 和 Hermes Agent
 
 ## 安装
@@ -79,8 +80,23 @@ pip install -r tools/requirements.txt
 | exchange-calendars | 交易日历（A/HK/US） |
 | newspaper4k | 新闻正文提取 |
 | pypinyin | 股票名称拼音搜索 |
+| pytdx | A 股 TDX 行情（免费兜底源） |
+| longport | 港股 / 美股 Longbridge SDK |
 
-可选的搜索引擎 API Key（配置任一即可）：
+### 环境变量
+
+**数据源（可选，配置后自动加入 Failover 链）：**
+
+| 环境变量 | 用途 |
+|---------|------|
+| `TUSHARE_TOKEN` | Tushare 数据源（A 股 K 线 / 行情） |
+| `LONGBRIDGE_APP_KEY` | Longbridge SDK（港股 / 美股） |
+| `LONGBRIDGE_APP_SECRET` | Longbridge SDK |
+| `LONGBRIDGE_ACCESS_TOKEN` | Longbridge SDK |
+| `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股 K 线 / 行情） |
+| `FINNHUB_API_KEY` | Finnhub（港股 / 美股） |
+
+**搜索引擎（可选，配置任一即可）：**
 
 | 环境变量 | 用途 |
 |---------|------|
@@ -88,6 +104,13 @@ pip install -r tools/requirements.txt
 | `BRAVE_API_KEY` | Brave 搜索 |
 | `SERPAPI_KEY` | SerpAPI |
 | `BOCHA_API_KEY` | Bocha AI 搜索 |
+
+**社交舆情（可选）：**
+
+| 环境变量 | 用途 |
+|---------|------|
+| `SENTIMENT_API_URL` | 舆情 API 地址（默认 `https://api.adanos.org`） |
+| `SENTIMENT_API_KEY` | 舆情 API 密钥 |
 
 ## 快速开始
 
@@ -197,7 +220,8 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 |------|------|
 | `search_stock_news` | 关键词搜索新闻 |
 | `search_comprehensive_intel` | 综合情报搜索 |
-| `get_social_sentiment` | 社交媒体情绪分析 |
+| `get_social_sentiment` | 社交媒体情绪（A 股：东财股吧 + 雪球；美港股：Reddit / X / Polymarket） |
+| `get_trending_sentiment` | 社交媒体热门趋势聚合（Reddit / X / Polymarket，10 分钟缓存） |
 | `extract_article` | 网页正文提取 |
 
 ### 辅助
@@ -270,13 +294,13 @@ position:
 
 ## 市场路由规则
 
-| 代码格式 | 示例 | 市场 | 数据源 |
-|----------|------|------|--------|
-| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare |
-| `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance |
-| 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance |
+| 代码格式 | 示例 | 市场 | 数据源 Failover 链 |
+|----------|------|------|---------------------|
+| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare → tushare → efinance → pytdx → baostock |
+| `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → finnhub → longbridge |
+| 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
 
-> 港股 / 美股免费数据可能有 15 分钟延迟（yfinance 限制）
+> 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
 
 ## 独立 CLI 使用
 
@@ -307,6 +331,8 @@ python tools/backtest.py run strategies/examples/rsi_oversold.yaml 600519 --star
 python tools/search_intel.py search "茅台 业绩"
 python tools/search_intel.py comprehensive 600519
 python tools/search_intel.py sentiment 600519
+python tools/search_intel.py sentiment AAPL
+python tools/search_intel.py trending
 
 # 风险筛查
 python tools/risk_screening.py screen 600519
@@ -320,12 +346,12 @@ python tools/market_regime.py detect A
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 27 个工具 + 15 个 skill
+│   └── index.ts                     #   注册 28 个工具 + 15 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   27 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   28 个 handler → subprocess 调 CLI
 │
 ├── tools/                           # 共享 Python CLI 工具（12 个脚本）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务
@@ -378,6 +404,8 @@ Agent (LLM 分析 + 生成报告)
 - [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) — A 股每日分析工具，本项目的综合分析流程参考了其设计思路
 - [akshare](https://github.com/akfamily/akshare) — A 股数据源
 - [yfinance](https://github.com/ranaroussi/yfinance) — 港股 / 美股数据源
+- [pytdx](https://github.com/rainx/pytdx) — 通达信 TDX 协议（A 股免费兜底）
+- [longport](https://github.com/longportapp/openapi-sdk) — Longbridge OpenAPI（港股 / 美股）
 - [exchange-calendars](https://github.com/gerrymanoim/exchange_calendars) — 全球交易日历
 
 ## 常见问题
@@ -392,11 +420,11 @@ pip install -r tools/requirements.txt
 
 ### Q: A 股数据获取失败？
 
-akshare 依赖东方财富等数据源，可能因为网络问题、akshare 版本过低（`pip install --upgrade akshare`）、或非交易时间。
+系统会自动按 akshare → tushare → efinance → pytdx → baostock 顺序尝试。如果所有源都失败，检查：网络问题、akshare 版本过低（`pip install --upgrade akshare`）、或非交易时间。配置 `TUSHARE_TOKEN` 可增加一个可靠数据源。
 
 ### Q: 港股 / 美股数据有延迟？
 
-yfinance 免费数据通常有 15 分钟延迟，需要付费 API 获取实时数据。
+yfinance 免费数据通常有 15 分钟延迟。配置 Longbridge（`LONGBRIDGE_APP_KEY` 等）或 Finnhub（`FINNHUB_API_KEY`）可获取更实时的数据，且作为 failover 备用源。
 
 ### Q: 如何自定义筛选条件？
 

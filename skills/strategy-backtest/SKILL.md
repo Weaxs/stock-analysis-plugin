@@ -1,6 +1,7 @@
 ---
 name: strategy-backtest
-description: 策略回测与优化 — AlphaEvo YAML策略定义、回测、诊断、进化
+description: 策略回测与优化 — AlphaEvo YAML策略定义、回测、诊断、进化。当用户要求回测交易策略时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 策略回测与优化
@@ -50,10 +51,17 @@ position:
 
 ### 第二步：运行回测
 
-使用 **`run_backtest`** 工具运行策略：
-- 传入策略 YAML 文件路径
-- 指定股票代码和回测时间范围
-- 设置初始资金（默认 100 万）
+运行回测脚本：
+
+```bash
+python3 scripts/gather.py --strategy <path.yaml> --symbol <symbol> --start <date> --end <date>
+```
+
+参数说明：
+- `--strategy`：策略 YAML 文件路径
+- `--symbol`：股票代码
+- `--start` / `--end`：回测时间范围（可选，默认近一年）
+- 初始资金默认 100 万
 
 ### 第三步：分析结果
 

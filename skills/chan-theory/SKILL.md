@@ -1,6 +1,7 @@
 ---
 name: chan-theory
-description: 缠论分析 — 基于缠中说禅理论的笔、段、中枢分析
+description: 缠论分析 — 基于缠中说禅理论的笔、段、中枢分析。当用户要求缠论分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 缠论分析
@@ -11,10 +12,15 @@ description: 缠论分析 — 基于缠中说禅理论的笔、段、中枢分�
 
 缠论是一套完备的技术分析理论，通过对走势的几何结构分析（笔→段→中枢→趋势），实现精确的买卖点定位。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=120）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 120 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 基本结构识别
 

@@ -1,6 +1,7 @@
 ---
 name: ma-crossover
-description: 均线金叉策略 — 基于均线交叉信号的趋势判断
+description: 均线金叉策略 — 基于均线交叉信号的趋势判断。当用户要求均线分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 均线金叉/死叉分析
@@ -11,10 +12,15 @@ description: 均线金叉策略 — 基于均线交叉信号的趋势判断
 
 均线金叉（短期均线上穿长期均线）代表短期趋势转强；死叉（短期均线下穿长期均线）代表趋势转弱。通过不同周期均线的交叉组合，捕捉不同级别的趋势转折。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=120）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 120 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 均线系统
 

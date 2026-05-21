@@ -1,6 +1,7 @@
 ---
 name: wave-theory
-description: 波浪理论分析 — 基于Elliott波浪理论的浪形识别和推演
+description: 波浪理论分析 — 基于Elliott波浪理论的浪形识别和推演。当用户要求波浪分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 波浪理论分析
@@ -11,10 +12,15 @@ description: 波浪理论分析 — 基于Elliott波浪理论的浪形识别和�
 
 市场走势遵循"5 浪推动 + 3 浪调整"的基本模式。通过识别当前所处的浪形位置，预判后续走势方向和幅度。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=120）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 120 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 推动浪识别（1-2-3-4-5）
 

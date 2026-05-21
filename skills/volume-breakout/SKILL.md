@@ -1,6 +1,7 @@
 ---
 name: volume-breakout
-description: 放量突破策略 — 识别关键位置的放量突破行情
+description: 放量突破策略 — 识别关键位置的放量突破行情。当用户要求分析突破形态时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 放量突破分析
@@ -11,10 +12,15 @@ description: 放量突破策略 — 识别关键位置的放量突破行情
 
 真正的突破需要成交量的配合。放量突破关键阻力位（前高、平台、颈线、均线压制），意味着买方力量压倒卖方，是趋势加速或反转的信号。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=90）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 90 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 识别关键阻力位
 

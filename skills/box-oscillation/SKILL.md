@@ -1,6 +1,7 @@
 ---
 name: box-oscillation
-description: 箱体震荡策略 — 识别箱体区间并在支撑压力间做波段
+description: 箱体震荡策略 — 识别箱体区间并在支撑压力间做波段。当用户要求箱体分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 箱体震荡分析
@@ -11,10 +12,15 @@ description: 箱体震荡策略 — 识别箱体区间并在支撑压力间做�
 
 当股价在一个相对固定的区间内反复震荡时，形成"箱体"。在箱体内低买高卖做波段，直到箱体被突破。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=90）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 90 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 箱体识别
 

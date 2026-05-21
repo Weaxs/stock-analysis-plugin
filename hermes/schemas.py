@@ -458,16 +458,24 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_social_sentiment",
-        "description": "获取股票社交媒体情绪数据（Reddit/X/Polymarket）。主要支持美股。需配置 SENTIMENT_API_KEY",
+        "description": "获取股票社交媒体情绪数据。A股：东方财富股吧热度+雪球讨论热度；美股/港股：Reddit/X/Polymarket情绪。自动根据市场选择数据源",
         "parameters": {
             "type": "object",
             "properties": {
                 "symbol": {
                     "type": "string",
-                    "description": "股票代码（如 AAPL）",
+                    "description": "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
                 },
             },
             "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_trending_sentiment",
+        "description": "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点",
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
     {

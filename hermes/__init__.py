@@ -30,6 +30,7 @@ _HANDLER_MAP = {
     "search_stock_news": tools.search_stock_news,
     "search_comprehensive_intel": tools.search_comprehensive_intel,
     "get_social_sentiment": tools.get_social_sentiment,
+    "get_trending_sentiment": tools.get_trending_sentiment,
     "extract_article": tools.extract_article,
     "screen_risk": tools.screen_risk,
     "detect_market_regime": tools.detect_market_regime,

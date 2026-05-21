@@ -1,6 +1,7 @@
 ---
 name: dragon-head
-description: 龙头战法 — 识别板块龙头股和领涨个股
+description: 龙头战法 — 识别板块龙头股和领涨个股。当用户要求龙头股分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 龙头战法分析
@@ -11,10 +12,15 @@ description: 龙头战法 — 识别板块龙头股和领涨个股
 
 每一轮板块行情都有龙头股引领。龙头股具有最强的市场号召力、最大的涨幅空间。龙头战法的核心是"抓龙头、弃杂毛"——只做板块中最强的那只。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_quote` 获取实时行情，调用 `get_kline`（count=30）和 `get_technical_analysis` 获取技术数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 30 根日K线、技术指标及实时行情：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 龙头股特征识别
 

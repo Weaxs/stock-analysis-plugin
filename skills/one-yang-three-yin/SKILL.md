@@ -1,6 +1,7 @@
 ---
 name: one-yang-three-yin
-description: 一阳穿三阴策略 — 识别强势反转的一阳穿三阴K线形态
+description: 一阳穿三阴策略 — 识别强势反转的一阳穿三阴K线形态。当用户要求分析一阳穿三阴时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 一阳穿三阴分析
@@ -11,10 +12,15 @@ description: 一阳穿三阴策略 — 识别强势反转的一阳穿三阴K线�
 
 "一阳穿三阴"是一种强势反转形态：一根大阳线的实体完全覆盖前面三根（或更多）阴线，表明多方力量在短时间内完全压制空方，是趋势反转的强烈信号。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=30）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 30 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 形态识别
 

@@ -192,6 +192,10 @@ def get_social_sentiment(args: dict, **kwargs) -> str:
     return _run("search_intel.py", f"sentiment {symbol}")
 
 
+def get_trending_sentiment(args: dict, **kwargs) -> str:
+    return _run("search_intel.py", "trending")
+
+
 def extract_article(args: dict, **kwargs) -> str:
     url = args["url"]
     return _run("search_intel.py", f'extract "{url}"')
@@ -207,3 +211,8 @@ def screen_risk(args: dict, **kwargs) -> str:
 def detect_market_regime(args: dict, **kwargs) -> str:
     market = args.get("market", "A")
     return _run("market_regime.py", f"detect {market}")
+
+
+def get_market_review(args: dict, **kwargs) -> str:
+    market = args.get("market", "A")
+    return _run("market_review.py", f"review --market {market}")

@@ -62,6 +62,21 @@ def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> f
     return np.floor(pre_close * (1 + sign * ratio) * 100 + 0.5) / 100.0
 
 
+def _failover(sources: list, label: str = ""):
+    """Try each (name, fn) in order; return first success or raise last error."""
+    last_err = None
+    for _name, fn in sources:
+        try:
+            result = fn()
+            if result:
+                return result
+        except Exception as e:
+            last_err = e
+    if last_err:
+        raise last_err
+    return None
+
+
 def _akshare_retry(fn, *args, retries=2, delay=1):
     for attempt in range(retries + 1):
         try:
@@ -206,15 +221,17 @@ def _clean_row(d: dict) -> dict:
 
 
 def kline_a(symbol: str, period: str, count: int) -> list:
-    try:
-        return _kline_akshare(symbol, period, count)
-    except Exception:
-        pass
-    try:
-        return _kline_efinance(symbol, period, count)
-    except Exception:
-        pass
-    return _kline_baostock(symbol, period, count)
+    """A-share kline with failover: akshare → tushare → efinance → pytdx → baostock."""
+    return _failover(
+        [
+            ("akshare", lambda: _kline_akshare(symbol, period, count)),
+            ("tushare", lambda: _kline_tushare(symbol, period, count)),
+            ("efinance", lambda: _kline_efinance(symbol, period, count)),
+            ("pytdx", lambda: _kline_pytdx(symbol, period, count)),
+            ("baostock", lambda: _kline_baostock(symbol, period, count)),
+        ],
+        label=f"kline_a:{symbol}",
+    )
 
 
 def _kline_akshare(symbol: str, period: str, count: int) -> list:
@@ -255,7 +272,161 @@ def _kline_akshare(symbol: str, period: str, count: int) -> list:
     return [_clean_row(r) for r in df.to_dict("records")]
 
 
-def kline_yf(symbol: str, period: str, count: int) -> list:
+def _kline_tushare(symbol: str, period: str, count: int) -> list:
+    """Tushare kline via HTTP API. Requires TUSHARE_TOKEN."""
+    import os
+
+    import pandas as pd
+    import requests
+
+    token = os.environ.get("TUSHARE_TOKEN")
+    if not token:
+        raise ValueError("TUSHARE_TOKEN not set")
+
+    api_name_map = {"daily": "daily", "weekly": "weekly", "monthly": "monthly"}
+    end = datetime.now()
+    start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
+
+    ts_code = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
+
+    resp = requests.post(
+        "http://api.tushare.pro",
+        json={
+            "api_name": api_name_map.get(period, "daily"),
+            "token": token,
+            "params": {
+                "ts_code": ts_code,
+                "start_date": start.strftime("%Y%m%d"),
+                "end_date": end.strftime("%Y%m%d"),
+            },
+            "fields": "trade_date,open,high,low,close,vol,amount,pct_chg",
+        },
+        timeout=15,
+    )
+    data = resp.json()
+    if data.get("code") != 0 or not data.get("data", {}).get("items"):
+        raise ValueError(f"tushare returned no data: {data.get('msg', '')}")
+
+    df = pd.DataFrame(data["data"]["items"], columns=data["data"]["fields"])
+    col_map = {"trade_date": "date", "vol": "volume", "amount": "turnover", "pct_chg": "change_pct"}
+    df = df.rename(columns=col_map)
+    df = df.sort_values("date")
+    for c in ["open", "high", "low", "close", "volume"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    keep = [c for c in ["date", "open", "high", "low", "close", "volume", "turnover", "change_pct"] if c in df.columns]
+    df = df[keep].tail(count)
+    return [_clean_row(r) for r in df.to_dict("records")]
+
+
+def _quote_tushare(symbol: str) -> dict:
+    """Tushare realtime quote via HTTP API."""
+    import os
+
+    import requests
+
+    token = os.environ.get("TUSHARE_TOKEN")
+    if not token:
+        raise ValueError("TUSHARE_TOKEN not set")
+
+    ts_code = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
+
+    resp = requests.post(
+        "http://api.tushare.pro",
+        json={
+            "api_name": "realtime_quote",
+            "token": token,
+            "params": {"ts_code": ts_code},
+        },
+        timeout=15,
+    )
+    data = resp.json()
+    if data.get("code") != 0 or not data.get("data", {}).get("items"):
+        raise ValueError(f"tushare quote failed: {data.get('msg', '')}")
+
+    row = dict(zip(data["data"]["fields"], data["data"]["items"][0]))
+    return _clean_row(
+        {
+            "symbol": symbol,
+            "name": row.get("name"),
+            "price": row.get("price"),
+            "change": row.get("change"),
+            "change_pct": row.get("pct_chg"),
+            "volume": row.get("vol"),
+            "turnover": row.get("amount"),
+            "high": row.get("high"),
+            "low": row.get("low"),
+            "open": row.get("open"),
+            "prev_close": row.get("pre_close"),
+        }
+    )
+
+
+def _kline_pytdx(symbol: str, period: str, count: int) -> list:
+    """pytdx kline from TDX market servers. No credentials needed."""
+    from pytdx.hq import TdxHq_API
+
+    market = 1 if symbol.startswith(("6", "9", "5")) else 0
+    freq_map = {"daily": 9, "weekly": 5, "monthly": 6}
+
+    api = TdxHq_API()
+    with api.connect("119.147.212.81", 7709):
+        data = api.get_security_bars(freq_map.get(period, 9), market, symbol, 0, count)
+
+    if not data:
+        raise ValueError("pytdx returned empty data")
+
+    rows = []
+    for bar in data:
+        rows.append(
+            _clean_row(
+                {
+                    "date": bar["datetime"][:10],
+                    "open": bar["open"],
+                    "high": bar["high"],
+                    "low": bar["low"],
+                    "close": bar["close"],
+                    "volume": bar["vol"],
+                    "turnover": bar.get("amount"),
+                }
+            )
+        )
+    return rows[-count:]
+
+
+def _quote_pytdx(symbol: str) -> dict:
+    """pytdx realtime quote from TDX market servers."""
+    from pytdx.hq import TdxHq_API
+
+    market = 1 if symbol.startswith(("6", "9", "5")) else 0
+
+    api = TdxHq_API()
+    with api.connect("119.147.212.81", 7709):
+        data = api.get_security_quotes([(market, symbol)])
+
+    if not data:
+        raise ValueError("pytdx quote returned empty")
+
+    q = data[0]
+    prev_close = q.get("last_close")
+    price = q.get("price")
+    return _clean_row(
+        {
+            "symbol": symbol,
+            "name": q.get("name", ""),
+            "price": price,
+            "change": (price - prev_close) if price and prev_close else None,
+            "change_pct": ((price / prev_close) - 1) * 100 if price and prev_close else None,
+            "volume": q.get("vol"),
+            "high": q.get("high"),
+            "low": q.get("low"),
+            "open": q.get("open"),
+            "prev_close": prev_close,
+        }
+    )
+
+
+def _kline_yfinance(symbol: str, period: str, count: int) -> list:
     import yfinance as yf
 
     period_map = {"daily": "1d", "weekly": "1wk", "monthly": "1mo"}
@@ -264,7 +435,7 @@ def kline_yf(symbol: str, period: str, count: int) -> list:
 
     df = yf.download(symbol, start=start, interval=period_map.get(period, "1d"), progress=False, auto_adjust=True)
     if df.empty:
-        return []
+        raise ValueError(f"yfinance returned empty data for {symbol}")
     df = df.reset_index()
     if isinstance(df.columns, __import__("pandas").MultiIndex):
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
@@ -283,6 +454,219 @@ def kline_yf(symbol: str, period: str, count: int) -> list:
     return [_clean_row(r) for r in df.to_dict("records")]
 
 
+def _kline_finnhub(symbol: str, period: str, count: int) -> list:
+    import os
+
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        raise ValueError("FINNHUB_API_KEY not set")
+    import finnhub
+
+    client = finnhub.Client(api_key=api_key)
+    resolution_map = {"daily": "D", "weekly": "W", "monthly": "M"}
+    resolution = resolution_map.get(period, "D")
+    days = count * 2 if period == "daily" else count * 10 if period == "weekly" else count * 35
+    end = int(datetime.now().timestamp())
+    start = int((datetime.now() - timedelta(days=days)).timestamp())
+    candles = client.stock_candles(symbol.replace(".HK", ""), resolution, start, end)
+    if candles.get("s") != "ok" or not candles.get("c"):
+        raise ValueError(f"finnhub returned no data for {symbol}")
+    rows = []
+    for i in range(len(candles["c"])):
+        rows.append(
+            _clean_row(
+                {
+                    "date": datetime.fromtimestamp(candles["t"][i]).strftime("%Y-%m-%d"),
+                    "open": candles["o"][i],
+                    "high": candles["h"][i],
+                    "low": candles["l"][i],
+                    "close": candles["c"][i],
+                    "volume": candles["v"][i],
+                }
+            )
+        )
+    return rows[-count:]
+
+
+def _kline_longbridge(symbol: str, period: str, count: int) -> list:
+    """Longbridge kline via longport SDK. Requires LONGBRIDGE_* env vars."""
+    import os
+
+    app_key = os.environ.get("LONGBRIDGE_APP_KEY")
+    app_secret = os.environ.get("LONGBRIDGE_APP_SECRET")
+    access_token = os.environ.get("LONGBRIDGE_ACCESS_TOKEN")
+    if not all([app_key, app_secret, access_token]):
+        raise ValueError("LONGBRIDGE credentials not set (APP_KEY/APP_SECRET/ACCESS_TOKEN)")
+
+    from longport.openapi import AdjustType, Config, Period, QuoteContext
+
+    config = Config(app_key=app_key, app_secret=app_secret, access_token=access_token)
+    ctx = QuoteContext(config)
+
+    period_map = {"daily": Period.Day, "weekly": Period.Week, "monthly": Period.Month}
+
+    candlesticks = ctx.candlesticks(symbol, period_map.get(period, Period.Day), count, AdjustType.ForwardAdj)
+    if not candlesticks:
+        raise ValueError(f"longbridge returned no kline for {symbol}")
+
+    rows = []
+    for c in candlesticks:
+        rows.append(
+            _clean_row(
+                {
+                    "date": str(c.timestamp)[:10],
+                    "open": float(c.open),
+                    "high": float(c.high),
+                    "low": float(c.low),
+                    "close": float(c.close),
+                    "volume": int(c.volume),
+                    "turnover": float(c.turnover) if c.turnover else None,
+                }
+            )
+        )
+    return rows[-count:]
+
+
+def _quote_longbridge(symbol: str) -> dict:
+    """Longbridge realtime quote."""
+    import os
+
+    app_key = os.environ.get("LONGBRIDGE_APP_KEY")
+    app_secret = os.environ.get("LONGBRIDGE_APP_SECRET")
+    access_token = os.environ.get("LONGBRIDGE_ACCESS_TOKEN")
+    if not all([app_key, app_secret, access_token]):
+        raise ValueError("LONGBRIDGE credentials not set")
+
+    from longport.openapi import Config, QuoteContext
+
+    config = Config(app_key=app_key, app_secret=app_secret, access_token=access_token)
+    ctx = QuoteContext(config)
+
+    quotes = ctx.quote([symbol])
+    if not quotes:
+        raise ValueError(f"longbridge returned no quote for {symbol}")
+
+    q = quotes[0]
+    prev_close = float(q.prev_close) if q.prev_close else None
+    price = float(q.last_done) if q.last_done else None
+    return _clean_row(
+        {
+            "symbol": symbol,
+            "name": getattr(q, "symbol", symbol),
+            "price": price,
+            "change": (price - prev_close) if price and prev_close else None,
+            "change_pct": float(q.change_rate) * 100 if getattr(q, "change_rate", None) else None,
+            "volume": int(q.volume) if q.volume else None,
+            "turnover": float(q.turnover) if getattr(q, "turnover", None) else None,
+            "high": float(q.high) if q.high else None,
+            "low": float(q.low) if q.low else None,
+            "open": float(q.open) if q.open else None,
+            "prev_close": prev_close,
+        }
+    )
+
+
+def _kline_alphavantage(symbol: str, period: str, count: int) -> list:
+    """Alpha Vantage kline. US stocks only. Requires ALPHAVANTAGE_API_KEY."""
+    import os
+
+    import requests
+
+    api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    if not api_key:
+        raise ValueError("ALPHAVANTAGE_API_KEY not set")
+
+    fn_map = {
+        "daily": "TIME_SERIES_DAILY_ADJUSTED",
+        "weekly": "TIME_SERIES_WEEKLY_ADJUSTED",
+        "monthly": "TIME_SERIES_MONTHLY_ADJUSTED",
+    }
+    ts_key_map = {
+        "daily": "Time Series (Daily)",
+        "weekly": "Weekly Adjusted Time Series",
+        "monthly": "Monthly Adjusted Time Series",
+    }
+
+    resp = requests.get(
+        "https://www.alphavantage.co/query",
+        params={
+            "function": fn_map.get(period, fn_map["daily"]),
+            "symbol": symbol,
+            "apikey": api_key,
+            "outputsize": "compact",
+        },
+        timeout=20,
+    )
+    data = resp.json()
+    ts_key = ts_key_map.get(period, ts_key_map["daily"])
+    ts = data.get(ts_key)
+    if not ts:
+        raise ValueError(f"alphavantage returned no data for {symbol}: {data.get('Note', data.get('Error Message', ''))}")
+
+    rows = []
+    for date_str, vals in sorted(ts.items()):
+        rows.append(
+            _clean_row(
+                {
+                    "date": date_str,
+                    "open": float(vals["1. open"]),
+                    "high": float(vals["2. high"]),
+                    "low": float(vals["3. low"]),
+                    "close": float(vals["4. close"]),
+                    "volume": int(vals.get("6. volume", vals.get("5. volume", 0))),
+                }
+            )
+        )
+    return rows[-count:]
+
+
+def _quote_alphavantage(symbol: str) -> dict:
+    """Alpha Vantage quote. US stocks only."""
+    import os
+
+    import requests
+
+    api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    if not api_key:
+        raise ValueError("ALPHAVANTAGE_API_KEY not set")
+
+    resp = requests.get(
+        "https://www.alphavantage.co/query",
+        params={"function": "GLOBAL_QUOTE", "symbol": symbol, "apikey": api_key},
+        timeout=20,
+    )
+    data = resp.json()
+    gq = data.get("Global Quote")
+    if not gq:
+        raise ValueError(f"alphavantage quote failed for {symbol}")
+
+    return _clean_row(
+        {
+            "symbol": symbol,
+            "price": float(gq.get("05. price", 0)),
+            "change": float(gq.get("09. change", 0)),
+            "change_pct": float(gq.get("10. change percent", "0").rstrip("%")),
+            "volume": int(gq.get("06. volume", 0)),
+            "high": float(gq.get("03. high", 0)),
+            "low": float(gq.get("04. low", 0)),
+            "open": float(gq.get("02. open", 0)),
+            "prev_close": float(gq.get("08. previous close", 0)),
+        }
+    )
+
+
+def kline_yf(symbol: str, period: str, count: int) -> list:
+    """HK/US kline with failover: yfinance → finnhub → longbridge → alphavantage (US only)."""
+    sources = [
+        ("yfinance", lambda: _kline_yfinance(symbol, period, count)),
+        ("finnhub", lambda: _kline_finnhub(symbol, period, count)),
+        ("longbridge", lambda: _kline_longbridge(symbol, period, count)),
+    ]
+    if detect_market(symbol) == "US":
+        sources.append(("alphavantage", lambda: _kline_alphavantage(symbol, period, count)))
+    return _failover(sources, label=f"kline:{symbol}")
+
+
 def cmd_kline(args):
     market = detect_market(args.symbol)
     try:
@@ -299,10 +683,16 @@ def cmd_kline(args):
 
 
 def quote_a(symbol: str) -> dict:
-    try:
-        return _quote_akshare(symbol)
-    except Exception:
-        return _quote_efinance(symbol)
+    """A-share quote with failover: akshare → tushare → efinance → pytdx."""
+    return _failover(
+        [
+            ("akshare", lambda: _quote_akshare(symbol)),
+            ("tushare", lambda: _quote_tushare(symbol)),
+            ("efinance", lambda: _quote_efinance(symbol)),
+            ("pytdx", lambda: _quote_pytdx(symbol)),
+        ],
+        label=f"quote_a:{symbol}",
+    )
 
 
 def _quote_akshare(symbol: str) -> dict:
@@ -337,13 +727,13 @@ def _quote_akshare(symbol: str) -> dict:
     )
 
 
-def quote_yf(symbol: str) -> dict:
+def _quote_yfinance(symbol: str) -> dict:
     import yfinance as yf
 
     t = yf.Ticker(symbol)
     info = t.info
     if not info or "regularMarketPrice" not in info:
-        return {"error": f"No data for {symbol}"}
+        raise ValueError(f"No data for {symbol}")
     return _clean_row(
         {
             "symbol": symbol,
@@ -363,6 +753,44 @@ def quote_yf(symbol: str) -> dict:
     )
 
 
+def _quote_finnhub(symbol: str) -> dict:
+    import os
+
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        raise ValueError("FINNHUB_API_KEY not set")
+    import finnhub
+
+    client = finnhub.Client(api_key=api_key)
+    q = client.quote(symbol.replace(".HK", ""))
+    if not q or q.get("c") is None or q["c"] == 0:
+        raise ValueError(f"finnhub returned no quote for {symbol}")
+    return _clean_row(
+        {
+            "symbol": symbol,
+            "price": q["c"],
+            "change": q["d"],
+            "change_pct": q["dp"],
+            "high": q["h"],
+            "low": q["l"],
+            "open": q["o"],
+            "prev_close": q["pc"],
+        }
+    )
+
+
+def quote_yf(symbol: str) -> dict:
+    """HK/US quote with failover: yfinance → finnhub → longbridge → alphavantage (US only)."""
+    sources = [
+        ("yfinance", lambda: _quote_yfinance(symbol)),
+        ("finnhub", lambda: _quote_finnhub(symbol)),
+        ("longbridge", lambda: _quote_longbridge(symbol)),
+    ]
+    if detect_market(symbol) == "US":
+        sources.append(("alphavantage", lambda: _quote_alphavantage(symbol)))
+    return _failover(sources, label=f"quote:{symbol}")
+
+
 def cmd_quote(args):
     market = detect_market(args.symbol)
     try:
@@ -372,6 +800,31 @@ def cmd_quote(args):
 
 
 # --------------- capital_flow ---------------
+
+
+def _capital_flow_efinance(symbol: str) -> list:
+    """Fallback: fetch individual stock capital flow via efinance."""
+    import efinance as ef
+    import pandas as pd
+
+    df = ef.stock.get_today_bill(symbol)
+    if df is None or df.empty:
+        raise ValueError("efinance capital flow returned empty")
+    col_map = {
+        "日期": "date",
+        "主力净流入": "main_net_inflow",
+        "超大单净流入": "super_large_net",
+        "大单净流入": "large_net",
+        "中单净流入": "medium_net",
+        "小单净流入": "small_net",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    for c in keep:
+        if c != "date":
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df[keep].tail(10)
+    return [_clean_row(r) for r in df.to_dict("records")]
 
 
 def cmd_capital_flow(args):
@@ -437,11 +890,42 @@ def cmd_capital_flow(args):
 
         df = df[keep].tail(10)
         return [_clean_row(r) for r in df.to_dict("records")]
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        try:
+            return _capital_flow_efinance(args.symbol)
+        except Exception as e2:
+            return {"error": str(e2)}
 
 
 # --------------- news ---------------
+
+
+def _news_search_intel_fallback(symbol: str) -> list:
+    """Fallback: use search_intel to find news when primary sources fail."""
+    import subprocess
+    from pathlib import Path
+
+    tools_dir = Path(__file__).parent
+    try:
+        result = subprocess.run(
+            [sys.executable, str(tools_dir / "search_intel.py"), "search", f"{symbol} 最新消息"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    try:
+        data = json.loads(result.stdout.strip())
+        if isinstance(data, list):
+            return [
+                {"title": item.get("title", ""), "url": item.get("url", ""), "source": "search"} for item in data[:10]
+            ]
+        return []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 def cmd_news(args):
@@ -452,7 +936,7 @@ def cmd_news(args):
 
             df = _akshare_retry(ak.stock_news_em, symbol=args.symbol)
             if df is None or df.empty:
-                return []
+                raise ValueError("akshare news empty")
             col_map = {
                 "新闻标题": "title",
                 "发布时间": "datetime",
@@ -476,7 +960,7 @@ def cmd_news(args):
             t = yf.Ticker(args.symbol)
             news = t.news
             if not news:
-                return []
+                raise ValueError("yfinance news empty")
             results = []
             for item in news[:20]:
                 results.append(
@@ -489,8 +973,8 @@ def cmd_news(args):
                     }
                 )
             return results
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return _news_search_intel_fallback(args.symbol)
 
 
 # --------------- financials ---------------
@@ -759,6 +1243,40 @@ def cmd_market_indices(args):
 # --------------- sector_rankings ---------------
 
 
+def _sector_rankings_efinance(top: int, direction: str):
+    """Fallback: fetch sector rankings via efinance."""
+    import efinance as ef
+    import pandas as pd
+
+    df = ef.stock.get_realtime_quotes(fs=ef.stock.get_belong_board("行业板块"))
+    if df is None or df.empty:
+        raise ValueError("efinance sector data unavailable")
+    col_map = {
+        "股票名称": "name",
+        "股票代码": "code",
+        "涨跌幅": "change_pct",
+        "成交量": "volume",
+        "成交额": "turnover",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    df = df[keep]
+    if "change_pct" in df.columns:
+        df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce")
+    if direction == "bottom":
+        df = df.sort_values("change_pct", ascending=True).head(top)
+    elif direction == "both":
+        top_df = df.sort_values("change_pct", ascending=False).head(top)
+        bottom_df = df.sort_values("change_pct", ascending=True).head(top)
+        return {
+            "top": [_clean_row(r) for r in top_df.to_dict("records")],
+            "bottom": [_clean_row(r) for r in bottom_df.to_dict("records")],
+        }
+    else:
+        df = df.sort_values("change_pct", ascending=False).head(top)
+    return [_clean_row(r) for r in df.to_dict("records")]
+
+
 def cmd_sector_rankings(args):
     try:
         import akshare as ak
@@ -766,7 +1284,7 @@ def cmd_sector_rankings(args):
 
         df = _akshare_retry(ak.stock_board_industry_name_em)
         if df is None or df.empty:
-            return {"error": "Sector data unavailable"}
+            raise ValueError("akshare sector data unavailable")
         col_map = {
             "板块名称": "name",
             "板块代码": "code",
@@ -800,8 +1318,12 @@ def cmd_sector_rankings(args):
         else:
             df = df.head(args.top)
         return [_clean_row(r) for r in df.to_dict("records")]
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        try:
+            direction = getattr(args, "direction", "top")
+            return _sector_rankings_efinance(args.top, direction)
+        except Exception as e2:
+            return {"error": str(e2)}
 
 
 # --------------- stock_info ---------------

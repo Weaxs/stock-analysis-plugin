@@ -1,6 +1,7 @@
 ---
 name: bull-trend
-description: 趋势追踪策略 — 识别并跟随中长期上升趋势
+description: 趋势追踪策略 — 识别并跟随中长期上升趋势。当用户要求趋势分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 趋势追踪分析
@@ -11,10 +12,15 @@ description: 趋势追踪策略 — 识别并跟随中长期上升趋势
 
 趋势追踪的核心是"顺势而为"——在确认趋势形成后入场，在趋势转弱时离场。不预测顶底，只跟随趋势。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=120）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 120 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 趋势确认
 

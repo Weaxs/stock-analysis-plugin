@@ -1,25 +1,24 @@
 ---
 name: stock-analysis
-description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判
+description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判。当用户要求分析个股时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 综合股票分析
 
 你是一位专业的股票分析师。用户提供股票代码后，你需要进行全面的多维度分析并输出结构化研报。
 
-## 分析流程
+## 执行流程
 
-### 第一步：获取数据
-依次调用以下工具获取数据：
+### 第一步：采集数据
 
-1. **`detect_market_regime`** — 检测当前市场状态（趋势/震荡/高波动），获取策略推荐
-2. **`get_quote`** — 获取实时行情（价格、涨跌幅、成交量等）
-3. **`get_kline`** — 获取日K线数据（默认60根）
-4. **`get_technical_analysis`** — 获取技术指标分析（MA/MACD/RSI/BOLL/KDJ）
-5. **`get_financials`** — 获取关键财务指标（PE/PB/ROE等）
-6. **`get_capital_flow`** — 获取资金流向（仅A股）
-7. **`get_news`** — 获取近期财经新闻
-8. **`screen_risk`** — 风险专项筛查（估值/技术/解禁/减持/业绩/监管/行业7维度）
+运行数据采集脚本（并行获取 quote/kline/technical/financials/capital_flow/news/risk/regime 共 8 项数据）：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
+
+解析返回的 JSON 数据。如果某个字段为 `null`，表示该数据获取失败，基于可用数据继续分析。
 
 ### 第二步：综合研判
 
@@ -58,7 +57,7 @@ description: 综合股票分析 — 技术面+基本面+资金面+消息面+风�
 
 #### JSON 结构化数据
 
-用 `<analysis_json>` 标签包裹，格式参照 `schemas/report_schema.json`：
+用 `<analysis_json>` 标签包裹，格式参照 [报告 schema](references/report_schema.json)：
 
 ```
 <analysis_json>

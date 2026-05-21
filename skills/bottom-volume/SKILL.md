@@ -1,6 +1,7 @@
 ---
 name: bottom-volume
-description: 底部放量策略 — 识别底部区域的异动放量信号
+description: 底部放量策略 — 识别底部区域的异动放量信号。当用户要求分析底部放量时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 底部放量分析
@@ -11,10 +12,15 @@ description: 底部放量策略 — 识别底部区域的异动放量信号
 
 长期下跌后的底部区域出现异常放量，可能意味着主力资金开始建仓。底部放量是趋势反转的先兆信号，但需要结合其他指标确认。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=120）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 120 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 底部区域确认
 

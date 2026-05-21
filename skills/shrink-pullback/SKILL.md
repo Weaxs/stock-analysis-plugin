@@ -1,6 +1,7 @@
 ---
 name: shrink-pullback
-description: 缩量回调策略 — 识别上升趋势中的缩量回调买点
+description: 缩量回调策略 — 识别上升趋势中的缩量回调买点。当用户要求分析缩量回调时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 缩量回调分析
@@ -11,10 +12,15 @@ description: 缩量回调策略 — 识别上升趋势中的缩量回调买点
 
 在上升趋势中，缩量回调代表"洗盘"而非"出货"——主力没有大规模抛售，回调是获利盘的自然消化。缩量回调到关键支撑位后，放量上攻是理想买点。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=60）和 `get_technical_analysis` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 60 根日K线及技术指标：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 前提确认
 

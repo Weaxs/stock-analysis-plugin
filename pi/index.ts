@@ -761,6 +761,27 @@ export default (pi: ExtensionAPI) => {
     },
   });
 
+  pi.registerTool({
+    name: "get_market_review",
+    description:
+      "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议",
+    parameters: {
+      type: "object",
+      properties: {
+        market: {
+          type: "string",
+          enum: ["A", "HK", "US", "all"],
+          description: "市场代码，默认 A。all 表示所有市场",
+        },
+      },
+    },
+    async execute({ market }) {
+      const m = market || "A";
+      const result = await py("market_review.py", `review --market ${m}`);
+      return result.stdout;
+    },
+  });
+
   // --- Skill Discovery ---
 
   pi.on("resources_discover", () => ({
@@ -780,6 +801,11 @@ export default (pi: ExtensionAPI) => {
       `${__dirname}/../skills/emotion-cycle/SKILL.md`,
       `${__dirname}/../skills/one-yang-three-yin/SKILL.md`,
       `${__dirname}/../skills/wisburg-research/SKILL.md`,
+      `${__dirname}/../skills/market-review/SKILL.md`,
+      `${__dirname}/../skills/event-driven/SKILL.md`,
+      `${__dirname}/../skills/expectation-repricing/SKILL.md`,
+      `${__dirname}/../skills/growth-quality/SKILL.md`,
+      `${__dirname}/../skills/hot-theme/SKILL.md`,
     ],
   }));
 };

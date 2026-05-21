@@ -1,6 +1,7 @@
 ---
 name: emotion-cycle
-description: 情绪周期策略 — 基于市场情绪周期的择时分析
+description: 情绪周期策略 — 基于市场情绪周期的择时分析。当用户要求情绪分析时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 情绪周期分析
@@ -11,10 +12,15 @@ description: 情绪周期策略 — 基于市场情绪周期的择时分析
 
 市场是情绪驱动的。情绪有周期性：从恐慌→犹豫→乐观→贪婪→恐慌，循环往复。在别人恐惧时贪婪，在别人贪婪时恐惧。
 
-## 分析框架
+## 执行流程
 
-### 1. 获取数据
-调用 `get_kline`（count=60）、`get_technical_analysis` 和 `get_quote` 获取数据。
+### 1. 采集数据
+
+运行数据采集脚本获取 60 根日K线、技术指标及实时行情：
+
+```bash
+python3 scripts/gather.py <symbol>
+```
 
 ### 2. 情绪指标
 

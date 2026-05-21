@@ -1,13 +1,14 @@
 ---
 name: stock-screener
-description: 全市场股票筛选 — AlphaSift L1硬筛 + LLM智能排序
+description: 全市场股票筛选 — AlphaSift L1硬筛 + LLM智能排序。当用户要求选股或筛选时使用。
+allowed-tools: Bash(python3:*) Read
 ---
 
 # 全市场股票筛选
 
 你是一位量化选股分析师。帮助用户从全市场中筛选出符合条件的股票。
 
-## 筛选流程
+## 执行流程
 
 ### 第一步：确认筛选条件
 
@@ -16,16 +17,19 @@ description: 全市场股票筛选 — AlphaSift L1硬筛 + LLM智能排序
 - **筛选偏好**：价值型、成长型、趋势型、还是自定义条件
 - **返回数量**：默认 Top 20
 
-### 第二步：L1 量化筛选
+### 第二步：运行筛选
 
-调用 **`screen_stocks`** 工具进行第一轮硬筛：
-- 传入市场参数和筛选条件
-- 工具会按 PE/PB/市值/换手率/涨跌幅/量比 等因子过滤和评分
-- 返回候选股列表及各维度得分
+运行数据采集脚本进行 L1 量化筛选：
+
+```bash
+python3 scripts/gather.py --market A --top 20
+```
+
+可选参数：`--market`（A/HK/US）、`--top`（返回数量）、`--config`（自定义 YAML 配置路径）。
 
 ### 第三步：L2 智能排序
 
-对 L1 筛选出的候选股，逐一调用 **`get_technical_analysis`** 获取技术面数据，然后进行 LLM 智能排序：
+对 L1 筛选出的候选股，基于返回的各项数据进行 LLM 智能排序：
 
 排序考虑因素：
 1. **技术形态质量**：趋势明确 > 震荡 > 趋势不明

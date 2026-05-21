@@ -9,3 +9,5 @@ exchange-calendars>=4.5.0
 newspaper4k>=0.9.0
 efinance>=0.5.0
 baostock>=0.8.8
+pytdx>=1.72
+longport>=1.0.0
