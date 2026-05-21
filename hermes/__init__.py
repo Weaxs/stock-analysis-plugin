@@ -34,6 +34,7 @@ _HANDLER_MAP = {
     "extract_article": tools.extract_article,
     "screen_risk": tools.screen_risk,
     "detect_market_regime": tools.detect_market_regime,
+    "get_market_review": tools.get_market_review,
 }
 
 

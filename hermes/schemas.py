@@ -524,4 +524,18 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "name": "get_market_review",
+        "description": "大盘复盘 — 获取市场日度复盘数据，包含指数表现、涨跌统计、板块排名、重要新闻、市场温度与策略建议",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "market": {
+                    "type": "string",
+                    "enum": ["A", "HK", "US", "all"],
+                    "description": "市场代码，默认 A。all 表示所有市场",
+                },
+            },
+        },
+    },
 ]

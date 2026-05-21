@@ -34,6 +34,7 @@ EXPECTED_TOOLS = sorted(
         "extract_article",
         "screen_risk",
         "detect_market_regime",
+        "get_market_review",
     ]
 )
 
