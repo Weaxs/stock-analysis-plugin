@@ -50,6 +50,10 @@
     "backtest",
     "screener"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Weaxs/stock-analysis-plugin"
+  },
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
