@@ -23,7 +23,12 @@
       "./skills/box-oscillation/SKILL.md",
       "./skills/emotion-cycle/SKILL.md",
       "./skills/one-yang-three-yin/SKILL.md",
-      "./skills/wisburg-research/SKILL.md"
+      "./skills/wisburg-research/SKILL.md",
+      "./skills/event-driven/SKILL.md",
+      "./skills/expectation-repricing/SKILL.md",
+      "./skills/growth-quality/SKILL.md",
+      "./skills/hot-theme/SKILL.md",
+      "./skills/market-review/SKILL.md"
     ]
   },
   "files": [
