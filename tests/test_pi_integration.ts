@@ -27,9 +27,13 @@ const EXPECTED_TOOLS = [
   "search_stock_news",
   "search_comprehensive_intel",
   "get_social_sentiment",
+  "get_trending_sentiment",
   "extract_article",
   "screen_risk",
   "detect_market_regime",
+  "get_market_review",
+  "run_watchlist_analysis",
+  "detect_anomaly",
 ].sort();
 
 const EXPECTED_SKILLS = [
@@ -39,7 +43,12 @@ const EXPECTED_SKILLS = [
   "chan-theory",
   "dragon-head",
   "emotion-cycle",
+  "event-driven",
+  "expectation-repricing",
+  "growth-quality",
+  "hot-theme",
   "ma-crossover",
+  "market-review",
   "one-yang-three-yin",
   "shrink-pullback",
   "stock-analysis",

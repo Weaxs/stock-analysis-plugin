@@ -542,7 +542,18 @@ class TestQuoteTushare:
             json=lambda: {
                 "code": 0,
                 "data": {
-                    "fields": ["name", "price", "change", "pct_chg", "vol", "amount", "high", "low", "open", "pre_close"],
+                    "fields": [
+                        "name",
+                        "price",
+                        "change",
+                        "pct_chg",
+                        "vol",
+                        "amount",
+                        "high",
+                        "low",
+                        "open",
+                        "pre_close",
+                    ],
                     "items": [["贵州茅台", 1800.0, 20.0, 1.12, 5000, 9000000, 1810.0, 1780.0, 1790.0, 1780.0]],
                 },
             }
@@ -568,8 +579,24 @@ class TestKlinePytdx:
         mock_api.connect.return_value.__enter__ = MagicMock(return_value=mock_api)
         mock_api.connect.return_value.__exit__ = MagicMock(return_value=False)
         mock_api.get_security_bars.return_value = [
-            {"datetime": "2026-05-18 15:00", "open": 9.5, "high": 10.5, "low": 9.0, "close": 10.0, "vol": 900, "amount": 9000},
-            {"datetime": "2026-05-19 15:00", "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5, "vol": 1000, "amount": 10500},
+            {
+                "datetime": "2026-05-18 15:00",
+                "open": 9.5,
+                "high": 10.5,
+                "low": 9.0,
+                "close": 10.0,
+                "vol": 900,
+                "amount": 9000,
+            },
+            {
+                "datetime": "2026-05-19 15:00",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "vol": 1000,
+                "amount": 10500,
+            },
         ]
         with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}):
             result = _kline_pytdx("600519", "daily", 5)
@@ -583,8 +610,9 @@ class TestKlinePytdx:
         mock_api.connect.return_value.__enter__ = MagicMock(return_value=mock_api)
         mock_api.connect.return_value.__exit__ = MagicMock(return_value=False)
         mock_api.get_security_bars.return_value = []
-        with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}), pytest.raises(
-            ValueError, match="pytdx returned empty"
+        with (
+            patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}),
+            pytest.raises(ValueError, match="pytdx returned empty"),
         ):
             _kline_pytdx("600519", "daily", 10)
 
@@ -597,7 +625,15 @@ class TestQuotePytdx:
         mock_api.connect.return_value.__enter__ = MagicMock(return_value=mock_api)
         mock_api.connect.return_value.__exit__ = MagicMock(return_value=False)
         mock_api.get_security_quotes.return_value = [
-            {"name": "贵州茅台", "price": 1800.0, "last_close": 1780.0, "vol": 5000, "high": 1810.0, "low": 1780.0, "open": 1790.0}
+            {
+                "name": "贵州茅台",
+                "price": 1800.0,
+                "last_close": 1780.0,
+                "vol": 5000,
+                "high": 1810.0,
+                "low": 1780.0,
+                "open": 1790.0,
+            }
         ]
         with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}):
             result = _quote_pytdx("600519")
@@ -613,9 +649,13 @@ class TestKlineLongbridge:
     def test_no_data_raises(self):
         mock_ctx = MagicMock()
         mock_ctx.candlesticks.return_value = []
-        with patch.dict(
-            sys.modules, {"longport": MagicMock(), "longport.openapi": MagicMock(QuoteContext=MagicMock(return_value=mock_ctx))}
-        ), pytest.raises(ValueError, match="longbridge returned no kline"):
+        with (
+            patch.dict(
+                sys.modules,
+                {"longport": MagicMock(), "longport.openapi": MagicMock(QuoteContext=MagicMock(return_value=mock_ctx))},
+            ),
+            pytest.raises(ValueError, match="longbridge returned no kline"),
+        ):
             _kline_longbridge("AAPL", "daily", 10)
 
     @patch.dict("os.environ", {}, clear=True)
@@ -648,8 +688,20 @@ class TestKlineAlphavantage:
         mock_get.return_value = MagicMock(
             json=lambda: {
                 "Time Series (Daily)": {
-                    "2026-05-19": {"1. open": "150.0", "2. high": "152.0", "3. low": "148.0", "4. close": "151.0", "6. volume": "50000"},
-                    "2026-05-18": {"1. open": "149.0", "2. high": "151.0", "3. low": "147.0", "4. close": "150.0", "6. volume": "45000"},
+                    "2026-05-19": {
+                        "1. open": "150.0",
+                        "2. high": "152.0",
+                        "3. low": "148.0",
+                        "4. close": "151.0",
+                        "6. volume": "50000",
+                    },
+                    "2026-05-18": {
+                        "1. open": "149.0",
+                        "2. high": "151.0",
+                        "3. low": "147.0",
+                        "4. close": "150.0",
+                        "6. volume": "45000",
+                    },
                 }
             }
         )

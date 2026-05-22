@@ -334,10 +334,10 @@ def detect_limit_hit(symbol: str, quote: dict) -> list:
 
     anomalies = []
     if abs(price - limit_up_price) < 0.02:
-        pct_str = f"{change_pct:.2f}" if change_pct is not None else f"{limit_pct*100:.0f}"
+        pct_str = f"{change_pct:.2f}" if change_pct is not None else f"{limit_pct * 100:.0f}"
         anomalies.append(_anomaly("limit_up", "high", "bullish", f"涨停（涨幅{pct_str}%），封板中"))
     elif abs(price - limit_down_price) < 0.02:
-        pct_str = f"{change_pct:.2f}" if change_pct is not None else f"-{limit_pct*100:.0f}"
+        pct_str = f"{change_pct:.2f}" if change_pct is not None else f"-{limit_pct * 100:.0f}"
         anomalies.append(_anomaly("limit_down", "high", "bearish", f"跌停（跌幅{pct_str}%），恐慌情绪"))
     return anomalies
 
@@ -442,22 +442,14 @@ def detect_ma_cross(close: pd.Series) -> list:
     anomalies = []
 
     if float(ma5.iloc[-2]) <= float(ma10.iloc[-2]) and float(ma5.iloc[-1]) > float(ma10.iloc[-1]):
-        anomalies.append(
-            _anomaly("ma5_cross_ma10_golden", "medium", "bullish", "MA5上穿MA10，短线金叉")
-        )
+        anomalies.append(_anomaly("ma5_cross_ma10_golden", "medium", "bullish", "MA5上穿MA10，短线金叉"))
     elif float(ma5.iloc[-2]) >= float(ma10.iloc[-2]) and float(ma5.iloc[-1]) < float(ma10.iloc[-1]):
-        anomalies.append(
-            _anomaly("ma5_cross_ma10_death", "medium", "bearish", "MA5下穿MA10，短线死叉")
-        )
+        anomalies.append(_anomaly("ma5_cross_ma10_death", "medium", "bearish", "MA5下穿MA10，短线死叉"))
 
     if float(ma10.iloc[-2]) <= float(ma20.iloc[-2]) and float(ma10.iloc[-1]) > float(ma20.iloc[-1]):
-        anomalies.append(
-            _anomaly("ma10_cross_ma20_golden", "medium", "bullish", "MA10上穿MA20，中线金叉")
-        )
+        anomalies.append(_anomaly("ma10_cross_ma20_golden", "medium", "bullish", "MA10上穿MA20，中线金叉"))
     elif float(ma10.iloc[-2]) >= float(ma20.iloc[-2]) and float(ma10.iloc[-1]) < float(ma20.iloc[-1]):
-        anomalies.append(
-            _anomaly("ma10_cross_ma20_death", "medium", "bearish", "MA10下穿MA20，中线死叉")
-        )
+        anomalies.append(_anomaly("ma10_cross_ma20_death", "medium", "bearish", "MA10下穿MA20，中线死叉"))
 
     return anomalies
 
@@ -547,7 +539,11 @@ def detect_anomalies(symbol: str) -> dict:
             "bullish_signals": bullish_count,
             "bearish_signals": bearish_count,
             "overall_bias": (
-                "bullish" if bullish_count > bearish_count else "bearish" if bearish_count > bullish_count else "neutral"
+                "bullish"
+                if bullish_count > bearish_count
+                else "bearish"
+                if bearish_count > bullish_count
+                else "neutral"
             ),
         },
         "anomalies": anomalies,

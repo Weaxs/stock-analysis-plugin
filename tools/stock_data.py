@@ -601,7 +601,9 @@ def _kline_alphavantage(symbol: str, period: str, count: int) -> list:
     ts_key = ts_key_map.get(period, ts_key_map["daily"])
     ts = data.get(ts_key)
     if not ts:
-        raise ValueError(f"alphavantage returned no data for {symbol}: {data.get('Note', data.get('Error Message', ''))}")
+        raise ValueError(
+            f"alphavantage returned no data for {symbol}: {data.get('Note', data.get('Error Message', ''))}"
+        )
 
     rows = []
     for date_str, vals in sorted(ts.items()):

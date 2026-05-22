@@ -347,7 +347,7 @@ class TestDetectAnomaliesIntegration:
     def test_basic_flow(self, mock_kline, mock_run_tool):
         # Create 30 bars of steady data
         records = [
-            {"date": f"2024-01-{i+1:02d}", "open": 100, "close": 100, "high": 102, "low": 98, "volume": 1000000}
+            {"date": f"2024-01-{i + 1:02d}", "open": 100, "close": 100, "high": 102, "low": 98, "volume": 1000000}
             for i in range(30)
         ]
         mock_kline.return_value = records
@@ -376,19 +376,19 @@ class TestDetectAnomaliesIntegration:
     def test_sorting_by_severity(self, mock_kline, mock_run_tool):
         # Large volume spike + normal everything else
         records = [
-            {"date": f"2024-01-{i+1:02d}", "open": 100, "close": 100, "high": 102, "low": 98, "volume": 1000000}
+            {"date": f"2024-01-{i + 1:02d}", "open": 100, "close": 100, "high": 102, "low": 98, "volume": 1000000}
             for i in range(29)
         ]
-        records.append(
-            {"date": "2024-01-30", "open": 100, "close": 100, "high": 102, "low": 98, "volume": 4000000}
-        )
+        records.append({"date": "2024-01-30", "open": 100, "close": 100, "high": 102, "low": 98, "volume": 4000000})
         mock_kline.return_value = records
         mock_run_tool.return_value = {"price": 100, "prev_close": 99, "change_pct": 1.0, "name": "测试"}
         result = detect_anomalies("600519")
         if len(result.get("anomalies", [])) > 1:
             severities = [a["severity"] for a in result["anomalies"]]
             order = {"high": 0, "medium": 1, "low": 2}
-            assert all(order.get(severities[i], 3) <= order.get(severities[i + 1], 3) for i in range(len(severities) - 1))
+            assert all(
+                order.get(severities[i], 3) <= order.get(severities[i + 1], 3) for i in range(len(severities) - 1)
+            )
 
 
 class TestDetectDivergence:

@@ -119,8 +119,9 @@ class TestGetSocialSentimentMarketDetection:
         assert "东方财富" in result["note"]
 
     def test_wisburg_context_always_present(self):
-        with patch("tools.search_intel._eastmoney_guba_heat", return_value={}), patch(
-            "tools.search_intel._xueqiu_heat", return_value={}
+        with (
+            patch("tools.search_intel._eastmoney_guba_heat", return_value={}),
+            patch("tools.search_intel._xueqiu_heat", return_value={}),
         ):
             result = get_social_sentiment("600519")
         assert "additional_context" in result
