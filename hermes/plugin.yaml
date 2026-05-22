@@ -29,6 +29,9 @@ provides_tools:
   - extract_article
   - screen_risk
   - detect_market_regime
+  - get_market_review
+  - run_watchlist_analysis
+  - detect_anomaly
 requires_env:
   - name: TAVILY_API_KEY
     description: "Tavily search API key (optional, one search engine is enough)"

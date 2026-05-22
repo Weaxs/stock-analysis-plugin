@@ -44,7 +44,7 @@ npm install
 /skills
 ```
 
-应能看到 15 个已注册的 Skill（如 `stock-analysis`、`stock-screener`、`strategy-backtest` 等）。
+应能看到 20 个已注册的 Skill（如 `stock-analysis`、`stock-screener`、`strategy-backtest` 等）。
 
 也可以直接调用工具验证：
 
@@ -72,7 +72,7 @@ Pi Agent 使用 [jiti](https://github.com/nicolo-ribaudo/jiti) 加载 TypeScript
 
 ### 工具注册
 
-`pi/index.ts` 导出一个函数，接收 `ExtensionAPI` 对象，通过 `pi.registerTool()` 注册 27 个工具：
+`pi/index.ts` 导出一个函数，接收 `ExtensionAPI` 对象，通过 `pi.registerTool()` 注册 30 个工具：
 
 ```typescript
 import type { ExtensionAPI } from "pi-agent";
@@ -91,7 +91,7 @@ export default (pi: ExtensionAPI) => {
       return result.stdout;
     },
   });
-  // ... 其余 26 个工具
+  // ... 其余 29 个工具
 };
 ```
 
@@ -99,7 +99,7 @@ export default (pi: ExtensionAPI) => {
 
 ### Skill 注册
 
-通过 `resources_discover` 事件注册 15 个 SKILL.md：
+通过 `resources_discover` 事件注册 20 个 SKILL.md：
 
 ```typescript
 pi.on("resources_discover", () => ({

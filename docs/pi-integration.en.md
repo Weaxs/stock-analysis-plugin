@@ -44,7 +44,7 @@ After starting Pi Agent, type:
 /skills
 ```
 
-You should see 15 registered Skills (e.g., `stock-analysis`, `stock-screener`, `strategy-backtest`, etc.).
+You should see 20 registered Skills (e.g., `stock-analysis`, `stock-screener`, `strategy-backtest`, etc.).
 
 You can also test by invoking a tool directly:
 
@@ -72,7 +72,7 @@ Pi Agent loads TypeScript extensions using [jiti](https://github.com/nicolo-riba
 
 ### Tool Registration
 
-`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 27 tools via `pi.registerTool()`:
+`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 30 tools via `pi.registerTool()`:
 
 ```typescript
 import type { ExtensionAPI } from "pi-agent";
@@ -91,7 +91,7 @@ export default (pi: ExtensionAPI) => {
       return result.stdout;
     },
   });
-  // ... 26 more tools
+  // ... 29 more tools
 };
 ```
 

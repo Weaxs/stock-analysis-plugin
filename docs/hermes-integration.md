@@ -64,8 +64,8 @@ class MockCtx:
 
 ctx = MockCtx()
 register(ctx)
-print(f"Tools: {len(ctx.tools)}")   # 应输出 27
-print(f"Skills: {len(ctx.skills)}") # 应输出 15
+print(f"Tools: {len(ctx.tools)}")   # 应输出 30
+print(f"Skills: {len(ctx.skills)}") # 应输出 20
 ```
 
 ## 工作原理
@@ -82,7 +82,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 def register(ctx):
-    # 注册 27 个工具
+    # 注册 30 个工具
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
         handler = _HANDLER_MAP[name]
@@ -93,7 +93,7 @@ def register(ctx):
             handler=handler,
         )
 
-    # 注册 15 个 Skill
+    # 注册 20 个 Skill
     for child in sorted(SKILLS_DIR.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
@@ -102,7 +102,7 @@ def register(ctx):
 
 ### 工具定义（Schema）
 
-`hermes/schemas.py` 定义了 27 个工具的 JSON Schema，每个工具包含 `name`、`description` 和 `parameters`：
+`hermes/schemas.py` 定义了 30 个工具的 JSON Schema，每个工具包含 `name`、`description` 和 `parameters`：
 
 ```python
 TOOL_SCHEMAS = [
@@ -119,13 +119,13 @@ TOOL_SCHEMAS = [
             "required": ["symbol"],
         },
     },
-    # ... 其余 26 个
+    # ... 其余 29 个
 ]
 ```
 
 ### 工具实现（Handler）
 
-`hermes/tools.py` 实现了 27 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
+`hermes/tools.py` 实现了 30 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
 
 ```python
 import subprocess
@@ -158,7 +158,7 @@ def get_kline(args, **kwargs):
         cmd += ["--count", str(args["count"])]
     return _run("stock_data.py", cmd)
 
-# ... 其余 26 个 handler
+# ... 其余 29 个 handler
 ```
 
 ### Plugin Manifest
@@ -172,7 +172,7 @@ description: "Stock analysis, screening, and strategy backtesting across A/HK/US
 provides_tools:
   - get_kline
   - get_quote
-  # ... 27 个工具
+  # ... 30 个工具
 requires_env:
   - name: TAVILY_API_KEY
     description: "Tavily search API key (optional)"
@@ -251,7 +251,7 @@ ls -la ~/.hermes/plugins/stock-analysis
 # 应指向 /path/to/stock-analysis-plugin/hermes
 
 ls /path/to/stock-analysis-plugin/skills/
-# 应包含 15 个子目录
+# 应包含 20 个子目录
 ```
 
 ### 升级插件
@@ -269,8 +269,8 @@ stock-analysis-plugin/
 ├── hermes/
 │   ├── __init__.py       # register(ctx) 入口
 │   ├── plugin.yaml       # 插件元数据清单
-│   ├── schemas.py        # 27 个工具的 JSON Schema 定义
-│   └── tools.py          # 27 个 handler，subprocess 调 CLI
+│   ├── schemas.py        # 30 个工具的 JSON Schema 定义
+│   └── tools.py          # 30 个 handler，subprocess 调 CLI
 ├── tools/                # 共享 Python CLI 工具
 ├── skills/               # 共享 SKILL.md
 └── .venv/                # Python 虚拟环境（可选）

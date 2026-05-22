@@ -64,8 +64,8 @@ class MockCtx:
 
 ctx = MockCtx()
 register(ctx)
-print(f"Tools: {len(ctx.tools)}")   # Should print 27
-print(f"Skills: {len(ctx.skills)}") # Should print 15
+print(f"Tools: {len(ctx.tools)}")   # Should print 30
+print(f"Skills: {len(ctx.skills)}") # Should print 20
 ```
 
 ## How It Works
@@ -82,7 +82,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 def register(ctx):
-    # Register 27 tools
+    # Register 30 tools
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
         handler = _HANDLER_MAP[name]
@@ -93,7 +93,7 @@ def register(ctx):
             handler=handler,
         )
 
-    # Register 15 skills
+    # Register 20 skills
     for child in sorted(SKILLS_DIR.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
@@ -102,7 +102,7 @@ def register(ctx):
 
 ### Tool Definitions (Schema)
 
-`hermes/schemas.py` defines the JSON Schema for all 27 tools, each containing `name`, `description`, and `parameters`:
+`hermes/schemas.py` defines the JSON Schema for all 30 tools, each containing `name`, `description`, and `parameters`:
 
 ```python
 TOOL_SCHEMAS = [
@@ -119,13 +119,13 @@ TOOL_SCHEMAS = [
             "required": ["symbol"],
         },
     },
-    # ... 26 more
+    # ... 29 more
 ]
 ```
 
 ### Tool Handlers
 
-`hermes/tools.py` implements 27 handler functions, each calling the corresponding Python CLI script via `subprocess`:
+`hermes/tools.py` implements 30 handler functions, each calling the corresponding Python CLI script via `subprocess`:
 
 ```python
 import subprocess
@@ -158,7 +158,7 @@ def get_kline(args, **kwargs):
         cmd += ["--count", str(args["count"])]
     return _run("stock_data.py", cmd)
 
-# ... 26 more handlers
+# ... 29 more handlers
 ```
 
 ### Plugin Manifest
@@ -172,7 +172,7 @@ description: "Stock analysis, screening, and strategy backtesting across A/HK/US
 provides_tools:
   - get_kline
   - get_quote
-  # ... 27 tools total
+  # ... 30 tools total
 requires_env:
   - name: TAVILY_API_KEY
     description: "Tavily search API key (optional)"
@@ -251,7 +251,7 @@ ls -la ~/.hermes/plugins/stock-analysis
 # Should point to /path/to/stock-analysis-plugin/hermes
 
 ls /path/to/stock-analysis-plugin/skills/
-# Should contain 15 subdirectories
+# Should contain 20 subdirectories
 ```
 
 ### Upgrading the plugin
@@ -269,8 +269,8 @@ stock-analysis-plugin/
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # Plugin manifest
-│   ├── schemas.py        # JSON Schema definitions for 27 tools
-│   └── tools.py          # 27 handlers calling CLI via subprocess
+│   ├── schemas.py        # JSON Schema definitions for 30 tools
+│   └── tools.py          # 30 handlers calling CLI via subprocess
 ├── tools/                # Shared Python CLI tools
 ├── skills/               # Shared SKILL.md files
 └── .venv/                # Python virtual environment (optional)

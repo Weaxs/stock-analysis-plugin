@@ -216,3 +216,14 @@ def detect_market_regime(args: dict, **kwargs) -> str:
 def get_market_review(args: dict, **kwargs) -> str:
     market = args.get("market", "A")
     return _run("market_review.py", f"review --market {market}")
+
+
+def run_watchlist_analysis(args: dict, **kwargs) -> str:
+    symbols = args["symbols"]
+    workers = args.get("workers", 3)
+    return _run("watchlist.py", f"analyze {symbols} --workers {workers}")
+
+
+def detect_anomaly(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    return _run("anomaly_detect.py", f"detect {symbol}")

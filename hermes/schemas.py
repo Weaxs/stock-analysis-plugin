@@ -538,4 +538,36 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "name": "run_watchlist_analysis",
+        "description": "批量自选股分析 — 对多只股票并行采集行情/技术/资金/风险等数据，返回汇总结果。适用于每日定时分析自选股列表",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbols": {
+                    "type": "string",
+                    "description": "逗号分隔的股票代码列表，如 600519,000001,300750",
+                },
+                "workers": {
+                    "type": "number",
+                    "description": "并发数，默认 3（建议不超过5，避免API限流）",
+                },
+            },
+            "required": ["symbols"],
+        },
+    },
+    {
+        "name": "detect_anomaly",
+        "description": "异常/事件检测 — 一键扫描股票当前所有异动信号（MACD金叉死叉、RSI超买超卖、20日突破、放量异动、涨跌停、布林突破、KDJ极值、资金异动等），返回结构化异常列表",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "股票代码（如 600519、AAPL、00700.HK）",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
 ]
