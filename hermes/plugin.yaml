@@ -26,6 +26,7 @@ provides_tools:
   - search_stock_news
   - search_comprehensive_intel
   - get_social_sentiment
+  - get_trending_sentiment
   - extract_article
   - screen_risk
   - detect_market_regime
@@ -49,5 +50,35 @@ requires_env:
     description: "Bocha AI search API key (optional)"
     secret: true
   - name: SENTIMENT_API_KEY
-    description: "Sentiment analysis API key (optional)"
+    description: "Social sentiment API key (optional, for Eastmoney + Xueqiu)"
     secret: true
+  - name: SENTIMENT_API_URL
+    description: "Sentiment API endpoint (default: https://api.adanos.org)"
+    secret: false
+  - name: FINNHUB_API_KEY
+    description: "Finnhub API key (US stock quotes and financials)"
+    url: "https://finnhub.io"
+    secret: true
+  - name: ALPHAVANTAGE_API_KEY
+    description: "Alpha Vantage API key (US stock klines)"
+    url: "https://www.alphavantage.co"
+    secret: true
+  - name: LONGBRIDGE_APP_KEY
+    description: "Longbridge app key (HK stock quotes)"
+    url: "https://open.longportapp.com"
+    secret: true
+  - name: LONGBRIDGE_APP_SECRET
+    description: "Longbridge app secret"
+    secret: true
+  - name: LONGBRIDGE_ACCESS_TOKEN
+    description: "Longbridge access token"
+    secret: true
+  - name: TUSHARE_TOKEN
+    description: "Tushare token (A-share enhanced data, optional)"
+    url: "https://tushare.pro"
+    secret: true
+requires_mcp:
+  - name: wisburg-mcp-server
+    description: "Wisburg research data — institutional reports, earnings calls, filings, market daily"
+    url: "https://wisburg.com"
+    optional: true

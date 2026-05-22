@@ -64,7 +64,7 @@ class MockCtx:
 
 ctx = MockCtx()
 register(ctx)
-print(f"Tools: {len(ctx.tools)}")   # Should print 30
+print(f"Tools: {len(ctx.tools)}")   # Should print 31
 print(f"Skills: {len(ctx.skills)}") # Should print 20
 ```
 
@@ -82,7 +82,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 def register(ctx):
-    # Register 30 tools
+    # Register 31 tools
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
         handler = _HANDLER_MAP[name]
@@ -102,7 +102,7 @@ def register(ctx):
 
 ### Tool Definitions (Schema)
 
-`hermes/schemas.py` defines the JSON Schema for all 30 tools, each containing `name`, `description`, and `parameters`:
+`hermes/schemas.py` defines the JSON Schema for all 31 tools, each containing `name`, `description`, and `parameters`:
 
 ```python
 TOOL_SCHEMAS = [
@@ -119,13 +119,13 @@ TOOL_SCHEMAS = [
             "required": ["symbol"],
         },
     },
-    # ... 29 more
+    # ... 30 more
 ]
 ```
 
 ### Tool Handlers
 
-`hermes/tools.py` implements 30 handler functions, each calling the corresponding Python CLI script via `subprocess`:
+`hermes/tools.py` implements 31 handler functions, each calling the corresponding Python CLI script via `subprocess`:
 
 ```python
 import subprocess
@@ -158,7 +158,7 @@ def get_kline(args, **kwargs):
         cmd += ["--count", str(args["count"])]
     return _run("stock_data.py", cmd)
 
-# ... 29 more handlers
+# ... 30 more handlers
 ```
 
 ### Plugin Manifest
@@ -172,7 +172,7 @@ description: "Stock analysis, screening, and strategy backtesting across A/HK/US
 provides_tools:
   - get_kline
   - get_quote
-  # ... 30 tools total
+  # ... 31 tools total
 requires_env:
   - name: TAVILY_API_KEY
     description: "Tavily search API key (optional)"
@@ -188,15 +188,65 @@ The plugin locates the project root via `Path(__file__).resolve().parent.parent`
 
 ## Environment Variables
 
-The following environment variables are optional (configure at least one search engine to enable news search):
+Environment variables are grouped by function — configure as needed:
 
-| Variable | Purpose |
-|----------|---------|
-| `TAVILY_API_KEY` | Tavily search |
-| `BRAVE_API_KEY` | Brave search |
-| `SERPAPI_KEY` | SerpAPI |
-| `BOCHA_API_KEY` | Bocha AI search |
-| `SENTIMENT_API_KEY` | Social media sentiment analysis |
+### News & Search (configure at least one)
+
+| Variable | Purpose | URL |
+|----------|---------|-----|
+| `TAVILY_API_KEY` | Tavily search | https://tavily.com |
+| `BRAVE_API_KEY` | Brave search | https://brave.com/search/api/ |
+| `SERPAPI_KEY` | SerpAPI | https://serpapi.com |
+| `BOCHA_API_KEY` | Bocha AI search | — |
+
+### Social Sentiment
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `SENTIMENT_API_KEY` | Social sentiment API auth | Eastmoney + Xueqiu sentiment |
+| `SENTIMENT_API_URL` | Sentiment API endpoint | Default: `https://api.adanos.org` |
+
+### US / HK Market Data Sources
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `FINNHUB_API_KEY` | Finnhub (US quotes, financials) | https://finnhub.io |
+| `ALPHAVANTAGE_API_KEY` | Alpha Vantage (US klines) | https://www.alphavantage.co |
+| `LONGBRIDGE_APP_KEY` | Longbridge (HK quotes) | https://open.longportapp.com |
+| `LONGBRIDGE_APP_SECRET` | Longbridge App Secret | Same as above |
+| `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Access Token | Same as above |
+
+### A-share Enhanced Data Source (Optional)
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `TUSHARE_TOKEN` | Tushare (A-share fallback source) | https://tushare.pro |
+
+> Note: A-share basic data is fetched via akshare (free, no key required). Tushare is only used as a fallback/enhanced source.
+
+### Wisburg Research Data
+
+Wisburg is integrated via **MCP Server**, not environment variables. Add the Wisburg MCP service to your Hermes Agent MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "wisburg-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/wisburg-mcp-server"],
+      "env": {
+        "WISBURG_API_KEY": "your-wisburg-key"
+      }
+    }
+  }
+}
+```
+
+Once configured, the `wisburg-research` Skill automatically calls Wisburg MCP tools (prefixed with `mcp__wisburg-mcp-server__`), providing:
+- Institutional research reports (Goldman Sachs, Morgan Stanley, CICC, etc.)
+- Earnings call transcripts, financial filings (A/HK/US markets)
+- Research feed, market daily digest
+- A-share investor Q&A (semantic search)
 
 Configure in Hermes Agent:
 
@@ -269,8 +319,8 @@ stock-analysis-plugin/
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # Plugin manifest
-│   ├── schemas.py        # JSON Schema definitions for 30 tools
-│   └── tools.py          # 30 handlers calling CLI via subprocess
+│   ├── schemas.py        # JSON Schema definitions for 31 tools
+│   └── tools.py          # 31 handlers calling CLI via subprocess
 ├── tools/                # Shared Python CLI tools
 ├── skills/               # Shared SKILL.md files
 └── .venv/                # Python virtual environment (optional)

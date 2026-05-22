@@ -64,7 +64,7 @@ class MockCtx:
 
 ctx = MockCtx()
 register(ctx)
-print(f"Tools: {len(ctx.tools)}")   # 应输出 30
+print(f"Tools: {len(ctx.tools)}")   # 应输出 31
 print(f"Skills: {len(ctx.skills)}") # 应输出 20
 ```
 
@@ -82,7 +82,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 def register(ctx):
-    # 注册 30 个工具
+    # 注册 31 个工具
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
         handler = _HANDLER_MAP[name]
@@ -102,7 +102,7 @@ def register(ctx):
 
 ### 工具定义（Schema）
 
-`hermes/schemas.py` 定义了 30 个工具的 JSON Schema，每个工具包含 `name`、`description` 和 `parameters`：
+`hermes/schemas.py` 定义了 31 个工具的 JSON Schema，每个工具包含 `name`、`description` 和 `parameters`：
 
 ```python
 TOOL_SCHEMAS = [
@@ -119,13 +119,13 @@ TOOL_SCHEMAS = [
             "required": ["symbol"],
         },
     },
-    # ... 其余 29 个
+    # ... 其余 30 个
 ]
 ```
 
 ### 工具实现（Handler）
 
-`hermes/tools.py` 实现了 30 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
+`hermes/tools.py` 实现了 31 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
 
 ```python
 import subprocess
@@ -158,7 +158,7 @@ def get_kline(args, **kwargs):
         cmd += ["--count", str(args["count"])]
     return _run("stock_data.py", cmd)
 
-# ... 其余 29 个 handler
+# ... 其余 30 个 handler
 ```
 
 ### Plugin Manifest
@@ -172,7 +172,7 @@ description: "Stock analysis, screening, and strategy backtesting across A/HK/US
 provides_tools:
   - get_kline
   - get_quote
-  # ... 30 个工具
+  # ... 31 个工具
 requires_env:
   - name: TAVILY_API_KEY
     description: "Tavily search API key (optional)"
@@ -188,15 +188,65 @@ requires_env:
 
 ## 环境变量配置
 
-以下环境变量可选配置（配置任一搜索引擎即可启用新闻搜索功能）：
+以下环境变量按功能分组，根据需要配置：
 
-| 环境变量 | 用途 |
-|---------|------|
-| `TAVILY_API_KEY` | Tavily 搜索 |
-| `BRAVE_API_KEY` | Brave 搜索 |
-| `SERPAPI_KEY` | SerpAPI |
-| `BOCHA_API_KEY` | Bocha AI 搜索 |
-| `SENTIMENT_API_KEY` | 社交媒体情绪分析 |
+### 新闻 & 搜索（配置任一即可）
+
+| 环境变量 | 用途 | 获取地址 |
+|---------|------|---------|
+| `TAVILY_API_KEY` | Tavily 搜索 | https://tavily.com |
+| `BRAVE_API_KEY` | Brave 搜索 | https://brave.com/search/api/ |
+| `SERPAPI_KEY` | SerpAPI | https://serpapi.com |
+| `BOCHA_API_KEY` | Bocha AI 搜索 | — |
+
+### 社交情绪
+
+| 环境变量 | 用途 | 说明 |
+|---------|------|------|
+| `SENTIMENT_API_KEY` | 社交情绪分析 API 认证 | 东财股吧 + 雪球情绪 |
+| `SENTIMENT_API_URL` | 情绪 API 地址 | 默认 `https://api.adanos.org` |
+
+### 美股 / 港股数据源
+
+| 环境变量 | 用途 | 说明 |
+|---------|------|------|
+| `FINNHUB_API_KEY` | Finnhub（美股行情、财报） | https://finnhub.io |
+| `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股K线） | https://www.alphavantage.co |
+| `LONGBRIDGE_APP_KEY` | 长桥（港股行情） | https://open.longportapp.com |
+| `LONGBRIDGE_APP_SECRET` | 长桥 App Secret | 同上 |
+| `LONGBRIDGE_ACCESS_TOKEN` | 长桥 Access Token | 同上 |
+
+### A 股增强数据源（可选）
+
+| 环境变量 | 用途 | 说明 |
+|---------|------|------|
+| `TUSHARE_TOKEN` | Tushare（A股历史数据备用源） | https://tushare.pro |
+
+> 注意：A 股基础数据通过 akshare 免费获取，无需配置。Tushare 仅作为备用/增强数据源。
+
+### 智堡（Wisburg）投研数据
+
+智堡通过 **MCP Server** 接入，不是环境变量。需要在 Hermes Agent 的 MCP 配置中添加智堡服务：
+
+```json
+{
+  "mcpServers": {
+    "wisburg-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/wisburg-mcp-server"],
+      "env": {
+        "WISBURG_API_KEY": "your-wisburg-key"
+      }
+    }
+  }
+}
+```
+
+配置完成后，插件的 `wisburg-research` Skill 会自动调用智堡 MCP 工具（以 `mcp__wisburg-mcp-server__` 前缀），提供：
+- 投行/券商研报、个股研究报告
+- 电话会纪要、财报公告（A/港/美三市场）
+- 投研资讯流、市场日报
+- A股投资者问答（语义搜索）
 
 在 Hermes Agent 中配置环境变量：
 
@@ -269,8 +319,8 @@ stock-analysis-plugin/
 ├── hermes/
 │   ├── __init__.py       # register(ctx) 入口
 │   ├── plugin.yaml       # 插件元数据清单
-│   ├── schemas.py        # 30 个工具的 JSON Schema 定义
-│   └── tools.py          # 30 个 handler，subprocess 调 CLI
+│   ├── schemas.py        # 31 个工具的 JSON Schema 定义
+│   └── tools.py          # 31 个 handler，subprocess 调 CLI
 ├── tools/                # 共享 Python CLI 工具
 ├── skills/               # 共享 SKILL.md
 └── .venv/                # Python 虚拟环境（可选）

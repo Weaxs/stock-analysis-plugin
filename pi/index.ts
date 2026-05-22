@@ -693,6 +693,20 @@ export default (pi: ExtensionAPI) => {
   });
 
   pi.registerTool({
+    name: "get_trending_sentiment",
+    description:
+      "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+    async execute() {
+      const result = await py("search_intel.py", "trending");
+      return result.stdout;
+    },
+  });
+
+  pi.registerTool({
     name: "extract_article",
     description:
       "网页文章全文提取 — 输入URL，提取文章标题、正文（最多3000字）、作者、发布日期等。适用于深度阅读搜索结果中的新闻/研报",
@@ -757,27 +771,6 @@ export default (pi: ExtensionAPI) => {
     async execute({ market }) {
       const m = market || "A";
       const result = await py("market_regime.py", `detect ${m}`);
-      return result.stdout;
-    },
-  });
-
-  pi.registerTool({
-    name: "get_market_review",
-    description:
-      "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议",
-    parameters: {
-      type: "object",
-      properties: {
-        market: {
-          type: "string",
-          enum: ["A", "HK", "US", "all"],
-          description: "市场代码，默认 A。all 表示所有市场",
-        },
-      },
-    },
-    async execute({ market }) {
-      const m = market || "A";
-      const result = await py("market_review.py", `review --market ${m}`);
       return result.stdout;
     },
   });

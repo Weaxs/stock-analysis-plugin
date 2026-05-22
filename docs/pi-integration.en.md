@@ -72,7 +72,7 @@ Pi Agent loads TypeScript extensions using [jiti](https://github.com/nicolo-riba
 
 ### Tool Registration
 
-`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 30 tools via `pi.registerTool()`:
+`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 31 tools via `pi.registerTool()`:
 
 ```typescript
 import type { ExtensionAPI } from "pi-agent";
@@ -91,7 +91,7 @@ export default (pi: ExtensionAPI) => {
       return result.stdout;
     },
   });
-  // ... 29 more tools
+  // ... 30 more tools
 };
 ```
 
@@ -135,15 +135,65 @@ const python = existsSync(venvPython) ? venvPython : "python3";
 
 ## Environment Variables
 
-The following environment variables are optional (configure at least one search engine to enable news search):
+Environment variables are grouped by function — configure as needed:
 
-| Variable | Purpose |
-|----------|---------|
-| `TAVILY_API_KEY` | Tavily search |
-| `BRAVE_API_KEY` | Brave search |
-| `SERPAPI_KEY` | SerpAPI |
-| `BOCHA_API_KEY` | Bocha AI search |
-| `SENTIMENT_API_KEY` | Social media sentiment analysis |
+### News & Search (configure at least one)
+
+| Variable | Purpose | URL |
+|----------|---------|-----|
+| `TAVILY_API_KEY` | Tavily search | https://tavily.com |
+| `BRAVE_API_KEY` | Brave search | https://brave.com/search/api/ |
+| `SERPAPI_KEY` | SerpAPI | https://serpapi.com |
+| `BOCHA_API_KEY` | Bocha AI search | — |
+
+### Social Sentiment
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `SENTIMENT_API_KEY` | Social sentiment API auth | Eastmoney + Xueqiu sentiment |
+| `SENTIMENT_API_URL` | Sentiment API endpoint | Default: `https://api.adanos.org` |
+
+### US / HK Market Data Sources
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `FINNHUB_API_KEY` | Finnhub (US quotes, financials) | https://finnhub.io |
+| `ALPHAVANTAGE_API_KEY` | Alpha Vantage (US klines) | https://www.alphavantage.co |
+| `LONGBRIDGE_APP_KEY` | Longbridge (HK quotes) | https://open.longportapp.com |
+| `LONGBRIDGE_APP_SECRET` | Longbridge App Secret | Same as above |
+| `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Access Token | Same as above |
+
+### A-share Enhanced Data Source (Optional)
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `TUSHARE_TOKEN` | Tushare (A-share fallback source) | https://tushare.pro |
+
+> Note: A-share basic data is fetched via akshare (free, no key required). Tushare is only used as a fallback/enhanced source.
+
+### Wisburg Research Data
+
+Wisburg is integrated via **MCP Server**, not environment variables. Add the Wisburg MCP service to your Pi Agent MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "wisburg-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/wisburg-mcp-server"],
+      "env": {
+        "WISBURG_API_KEY": "your-wisburg-key"
+      }
+    }
+  }
+}
+```
+
+Once configured, the `wisburg-research` Skill automatically calls Wisburg MCP tools (prefixed with `mcp__wisburg-mcp-server__`), providing:
+- Institutional research reports (Goldman Sachs, Morgan Stanley, CICC, etc.)
+- Earnings call transcripts, financial filings (A/HK/US markets)
+- Research feed, market daily digest
+- A-share investor Q&A (semantic search)
 
 Set them before starting Pi Agent:
 
