@@ -1,6 +1,6 @@
 [project]
 name = "stock-analysis-plugin"
-version = "0.1.0"
+version = "0.1.1"
 description = "Hermes plugin for stock analysis, screening, and strategy backtesting across A/HK/US markets"
 requires-python = ">=3.10"
 license = "MIT"
