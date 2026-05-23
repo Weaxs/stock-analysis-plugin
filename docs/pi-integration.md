@@ -1,6 +1,6 @@
 # Pi Agent 接入指南
 
-本文介绍如何将 `stock-analysis-plugin` 作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension 使用。
+本文介绍如何将 `stock-analysis-plugin` 作为 [Pi Agent](https://pi.dev) Extension 使用。
 
 ## 前置条件
 
@@ -10,7 +10,19 @@
 
 ## 安装方式
 
-### 方式一：全局 Extension（推荐）
+### 方式一：通过 Pi 包管理安装（推荐）
+
+```bash
+pi install npm:@weaxs/stock-analysis-plugin
+```
+
+安装后 Pi Agent 会自动执行 `postinstall` 脚本：
+
+1. 查找系统中的 `python3`（需 >= 3.9）
+2. 在插件目录下创建 `.venv` 虚拟环境
+3. 安装 `tools/requirements.txt` 中的 Python 依赖
+
+### 方式二：全局 Extension（Git）
 
 ```bash
 cd ~/.pi/agent/extensions
@@ -19,13 +31,7 @@ cd stock-analysis-plugin
 npm install
 ```
 
-`npm install` 会自动执行 `postinstall` 脚本：
-
-1. 查找系统中的 `python3`（需 >= 3.9）
-2. 在插件目录下创建 `.venv` 虚拟环境
-3. 安装 `tools/requirements.txt` 中的 Python 依赖
-
-### 方式二：项目级 Extension
+### 方式三：项目级 Extension
 
 ```bash
 mkdir -p .pi/extensions && cd .pi/extensions
@@ -35,6 +41,16 @@ npm install
 ```
 
 项目级安装仅在该项目的 Pi Agent 会话中可用。
+
+### 方式四：settings.json 配置
+
+```json
+{
+  "packages": [
+    "npm:@weaxs/stock-analysis-plugin@0.1.0"
+  ]
+}
+```
 
 ## 验证加载
 
@@ -75,7 +91,7 @@ Pi Agent 使用 [jiti](https://github.com/nicolo-ribaudo/jiti) 加载 TypeScript
 `pi/index.ts` 导出一个函数，接收 `ExtensionAPI` 对象，通过 `pi.registerTool()` 注册 31 个工具：
 
 ```typescript
-import type { ExtensionAPI } from "pi-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default (pi: ExtensionAPI) => {
   pi.registerTool({
@@ -224,21 +240,30 @@ python3 -m venv .venv
 ### 升级插件
 
 ```bash
+# 通过 Pi 包管理安装的：
+pi install npm:@weaxs/stock-analysis-plugin@latest
+
+# 通过 Git 安装的：
 cd ~/.pi/agent/extensions/stock-analysis-plugin
 git pull
-npm install  # 会重新安装 Python 依赖
+npm install
 ```
 
-## 目录结构（Pi 相关）
+## npm 包内容
+
+通过 npm 安装时，包内仅包含 Pi Extension 所需文件：
 
 ```
-stock-analysis-plugin/
+@weaxs/stock-analysis-plugin/
 ├── pi/
 │   └── index.ts          # Extension 入口，注册工具和 Skill
-├── tools/                # 共享 Python CLI 工具
-├── skills/               # 共享 SKILL.md
+├── tools/                # Python CLI 工具
+├── skills/               # SKILL.md
+├── schemas/              # 策略 Schema
+├── strategies/           # 策略示例
 ├── scripts/
 │   └── setup-python.mjs  # postinstall 自动安装 Python 依赖
-├── package.json          # pi.extensions + pi.skills 配置
-└── .venv/                # 自动创建的 Python 虚拟环境
+└── package.json          # pi.extensions + pi.skills 配置
 ```
+
+> Hermes 相关文件（`hermes/`、`pyproject.toml`）不会包含在 npm 包中。

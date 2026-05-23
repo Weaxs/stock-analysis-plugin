@@ -1,52 +1,67 @@
 # Hermes Agent 接入指南
 
-本文介绍如何将 `stock-analysis-plugin` 作为 [Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin 使用。
+本文介绍如何将 `stock-analysis-plugin` 作为 [Hermes Agent](https://hermes-agent.nousresearch.com) Plugin 使用。
 
 ## 前置条件
 
-- Python >= 3.9
+- Python >= 3.10
 - Hermes Agent 已安装并可正常运行
 
 ## 安装方式
 
-### 方式一：软链接到插件目录（推荐）
+### 方式一：pip 安装（推荐）
 
 ```bash
-git clone git@github.com:Weaxs/stock-analysis-plugin.git /path/to/stock-analysis-plugin
-cd /path/to/stock-analysis-plugin
-pip install -r tools/requirements.txt
-
-# 软链接 hermes/ 目录到 Hermes 插件目录
-ln -s /path/to/stock-analysis-plugin/hermes ~/.hermes/plugins/stock-analysis
+pip install git+https://github.com/Weaxs/stock-analysis-plugin.git
 ```
 
-### 方式二：复制 hermes/ 目录
+安装后 Hermes 通过 `hermes_agent.plugins` entry point 自动发现插件，无需额外配置。
+
+在 `~/.hermes/config.yaml` 中启用：
+
+```yaml
+plugins:
+  enabled:
+    - stock-analysis
+```
+
+### 方式二：Hermes CLI 安装
 
 ```bash
-git clone git@github.com:Weaxs/stock-analysis-plugin.git /path/to/stock-analysis-plugin
-cd /path/to/stock-analysis-plugin
-pip install -r tools/requirements.txt
-
-cp -r hermes ~/.hermes/plugins/stock-analysis
+hermes plugins install Weaxs/stock-analysis-plugin --enable
 ```
 
-> 注意：复制方式需要确保 `hermes/__init__.py` 中的路径能正确定位到 `tools/` 和 `skills/` 目录。软链接方式自动保持正确的相对路径关系。
+### 方式三：项目级插件
 
-### 方式三：代码中直接注册
+```bash
+# 需要设置 HERMES_ENABLE_PROJECT_PLUGINS=true
+mkdir -p .hermes/plugins
+git clone git@github.com:Weaxs/stock-analysis-plugin.git .hermes/plugins/stock-analysis
+cd .hermes/plugins/stock-analysis
+pip install -r tools/requirements.txt
+```
 
-如果你在定制 Hermes Agent 的启动流程，可以直接在代码中注册：
+### NixOS 声明式安装
 
-```python
-import sys
-sys.path.insert(0, "/path/to/stock-analysis-plugin")
-
-from hermes import register
-register(ctx)
+```nix
+services.hermes-agent = {
+  extraPlugins = [
+    (pkgs.fetchFromGitHub {
+      owner = "Weaxs";
+      repo = "stock-analysis-plugin";
+      rev = "v0.1.0";
+      sha256 = "...";
+    })
+  ];
+  settings.plugins.enabled = [ "stock-analysis" ];
+};
 ```
 
 ## 验证加载
 
-启动 Hermes Agent 后验证插件已加载：
+启动 Hermes Agent 后，使用 `/plugins` 查看已加载的插件列表，应能看到 `stock-analysis`。
+
+也可以手动验证：
 
 ```python
 from hermes import register
@@ -72,7 +87,20 @@ print(f"Skills: {len(ctx.skills)}") # 应输出 20
 
 ### Plugin 入口
 
-`hermes/__init__.py` 导出 `register(ctx)` 函数，该函数接收 Hermes Agent 的上下文对象：
+Hermes 通过两种方式发现本插件：
+
+1. **pip entry point**：`pyproject.toml` 声明了 `hermes_agent.plugins` entry point：
+
+```toml
+[project.entry-points."hermes_agent.plugins"]
+stock-analysis = "hermes:register"
+```
+
+2. **目录发现**：`hermes/plugin.yaml` 作为插件清单，Hermes CLI 安装时使用。
+
+### 工具注册
+
+`hermes/__init__.py` 导出 `register(ctx)` 函数，接收 Hermes PluginContext：
 
 ```python
 from pathlib import Path
@@ -82,7 +110,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 def register(ctx):
-    # 注册 31 个工具
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
         handler = _HANDLER_MAP[name]
@@ -93,7 +120,6 @@ def register(ctx):
             handler=handler,
         )
 
-    # 注册 20 个 Skill
     for child in sorted(SKILLS_DIR.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
@@ -128,63 +154,25 @@ TOOL_SCHEMAS = [
 `hermes/tools.py` 实现了 31 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
 
 ```python
-import subprocess
-from pathlib import Path
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 
 def _find_python():
-    """优先使用 .venv，fallback 到系统 python3"""
     venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
     if venv_python.exists():
         return str(venv_python)
     return "python3"
 
 def _run(script, args):
-    """执行 Python CLI 脚本并返回 stdout"""
     python = _find_python()
-    cmd = [python, str(TOOLS_DIR / script)] + args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        return result.stderr or f"Error: exit code {result.returncode}"
+    cmd = f"{python} {TOOLS_DIR / script} {args}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
     return result.stdout
-
-def get_kline(args, **kwargs):
-    cmd = ["kline", args["symbol"]]
-    if "period" in args:
-        cmd += ["--period", args["period"]]
-    if "count" in args:
-        cmd += ["--count", str(args["count"])]
-    return _run("stock_data.py", cmd)
-
-# ... 其余 30 个 handler
-```
-
-### Plugin Manifest
-
-`hermes/plugin.yaml` 声明插件元数据和依赖：
-
-```yaml
-name: stock-analysis
-version: 0.1.0
-description: "Stock analysis, screening, and strategy backtesting across A/HK/US markets"
-provides_tools:
-  - get_kline
-  - get_quote
-  # ... 31 个工具
-requires_env:
-  - name: TAVILY_API_KEY
-    description: "Tavily search API key (optional)"
-    secret: true
 ```
 
 ### 路径解析
 
-插件通过 `Path(__file__).resolve().parent.parent` 定位项目根目录，从而找到共享的 `tools/` 和 `skills/` 目录。这意味着：
-
-- 使用软链接安装时，`Path.resolve()` 会解析真实路径，自动找到正确的项目根
-- 直接复制 `hermes/` 目录时，需确保完整的项目结构存在
+插件通过 `Path(__file__).resolve().parent.parent` 定位项目根目录，从而找到共享的 `tools/` 和 `skills/` 目录。pip 安装时，`hermes/` 和 `tools/` 作为顶层 Python 包一起安装到 site-packages。
 
 ## 环境变量配置
 
@@ -256,33 +244,25 @@ export TAVILY_API_KEY="your-key-here"
 
 # 方式二：在 .env 文件中配置
 echo 'TAVILY_API_KEY=your-key-here' >> .env
-
-# 方式三：在 plugin.yaml 所在目录创建 .env
-echo 'TAVILY_API_KEY=your-key-here' >> ~/.hermes/plugins/stock-analysis/.env
 ```
 
 ## 常见问题
 
 ### ImportError: No module named 'hermes'
 
-确保 `stock-analysis-plugin` 的根目录在 Python 路径中：
+使用 pip 安装：
 
-```python
-import sys
-sys.path.insert(0, "/path/to/stock-analysis-plugin")
-from hermes import register
+```bash
+pip install git+https://github.com/Weaxs/stock-analysis-plugin.git
 ```
-
-或者确保软链接/复制的目录名为 `hermes`，且其父目录在 `sys.path` 中。
 
 ### Python 依赖缺失
 
+pip 安装时核心依赖会自动安装。如果某些可选功能不可用，安装完整依赖：
+
 ```bash
-cd /path/to/stock-analysis-plugin
 pip install -r tools/requirements.txt
 ```
-
-如果使用 virtualenv，确保 Hermes Agent 启动时激活了同一环境。
 
 ### A 股数据获取失败
 
@@ -292,36 +272,33 @@ pip install -r tools/requirements.txt
 pip install --upgrade akshare
 ```
 
-### Skill 未注册
-
-检查 `skills/` 目录是否完整。软链接方式下，确认链接目标路径正确：
-
-```bash
-ls -la ~/.hermes/plugins/stock-analysis
-# 应指向 /path/to/stock-analysis-plugin/hermes
-
-ls /path/to/stock-analysis-plugin/skills/
-# 应包含 20 个子目录
-```
-
 ### 升级插件
 
 ```bash
+# pip 方式
+pip install --upgrade git+https://github.com/Weaxs/stock-analysis-plugin.git
+
+# Hermes CLI 方式
+hermes plugins update stock-analysis
+
+# Git clone 方式
 cd /path/to/stock-analysis-plugin
 git pull
-pip install -r tools/requirements.txt  # 更新依赖
+pip install -r tools/requirements.txt
 ```
 
-## 目录结构（Hermes 相关）
+## pip 包内容
+
+通过 pip 安装时，包内包含 Hermes Plugin 所需文件：
 
 ```
-stock-analysis-plugin/
+stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) 入口
 │   ├── plugin.yaml       # 插件元数据清单
-│   ├── schemas.py        # 31 个工具的 JSON Schema 定义
-│   └── tools.py          # 31 个 handler，subprocess 调 CLI
-├── tools/                # 共享 Python CLI 工具
-├── skills/               # 共享 SKILL.md
-└── .venv/                # Python 虚拟环境（可选）
+│   ├── schemas.py        # 31 个工具的 JSON Schema
+│   └── tools.py          # 31 个 handler
+└── tools/                # Python CLI 工具
 ```
+
+> Pi 相关文件（`pi/`、`package.json`、`scripts/`）不会包含在 pip 包中。

@@ -1,6 +1,6 @@
 # Pi Agent Integration Guide
 
-This guide explains how to use `stock-analysis-plugin` as a [Pi Agent](https://github.com/anthropics/pi-agent) Extension.
+This guide explains how to use `stock-analysis-plugin` as a [Pi Agent](https://pi.dev) Extension.
 
 ## Prerequisites
 
@@ -10,7 +10,19 @@ This guide explains how to use `stock-analysis-plugin` as a [Pi Agent](https://g
 
 ## Installation
 
-### Option 1: Global Extension (Recommended)
+### Option 1: Pi Package Manager (Recommended)
+
+```bash
+pi install npm:@weaxs/stock-analysis-plugin
+```
+
+The installation automatically runs the `postinstall` script which:
+
+1. Locates `python3` on your system (requires >= 3.9)
+2. Creates a `.venv` virtual environment in the plugin directory
+3. Installs Python dependencies from `tools/requirements.txt`
+
+### Option 2: Global Extension (Git)
 
 ```bash
 cd ~/.pi/agent/extensions
@@ -19,13 +31,7 @@ cd stock-analysis-plugin
 npm install
 ```
 
-`npm install` automatically runs the `postinstall` script which:
-
-1. Locates `python3` on your system (requires >= 3.9)
-2. Creates a `.venv` virtual environment in the plugin directory
-3. Installs Python dependencies from `tools/requirements.txt`
-
-### Option 2: Project-level Extension
+### Option 3: Project-level Extension
 
 ```bash
 mkdir -p .pi/extensions && cd .pi/extensions
@@ -35,6 +41,16 @@ npm install
 ```
 
 Project-level extensions are only available within that project's Pi Agent sessions.
+
+### Option 4: settings.json Configuration
+
+```json
+{
+  "packages": [
+    "npm:@weaxs/stock-analysis-plugin@0.1.0"
+  ]
+}
+```
 
 ## Verifying the Installation
 
@@ -75,7 +91,7 @@ Pi Agent loads TypeScript extensions using [jiti](https://github.com/nicolo-riba
 `pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 31 tools via `pi.registerTool()`:
 
 ```typescript
-import type { ExtensionAPI } from "pi-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default (pi: ExtensionAPI) => {
   pi.registerTool({
@@ -224,21 +240,30 @@ Some tools (e.g., `screen_stocks` for full-market screening) may take longer to 
 ### Upgrading the plugin
 
 ```bash
+# Installed via Pi package manager:
+pi install npm:@weaxs/stock-analysis-plugin@latest
+
+# Installed via Git:
 cd ~/.pi/agent/extensions/stock-analysis-plugin
 git pull
-npm install  # Re-installs Python dependencies
+npm install
 ```
 
-## Directory Structure (Pi-related)
+## npm Package Contents
+
+When installed via npm, the package only contains files needed for the Pi Extension:
 
 ```
-stock-analysis-plugin/
+@weaxs/stock-analysis-plugin/
 ├── pi/
 │   └── index.ts          # Extension entry — registers tools and skills
-├── tools/                # Shared Python CLI tools
-├── skills/               # Shared SKILL.md files
+├── tools/                # Python CLI tools
+├── skills/               # SKILL.md files
+├── schemas/              # Strategy schemas
+├── strategies/           # Strategy examples
 ├── scripts/
 │   └── setup-python.mjs  # postinstall script for Python setup
-├── package.json          # pi.extensions + pi.skills config
-└── .venv/                # Auto-created Python virtual environment
+└── package.json          # pi.extensions + pi.skills config
 ```
+
+> Hermes-related files (`hermes/`, `pyproject.toml`) are not included in the npm package.

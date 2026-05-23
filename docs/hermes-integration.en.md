@@ -1,52 +1,67 @@
 # Hermes Agent Integration Guide
 
-This guide explains how to use `stock-analysis-plugin` as a [Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin.
+This guide explains how to use `stock-analysis-plugin` as a [Hermes Agent](https://hermes-agent.nousresearch.com) Plugin.
 
 ## Prerequisites
 
-- Python >= 3.9
+- Python >= 3.10
 - Hermes Agent installed and running
 
 ## Installation
 
-### Option 1: Symlink to Plugin Directory (Recommended)
+### Option 1: pip Install (Recommended)
 
 ```bash
-git clone git@github.com:Weaxs/stock-analysis-plugin.git /path/to/stock-analysis-plugin
-cd /path/to/stock-analysis-plugin
-pip install -r tools/requirements.txt
-
-# Symlink the hermes/ directory into Hermes plugin directory
-ln -s /path/to/stock-analysis-plugin/hermes ~/.hermes/plugins/stock-analysis
+pip install git+https://github.com/Weaxs/stock-analysis-plugin.git
 ```
 
-### Option 2: Copy the hermes/ Directory
+After installation, Hermes auto-discovers the plugin via the `hermes_agent.plugins` entry point. No manual config needed.
+
+Enable it in `~/.hermes/config.yaml`:
+
+```yaml
+plugins:
+  enabled:
+    - stock-analysis
+```
+
+### Option 2: Hermes CLI
 
 ```bash
-git clone git@github.com:Weaxs/stock-analysis-plugin.git /path/to/stock-analysis-plugin
-cd /path/to/stock-analysis-plugin
-pip install -r tools/requirements.txt
-
-cp -r hermes ~/.hermes/plugins/stock-analysis
+hermes plugins install Weaxs/stock-analysis-plugin --enable
 ```
 
-> Note: When copying, ensure that `hermes/__init__.py` can still resolve paths to the `tools/` and `skills/` directories. The symlink approach automatically maintains correct relative paths.
+### Option 3: Project-local Plugin
 
-### Option 3: Register Directly in Code
+```bash
+# Requires HERMES_ENABLE_PROJECT_PLUGINS=true
+mkdir -p .hermes/plugins
+git clone git@github.com:Weaxs/stock-analysis-plugin.git .hermes/plugins/stock-analysis
+cd .hermes/plugins/stock-analysis
+pip install -r tools/requirements.txt
+```
 
-If you're customizing the Hermes Agent startup flow, you can register directly:
+### NixOS Declarative Installation
 
-```python
-import sys
-sys.path.insert(0, "/path/to/stock-analysis-plugin")
-
-from hermes import register
-register(ctx)
+```nix
+services.hermes-agent = {
+  extraPlugins = [
+    (pkgs.fetchFromGitHub {
+      owner = "Weaxs";
+      repo = "stock-analysis-plugin";
+      rev = "v0.1.0";
+      sha256 = "...";
+    })
+  ];
+  settings.plugins.enabled = [ "stock-analysis" ];
+};
 ```
 
 ## Verifying the Installation
 
-Test that the plugin loads correctly:
+After starting Hermes Agent, use `/plugins` to view loaded plugins — you should see `stock-analysis`.
+
+You can also verify programmatically:
 
 ```python
 from hermes import register
@@ -70,9 +85,22 @@ print(f"Skills: {len(ctx.skills)}") # Should print 20
 
 ## How It Works
 
-### Plugin Entry Point
+### Plugin Discovery
 
-`hermes/__init__.py` exports a `register(ctx)` function that receives the Hermes Agent context object:
+Hermes discovers this plugin through two mechanisms:
+
+1. **pip entry point**: `pyproject.toml` declares the `hermes_agent.plugins` entry point:
+
+```toml
+[project.entry-points."hermes_agent.plugins"]
+stock-analysis = "hermes:register"
+```
+
+2. **Directory discovery**: `hermes/plugin.yaml` serves as the plugin manifest for Hermes CLI installs.
+
+### Tool Registration
+
+`hermes/__init__.py` exports a `register(ctx)` function that receives the Hermes PluginContext:
 
 ```python
 from pathlib import Path
@@ -82,7 +110,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 def register(ctx):
-    # Register 31 tools
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
         handler = _HANDLER_MAP[name]
@@ -93,7 +120,6 @@ def register(ctx):
             handler=handler,
         )
 
-    # Register 20 skills
     for child in sorted(SKILLS_DIR.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
@@ -128,63 +154,25 @@ TOOL_SCHEMAS = [
 `hermes/tools.py` implements 31 handler functions, each calling the corresponding Python CLI script via `subprocess`:
 
 ```python
-import subprocess
-from pathlib import Path
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 
 def _find_python():
-    """Prefer .venv, fall back to system python3"""
     venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
     if venv_python.exists():
         return str(venv_python)
     return "python3"
 
 def _run(script, args):
-    """Execute a Python CLI script and return stdout"""
     python = _find_python()
-    cmd = [python, str(TOOLS_DIR / script)] + args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        return result.stderr or f"Error: exit code {result.returncode}"
+    cmd = f"{python} {TOOLS_DIR / script} {args}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
     return result.stdout
-
-def get_kline(args, **kwargs):
-    cmd = ["kline", args["symbol"]]
-    if "period" in args:
-        cmd += ["--period", args["period"]]
-    if "count" in args:
-        cmd += ["--count", str(args["count"])]
-    return _run("stock_data.py", cmd)
-
-# ... 30 more handlers
-```
-
-### Plugin Manifest
-
-`hermes/plugin.yaml` declares plugin metadata and dependencies:
-
-```yaml
-name: stock-analysis
-version: 0.1.0
-description: "Stock analysis, screening, and strategy backtesting across A/HK/US markets"
-provides_tools:
-  - get_kline
-  - get_quote
-  # ... 31 tools total
-requires_env:
-  - name: TAVILY_API_KEY
-    description: "Tavily search API key (optional)"
-    secret: true
 ```
 
 ### Path Resolution
 
-The plugin locates the project root via `Path(__file__).resolve().parent.parent`, which gives access to the shared `tools/` and `skills/` directories. This means:
-
-- **Symlink installs**: `Path.resolve()` follows the symlink to the real path, automatically finding the correct project root
-- **Copy installs**: The full project structure must exist at the expected relative location
+The plugin locates the project root via `Path(__file__).resolve().parent.parent`. When installed via pip, both `hermes/` and `tools/` are installed as top-level packages in site-packages, maintaining the expected relative path structure.
 
 ## Environment Variables
 
@@ -256,33 +244,25 @@ export TAVILY_API_KEY="your-key-here"
 
 # Option 2: .env file in project root
 echo 'TAVILY_API_KEY=your-key-here' >> .env
-
-# Option 3: .env in plugin directory
-echo 'TAVILY_API_KEY=your-key-here' >> ~/.hermes/plugins/stock-analysis/.env
 ```
 
 ## Troubleshooting
 
 ### ImportError: No module named 'hermes'
 
-Ensure the `stock-analysis-plugin` root directory is in your Python path:
+Install via pip:
 
-```python
-import sys
-sys.path.insert(0, "/path/to/stock-analysis-plugin")
-from hermes import register
+```bash
+pip install git+https://github.com/Weaxs/stock-analysis-plugin.git
 ```
-
-Or ensure the symlinked/copied directory is named `hermes` and its parent is on `sys.path`.
 
 ### Missing Python dependencies
 
+Core dependencies are installed automatically with pip. For optional features, install the full requirements:
+
 ```bash
-cd /path/to/stock-analysis-plugin
 pip install -r tools/requirements.txt
 ```
-
-If using a virtualenv, make sure Hermes Agent starts with the same environment activated.
 
 ### A-share data fetch failures
 
@@ -292,36 +272,33 @@ The underlying data source is [akshare](https://github.com/akfamily/akshare). Fa
 pip install --upgrade akshare
 ```
 
-### Skills not registered
-
-Check that the `skills/` directory is intact. With symlink installs, verify the link target is correct:
-
-```bash
-ls -la ~/.hermes/plugins/stock-analysis
-# Should point to /path/to/stock-analysis-plugin/hermes
-
-ls /path/to/stock-analysis-plugin/skills/
-# Should contain 20 subdirectories
-```
-
 ### Upgrading the plugin
 
 ```bash
+# pip install
+pip install --upgrade git+https://github.com/Weaxs/stock-analysis-plugin.git
+
+# Hermes CLI
+hermes plugins update stock-analysis
+
+# Git clone
 cd /path/to/stock-analysis-plugin
 git pull
-pip install -r tools/requirements.txt  # Update dependencies
+pip install -r tools/requirements.txt
 ```
 
-## Directory Structure (Hermes-related)
+## pip Package Contents
+
+When installed via pip, the package contains only files needed for the Hermes Plugin:
 
 ```
-stock-analysis-plugin/
+stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # Plugin manifest
 │   ├── schemas.py        # JSON Schema definitions for 31 tools
 │   └── tools.py          # 31 handlers calling CLI via subprocess
-├── tools/                # Shared Python CLI tools
-├── skills/               # Shared SKILL.md files
-└── .venv/                # Python virtual environment (optional)
+└── tools/                # Python CLI tools
 ```
+
+> Pi-related files (`pi/`, `package.json`, `scripts/`) are not included in the pip package.
