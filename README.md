@@ -1,5 +1,10 @@
 # stock-analysis-plugin
 
+[![npm](https://img.shields.io/npm/v/@weaxs/stock-analysis-plugin?label=npm&logo=npm)](https://www.npmjs.com/package/@weaxs/stock-analysis-plugin)
+[![PyPI](https://img.shields.io/pypi/v/stock-analysis-plugin?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/stock-analysis-plugin/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-%3E=3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
+
 A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension 或 [Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin 使用。
 
 底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层分别适配两个平台的注册机制。
@@ -38,22 +43,24 @@ A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，
 ```bash
 # 全局安装
 cd ~/.pi/agent/extensions
-git clone git@github.com:Weaxs/stock-analysis-plugin.git
+npm install @weaxs/stock-analysis-plugin
 
 # 或项目级安装
 mkdir -p .pi/extensions && cd .pi/extensions
-git clone git@github.com:Weaxs/stock-analysis-plugin.git
+npm install @weaxs/stock-analysis-plugin
 ```
+
+> 也可以直接 `git clone git@github.com:Weaxs/stock-analysis-plugin.git` 使用源码版本。
 
 Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
 
 ### Hermes Agent Plugin
 
-将 `hermes/` 目录复制或软链到 Hermes 插件目录：
-
 ```bash
-ln -s /path/to/stock-analysis/hermes ~/.hermes/plugins/stock-analysis
+pip install stock-analysis-plugin
 ```
+
+安装后 Hermes 通过 `hermes_agent.plugins` entry point 自动发现并注册，无需手动复制目录。
 
 或在 Python 中直接注册：
 

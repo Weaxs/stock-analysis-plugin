@@ -1,6 +1,6 @@
 {
   "name": "@weaxs/stock-analysis-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi Agent extension for stock analysis, screening, and strategy backtesting across A/HK/US markets",
   "type": "module",
   "main": "./pi/index.ts",
@@ -45,10 +45,25 @@
   },
   "keywords": [
     "pi-agent",
+    "pi-extension",
+    "ai-agent",
     "stock",
-    "analysis",
+    "stock-analysis",
+    "stock-market",
+    "stock-screener",
     "backtest",
-    "screener"
+    "backtesting",
+    "quantitative-finance",
+    "quantitative-trading",
+    "algorithmic-trading",
+    "technical-analysis",
+    "factor-investing",
+    "a-shares",
+    "hk-stocks",
+    "us-stocks",
+    "akshare",
+    "yfinance",
+    "tushare"
   ],
   "repository": {
     "type": "git",
