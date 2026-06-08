@@ -14,7 +14,7 @@
 ### 方式一：通过 ClawHub 安装（推荐）
 
 ```bash
-openclaw plugins install clawhub:weaxs/stock-analysis
+openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
 `clawhub:` 前缀强制走 ClawHub registry。安装时 npm 的 `postinstall` 会自动执行 `scripts/setup-python.mjs`：
@@ -251,7 +251,7 @@ OpenClaw plugin 装在哪里取决于 Gateway 的安装策略——通常是 `~/
 
 ```bash
 # ClawHub 安装的：
-openclaw plugins install clawhub:weaxs/stock-analysis@latest
+openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis@latest
 
 # npm 安装的：
 openclaw plugins install @weaxs/openclaw-stock-analysis@latest

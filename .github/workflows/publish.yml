@@ -154,12 +154,10 @@ jobs:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
 
       - name: Publish to ClawHub (dry-run)
-        working-directory: openclaw
-        run: clawhub package publish weaxs/stock-analysis --dry-run
+        run: clawhub package publish ./openclaw --dry-run
 
       - name: Publish to ClawHub
-        working-directory: openclaw
-        run: clawhub package publish weaxs/stock-analysis
+        run: clawhub package publish ./openclaw
 
   github-release:
     runs-on: ubuntu-latest
@@ -186,7 +184,7 @@ jobs:
           echo "---" >> release_notes.md
           echo "**npm**: \`npm install @weaxs/stock-analysis-plugin@${GITHUB_REF_NAME#v}\`" >> release_notes.md
           echo "**pip**: \`pip install stock-analysis-plugin==${GITHUB_REF_NAME#v}\`" >> release_notes.md
-          echo "**OpenClaw**: \`openclaw plugins install clawhub:weaxs/stock-analysis\`" >> release_notes.md
+          echo "**OpenClaw**: \`openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis\`" >> release_notes.md
 
       - name: Create GitHub Release
         run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md

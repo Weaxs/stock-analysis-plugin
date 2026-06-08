@@ -75,7 +75,7 @@ register(ctx)
 ### OpenClaw Plugin
 
 ```bash
-openclaw plugins install clawhub:weaxs/stock-analysis
+openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
 OpenClaw Gateway 启动后自动加载并注册 31 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
