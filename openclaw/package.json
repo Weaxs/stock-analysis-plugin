@@ -1,0 +1,46 @@
+{
+  "name": "@weaxs/openclaw-stock-analysis",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin for stock analysis, screening, and strategy backtesting across A/HK/US markets",
+  "type": "module",
+  "main": "./index.ts",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  },
+  "scripts": {
+    "postinstall": "node scripts/setup-python.mjs"
+  },
+  "files": [
+    "index.ts",
+    "openclaw.plugin.json",
+    "README.md",
+    "tools/",
+    "skills/",
+    "schemas/",
+    "strategies/",
+    "scripts/"
+  ],
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "stock-analysis",
+    "stock-screener",
+    "backtest",
+    "a-shares",
+    "hk-stocks",
+    "us-stocks"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Weaxs/stock-analysis-plugin"
+  },
+  "license": "MIT"
+}

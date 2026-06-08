@@ -81,6 +81,9 @@ jobs:
       - name: Test Pi extension registration
         run: npx tsx tests/test_pi_integration.ts
 
+      - name: Test OpenClaw plugin registration
+        run: npx tsx tests/test_openclaw_integration.ts
+
   build:
     runs-on: ubuntu-latest
     needs: [lint, test, integration]

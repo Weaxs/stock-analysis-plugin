@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%3E=3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
 
-A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension 或 [Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin 使用。
+A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension、[Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin，或 [OpenClaw](https://docs.openclaw.ai/) Plugin 使用。
 
-底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层分别适配两个平台的注册机制。
+底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层分别适配三个平台的注册机制。
 
 ## 目录
 
@@ -15,6 +15,7 @@ A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，
 - [安装](#安装)
   - [Pi Agent Extension](#pi-agent-extension)
   - [Hermes Agent Plugin](#hermes-agent-plugin)
+  - [OpenClaw Plugin](#openclaw-plugin)
   - [Python 依赖](#python-依赖)
 - [快速开始](#快速开始)
 - [Skills 一览](#skills-一览)
@@ -29,12 +30,12 @@ A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，
 
 ## 功能概览
 
-- **28 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
-- **15 个 Skills** — 综合分析、全市场选股、策略回测 + 12 个策略方法论（缠论、波浪、龙头、情绪周期等）
+- **31 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
+- **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
 - **多数据源 Failover** — 9 个数据源自动容灾切换（akshare / tushare / efinance / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage）
 - **社交舆情增强** — A 股（东财股吧 + 雪球）/ 美港股（Reddit / X / Polymarket），市场自动路由
-- **双平台适配** — 同一套工具同时支持 Pi Agent 和 Hermes Agent
+- **三平台适配** — 同一套工具同时支持 Pi Agent、Hermes Agent 和 OpenClaw
 
 ## 安装
 
@@ -70,6 +71,16 @@ register(ctx)
 ```
 
 详见 [Hermes Agent 接入指南](docs/hermes-integration.md)（[English](docs/hermes-integration.en.md)）。
+
+### OpenClaw Plugin
+
+```bash
+openclaw plugins install clawhub:weaxs/stock-analysis
+```
+
+OpenClaw Gateway 启动后自动加载并注册 31 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
+
+详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
 ### Python 依赖
 
@@ -353,12 +364,16 @@ python tools/market_regime.py detect A
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 28 个工具 + 15 个 skill
+│   └── index.ts                     #   注册 31 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   28 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   31 个 handler → subprocess 调 CLI
+├── openclaw/                        # OpenClaw Plugin
+│   ├── openclaw.plugin.json         #   manifest（contracts.tools）
+│   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
+│   └── index.ts                     #   definePluginEntry + registerTool ×31
 │
 ├── tools/                           # 共享 Python CLI 工具（12 个脚本）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务
@@ -374,7 +389,7 @@ stock-analysis/
 │   ├── trading_calendar.py          #   交易日历
 │   └── requirements.txt
 │
-├── skills/                          # 共享 SKILL.md（15 个）
+├── skills/                          # 共享 SKILL.md（20 个）
 │   ├── stock-analysis/              #   综合分析 workflow
 │   ├── stock-screener/              #   选股 workflow
 │   ├── strategy-backtest/           #   回测 + 进化 workflow
@@ -393,11 +408,11 @@ stock-analysis/
 用户 (自然语言)
     │
     ▼
-Agent (Pi / Hermes)
+Agent (Pi / Hermes / OpenClaw)
     │
     ├── 加载 SKILL.md → 分析框架 / 流程指引
     │
-    ├── 调用工具 → pi/index.ts 或 hermes/tools.py → python3 tools/xxx.py → JSON
+    ├── 调用工具 → pi/index.ts 或 hermes/tools.py 或 openclaw/index.ts → python3 tools/xxx.py → JSON
     │
     ▼
 Agent (LLM 分析 + 生成报告)

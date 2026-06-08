@@ -62,6 +62,9 @@ jobs:
       - name: Test Pi extension registration
         run: npx tsx tests/test_pi_integration.ts
 
+      - name: Test OpenClaw plugin registration
+        run: npx tsx tests/test_openclaw_integration.ts
+
   publish-npm:
     runs-on: ubuntu-latest
     needs: [lint, test]
@@ -112,9 +115,55 @@ jobs:
         with:
           password: ${{ secrets.PYPI_TOKEN }}
 
+  publish-openclaw:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Stage payload into openclaw/
+        run: |
+          set -euo pipefail
+          for d in tools skills schemas strategies scripts; do
+            if [ -d "$d" ]; then
+              rm -rf "openclaw/$d"
+              cp -R "$d" "openclaw/$d"
+            fi
+          done
+
+      - name: Install clawhub CLI
+        run: npm i -g clawhub
+
+      - name: npm publish
+        working-directory: openclaw
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Authenticate clawhub CLI
+        run: clawhub login --token "$CLAWHUB_TOKEN" --no-input
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+
+      - name: Publish to ClawHub (dry-run)
+        working-directory: openclaw
+        run: clawhub package publish weaxs/stock-analysis --dry-run
+
+      - name: Publish to ClawHub
+        working-directory: openclaw
+        run: clawhub package publish weaxs/stock-analysis
+
   github-release:
     runs-on: ubuntu-latest
-    needs: [publish-npm, publish-pypi]
+    needs: [publish-npm, publish-pypi, publish-openclaw]
     permissions:
       contents: write
     steps:
@@ -137,6 +186,7 @@ jobs:
           echo "---" >> release_notes.md
           echo "**npm**: \`npm install @weaxs/stock-analysis-plugin@${GITHUB_REF_NAME#v}\`" >> release_notes.md
           echo "**pip**: \`pip install stock-analysis-plugin==${GITHUB_REF_NAME#v}\`" >> release_notes.md
+          echo "**OpenClaw**: \`openclaw plugins install clawhub:weaxs/stock-analysis\`" >> release_notes.md
 
       - name: Create GitHub Release
         run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md

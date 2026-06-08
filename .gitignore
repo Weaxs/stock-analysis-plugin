@@ -26,6 +26,7 @@ node_modules/
 !package-lock.json
 !tsconfig.json
 !schemas/**/*.json
+!openclaw/openclaw.plugin.json
 !strategies/**/*.yaml
 
 # Env

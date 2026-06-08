@@ -10,5 +10,5 @@
     "types": ["node"],
     "typeRoots": ["./typings", "./node_modules/@types"]
   },
-  "include": ["pi/index.ts"]
+  "include": ["pi/index.ts", "openclaw/index.ts", "typings/**/*.d.ts"]
 }
