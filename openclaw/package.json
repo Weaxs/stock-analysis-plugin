@@ -1,6 +1,6 @@
 {
   "name": "@weaxs/openclaw-stock-analysis",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "OpenClaw plugin for stock analysis, screening, and strategy backtesting across A/HK/US markets",
   "type": "module",
   "main": "./index.ts",
