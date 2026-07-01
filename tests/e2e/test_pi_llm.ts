@@ -133,20 +133,53 @@ function assert(cond: boolean, msg: string) {
   }
 }
 
-// Test 1: single tool
+// Test 1a: English — company names → US tickers. Fully offline (regex only).
 {
   const r = await runLoop(
-    "从这段文字里找出所有股票代码：我想看茅台 600519 和 AAPL。只列出代码。",
+    "I want to check on Nvidia and Apple. What are their exact stock tickers? " +
+      "Use a tool to extract them — don't guess from memory. " +
+      "Reply with just the tickers, comma-separated.",
     ["parse_stock_list"]
   );
   const names = r.toolCalls.map((t) => t.name);
   assert(
     names.includes("parse_stock_list"),
-    `LLM did not call parse_stock_list. calls=${JSON.stringify(r.toolCalls)}`
+    `LLM did not call parse_stock_list (english). calls=${JSON.stringify(r.toolCalls)}`
   );
-  assert(r.final.includes("600519"), `final missing 600519: ${r.final}`);
+  assert(r.final.includes("NVDA"), `final missing NVDA: ${r.final}`);
   assert(r.final.includes("AAPL"), `final missing AAPL: ${r.final}`);
-  console.log("  OK: parse_stock_list flow");
+  console.log("  OK: parse_stock_list english flow");
+}
+
+// Test 1b: Chinese — full names → A-share codes. Requires akshare for name
+// resolution; soft-assert codes to avoid coupling to upstream data health.
+{
+  const r = await runLoop(
+    "我想查贵州茅台和宁德时代的股票代码。用工具从文本里提取，不要凭记忆猜。只回答代码，逗号分隔。",
+    ["parse_stock_list"]
+  );
+  const names = r.toolCalls.map((t) => t.name);
+  assert(
+    names.includes("parse_stock_list"),
+    `LLM did not call parse_stock_list (chinese). calls=${JSON.stringify(r.toolCalls)}`
+  );
+
+  // Check what akshare actually returned this time; only assert on codes it resolved.
+  const tool = registered.find((r) => r.name === "parse_stock_list")!;
+  const probeRaw = await tool.execute({ text: "贵州茅台和宁德时代" });
+  const probe = JSON.parse(probeRaw);
+  const resolvedCodes = new Set(
+    (probe.items || []).filter((i: any) => i.market === "A").map((i: any) => i.symbol)
+  );
+  for (const expected of ["600519", "300750"]) {
+    if (resolvedCodes.has(expected)) {
+      assert(
+        r.final.includes(expected),
+        `tool resolved ${expected} but final answer missing: ${r.final}`
+      );
+    }
+  }
+  console.log("  OK: parse_stock_list chinese flow");
 }
 
 // Test 2: capabilities boundary

@@ -124,26 +124,58 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
 
 
 class TestSingleToolFlow:
-    """Simplest possible e2e: LLM must pick parse_stock_list for a symbol-extract task."""
+    """LLM must call parse_stock_list — the user only gives natural language,
+    never the ticker/code. The only way to get the answer is via the tool."""
 
-    def test_parse_stock_list_flow(self, client, hermes_handlers):
+    def test_parse_stock_list_english(self, client, hermes_handlers):
+        """English: company names → US tickers. Doesn't hit akshare, fully stable."""
         result = _run_agent_loop(
             client,
             hermes_handlers,
-            user_msg="从这段文字里找出所有股票代码：我想看茅台 600519 和 AAPL 今天怎么样。只列出代码。",
+            user_msg=(
+                "I want to check on Nvidia and Apple. What are their exact stock tickers? "
+                "Use a tool to extract them — don't guess from memory. "
+                "Reply with just the tickers, comma-separated."
+            ),
             tool_names=["parse_stock_list"],
         )
 
-        # Must have called parse_stock_list at least once
         names_called = [tc["name"] for tc in result["tool_calls"]]
         assert "parse_stock_list" in names_called, (
             f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
         )
 
-        # Final answer should mention both symbols
         final = result["final"]
-        assert "600519" in final, f"final answer missing 600519: {final}"
+        assert "NVDA" in final, f"final answer missing NVDA: {final}"
         assert "AAPL" in final, f"final answer missing AAPL: {final}"
+
+    def test_parse_stock_list_chinese(self, client, hermes_handlers):
+        """Chinese: full names → A-share codes. parse_stock_list uses akshare
+        for name resolution — if akshare is unreachable, tool returns unresolved.
+        We still assert the LLM called the tool (main e2e contract) but only
+        soft-assert on final codes to avoid coupling to upstream data health."""
+        result = _run_agent_loop(
+            client,
+            hermes_handlers,
+            user_msg=("我想查贵州茅台和宁德时代的股票代码。用工具从文本里提取，不要凭记忆猜。只回答代码，逗号分隔。"),
+            tool_names=["parse_stock_list"],
+        )
+
+        names_called = [tc["name"] for tc in result["tool_calls"]]
+        assert "parse_stock_list" in names_called, (
+            f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
+        )
+
+        # Soft-check: if akshare worked, tool should have surfaced codes.
+        # If akshare was flaky, tool returned {unresolved: [...]} and the LLM
+        # will honestly say so — either way the e2e contract (LLM → tool → answer) held.
+        tool_output = json.loads(hermes_handlers.handlers["parse_stock_list"]({"text": "贵州茅台和宁德时代"}))
+        resolved_codes = {i["symbol"] for i in tool_output.get("items", []) if i.get("market") == "A"}
+        if resolved_codes:
+            final = result["final"]
+            for expected in ("600519", "300750"):
+                if expected in resolved_codes:
+                    assert expected in final, f"tool resolved {expected} but final answer missing it: {final}"
 
 
 class TestMultiToolFlow:
