@@ -460,9 +460,11 @@ def diagnose(metrics: dict) -> dict:
 
 def diagnose_advanced(metrics: dict, trades: list, equity_curve: list, strategy: dict) -> dict:
     """Extra agent-friendly diagnostics: failure reason, regime fit, parameter hints."""
-    exit_cfg = strategy.get("exit", {})
-    stop_loss = float(exit_cfg.get("stop_loss", -0.10))
-    take_profit = float(exit_cfg.get("take_profit", 0.50))
+    exit_cfg = strategy.get("exit") or {}
+    sl_val = exit_cfg.get("stop_loss")
+    stop_loss = float(sl_val) if sl_val is not None else -0.10
+    tp_val = exit_cfg.get("take_profit")
+    take_profit = float(tp_val) if tp_val is not None else 0.50
 
     total = metrics.get("total_trades", 0)
     win_rate = metrics.get("win_rate", 0)

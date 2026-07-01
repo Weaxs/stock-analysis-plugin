@@ -7,6 +7,7 @@ Does NOT hit the network — this is a cheap capability probe, not a health chec
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -33,10 +34,12 @@ PROVIDERS = {
 def _check_provider(name: str) -> dict:
     import_name, env_vars, markets, note = PROVIDERS[name]
 
+    # find_spec avoids executing the package's top-level code — cheaper and
+    # side-effect-free vs import_module. This is a capability probe, not a call.
     try:
-        importlib.import_module(import_name)
-        pkg_ok = True
-        pkg_err = None
+        spec = importlib.util.find_spec(import_name)
+        pkg_ok = spec is not None
+        pkg_err = None if pkg_ok else f"package '{import_name}' not installed"
     except Exception as e:
         pkg_ok = False
         pkg_err = f"package '{import_name}' not installed: {e}"
@@ -113,9 +116,10 @@ def main():
     p = sub.add_parser("check")
     p.add_argument(
         "--market",
-        default="all",
-        choices=["A", "HK", "US", "all"],
-        help="Market to diagnose (default: all)",
+        default="ALL",
+        type=str.upper,
+        choices=["A", "HK", "US", "ALL"],
+        help="Market to diagnose (default: ALL)",
     )
     args = parser.parse_args()
     if not args.command:

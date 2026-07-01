@@ -61,7 +61,7 @@
 {%- endmacro %}
 
 {% macro change_pct(v) -%}
-{%- if v is none -%}-
+{%- if v is none or v is not number -%}-
 {%- elif v > 0 -%}+{{ '%.2f'|format(v) }}%
 {%- else -%}{{ '%.2f'|format(v) }}%
 {%- endif -%}

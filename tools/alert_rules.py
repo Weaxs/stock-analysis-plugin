@@ -164,6 +164,16 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     anom = _run_json("anomaly_detect.py", ["detect", symbol]) if needs_anom else None
     risk = _run_json("risk_screening.py", ["screen", symbol]) if needs_risk else None
 
+    warnings = []
+    if not quote or quote.get("price") is None:
+        warnings.append("quote fetch failed or missing price — price/change rules cannot fire")
+    if needs_tech and not tech:
+        warnings.append("technical analysis fetch failed — volume_ratio rules cannot fire")
+    if needs_anom and not anom:
+        warnings.append("anomaly fetch failed — anomaly rules cannot fire")
+    if needs_risk and not risk:
+        warnings.append("risk screening fetch failed — risk rules cannot fire")
+
     hits = []
     evaluated = []
     for rule in rules:
@@ -181,7 +191,7 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "freshness": "realtime_or_latest_trade_day",
             "fallback_used": False,
-            "warnings": [],
+            "warnings": warnings,
         },
         "symbol": symbol,
         "market": detect_market(symbol),

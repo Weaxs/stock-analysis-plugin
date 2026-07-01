@@ -81,7 +81,7 @@ def main():
     sub = parser.add_subparsers(dest="command")
     p = sub.add_parser("get")
     grp = p.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--market", choices=["A", "HK", "US"], help="Market code")
+    grp.add_argument("--market", type=str.upper, choices=["A", "HK", "US"], help="Market code")
     grp.add_argument("--symbol", help="Stock symbol (auto-detects market)")
     args = parser.parse_args()
 

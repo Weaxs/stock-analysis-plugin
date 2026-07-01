@@ -32,16 +32,16 @@ class TestCheckProvider:
     def test_missing_finnhub_package_reported(self, monkeypatch):
         # Simulate finnhub package missing even though env is set
         monkeypatch.setenv("FINNHUB_API_KEY", "fake")
-        import importlib
+        import importlib.util
 
-        real_import = importlib.import_module
+        real_find_spec = importlib.util.find_spec
 
-        def fake_import(name, *a, **kw):
+        def fake_find_spec(name, *a, **kw):
             if name == "finnhub":
-                raise ImportError("No module named 'finnhub'")
-            return real_import(name, *a, **kw)
+                return None
+            return real_find_spec(name, *a, **kw)
 
-        monkeypatch.setattr(importlib, "import_module", fake_import)
+        monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
         result = diagnostics._check_provider("finnhub")
         assert result["available"] is False
         assert "finnhub" in (result["reason"] or "")
@@ -50,16 +50,16 @@ class TestCheckProvider:
         # Env vars set but simulate longport.openapi missing
         for v in ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"):
             monkeypatch.setenv(v, "x")
-        import importlib
+        import importlib.util
 
-        real_import = importlib.import_module
+        real_find_spec = importlib.util.find_spec
 
-        def fake_import(name, *a, **kw):
+        def fake_find_spec(name, *a, **kw):
             if name == "longport.openapi":
-                raise ImportError("No module named 'longport'")
-            return real_import(name, *a, **kw)
+                return None
+            return real_find_spec(name, *a, **kw)
 
-        monkeypatch.setattr(importlib, "import_module", fake_import)
+        monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
         result = diagnostics._check_provider("longbridge")
         assert result["available"] is False
         assert "longport" in (result["reason"] or "")
