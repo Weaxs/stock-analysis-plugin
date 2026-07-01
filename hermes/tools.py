@@ -1,3 +1,4 @@
+import base64
 import json
 import subprocess
 import sys
@@ -227,3 +228,63 @@ def run_watchlist_analysis(args: dict, **kwargs) -> str:
 def detect_anomaly(args: dict, **kwargs) -> str:
     symbol = args["symbol"]
     return _run("anomaly_detect.py", f"detect {symbol}")
+
+
+def diagnose_data_sources(args: dict, **kwargs) -> str:
+    market = args.get("market", "all")
+    return _run("diagnostics.py", f"check --market {market}")
+
+
+def get_market_capabilities(args: dict, **kwargs) -> str:
+    market = args.get("market")
+    symbol = args.get("symbol")
+    arg = f"--symbol {symbol}" if symbol else f"--market {market or 'A'}"
+    return _run("capabilities.py", f"get {arg}")
+
+
+def render_stock_report(args: dict, **kwargs) -> str:
+    report = args["report"]
+    template = args.get("template", "full")
+    payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    return _run("report_renderer.py", f"stock --template {template} --input-b64 {payload}")
+
+
+def render_market_report(args: dict, **kwargs) -> str:
+    report = args["report"]
+    template = args.get("template", "full")
+    payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    return _run("report_renderer.py", f"market --template {template} --input-b64 {payload}")
+
+
+def build_watchlist_context(args: dict, **kwargs) -> str:
+    symbols = args["symbols"]
+    workers = args.get("workers", 3)
+    flag = " --include-market-review" if args.get("include_market_review") else ""
+    return _run("watchlist_context.py", f"build {symbols} --workers {workers}{flag}")
+
+
+def analyze_position_context(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    cost = args["cost"]
+    quantity = args["quantity"]
+    stop_loss = args.get("stop_loss")
+    take_profit = args.get("take_profit")
+    sl_arg = f" --stop-loss {stop_loss}" if stop_loss is not None else ""
+    tp_arg = f" --take-profit {take_profit}" if take_profit is not None else ""
+    return _run(
+        "position_context.py",
+        f"analyze {symbol} --cost {cost} --quantity {quantity}{sl_arg}{tp_arg}",
+    )
+
+
+def check_alert_rules(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    rules = args["rules"]
+    payload = base64.b64encode(json.dumps(rules, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    return _run("alert_rules.py", f"check {symbol} --rules-b64 {payload}")
+
+
+def parse_stock_list(args: dict, **kwargs) -> str:
+    text = args["text"]
+    payload = base64.b64encode(str(text).encode("utf-8")).decode("ascii")
+    return _run("import_parser.py", f"parse --text-b64 {payload}")

@@ -37,6 +37,14 @@ _HANDLER_MAP = {
     "get_market_review": tools.get_market_review,
     "run_watchlist_analysis": tools.run_watchlist_analysis,
     "detect_anomaly": tools.detect_anomaly,
+    "diagnose_data_sources": tools.diagnose_data_sources,
+    "get_market_capabilities": tools.get_market_capabilities,
+    "render_stock_report": tools.render_stock_report,
+    "render_market_report": tools.render_market_report,
+    "build_watchlist_context": tools.build_watchlist_context,
+    "analyze_position_context": tools.analyze_position_context,
+    "check_alert_rules": tools.check_alert_rules,
+    "parse_stock_list": tools.parse_stock_list,
 }
 
 

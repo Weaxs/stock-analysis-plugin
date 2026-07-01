@@ -843,6 +843,200 @@ export default (pi: ExtensionAPI) => {
     },
   });
 
+  // --- Diagnostics & Capabilities ---
+
+  pi.registerTool({
+    name: "diagnose_data_sources",
+    description:
+      "数据源诊断 — 检查当前环境可用的数据 provider（akshare/tushare/yfinance/finnhub/longbridge/alphavantage），输出每个市场的可用链路、缺失 env、warnings。用于让 agent 自解释为何拿不到数据",
+    parameters: {
+      type: "object",
+      properties: {
+        market: {
+          type: "string",
+          enum: ["A", "HK", "US", "all"],
+          description: "市场，默认 all",
+        },
+      },
+    },
+    async execute({ market = "all" }) {
+      const result = await py("diagnostics.py", `check --market ${market}`);
+      return result.stdout;
+    },
+  });
+
+  pi.registerTool({
+    name: "get_market_capabilities",
+    description:
+      "市场能力边界 — 返回指定市场支持/不支持的工具列表，避免 agent 对港股调 get_chip_distribution 或对美股调 get_capital_flow 后编造数据",
+    parameters: {
+      type: "object",
+      properties: {
+        market: { type: "string", enum: ["A", "HK", "US"], description: "市场代码" },
+        symbol: { type: "string", description: "股票代码（自动识别市场，与 market 二选一）" },
+      },
+    },
+    async execute({ market, symbol }) {
+      const arg = symbol ? `--symbol ${symbol}` : `--market ${market || "A"}`;
+      const result = await py("capabilities.py", `get ${arg}`);
+      return result.stdout;
+    },
+  });
+
+  // --- Report Rendering ---
+
+  pi.registerTool({
+    name: "render_stock_report",
+    description:
+      "股票分析报告渲染 — 将结构化 JSON（符合 schemas/report_schema.json）通过 j2 模板渲染为 Markdown。style: brief|full。仅渲染，不保存不推送",
+    parameters: {
+      type: "object",
+      properties: {
+        report: {
+          type: "object",
+          description: "结构化股票报告，字段参考 schemas/report_schema.json",
+        },
+        template: {
+          type: "string",
+          enum: ["brief", "full"],
+          description: "模板类型，默认 full",
+        },
+      },
+      required: ["report"],
+    },
+    async execute({ report, template = "full" }) {
+      const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
+      const result = await py(
+        "report_renderer.py",
+        `stock --template ${template} --input-b64 ${b64}`
+      );
+      return result.stdout;
+    },
+  });
+
+  pi.registerTool({
+    name: "render_market_report",
+    description:
+      "大盘复盘报告渲染 — 将结构化 JSON（符合 schemas/market_review_schema.json）通过 j2 模板渲染为 Markdown",
+    parameters: {
+      type: "object",
+      properties: {
+        report: { type: "object", description: "结构化市场复盘" },
+        template: { type: "string", enum: ["full"], description: "模板类型，默认 full" },
+      },
+      required: ["report"],
+    },
+    async execute({ report, template = "full" }) {
+      const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
+      const result = await py(
+        "report_renderer.py",
+        `market --template ${template} --input-b64 ${b64}`
+      );
+      return result.stdout;
+    },
+  });
+
+  // --- Watchlist / Position / Alert Context ---
+
+  pi.registerTool({
+    name: "build_watchlist_context",
+    description:
+      "自选股上下文包 — 对多只股票输出评分/趋势/异常/风险/建议 next_tools 的 agent 友好摘要。宿主 agent 决定如何写日报或深入分析",
+    parameters: {
+      type: "object",
+      properties: {
+        symbols: { type: "string", description: "逗号分隔的股票代码列表" },
+        include_market_review: {
+          type: "boolean",
+          description: "是否附带各市场复盘，默认 false",
+        },
+        workers: { type: "number", description: "并发数，默认 3" },
+      },
+      required: ["symbols"],
+    },
+    async execute({ symbols, include_market_review = false, workers = 3 }) {
+      const flag = include_market_review ? " --include-market-review" : "";
+      const result = await py(
+        "watchlist_context.py",
+        `build ${symbols} --workers ${workers}${flag}`
+      );
+      return result.stdout;
+    },
+  });
+
+  pi.registerTool({
+    name: "analyze_position_context",
+    description:
+      "持仓上下文分析 — 输入成本/仓位/止损止盈，结合现价和技术位输出浮盈亏、离止损距离、风险级别、操作建议。无状态、不存账户",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "股票代码" },
+        cost: { type: "number", description: "成本价" },
+        quantity: { type: "number", description: "持仓数量" },
+        stop_loss: { type: "number", description: "止损价（可选）" },
+        take_profit: { type: "number", description: "止盈价（可选）" },
+      },
+      required: ["symbol", "cost", "quantity"],
+    },
+    async execute({ symbol, cost, quantity, stop_loss, take_profit }) {
+      const slArg = stop_loss !== undefined ? ` --stop-loss ${stop_loss}` : "";
+      const tpArg = take_profit !== undefined ? ` --take-profit ${take_profit}` : "";
+      const result = await py(
+        "position_context.py",
+        `analyze ${symbol} --cost ${cost} --quantity ${quantity}${slArg}${tpArg}`
+      );
+      return result.stdout;
+    },
+  });
+
+  pi.registerTool({
+    name: "check_alert_rules",
+    description:
+      "无状态告警规则检查 — 传入规则数组，返回当前是否触发。规则类型：price_below/price_above/change_pct_above/change_pct_below/volume_ratio_above/anomaly/risk_veto/risk_level_at_least。不做调度不存历史",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "股票代码" },
+        rules: {
+          type: "array",
+          description: "规则列表，每项 { type, value }",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string" },
+              value: {},
+            },
+          },
+        },
+      },
+      required: ["symbol", "rules"],
+    },
+    async execute({ symbol, rules }) {
+      const b64 = Buffer.from(JSON.stringify(rules), "utf-8").toString("base64");
+      const result = await py("alert_rules.py", `check ${symbol} --rules-b64 ${b64}`);
+      return result.stdout;
+    },
+  });
+
+  pi.registerTool({
+    name: "parse_stock_list",
+    description:
+      "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker，并调用 name_resolver 处理中文股票名",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "待解析的文本" },
+      },
+      required: ["text"],
+    },
+    async execute({ text }) {
+      const b64 = Buffer.from(String(text), "utf-8").toString("base64");
+      const result = await py("import_parser.py", `parse --text-b64 ${b64}`);
+      return result.stdout;
+    },
+  });
+
   // --- Skill Discovery ---
 
   pi.on("resources_discover", () => ({

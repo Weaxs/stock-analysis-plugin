@@ -46,6 +46,7 @@ dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "requests>=2.28.0",
+    "jinja2>=3.1.0",
 ]
 
 [project.urls]
@@ -65,7 +66,14 @@ packages = ["hermes", "tools"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "skills" = "skills"
+"templates" = "templates"
+"schemas" = "schemas"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not integration_network and not integration_llm'"
+markers = [
+    "integration_network: real provider calls (akshare/yfinance/etc.) — needs network",
+    "integration_llm: real LLM calls (DeepSeek/Anthropic) — needs API key and network",
+]

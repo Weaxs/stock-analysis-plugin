@@ -1,0 +1,90 @@
+{# Shared Jinja2 macros for stock-analysis-plugin report templates. #}
+
+{% macro decision_emoji(decision) -%}
+{%- if decision == 'strong_buy' -%}🟢🟢
+{%- elif decision == 'buy' -%}🟢
+{%- elif decision == 'hold' -%}⚪
+{%- elif decision == 'sell' -%}🟡
+{%- elif decision == 'strong_sell' -%}🔴
+{%- else -%}❔
+{%- endif -%}
+{%- endmacro %}
+
+{% macro decision_label(decision) -%}
+{%- if decision == 'strong_buy' -%}强烈买入
+{%- elif decision == 'buy' -%}买入
+{%- elif decision == 'hold' -%}观望
+{%- elif decision == 'sell' -%}卖出
+{%- elif decision == 'strong_sell' -%}强烈卖出
+{%- else -%}-
+{%- endif -%}
+{%- endmacro %}
+
+{% macro confidence_label(c) -%}
+{%- if c == 'high' -%}高
+{%- elif c == 'medium' -%}中
+{%- elif c == 'low' -%}低
+{%- else -%}-
+{%- endif -%}
+{%- endmacro %}
+
+{% macro signal_emoji(signal) -%}
+{%- if signal == 'green' -%}🟢
+{%- elif signal == 'yellow' -%}🟡
+{%- elif signal == 'red' -%}🔴
+{%- else -%}⚪
+{%- endif -%}
+{%- endmacro %}
+
+{% macro signal_label(signal) -%}
+{%- if signal == 'green' -%}绿灯（进攻）
+{%- elif signal == 'yellow' -%}黄灯（均衡）
+{%- elif signal == 'red' -%}红灯（防守）
+{%- else -%}-
+{%- endif -%}
+{%- endmacro %}
+
+{% macro stance_label(stance) -%}
+{%- if stance == 'offensive' -%}进攻
+{%- elif stance == 'balanced' -%}均衡
+{%- elif stance == 'defensive' -%}防守
+{%- else -%}-
+{%- endif -%}
+{%- endmacro %}
+
+{% macro risk_emoji(level) -%}
+{%- if level == 'high' -%}🔴
+{%- elif level == 'medium' -%}🟡
+{%- elif level == 'low' -%}🟢
+{%- else -%}⚪
+{%- endif -%}
+{%- endmacro %}
+
+{% macro change_pct(v) -%}
+{%- if v is none -%}-
+{%- elif v > 0 -%}+{{ '%.2f'|format(v) }}%
+{%- else -%}{{ '%.2f'|format(v) }}%
+{%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_num(v, digits=2) -%}
+{%- if v is none -%}-
+{%- elif v is number -%}{{ ('%%.%df' % digits)|format(v) }}
+{%- else -%}{{ v }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro market_cn(m) -%}
+{%- if m == 'A' -%}A 股
+{%- elif m == 'HK' -%}港股
+{%- elif m == 'US' -%}美股
+{%- else -%}{{ m }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro direction_emoji(d) -%}
+{%- if d == 'positive' -%}✅
+{%- elif d == 'negative' -%}⚠️
+{%- else -%}ℹ️
+{%- endif -%}
+{%- endmacro %}
