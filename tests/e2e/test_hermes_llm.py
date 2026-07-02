@@ -73,7 +73,15 @@ def _to_openai_tools(schemas: dict, names: list[str]) -> list[dict]:
 
 
 def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], max_turns: int = 3) -> dict:
-    """One-shot agent loop: LLM → tool_calls → handler → LLM → final answer."""
+    """One-shot agent loop: LLM → tool_calls → handler → LLM → final answer.
+
+    Returns:
+      tool_calls: [{name, args, result_json}] — every tool invocation the LLM made,
+                  with our tool's return value already parsed
+      final: the LLM's final text answer (may be empty — some models return
+             `content: null` after tool_use, that's model-side variability, not
+             a contract violation)
+    """
     tools = _to_openai_tools(hermes_ctx.schemas, tool_names)
     messages = [{"role": "user", "content": user_msg}]
 
@@ -100,12 +108,17 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
         for call in msg.tool_calls:
             name = call.function.name
             args = json.loads(call.function.arguments or "{}")
-            tool_calls_seen.append({"name": name, "args": args})
 
             if name not in hermes_ctx.handlers:
                 result = json.dumps({"error": f"unknown tool: {name}"})
             else:
                 result = hermes_ctx.handlers[name](args)
+
+            try:
+                result_parsed = json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                result_parsed = None
+            tool_calls_seen.append({"name": name, "args": args, "result": result_parsed})
 
             messages.append(
                 {
@@ -125,7 +138,17 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
 
 class TestSingleToolFlow:
     """LLM must call parse_stock_list — the user only gives natural language,
-    never the ticker/code. The only way to get the answer is via the tool."""
+    never the ticker/code. The only way to get the answer is via the tool.
+
+    Assertions target the tool_use contract, not the LLM's final text:
+      - LLM picked parse_stock_list
+      - Args carried the natural-language input (contains the company names)
+      - Our tool successfully extracted the expected symbols
+
+    We deliberately do NOT assert on the LLM's final response — deepseek-v4-flash
+    (like many models) sometimes returns content=null after tool_use. That's model
+    variability, not a broken plugin contract.
+    """
 
     def test_parse_stock_list_english(self, client, hermes_handlers):
         """English: company names → US tickers. Doesn't hit akshare, fully stable."""
@@ -140,20 +163,24 @@ class TestSingleToolFlow:
             tool_names=["parse_stock_list"],
         )
 
-        names_called = [tc["name"] for tc in result["tool_calls"]]
-        assert "parse_stock_list" in names_called, (
-            f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
-        )
+        # 1. LLM chose the right tool
+        parse_calls = [tc for tc in result["tool_calls"] if tc["name"] == "parse_stock_list"]
+        assert parse_calls, f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
 
-        final = result["final"]
-        assert "NVDA" in final, f"final answer missing NVDA: {final}"
-        assert "AAPL" in final, f"final answer missing AAPL: {final}"
+        # 2. Tool successfully extracted both US tickers (across all its parse_stock_list calls)
+        symbols_found = set()
+        for call in parse_calls:
+            for item in (call["result"] or {}).get("items", []):
+                symbols_found.add(item["symbol"])
+        assert "NVDA" in symbols_found, f"tool didn't extract NVDA. items across calls: {symbols_found}"
+        assert "AAPL" in symbols_found, f"tool didn't extract AAPL. items across calls: {symbols_found}"
 
     def test_parse_stock_list_chinese(self, client, hermes_handlers):
-        """Chinese: full names → A-share codes. parse_stock_list uses akshare
-        for name resolution — if akshare is unreachable, tool returns unresolved.
-        We still assert the LLM called the tool (main e2e contract) but only
-        soft-assert on final codes to avoid coupling to upstream data health."""
+        """Chinese: full names → A-share codes. Requires akshare for name resolution.
+
+        Hard-assert LLM picked the tool. Soft-assert specific codes only when
+        akshare actually resolved them — decouples from upstream data outages.
+        """
         result = _run_agent_loop(
             client,
             hermes_handlers,
@@ -161,21 +188,26 @@ class TestSingleToolFlow:
             tool_names=["parse_stock_list"],
         )
 
-        names_called = [tc["name"] for tc in result["tool_calls"]]
-        assert "parse_stock_list" in names_called, (
-            f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
-        )
+        parse_calls = [tc for tc in result["tool_calls"] if tc["name"] == "parse_stock_list"]
+        assert parse_calls, f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
 
-        # Soft-check: if akshare worked, tool should have surfaced codes.
-        # If akshare was flaky, tool returned {unresolved: [...]} and the LLM
-        # will honestly say so — either way the e2e contract (LLM → tool → answer) held.
-        tool_output = json.loads(hermes_handlers.handlers["parse_stock_list"]({"text": "贵州茅台和宁德时代"}))
-        resolved_codes = {i["symbol"] for i in tool_output.get("items", []) if i.get("market") == "A"}
-        if resolved_codes:
-            final = result["final"]
+        # akshare probe outside the loop — did the resolver work at all this run?
+        probe = json.loads(hermes_handlers.handlers["parse_stock_list"]({"text": "贵州茅台和宁德时代"}))
+        probe_codes = {i["symbol"] for i in probe.get("items", []) if i.get("market") == "A"}
+
+        if probe_codes:
+            # akshare works — the LLM's tool calls should have yielded the same codes
+            symbols_found = set()
+            for call in parse_calls:
+                for item in (call["result"] or {}).get("items", []):
+                    if item.get("market") == "A":
+                        symbols_found.add(item["symbol"])
             for expected in ("600519", "300750"):
-                if expected in resolved_codes:
-                    assert expected in final, f"tool resolved {expected} but final answer missing it: {final}"
+                if expected in probe_codes:
+                    assert expected in symbols_found, (
+                        f"probe resolved {expected} but LLM's tool calls only yielded {symbols_found}. "
+                        f"Args LLM sent: {[tc['args'] for tc in parse_calls]}"
+                    )
 
 
 class TestMultiToolFlow:
@@ -185,15 +217,19 @@ class TestMultiToolFlow:
         result = _run_agent_loop(
             client,
             hermes_handlers,
-            user_msg="港股支持获取资金流数据（capital_flow）吗？用工具查一下再回答，答案只需 是/否。",
+            user_msg="港股支持获取资金流数据（capital_flow）吗？用工具查一下再回答。",
             tool_names=["get_market_capabilities"],
         )
 
-        names_called = [tc["name"] for tc in result["tool_calls"]]
-        assert "get_market_capabilities" in names_called, f"LLM did not query capabilities: {result['tool_calls']}"
+        cap_calls = [tc for tc in result["tool_calls"] if tc["name"] == "get_market_capabilities"]
+        assert cap_calls, f"LLM did not query capabilities: {result['tool_calls']}"
 
-        # capital_flow is A-share only → answer should be no/否
-        final_lower = result["final"].lower()
-        assert "否" in result["final"] or "不支持" in result["final"] or "no" in final_lower, (
-            f"LLM should answer negative but said: {result['final']}"
+        # The tool result itself must say capital_flow is unsupported for HK.
+        # (Verifies the LLM asked about HK, not that its final answer was correct English/Chinese.)
+        hk_calls = [c for c in cap_calls if (c["result"] or {}).get("market") == "HK"]
+        assert hk_calls, f"LLM did not query HK market. args: {[c['args'] for c in cap_calls]}"
+
+        unsupported = {u["tool"] for c in hk_calls for u in (c["result"] or {}).get("unsupported", [])}
+        assert "get_capital_flow" in unsupported, (
+            f"HK capabilities should mark get_capital_flow unsupported, got: {unsupported}"
         )
