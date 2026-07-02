@@ -1,0 +1,28 @@
+{%- import '_macros.j2' as m -%}
+{{ m.decision_emoji(decision_type) }} **{{ stock_name }}（{{ stock_code }}）** | {{ m.decision_label(decision_type) }} · 评分 {{ sentiment_score }} · 置信 {{ m.confidence_label(confidence) }}
+
+{% if core_conclusion and core_conclusion.one_sentence -%}
+> {{ core_conclusion.one_sentence }}
+{%- endif %}
+{% if risk_screening and risk_screening.veto_buy %}
+⚠️ **一票否决** — 风险筛查触发，建议谨慎。
+{% endif %}
+
+{% set dp = data_perspective or {} -%}
+{% set pp = dp.price_position or {} -%}
+{% set ts = dp.trend_status or {} -%}
+- 📈 **趋势：** {{ ts.ma_alignment or '-' }}{% if ts.is_bullish is not none %}（{{ '看多' if ts.is_bullish else '看空' }}）{% endif %}
+- 💰 **价位：** 现价 {{ m.fmt_num(pp.current_price) }} | 支撑 {{ m.fmt_num(pp.support_level) }} | 压力 {{ m.fmt_num(pp.resistance_level) }}
+
+{% set bp = battle_plan or {} -%}
+{% if bp -%}
+- 🎯 **作战：** 买点 {{ m.fmt_num(bp.ideal_buy) }} | 止损 {{ m.fmt_num(bp.stop_loss) }} | 止盈 {{ m.fmt_num(bp.take_profit) }} | 仓位 {{ bp.suggested_position or '-' }}
+{%- endif %}
+
+{% set intel = intelligence or {} -%}
+{% if intel.positive_catalysts -%}
+✅ **利好：** {{ intel.positive_catalysts | join('；') }}
+{% endif %}
+{% if intel.risk_alerts -%}
+⚠️ **风险：** {{ intel.risk_alerts | join('；') }}
+{% endif %}

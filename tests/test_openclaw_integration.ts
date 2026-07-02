@@ -45,6 +45,7 @@ const fakeTypebox = {
     }),
     String: (opts?: unknown) => ({ __typebox: "string", opts }),
     Number: (opts?: unknown) => ({ __typebox: "number", opts }),
+    Boolean: (opts?: unknown) => ({ __typebox: "boolean", opts }),
     Optional: (schema: unknown) => ({ __typebox: "optional", schema }),
     Union: (schemas: unknown[], opts?: unknown) => ({
       __typebox: "union",
@@ -52,6 +53,11 @@ const fakeTypebox = {
       opts,
     }),
     Literal: (value: unknown) => ({ __typebox: "literal", value }),
+    Array: (item: unknown, opts?: unknown) => ({
+      __typebox: "array",
+      item,
+      opts,
+    }),
   },
 };
 
@@ -186,6 +192,32 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_market_review: {},
   run_watchlist_analysis: { symbols: "600519,000001" },
   detect_anomaly: { symbol: "600519" },
+  diagnose_data_sources: {},
+  get_market_capabilities: { market: "A" },
+  render_stock_report: {
+    report: {
+      stock_name: "test",
+      stock_code: "600519",
+      decision_type: "hold",
+      sentiment_score: 50,
+      confidence: "low",
+    },
+    template: "brief",
+  },
+  render_market_report: { report: {} },
+  build_watchlist_context: { symbols: "600519,AAPL" },
+  analyze_position_context: {
+    symbol: "600519",
+    cost: 1500,
+    quantity: 100,
+    stop_loss: 1420,
+    take_profit: 1680,
+  },
+  check_alert_rules: {
+    symbol: "600519",
+    rules: [{ type: "price_below", value: 1450 }],
+  },
+  parse_stock_list: { text: "600519,AAPL" },
 };
 
 for (const tool of tools) {

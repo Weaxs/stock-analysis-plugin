@@ -37,8 +37,10 @@ declare module "typebox" {
     Object(props: Record<string, unknown>, opts?: unknown): unknown;
     String(opts?: { description?: string }): unknown;
     Number(opts?: { description?: string }): unknown;
+    Boolean(opts?: { description?: string }): unknown;
     Optional(schema: unknown): unknown;
     Union(schemas: unknown[], opts?: { description?: string }): unknown;
     Literal<T extends string | number | boolean>(value: T): unknown;
+    Array(item: unknown, opts?: { description?: string }): unknown;
   };
 }

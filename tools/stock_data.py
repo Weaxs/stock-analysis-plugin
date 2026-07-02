@@ -128,13 +128,18 @@ def _kline_efinance(symbol: str, period: str, count: int) -> list:
 
 
 def _kline_baostock(symbol: str, period: str, count: int) -> list:
+    import io
+
     import baostock as bs
     import pandas as pd
 
     freq_map = {"daily": "d", "weekly": "w", "monthly": "m"}
     end = datetime.now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
-    bs.login()
+    # baostock login/logout print status lines to stdout — silence them so the
+    # tool's JSON output on stdout stays clean for the calling host.
+    with contextlib.redirect_stdout(io.StringIO()):
+        bs.login()
     try:
         rs = bs.query_history_k_data_plus(
             _to_baostock_code(symbol),
@@ -149,7 +154,8 @@ def _kline_baostock(symbol: str, period: str, count: int) -> list:
             rows.append(rs.get_row_data())
         df = pd.DataFrame(rows, columns=rs.fields)
     finally:
-        bs.logout()
+        with contextlib.redirect_stdout(io.StringIO()):
+            bs.logout()
     if df.empty:
         raise ValueError("baostock returned empty data")
     col_map = {"amount": "turnover", "pctChg": "change_pct"}

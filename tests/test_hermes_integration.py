@@ -37,6 +37,14 @@ EXPECTED_TOOLS = sorted(
         "get_market_review",
         "run_watchlist_analysis",
         "detect_anomaly",
+        "diagnose_data_sources",
+        "get_market_capabilities",
+        "render_stock_report",
+        "render_market_report",
+        "build_watchlist_context",
+        "analyze_position_context",
+        "check_alert_rules",
+        "parse_stock_list",
     ]
 )
 

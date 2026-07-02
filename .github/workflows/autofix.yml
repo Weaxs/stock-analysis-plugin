@@ -1,0 +1,30 @@
+name: autofix.ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install "ruff>=0.4.0"
+
+      - name: Ruff auto-fix (lint)
+        run: ruff check --fix tools/ skills/ tests/ hermes/
+        continue-on-error: true
+
+      - name: Ruff format
+        run: ruff format tools/ skills/ tests/ hermes/
+
+      - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a

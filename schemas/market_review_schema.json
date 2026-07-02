@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MarketReviewReport",
+  "description": "结构化大盘复盘报告格式",
+  "type": "object",
+  "properties": {
+    "market": {
+      "type": "string",
+      "enum": ["A", "HK", "US"],
+      "description": "市场代码"
+    },
+    "market_cn": {
+      "type": "string",
+      "description": "市场中文名（A 股 / 港股 / 美股）"
+    },
+    "review_date": { "type": "string", "format": "date" },
+    "temperature": {
+      "type": "object",
+      "description": "市场温度（来自 market_review.review）",
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "level": { "type": "string", "enum": ["constructive", "neutral", "weak"] },
+        "signal": { "type": "string", "enum": ["green", "yellow", "red"] }
+      },
+      "required": ["score", "signal"]
+    },
+    "strategy_stance": {
+      "type": "string",
+      "enum": ["offensive", "balanced", "defensive"],
+      "description": "建议策略姿态"
+    },
+    "regime": {
+      "type": "object",
+      "description": "市场阶段（来自 detect_market_regime）",
+      "properties": {
+        "regime": { "type": "string" },
+        "regime_cn": { "type": "string" },
+        "confidence": { "type": "number" },
+        "recommended_skills": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "overview": {
+      "type": "object",
+      "description": "盘面总览",
+      "properties": {
+        "headline": { "type": "string", "description": "一句话总览" },
+        "indices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "code": { "type": "string" },
+              "price": { "type": "number" },
+              "change_pct": { "type": "number" },
+              "volume": { "type": ["number", "string"] }
+            }
+          }
+        },
+        "breadth": {
+          "type": "object",
+          "description": "涨跌家数（仅 A 股）",
+          "properties": {
+            "up_count": { "type": "integer" },
+            "down_count": { "type": "integer" },
+            "limit_up_count": { "type": "integer" },
+            "limit_down_count": { "type": "integer" },
+            "turnover": { "type": ["number", "string"] },
+            "turnover_change": { "type": "string", "description": "放量 / 缩量 / 持平" }
+          }
+        }
+      }
+    },
+    "index_structure": {
+      "type": "object",
+      "description": "指数结构与分化",
+      "properties": {
+        "large_vs_small": { "type": "string", "description": "大盘 vs 中小盘表现差异" },
+        "blue_chip_vs_theme": { "type": "string", "description": "权重股 vs 题材股分化" },
+        "position_assessment": { "type": "string", "description": "指数位置（突破 / 回落 / 震荡）" }
+      }
+    },
+    "sectors": {
+      "type": "object",
+      "description": "板块主线（仅 A 股有完整数据）",
+      "properties": {
+        "leading": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "change_pct": { "type": "number" },
+              "logic": { "type": "string", "description": "上涨逻辑（政策 / 业绩 / 事件）" }
+            }
+          }
+        },
+        "lagging": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "change_pct": { "type": "number" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "main_storylines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "theme": { "type": "string" },
+              "stage": { "type": "string", "description": "首日 / 加速 / 高潮 / 退潮" },
+              "sustainability": { "type": "string", "enum": ["high", "medium", "low"] }
+            }
+          }
+        }
+      }
+    },
+    "capital_emotion": {
+      "type": "object",
+      "description": "资金与情绪",
+      "properties": {
+        "turnover_level": { "type": "string", "description": "成交额历史分位" },
+        "limit_ratio": { "type": "string", "description": "涨停 / 跌停比情绪解读" },
+        "money_effect": { "type": "string", "description": "赚钱效应判断" },
+        "consecutive_limit_height": { "type": "integer", "description": "连板高度（仅 A 股）" }
+      }
+    },
+    "catalysts": {
+      "type": "array",
+      "description": "消息催化",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "category": { "type": "string", "description": "政策 / 业绩 / 事件 / 国际 / 其他" },
+          "impact": { "type": "string", "description": "对市场的影响路径" },
+          "direction": { "type": "string", "enum": ["positive", "negative", "neutral"] }
+        }
+      }
+    },
+    "tomorrow_strategy": {
+      "type": "object",
+      "description": "明日策略",
+      "properties": {
+        "stance": { "type": "string", "enum": ["offensive", "balanced", "defensive"] },
+        "position_advice": { "type": "string", "description": "建议仓位区间" },
+        "focus_sectors": { "type": "array", "items": { "type": "string" } },
+        "avoid": { "type": "array", "items": { "type": "string" } },
+        "key_levels": {
+          "type": "object",
+          "properties": {
+            "support": { "type": ["number", "string"] },
+            "resistance": { "type": ["number", "string"] }
+          }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "description": "风险提示",
+      "items": {
+        "type": "object",
+        "properties": {
+          "level": { "type": "string", "enum": ["high", "medium", "low"] },
+          "category": { "type": "string", "description": "系统性 / 板块 / 个股 / 外围" },
+          "description": { "type": "string" }
+        }
+      }
+    }
+  },
+  "required": ["market", "review_date", "temperature", "strategy_stance"]
+}

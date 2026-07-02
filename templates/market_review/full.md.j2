@@ -1,0 +1,103 @@
+{%- import '_macros.j2' as m -%}
+# {{ m.market_cn(market) }}大盘复盘 · {{ review_date }}
+
+{% set t = temperature or {} -%}
+**温度：** {{ m.signal_emoji(t.signal) }} {{ m.fmt_num(t.score, 1) }}/100　|　**信号灯：** {{ m.signal_label(t.signal) }}　|　**策略姿态：** {{ m.stance_label(strategy_stance) }}
+
+{% if regime and (regime.regime_cn or regime.regime) -%}
+> **市场阶段：** {{ regime.regime_cn or regime.regime }}{% if regime.confidence is not none %}（置信度 {{ m.fmt_num(regime.confidence) }}）{% endif %}{% if regime.recommended_skills %}　|　**推荐策略：** {{ regime.recommended_skills | join('、') }}{% endif %}
+{%- endif %}
+
+## 1. 盘面总览
+
+{% set ov = overview or {} -%}
+{% if ov.headline -%}
+{{ ov.headline }}
+
+{% endif -%}
+{% if ov.indices -%}
+| 指数 | 现值 | 涨跌幅 | 成交量 |
+|------|------|--------|--------|
+{% for idx in ov.indices -%}
+| {{ idx.name }}{% if idx.code %}（{{ idx.code }}）{% endif %} | {{ m.fmt_num(idx.price) }} | {{ m.change_pct(idx.change_pct) }} | {{ idx.volume or '-' }} |
+{% endfor %}
+{%- endif %}
+
+{% set br = ov.breadth or {} -%}
+{% if br and (br.up_count is not none or br.limit_up_count is not none) -%}
+- **涨跌家数：** 🟢 {{ br.up_count or 0 }} 上涨 | 🔴 {{ br.down_count or 0 }} 下跌
+- **涨跌停：** 🚀 {{ br.limit_up_count or 0 }} 涨停 | 💧 {{ br.limit_down_count or 0 }} 跌停
+{% if br.turnover %}- **成交额：** {{ br.turnover }}{% if br.turnover_change %}（{{ br.turnover_change }}）{% endif %}
+{% endif -%}
+{%- endif %}
+
+{% if index_structure -%}
+## 2. 指数结构
+
+{% if index_structure.large_vs_small %}- **大小盘分化：** {{ index_structure.large_vs_small }}
+{% endif %}{% if index_structure.blue_chip_vs_theme %}- **权重 vs 题材：** {{ index_structure.blue_chip_vs_theme }}
+{% endif %}{% if index_structure.position_assessment %}- **指数位置：** {{ index_structure.position_assessment }}
+{% endif %}
+{%- endif %}
+
+{% if sectors -%}
+## 3. 板块主线
+
+{% if sectors.leading -%}
+**领涨板块：**
+{% for s in sectors.leading %}- 🟢 {{ s.name }} {{ m.change_pct(s.change_pct) }}{% if s.logic %} — {{ s.logic }}{% endif %}
+{% endfor %}
+{%- endif %}
+
+{% if sectors.lagging -%}
+**领跌板块：**
+{% for s in sectors.lagging %}- 🔴 {{ s.name }} {{ m.change_pct(s.change_pct) }}{% if s.reason %} — {{ s.reason }}{% endif %}
+{% endfor %}
+{%- endif %}
+
+{% if sectors.main_storylines -%}
+**主线判断：**
+{% for line in sectors.main_storylines %}- **{{ line.theme }}** | 阶段：{{ line.stage or '-' }}{% if line.sustainability %} | 持续性：{{ line.sustainability }}{% endif %}
+{% endfor %}
+{%- endif %}
+{%- endif %}
+
+{% if capital_emotion -%}
+## 4. 资金与情绪
+
+{% if capital_emotion.turnover_level %}- **成交分位：** {{ capital_emotion.turnover_level }}
+{% endif %}{% if capital_emotion.limit_ratio %}- **涨跌停比：** {{ capital_emotion.limit_ratio }}
+{% endif %}{% if capital_emotion.money_effect %}- **赚钱效应：** {{ capital_emotion.money_effect }}
+{% endif %}{% if capital_emotion.consecutive_limit_height is not none %}- **连板高度：** {{ capital_emotion.consecutive_limit_height }} 板
+{% endif %}
+{%- endif %}
+
+{% if catalysts -%}
+## 5. 消息催化
+
+{% for c in catalysts %}- {{ m.direction_emoji(c.direction) }} **[{{ c.category or '-' }}] {{ c.title }}**{% if c.impact %} — {{ c.impact }}{% endif %}
+{% endfor %}
+{%- endif %}
+
+{% if tomorrow_strategy -%}
+## 6. 明日策略
+
+{% set ts = tomorrow_strategy -%}
+- **策略姿态：** {{ m.stance_label(ts.stance) }}
+{% if ts.position_advice %}- **建议仓位：** {{ ts.position_advice }}
+{% endif %}{% if ts.focus_sectors %}- **关注方向：** {{ ts.focus_sectors | join('、') }}
+{% endif %}{% if ts.avoid %}- **规避方向：** {{ ts.avoid | join('、') }}
+{% endif %}{% if ts.key_levels and (ts.key_levels.support or ts.key_levels.resistance) -%}
+- **关键点位：** 支撑 {{ ts.key_levels.support or '-' }} | 压力 {{ ts.key_levels.resistance or '-' }}
+{%- endif %}
+{%- endif %}
+
+{% if risks -%}
+## 7. 风险提示
+
+{% for r in risks %}- {{ m.risk_emoji(r.level) }} **[{{ r.category or '风险' }}]** {{ r.description }}
+{% endfor %}
+{%- endif %}
+
+---
+*本报告由 stock-analysis-plugin 渲染，仅供参考，不构成投资建议。*

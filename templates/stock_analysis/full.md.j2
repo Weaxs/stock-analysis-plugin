@@ -1,0 +1,108 @@
+{%- import '_macros.j2' as m -%}
+# {{ stock_name }}（{{ stock_code }}）分析报告
+
+**分析日期：** {{ analysis_date }}　|　**决策：** {{ m.decision_emoji(decision_type) }} {{ m.decision_label(decision_type) }}　|　**情绪分：** {{ sentiment_score }}/100　|　**置信度：** {{ m.confidence_label(confidence) }}
+
+{% if core_conclusion -%}
+> **核心结论：** {{ core_conclusion.one_sentence }}
+{% if core_conclusion.signal_type %}> **信号类型：** {{ core_conclusion.signal_type }}{% if core_conclusion.time_sensitivity %}　|　**时效：** {{ core_conclusion.time_sensitivity }}{% endif %}{% endif %}
+{%- endif %}
+
+{% if risk_screening and risk_screening.veto_buy %}
+> ⚠️ **一票否决（veto_buy）：** 风险筛查触发否决条件，建议谨慎。
+{% endif %}
+
+## 市场环境
+
+{% if market_environment -%}
+- **市场阶段：** {{ market_environment.regime_cn or market_environment.regime or '-' }}{% if market_environment.confidence is not none %}（置信度 {{ m.fmt_num(market_environment.confidence) }}）{% endif %}
+{% if market_environment.recommended_skills -%}
+- **推荐策略：** {{ market_environment.recommended_skills | join('、') }}
+{%- endif %}
+{%- else -%}
+- 数据缺失
+{%- endif %}
+
+## 风险筛查
+
+{% if risk_screening -%}
+- **风险等级：** {{ m.risk_emoji(risk_screening.risk_level) }} {{ risk_screening.risk_level or '-' }}　|　**风险分：** {{ risk_screening.risk_score }}/100
+{% if risk_screening.flags -%}
+- **风险标记：**
+{% for f in risk_screening.flags %}  - [{{ f.severity }}] {{ f.category }}：{{ f.description }}
+{% endfor %}
+{%- else -%}
+- **风险标记：** 无显著风险标记
+{%- endif %}
+{%- else -%}
+- 数据缺失
+{%- endif %}
+
+## 技术分析
+
+{% set dp = data_perspective or {} -%}
+{% set ts = dp.trend_status or {} -%}
+{% set pp = dp.price_position or {} -%}
+{% set vol = dp.volume_analysis or {} -%}
+{% set chip = dp.chip_structure or {} -%}
+- **趋势：** {{ ts.ma_alignment or '-' }}{% if ts.is_bullish is not none %}（{{ '看多' if ts.is_bullish else '看空' }}）{% endif %}{% if ts.trend_score is not none %}　趋势分 {{ m.fmt_num(ts.trend_score) }}{% endif %}
+- **价格结构：** 现价 {{ m.fmt_num(pp.current_price) }}　|　偏离 MA5 {{ m.change_pct(pp.bias_ma5) }}　|　支撑 {{ m.fmt_num(pp.support_level) }}　|　压力 {{ m.fmt_num(pp.resistance_level) }}
+- **量价：** 量比 {{ m.fmt_num(vol.volume_ratio) }}{% if vol.volume_status %}（{{ vol.volume_status }}）{% endif %}{% if vol.turnover_rate is not none %}　|　换手率 {{ m.change_pct(vol.turnover_rate) }}{% endif %}
+{% if chip and (chip.profit_ratio is not none or chip.avg_cost is not none) -%}
+- **筹码：** 获利盘 {{ m.change_pct(chip.profit_ratio) }}　|　平均成本 {{ m.fmt_num(chip.avg_cost) }}{% if chip.concentration is not none %}　|　集中度 {{ m.fmt_num(chip.concentration) }}{% endif %}
+{%- endif %}
+
+## 消息面
+
+{% set intel = intelligence or {} -%}
+{% if intel.latest_news -%}
+- **最新动态：** {{ intel.latest_news }}
+{%- endif %}
+{% if intel.sentiment_summary -%}
+- **舆情摘要：** {{ intel.sentiment_summary }}
+{%- endif %}
+{% if intel.positive_catalysts -%}
+- **利好催化：**
+{% for c in intel.positive_catalysts %}  - ✅ {{ c }}
+{% endfor %}
+{%- endif %}
+{% if intel.risk_alerts -%}
+- **风险提示：**
+{% for a in intel.risk_alerts %}  - ⚠️ {{ a }}
+{% endfor %}
+{%- endif %}
+
+## 作战计划
+
+{% set bp = battle_plan or {} -%}
+{% if bp -%}
+- **理想买点：** {{ m.fmt_num(bp.ideal_buy) }}　|　**次级买点：** {{ m.fmt_num(bp.secondary_buy) }}
+- **止损：** {{ m.fmt_num(bp.stop_loss) }}　|　**止盈：** {{ m.fmt_num(bp.take_profit) }}
+- **建议仓位：** {{ bp.suggested_position or '-' }}
+{% if bp.entry_plan %}- **进场计划：** {{ bp.entry_plan }}
+{% endif %}{% if bp.risk_control %}- **风控要点：** {{ bp.risk_control }}
+{% endif %}{% if bp.action_checklist -%}
+- **操作清单：**
+{% for item in bp.action_checklist %}  - [ ] {{ item }}
+{% endfor %}
+{%- endif %}
+{%- else -%}
+- 暂无作战计划
+{%- endif %}
+
+{% if core_conclusion and core_conclusion.position_advice -%}
+## 仓位建议
+
+- **空仓者：** {{ core_conclusion.position_advice.no_position or '-' }}
+- **持仓者：** {{ core_conclusion.position_advice.has_position or '-' }}
+{%- endif %}
+
+{% if risk_warning -%}
+## 风险提示
+
+{% for w in risk_warning %}- {{ w }}
+{% endfor %}
+{%- endif %}
+
+---
+*本报告由 stock-analysis-plugin 渲染，仅供参考，不构成投资建议。*

@@ -458,6 +458,120 @@ def diagnose(metrics: dict) -> dict:
     return {"strengths": strengths, "weaknesses": weaknesses, "suggestions": suggestions}
 
 
+def diagnose_advanced(metrics: dict, trades: list, equity_curve: list, strategy: dict) -> dict:
+    """Extra agent-friendly diagnostics: failure reason, regime fit, parameter hints."""
+    exit_cfg = strategy.get("exit") or {}
+    sl_val = exit_cfg.get("stop_loss")
+    stop_loss = float(sl_val) if sl_val is not None else -0.10
+    tp_val = exit_cfg.get("take_profit")
+    take_profit = float(tp_val) if tp_val is not None else 0.50
+
+    total = metrics.get("total_trades", 0)
+    win_rate = metrics.get("win_rate", 0)
+    plr = metrics.get("profit_loss_ratio", 0)
+    mdd = abs(metrics.get("max_drawdown", 0))
+    total_return = metrics.get("total_return", 0)
+
+    # trade_count_quality
+    if total < 5:
+        trade_count_quality = "too_low"
+    elif total < 15:
+        trade_count_quality = "marginal"
+    else:
+        trade_count_quality = "sufficient"
+
+    # main_failure_reason — pick the most impactful weakness
+    sell_trades = [t for t in trades if t.get("action") == "sell"]
+    stop_hits = sum(
+        1
+        for t in sell_trades
+        if (t.get("reason") or "").startswith("stop_loss")
+        or (t.get("pnl_pct", 0) is not None and t.get("pnl_pct", 0) <= stop_loss * 100 + 0.5)
+    )
+    stop_ratio = stop_hits / max(1, len(sell_trades))
+
+    main_failure_reason = None
+    if total_return < 0:
+        if stop_ratio > 0.5:
+            main_failure_reason = "止损频繁触发，可能过紧或市场震荡不匹配"
+        elif win_rate < 0.35:
+            main_failure_reason = "胜率过低，入场信号质量差"
+        elif plr < 1:
+            main_failure_reason = "盈亏比不足，盈利未能覆盖亏损"
+        else:
+            main_failure_reason = "整体信号频次或时机不佳"
+    elif mdd > 0.25:
+        main_failure_reason = "收益为正但回撤过大，风险控制不足"
+
+    # regime_fit — infer from equity curve shape
+    regime_fit = "unknown"
+    if len(equity_curve) >= 3:
+        # split into halves, compare
+        mid = len(equity_curve) // 2
+        first = equity_curve[mid][1] if isinstance(equity_curve[mid], list) else equity_curve[mid]
+        last = equity_curve[-1][1] if isinstance(equity_curve[-1], list) else equity_curve[-1]
+        start_v = equity_curve[0][1] if isinstance(equity_curve[0], list) else equity_curve[0]
+        first_half = (first - start_v) / start_v if start_v else 0
+        second_half = (last - first) / first if first else 0
+        if first_half > 0.05 and second_half > 0.05:
+            regime_fit = "consistent_across_periods"
+        elif first_half > 0.05 and second_half < -0.02:
+            regime_fit = "better_in_early_period"
+        elif first_half < -0.02 and second_half > 0.05:
+            regime_fit = "better_in_late_period"
+        elif win_rate > 0.5 and total_return > 0:
+            regime_fit = "better_in_trend_market"
+        else:
+            regime_fit = "regime_dependent"
+
+    # suggested_parameter_changes
+    suggestions = []
+    if stop_ratio > 0.5 and total_return < 0:
+        suggestions.append(
+            {
+                "parameter": "exit.stop_loss",
+                "from": stop_loss,
+                "to": round(stop_loss * 1.5, 3),
+                "reason": "止损过紧，被震荡打出",
+            }
+        )
+    if plr < 1 and win_rate > 0.4:
+        suggestions.append(
+            {
+                "parameter": "exit.take_profit",
+                "from": take_profit,
+                "to": round(take_profit * 1.3, 3),
+                "reason": "止盈过早，盈亏比偏低",
+            }
+        )
+    if trade_count_quality == "too_low":
+        suggestions.append(
+            {
+                "parameter": "entry.*",
+                "from": None,
+                "to": None,
+                "reason": "入场条件过严，交易次数不足",
+            }
+        )
+    if mdd > 0.25:
+        suggestions.append(
+            {
+                "parameter": "position.size",
+                "from": None,
+                "to": None,
+                "reason": "回撤大，考虑降低仓位比例",
+            }
+        )
+
+    return {
+        "trade_count_quality": trade_count_quality,
+        "main_failure_reason": main_failure_reason,
+        "regime_fit": regime_fit,
+        "stop_loss_hit_ratio": round(stop_ratio, 2),
+        "suggested_parameter_changes": suggestions,
+    }
+
+
 def sample_curve(curve: list, max_points: int = 200) -> list:
     if len(curve) <= max_points:
         return curve
@@ -497,6 +611,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         "trades": sim["trades"],
         "equity_curve": sample_curve(sim["equity_curve"]),
         "diagnosis": diagnose(metrics),
+        "diagnostics": diagnose_advanced(metrics, sim["trades"], sim["equity_curve"], strategy),
     }
 
 
