@@ -1,0 +1,43 @@
+# Configuration for auto-generated release notes.
+# Docs: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+#
+# Categorization runs on merged PR labels. Commits landing outside PRs (rare
+# now that main is protected) fall into "Other Changes".
+
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot
+      - github-actions
+  categories:
+    - title: "New Features"
+      labels:
+        - "type: feat"
+        - feature
+    - title: "Bug Fixes"
+      labels:
+        - "type: fix"
+        - bug
+    - title: "Tests & E2E"
+      labels:
+        - "type: test"
+        - test
+    - title: "CI / Build"
+      labels:
+        - "type: ci"
+        - ci
+        - build
+    - title: "Docs"
+      labels:
+        - "type: docs"
+        - documentation
+    - title: "Chore / Refactor"
+      labels:
+        - "type: chore"
+        - chore
+        - refactor
+    - title: "Other Changes"
+      labels:
+        - "*"

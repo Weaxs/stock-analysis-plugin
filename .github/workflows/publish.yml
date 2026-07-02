@@ -169,24 +169,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate release notes
+      - name: Compose install footer
         run: |
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
-          if [ -z "$PREV_TAG" ]; then
-            LOG=$(git log --pretty=format:"- %s" HEAD)
-          else
-            LOG=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD)
-          fi
-          echo "## What's Changed" > release_notes.md
-          echo "" >> release_notes.md
-          echo "$LOG" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "---" >> release_notes.md
-          echo "**npm**: \`npm install @weaxs/stock-analysis-plugin@${GITHUB_REF_NAME#v}\`" >> release_notes.md
-          echo "**pip**: \`pip install stock-analysis-plugin==${GITHUB_REF_NAME#v}\`" >> release_notes.md
-          echo "**OpenClaw**: \`openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis\`" >> release_notes.md
+          VERSION="${GITHUB_REF_NAME#v}"
+          cat > install_footer.md <<EOF
+
+          ---
+          ### Install
+
+          - **npm**: \`npm install @weaxs/stock-analysis-plugin@${VERSION}\`
+          - **pip**: \`pip install stock-analysis-plugin==${VERSION}\`
+          - **OpenClaw**: \`openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis\`
+          EOF
 
       - name: Create GitHub Release
-        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md
+        # --generate-notes uses .github/release.yml for PR categorization and
+        # automatically appends author @mentions, PR numbers, and a Full
+        # Changelog compare link. We append our install footer via --notes-file
+        # after the fact, since --generate-notes and --notes-file are exclusive.
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
+          # Fetch the generated body, append install footer, update the release
+          GENERATED=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
+          {
+            echo "$GENERATED"
+            cat install_footer.md
+          } > final_notes.md
+          gh release edit "${GITHUB_REF_NAME}" --notes-file final_notes.md
         env:
           GH_TOKEN: ${{ github.token }}
