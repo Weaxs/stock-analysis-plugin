@@ -148,9 +148,10 @@ function assert(cond: boolean, msg: string) {
 // returns content=null after tool_use — that's model variability, not our bug).
 {
   const r = await runLoop(
-    "I want to check on Nvidia and Apple. What are their exact stock tickers? " +
-      "Use a tool to extract them — don't guess from memory. " +
-      "Reply with just the tickers, comma-separated.",
+    // Pinned tool input: we test the LLM→tool→python round-trip, not the
+    // model's name→ticker knowledge (DeepSeek drift made that flaky).
+    "Call the parse_stock_list tool with exactly this text: 'NVDA AAPL'. " +
+      "Reply with just the tickers it returns, comma-separated.",
     ["parse_stock_list"]
   );
   const parseCalls = r.toolCalls.filter((t) => t.name === "parse_stock_list");
