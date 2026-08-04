@@ -186,9 +186,12 @@ jobs:
         run: npm install
 
       - name: Install host CLIs
+        # Pinned: pi latest and openclaw latest (slim repack) drifted from the
+        # validated CLIs — openclaw@latest installed no working bin, and pi's
+        # `list` flags changed between releases.
         run: |
-          npm i -g @earendil-works/pi-coding-agent
-          npm i -g openclaw
+          npm i -g @earendil-works/pi-coding-agent@0.83.0
+          npm i -g openclaw@2026.6.33
 
       - name: Real-host smoke QA (${{ matrix.host }})
         env:

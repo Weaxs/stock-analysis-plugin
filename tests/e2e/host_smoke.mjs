@@ -75,9 +75,9 @@ function findPython() {
 async function smokePi() {
   // Real install path: project-local `pi install <repo>` records the package in
   // .pi/settings.json; --approve bypasses the interactive project-trust prompt.
+  // No separate list assertion: the QA below is the load proof — an unloaded
+  // plugin can never produce a get_quote tool call.
   sh("pi", ["install", repoRoot, "-l"], { cwd: WORK });
-  const list = sh("pi", ["list", "--approve"], { cwd: WORK });
-  assertCond(/stock-analysis/i.test(list), "pi list should show the installed package");
 
   let lastOut = "";
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
