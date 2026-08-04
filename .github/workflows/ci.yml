@@ -179,8 +179,9 @@ jobs:
           python-version: "3.11"
 
       - uses: actions/setup-node@v4
+        # Node 24: openclaw requires >= 22.19, and pi 0.83's undici breaks on 20.x
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install Node dependencies (also builds repo .venv via postinstall)
         run: npm install
