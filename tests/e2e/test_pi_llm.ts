@@ -182,7 +182,7 @@ function assert(cond: boolean, msg: string) {
 
   // Probe akshare state outside the LLM path
   const tool = registered.find((r) => r.name === "parse_stock_list")!;
-  const probe = JSON.parse(await tool.execute({ text: "贵州茅台和宁德时代" }));
+  const probe = JSON.parse((await tool.execute("probe", { text: "贵州茅台和宁德时代" })).content[0].text);
   const probeCodes = new Set(
     (probe.items || []).filter((i: any) => i.market === "A").map((i: any) => i.symbol as string)
   );
