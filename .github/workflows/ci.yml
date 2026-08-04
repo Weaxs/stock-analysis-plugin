@@ -160,6 +160,48 @@ jobs:
           fi
           npx tsx tests/e2e/test_pi_llm.ts
 
+  e2e-host:
+    # Real-host smoke: install the plugin into the actual pi / openclaw /
+    # hermes runtime and run one QA turn through the host's own agent loop.
+    # This is a BLOCKING check — the smoke script retries the QA internally.
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [pi, openclaw, hermes]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies (also builds repo .venv via postinstall)
+        run: npm install
+
+      - name: Install host CLIs
+        run: |
+          npm i -g @earendil-works/pi-coding-agent
+          npm i -g openclaw
+
+      - name: Real-host smoke QA (${{ matrix.host }})
+        env:
+          SMOKE_LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          SMOKE_LLM_BASE_URL: https://api.deepseek.com
+          SMOKE_LLM_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+        run: |
+          if [ -z "$SMOKE_LLM_API_KEY" ]; then
+            echo "SMOKE_LLM_API_KEY not configured — failing (this check is blocking by design)"
+            exit 1
+          fi
+          node tests/e2e/host_smoke.mjs ${{ matrix.host }}
+
   build:
     runs-on: ubuntu-latest
     needs: [lint, test, integration]

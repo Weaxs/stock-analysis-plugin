@@ -93,8 +93,10 @@ Hermes 通过两种方式发现本插件：
 
 ```toml
 [project.entry-points."hermes_agent.plugins"]
-stock-analysis = "hermes:register"
+stock-analysis = "hermes"
 ```
+
+> 注意：entry point 必须指向**模块**（`hermes`），不能写成 `hermes:register`——Hermes 0.19 的加载器对 entry point 做 `ep.load()` 后直接 `getattr(module, "register")`；若指向函数，`ep.load()` 返回函数本身，加载器会报 "no register() function" 并静默跳过工具注册。
 
 2. **目录发现**：`hermes/plugin.yaml` 作为插件清单，Hermes CLI 安装时使用。
 

@@ -33,11 +33,15 @@ const python = existsSync(venvPython) ? venvPython : "python3";
 
 // --- Load Pi and capture tool registrations -------------------------------
 
+interface ToolResult {
+  content: { type: string; text: string }[];
+  details: unknown;
+}
 interface Registered {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  execute: (args: Record<string, unknown>) => Promise<string>;
+  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<ToolResult>;
 }
 const registered: Registered[] = [];
 
@@ -46,14 +50,11 @@ const mockPi = {
     registered.push(cfg);
   },
   on() {},
-  exec: async (cmd: string) => {
-    const parts = cmd.split(/\s+/);
-    const bin = parts[0];
-    const argv = parts.slice(1);
-    const { stdout, stderr } = await execFileAsync(bin, argv, {
+  exec: async (cmd: string, args: string[] = []) => {
+    const { stdout, stderr } = await execFileAsync(cmd, args, {
       maxBuffer: 32 * 1024 * 1024,
     });
-    return { stdout, stderr, exitCode: 0 };
+    return { stdout, stderr, code: 0, killed: false };
   },
 };
 
@@ -111,7 +112,7 @@ async function runLoop(userMsg: string, toolNames: string[], maxTurns = 3) {
 
       const tool = registered.find((r) => r.name === name);
       const rawResult = tool
-        ? await tool.execute(args)
+        ? (await tool.execute(call.id, args)).content[0]?.text ?? ""
         : JSON.stringify({ error: "unknown tool" });
 
       let parsedResult: any = null;

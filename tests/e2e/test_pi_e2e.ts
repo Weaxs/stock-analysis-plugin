@@ -26,9 +26,13 @@ const python = existsSync(venvPython) ? venvPython : "python3";
 
 // --- Load pi/index.ts and capture the tool registrations ------------------
 
+interface ToolResult {
+  content: { type: string; text: string }[];
+  details: unknown;
+}
 interface Registered {
   name: string;
-  execute: (args: Record<string, unknown>) => Promise<string>;
+  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<ToolResult>;
 }
 const registered: Registered[] = [];
 
@@ -37,16 +41,12 @@ const mockPi = {
     registered.push(cfg);
   },
   on() {},
-  exec: async (cmd: string) => {
-    // The `py()` helper inside pi/index.ts calls pi.exec with a full command string.
-    // Real subprocess execution goes here.
-    const parts = cmd.split(/\s+/);
-    const bin = parts[0];
-    const argv = parts.slice(1);
-    const { stdout, stderr } = await execFileAsync(bin, argv, {
+  exec: async (cmd: string, args: string[] = []) => {
+    // pi/index.ts calls pi.exec(python, [script, ...args]) — argv form, no shell.
+    const { stdout, stderr } = await execFileAsync(cmd, args, {
       maxBuffer: 32 * 1024 * 1024,
     });
-    return { stdout, stderr, exitCode: 0 };
+    return { stdout, stderr, code: 0, killed: false };
   },
 };
 
@@ -72,8 +72,8 @@ function assert(cond: boolean, msg: string) {
 async function callTool(name: string, args: Record<string, unknown>): Promise<any> {
   const tool = registered.find((t) => t.name === name);
   if (!tool) throw new Error(`tool not registered: ${name}`);
-  const raw = await tool.execute(args);
-  return JSON.parse(raw);
+  const result = await tool.execute("e2e-call", args);
+  return JSON.parse(result.content[0].text);
 }
 
 console.log(`Pi e2e host→python round-trip (python: ${python})`);

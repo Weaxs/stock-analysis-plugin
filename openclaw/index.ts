@@ -28,9 +28,14 @@ const toolsDir = existsSync(join(here, "tools"))
 const repoRoot = dirname(toolsDir);
 const isWin = process.platform === "win32";
 const venvPython = join(repoRoot, ".venv", isWin ? "Scripts" : "bin", "python3");
+// Staged-payload layout (openclaw/tools present in a dev checkout): the venv
+// still lives at the repo root one level up.
+const parentVenvPython = join(repoRoot, "..", ".venv", isWin ? "Scripts" : "bin", "python3");
 
 function pythonBin(): string {
-  return existsSync(venvPython) ? venvPython : "python3";
+  if (existsSync(venvPython)) return venvPython;
+  if (existsSync(parentVenvPython)) return parentVenvPython;
+  return "python3";
 }
 
 async function runPy(script: string, args: string[]): Promise<string> {

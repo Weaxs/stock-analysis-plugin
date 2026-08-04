@@ -6,8 +6,12 @@ export default (pi: ExtensionAPI) => {
   const isWin = process.platform === "win32";
   const venvPython = `${__dirname}/../.venv/${isWin ? "Scripts" : "bin"}/python3`;
   const python = existsSync(venvPython) ? venvPython : "python3";
-  const py = (script: string, args: string) =>
-    pi.exec(`${python} ${toolsDir}/${script} ${args}`);
+  const py = (script: string, args: string[]) =>
+    pi.exec(python, [`${toolsDir}/${script}`, ...args]);
+  const asText = (text: string) => ({
+    content: [{ type: "text" as const, text }],
+    details: {},
+  });
 
   // --- Data Tools ---
 
@@ -34,12 +38,16 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, period = "daily", count = 60 }) {
-      const result = await py(
-        "stock_data.py",
-        `kline ${symbol} --period ${period} --count ${count}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, period = "daily", count = 60 }) {
+      const result = await py("stock_data.py", [
+        "kline",
+        symbol,
+        "--period",
+        period,
+        "--count",
+        String(count),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -57,9 +65,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("stock_data.py", `quote ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("stock_data.py", ["quote", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -81,10 +89,14 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ symbol = "", mode = "detail" }) {
-      const symArg = symbol ? ` ${symbol}` : "";
-      const result = await py("stock_data.py", `capital_flow${symArg} --mode ${mode}`);
-      return result.stdout;
+    async execute(_id, { symbol = "", mode = "detail" }) {
+      const result = await py("stock_data.py", [
+        "capital_flow",
+        ...(symbol ? [symbol] : []),
+        "--mode",
+        mode,
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -105,9 +117,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, days = 3 }) {
-      const result = await py("stock_data.py", `news ${symbol} --days ${days}`);
-      return result.stdout;
+    async execute(_id, { symbol, days = 3 }) {
+      const result = await py("stock_data.py", ["news", symbol, "--days", String(days)]);
+      return asText(result.stdout);
     },
   });
 
@@ -125,9 +137,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("stock_data.py", `financials ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("stock_data.py", ["financials", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -156,12 +168,16 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, period = "daily", count = 120 }) {
-      const result = await py(
-        "technical.py",
-        `analyze ${symbol} --period ${period} --count ${count}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, period = "daily", count = 120 }) {
+      const result = await py("technical.py", [
+        "analyze",
+        symbol,
+        "--period",
+        period,
+        "--count",
+        String(count),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -188,12 +204,16 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, period = "daily", days = 60 }) {
-      const result = await py(
-        "pattern.py",
-        `analyze ${symbol} --period ${period} --days ${days}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, period = "daily", days = 60 }) {
+      const result = await py("pattern.py", [
+        "analyze",
+        symbol,
+        "--period",
+        period,
+        "--days",
+        String(days),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -213,12 +233,13 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ region = "cn" }) {
-      const result = await py(
-        "stock_data.py",
-        `market_indices --region ${region}`
-      );
-      return result.stdout;
+    async execute(_id, { region = "cn" }) {
+      const result = await py("stock_data.py", [
+        "market_indices",
+        "--region",
+        region,
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -239,12 +260,15 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ top = 10, direction = "top" }) {
-      const result = await py(
-        "stock_data.py",
-        `sector_rankings --top ${top} --direction ${direction}`
-      );
-      return result.stdout;
+    async execute(_id, { top = 10, direction = "top" }) {
+      const result = await py("stock_data.py", [
+        "sector_rankings",
+        "--top",
+        String(top),
+        "--direction",
+        direction,
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -262,9 +286,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("stock_data.py", `stock_info ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("stock_data.py", ["stock_info", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -282,9 +306,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("stock_data.py", `chip_distribution ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("stock_data.py", ["chip_distribution", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -302,9 +326,9 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ market = "A" }) {
-      const result = await py("stock_data.py", `market_stats --market ${market}`);
-      return result.stdout;
+    async execute(_id, { market = "A" }) {
+      const result = await py("stock_data.py", ["market_stats", "--market", market]);
+      return asText(result.stdout);
     },
   });
 
@@ -322,9 +346,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("stock_data.py", `fundamental_context ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("stock_data.py", ["fundamental_context", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -352,13 +376,16 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ market = "A", top = 20, config }) {
-      const configArg = config ? ` --config ${config}` : "";
-      const result = await py(
-        "screener.py",
-        `screen --market ${market} --top ${top}${configArg}`
-      );
-      return result.stdout;
+    async execute(_id, { market = "A", top = 20, config }) {
+      const result = await py("screener.py", [
+        "screen",
+        "--market",
+        market,
+        "--top",
+        String(top),
+        ...(config ? ["--config", config] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -392,14 +419,17 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["strategy", "symbol"],
     },
-    async execute({ strategy, symbol, start, end, capital = 1000000 }) {
-      const startArg = start ? ` --start ${start}` : "";
-      const endArg = end ? ` --end ${end}` : "";
-      const result = await py(
-        "backtest.py",
-        `run ${strategy} ${symbol}${startArg}${endArg} --capital ${capital}`
-      );
-      return result.stdout;
+    async execute(_id, { strategy, symbol, start, end, capital = 1000000 }) {
+      const result = await py("backtest.py", [
+        "run",
+        strategy,
+        symbol,
+        ...(start ? ["--start", start] : []),
+        ...(end ? ["--end", end] : []),
+        "--capital",
+        String(capital),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -440,12 +470,17 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol", "signal"],
     },
-    async execute({ symbol, signal, forward_days = "3,5,10", lookback = 250 }) {
-      const result = await py(
-        "backtest.py",
-        `evaluate_signal ${symbol} ${signal} --forward ${forward_days} --lookback ${lookback}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, signal, forward_days = "3,5,10", lookback = 250 }) {
+      const result = await py("backtest.py", [
+        "evaluate_signal",
+        symbol,
+        signal,
+        "--forward",
+        String(forward_days),
+        "--lookback",
+        String(lookback),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -469,12 +504,14 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["query"],
     },
-    async execute({ query, top = 5 }) {
-      const result = await py(
-        "name_resolver.py",
-        `resolve "${query}" --top ${top}`
-      );
-      return result.stdout;
+    async execute(_id, { query, top = 5 }) {
+      const result = await py("name_resolver.py", [
+        "resolve",
+        query,
+        "--top",
+        String(top),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -499,13 +536,13 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["market"],
     },
-    async execute({ market, date }) {
-      const dateArg = date ? ` --date ${date}` : "";
-      const result = await py(
-        "trading_calendar.py",
-        `check ${market}${dateArg}`
-      );
-      return result.stdout;
+    async execute(_id, { market, date }) {
+      const result = await py("trading_calendar.py", [
+        "check",
+        market,
+        ...(date ? ["--date", date] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -537,13 +574,15 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["market"],
     },
-    async execute({ market, direction = "next", count = 5, date }) {
-      const dateArg = date ? ` --date ${date}` : "";
-      const result = await py(
-        "trading_calendar.py",
-        `${direction} ${market} --count ${count}${dateArg}`
-      );
-      return result.stdout;
+    async execute(_id, { market, direction = "next", count = 5, date }) {
+      const result = await py("trading_calendar.py", [
+        direction,
+        market,
+        "--count",
+        String(count),
+        ...(date ? ["--date", date] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -572,12 +611,18 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, periods = "5,10,20,30,60,120,250", kline_period = "daily" }) {
-      const result = await py(
-        "technical.py",
-        `calculate_ma ${symbol} --periods ${periods} --period ${kline_period} --count 300`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, periods = "5,10,20,30,60,120,250", kline_period = "daily" }) {
+      const result = await py("technical.py", [
+        "calculate_ma",
+        symbol,
+        "--periods",
+        periods,
+        "--period",
+        kline_period,
+        "--count",
+        "300",
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -606,12 +651,16 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, period = "daily", count = 60 }) {
-      const result = await py(
-        "volume_analysis.py",
-        `analyze ${symbol} --period ${period} --count ${count}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, period = "daily", count = 60 }) {
+      const result = await py("volume_analysis.py", [
+        "analyze",
+        symbol,
+        "--period",
+        period,
+        "--count",
+        String(count),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -635,12 +684,14 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["query"],
     },
-    async execute({ query, count = 10 }) {
-      const result = await py(
-        "search_intel.py",
-        `search "${query}" --count ${count}`
-      );
-      return result.stdout;
+    async execute(_id, { query, count = 10 }) {
+      const result = await py("search_intel.py", [
+        "search",
+        query,
+        "--count",
+        String(count),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -662,13 +713,13 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, name }) {
-      const nameArg = name ? ` --name "${name}"` : "";
-      const result = await py(
-        "search_intel.py",
-        `comprehensive ${symbol}${nameArg}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, name }) {
+      const result = await py("search_intel.py", [
+        "comprehensive",
+        symbol,
+        ...(name ? ["--name", name] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -686,9 +737,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("search_intel.py", `sentiment ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("search_intel.py", ["sentiment", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -701,8 +752,8 @@ export default (pi: ExtensionAPI) => {
       properties: {},
     },
     async execute() {
-      const result = await py("search_intel.py", "trending");
-      return result.stdout;
+      const result = await py("search_intel.py", ["trending"]);
+      return asText(result.stdout);
     },
   });
 
@@ -720,9 +771,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["url"],
     },
-    async execute({ url }) {
-      const result = await py("search_intel.py", `extract "${url}"`);
-      return result.stdout;
+    async execute(_id, { url }) {
+      const result = await py("search_intel.py", ["extract", url]);
+      return asText(result.stdout);
     },
   });
 
@@ -744,13 +795,13 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol, name }) {
-      const nameArg = name ? ` --name "${name}"` : "";
-      const result = await py(
-        "risk_screening.py",
-        `screen ${symbol}${nameArg}`,
-      );
-      return result.stdout;
+    async execute(_id, { symbol, name }) {
+      const result = await py("risk_screening.py", [
+        "screen",
+        symbol,
+        ...(name ? ["--name", name] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -768,10 +819,10 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ market }) {
+    async execute(_id, { market }) {
       const m = market || "A";
-      const result = await py("market_regime.py", `detect ${m}`);
-      return result.stdout;
+      const result = await py("market_regime.py", ["detect", m]);
+      return asText(result.stdout);
     },
   });
 
@@ -789,10 +840,10 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ market }) {
+    async execute(_id, { market }) {
       const m = market || "A";
-      const result = await py("market_review.py", `review --market ${m}`);
-      return result.stdout;
+      const result = await py("market_review.py", ["review", "--market", m]);
+      return asText(result.stdout);
     },
   });
 
@@ -814,12 +865,14 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbols"],
     },
-    async execute({ symbols, workers = 3 }) {
-      const result = await py(
-        "watchlist.py",
-        `analyze ${symbols} --workers ${workers}`
-      );
-      return result.stdout;
+    async execute(_id, { symbols, workers = 3 }) {
+      const result = await py("watchlist.py", [
+        "analyze",
+        symbols,
+        "--workers",
+        String(workers),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -837,9 +890,9 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute({ symbol }) {
-      const result = await py("anomaly_detect.py", `detect ${symbol}`);
-      return result.stdout;
+    async execute(_id, { symbol }) {
+      const result = await py("anomaly_detect.py", ["detect", symbol]);
+      return asText(result.stdout);
     },
   });
 
@@ -859,9 +912,9 @@ export default (pi: ExtensionAPI) => {
         },
       },
     },
-    async execute({ market = "all" }) {
-      const result = await py("diagnostics.py", `check --market ${market}`);
-      return result.stdout;
+    async execute(_id, { market = "all" }) {
+      const result = await py("diagnostics.py", ["check", "--market", market]);
+      return asText(result.stdout);
     },
   });
 
@@ -876,10 +929,12 @@ export default (pi: ExtensionAPI) => {
         symbol: { type: "string", description: "股票代码（自动识别市场，与 market 二选一）" },
       },
     },
-    async execute({ market, symbol }) {
-      const arg = symbol ? `--symbol ${symbol}` : `--market ${market || "A"}`;
-      const result = await py("capabilities.py", `get ${arg}`);
-      return result.stdout;
+    async execute(_id, { market, symbol }) {
+      const args = symbol
+        ? ["get", "--symbol", symbol]
+        : ["get", "--market", market || "A"];
+      const result = await py("capabilities.py", args);
+      return asText(result.stdout);
     },
   });
 
@@ -904,13 +959,16 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["report"],
     },
-    async execute({ report, template = "full" }) {
+    async execute(_id, { report, template = "full" }) {
       const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
-      const result = await py(
-        "report_renderer.py",
-        `stock --template ${template} --input-b64 ${b64}`
-      );
-      return result.stdout;
+      const result = await py("report_renderer.py", [
+        "stock",
+        "--template",
+        template,
+        "--input-b64",
+        b64,
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -926,13 +984,16 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["report"],
     },
-    async execute({ report, template = "full" }) {
+    async execute(_id, { report, template = "full" }) {
       const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
-      const result = await py(
-        "report_renderer.py",
-        `market --template ${template} --input-b64 ${b64}`
-      );
-      return result.stdout;
+      const result = await py("report_renderer.py", [
+        "market",
+        "--template",
+        template,
+        "--input-b64",
+        b64,
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -954,13 +1015,15 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbols"],
     },
-    async execute({ symbols, include_market_review = false, workers = 3 }) {
-      const flag = include_market_review ? " --include-market-review" : "";
-      const result = await py(
-        "watchlist_context.py",
-        `build ${symbols} --workers ${workers}${flag}`
-      );
-      return result.stdout;
+    async execute(_id, { symbols, include_market_review = false, workers = 3 }) {
+      const result = await py("watchlist_context.py", [
+        "build",
+        symbols,
+        "--workers",
+        String(workers),
+        ...(include_market_review ? ["--include-market-review"] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -979,14 +1042,18 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol", "cost", "quantity"],
     },
-    async execute({ symbol, cost, quantity, stop_loss, take_profit }) {
-      const slArg = stop_loss !== undefined ? ` --stop-loss ${stop_loss}` : "";
-      const tpArg = take_profit !== undefined ? ` --take-profit ${take_profit}` : "";
-      const result = await py(
-        "position_context.py",
-        `analyze ${symbol} --cost ${cost} --quantity ${quantity}${slArg}${tpArg}`
-      );
-      return result.stdout;
+    async execute(_id, { symbol, cost, quantity, stop_loss, take_profit }) {
+      const result = await py("position_context.py", [
+        "analyze",
+        symbol,
+        "--cost",
+        String(cost),
+        "--quantity",
+        String(quantity),
+        ...(stop_loss !== undefined ? ["--stop-loss", String(stop_loss)] : []),
+        ...(take_profit !== undefined ? ["--take-profit", String(take_profit)] : []),
+      ]);
+      return asText(result.stdout);
     },
   });
 
@@ -1012,10 +1079,10 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol", "rules"],
     },
-    async execute({ symbol, rules }) {
+    async execute(_id, { symbol, rules }) {
       const b64 = Buffer.from(JSON.stringify(rules), "utf-8").toString("base64");
-      const result = await py("alert_rules.py", `check ${symbol} --rules-b64 ${b64}`);
-      return result.stdout;
+      const result = await py("alert_rules.py", ["check", symbol, "--rules-b64", b64]);
+      return asText(result.stdout);
     },
   });
 
@@ -1030,10 +1097,10 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["text"],
     },
-    async execute({ text }) {
+    async execute(_id, { text }) {
       const b64 = Buffer.from(String(text), "utf-8").toString("base64");
-      const result = await py("import_parser.py", `parse --text-b64 ${b64}`);
-      return result.stdout;
+      const result = await py("import_parser.py", ["parse", "--text-b64", b64]);
+      return asText(result.stdout);
     },
   });
 

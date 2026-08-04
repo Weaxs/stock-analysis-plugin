@@ -1,7 +1,7 @@
 [project]
 name = "stock-analysis-plugin"
 version = "0.1.4"
-description = "Hermes plugin for stock analysis, screening, and strategy backtesting across A/HK/US markets"
+description = "Hermes plugin for stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -55,7 +55,7 @@ Repository = "https://github.com/Weaxs/stock-analysis-plugin"
 Issues = "https://github.com/Weaxs/stock-analysis-plugin/issues"
 
 [project.entry-points."hermes_agent.plugins"]
-stock-analysis = "hermes:register"
+stock-analysis = "hermes"
 
 [build-system]
 requires = ["hatchling"]
