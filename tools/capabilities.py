@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Market capability boundaries — tell agent what a given market supports.
 
-Prevents agents from calling A-share-only tools on HK/US and vice versa.
+Prevents agents from calling A-share-only tools on HK/US/JP/KR/TW and vice versa.
 """
 
 import argparse
@@ -13,21 +13,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stock_data import detect_market
 
+ALL_MARKETS = ["A", "HK", "US", "JP", "KR", "TW"]
+
 # tool_name -> {markets: [supported markets], reason: str for unsupported}
 TOOL_MATRIX = {
-    "get_kline": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_quote": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_news": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_financials": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_technical_analysis": {"markets": ["A", "HK", "US"], "reason": None},
-    "analyze_pattern": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_market_indices": {"markets": ["A", "HK", "US"], "reason": None},
-    "calculate_ma": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_volume_analysis": {"markets": ["A", "HK", "US"], "reason": None},
-    "detect_anomaly": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_stock_info": {"markets": ["A", "HK", "US"], "reason": None},
-    "detect_market_regime": {"markets": ["A", "HK", "US"], "reason": None},
-    "get_market_review": {"markets": ["A", "HK", "US"], "reason": None},
+    "get_kline": {"markets": ALL_MARKETS, "reason": None},
+    "get_quote": {"markets": ALL_MARKETS, "reason": None},
+    "get_news": {"markets": ALL_MARKETS, "reason": None},
+    "get_financials": {"markets": ALL_MARKETS, "reason": None},
+    "get_technical_analysis": {"markets": ALL_MARKETS, "reason": None},
+    "analyze_pattern": {"markets": ALL_MARKETS, "reason": None},
+    "get_market_indices": {"markets": ALL_MARKETS, "reason": None},
+    "calculate_ma": {"markets": ALL_MARKETS, "reason": None},
+    "get_volume_analysis": {"markets": ALL_MARKETS, "reason": None},
+    "detect_anomaly": {"markets": ALL_MARKETS, "reason": None},
+    "get_stock_info": {"markets": ALL_MARKETS, "reason": None},
+    "detect_market_regime": {"markets": ["A", "HK", "US"], "reason": "index coverage is CN/HK/US only"},
+    "get_market_review": {"markets": ["A", "HK", "US"], "reason": "review data coverage is CN/HK/US only"},
     # A-share only
     "get_capital_flow": {"markets": ["A"], "reason": "A-share only (akshare data)"},
     "get_chip_distribution": {"markets": ["A"], "reason": "A-share only"},
@@ -41,14 +43,14 @@ TOOL_MATRIX = {
         "reason": "sentiment providers are US-centric; requires SENTIMENT_API_KEY",
     },
     "get_trending_sentiment": {
-        "markets": ["A", "HK", "US"],
+        "markets": ALL_MARKETS,
         "reason": None,
     },
     # search-based, market-agnostic
-    "search_stock_news": {"markets": ["A", "HK", "US"], "reason": None},
-    "search_comprehensive_intel": {"markets": ["A", "HK", "US"], "reason": None},
-    "extract_article": {"markets": ["A", "HK", "US"], "reason": None},
-    "screen_risk": {"markets": ["A", "HK", "US"], "reason": None},
+    "search_stock_news": {"markets": ALL_MARKETS, "reason": None},
+    "search_comprehensive_intel": {"markets": ALL_MARKETS, "reason": None},
+    "extract_article": {"markets": ALL_MARKETS, "reason": None},
+    "screen_risk": {"markets": ALL_MARKETS, "reason": None},
 }
 
 
@@ -81,7 +83,7 @@ def main():
     sub = parser.add_subparsers(dest="command")
     p = sub.add_parser("get")
     grp = p.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--market", type=str.upper, choices=["A", "HK", "US"], help="Market code")
+    grp.add_argument("--market", type=str.upper, choices=ALL_MARKETS, help="Market code")
     grp.add_argument("--symbol", help="Stock symbol (auto-detects market)")
     args = parser.parse_args()
 

@@ -1,13 +1,13 @@
 TOOL_SCHEMAS = [
     {
         "name": "get_kline",
-        "description": "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）",
+        "description": "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF",
         "parameters": {
             "type": "object",
             "properties": {
                 "symbol": {
                     "type": "string",
-                    "description": "股票代码，如 600519（A股）、00700.HK（港股）、AAPL（美股）",
+                    "description": "股票代码，如 600519（A股）、00700.HK（港股）、AAPL（美股）、7203.T（日股）、005930.KS（韩股）、2330.TW（台股）",
                 },
                 "period": {
                     "type": "string",
@@ -24,7 +24,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_quote",
-        "description": "获取股票实时行情报价。支持A股、港股、美股",
+        "description": "获取股票实时行情报价。支持A股、港股、美股、日股、韩股、台股",
         "parameters": {
             "type": "object",
             "properties": {
@@ -134,13 +134,13 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_indices",
-        "description": "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500",
+        "description": "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500；JP: 日经225/东证；KR: KOSPI/KOSDAQ；TW: 台湾加权",
         "parameters": {
             "type": "object",
             "properties": {
                 "region": {
                     "type": "string",
-                    "enum": ["cn", "hk", "us"],
+                    "enum": ["cn", "hk", "us", "jp", "kr", "tw"],
                     "description": "市场区域，默认 cn",
                 },
             },
@@ -166,7 +166,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_stock_info",
-        "description": "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，HK/US返回行业/公司简介",
+        "description": "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，其他市场返回行业/公司简介",
         "parameters": {
             "type": "object",
             "properties": {
@@ -329,13 +329,13 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "check_trading_day",
-        "description": "查询某日是否为交易日。支持CN（A股）、HK（港股）、US（美股）三市场",
+        "description": "查询某日是否为交易日。支持CN（A股）、HK（港股）、US（美股）、JP（日股）、KR（韩股）、TW（台股）",
         "parameters": {
             "type": "object",
             "properties": {
                 "market": {
                     "type": "string",
-                    "enum": ["CN", "HK", "US"],
+                    "enum": ["CN", "HK", "US", "JP", "KR", "TW"],
                     "description": "市场",
                 },
                 "date": {
@@ -348,13 +348,13 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_trading_days",
-        "description": "获取最近/未来N个交易日列表。支持CN/HK/US三市场",
+        "description": "获取最近/未来N个交易日列表。支持CN/HK/US/JP/KR/TW",
         "parameters": {
             "type": "object",
             "properties": {
                 "market": {
                     "type": "string",
-                    "enum": ["CN", "HK", "US"],
+                    "enum": ["CN", "HK", "US", "JP", "KR", "TW"],
                     "description": "市场",
                 },
                 "direction": {
@@ -578,7 +578,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "market": {
                     "type": "string",
-                    "enum": ["A", "HK", "US", "all"],
+                    "enum": ["A", "HK", "US", "JP", "KR", "TW", "all"],
                     "description": "市场，默认 all",
                 },
             },
@@ -590,7 +590,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "market": {"type": "string", "enum": ["A", "HK", "US"], "description": "市场代码"},
+                "market": {"type": "string", "enum": ["A", "HK", "US", "JP", "KR", "TW"], "description": "市场代码"},
                 "symbol": {"type": "string", "description": "股票代码（自动识别市场，与 market 二选一）"},
             },
         },
@@ -671,7 +671,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "parse_stock_list",
-        "description": "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker，并调用 name_resolver 处理中文股票名",
+        "description": "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker、日股 xxxx.T、韩股 xxxxxx.KS/KQ、台股 xxxx.TW，并调用 name_resolver 处理中文股票名",
         "parameters": {
             "type": "object",
             "properties": {

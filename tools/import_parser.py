@@ -17,8 +17,14 @@ from name_resolver import resolve  # noqa: E402
 # regex patterns
 RE_A_CODE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 RE_HK_CODE = re.compile(r"(?<![A-Za-z0-9])(\d{4,5}\.HK)(?![A-Za-z0-9])", re.IGNORECASE)
+RE_ASIA_SUFFIX_CODE = re.compile(
+    r"(?<![A-Za-z0-9])(\d{4}\.T|\d{6}\.(?:KS|KQ)|\d{4}\.(?:TW|TWO))(?![A-Za-z0-9])", re.IGNORECASE
+)
 RE_US_TICKER = re.compile(r"(?<![A-Za-z0-9])([A-Z]{1,5})(?![A-Za-z0-9\.])")
 RE_CN_NAME = re.compile(r"[一-鿿][一-鿿\w]{1,7}")
+
+# suffix -> market for RE_ASIA_SUFFIX_CODE
+SUFFIX_MARKET = {"T": "JP", "KS": "KR", "KQ": "KR", "TW": "TW", "TWO": "TW"}
 
 # US ticker false-positive filter (common ALL-CAPS words that aren't tickers)
 US_STOPWORDS = {
@@ -158,9 +164,20 @@ def parse(text: str) -> dict:
             seen_symbols.add(code)
             hk_matches.append(m.group(1))
 
-    # strip HK codes so their 4-5 digit part doesn't get picked up as A-share
+    # 1b. JP/KR/TW suffixed codes (7203.T, 005930.KS, 2330.TW — digits would hit A-share regex too)
+    asia_matches: list[str] = []
+    for m in RE_ASIA_SUFFIX_CODE.finditer(text):
+        code = m.group(1).upper()
+        suffix = code.split(".", 1)[1]
+        if code not in seen_symbols:
+            items.append({"symbol": code, "market": SUFFIX_MARKET[suffix]})
+            seen_symbols.add(code)
+            asia_matches.append(m.group(1))
+
+    # strip suffixed codes so their digit part doesn't get picked up as A-share
+    # and their suffix doesn't get picked up as a US ticker
     text_after_hk = text
-    for m in hk_matches:
+    for m in hk_matches + asia_matches:
         text_after_hk = text_after_hk.replace(m, " ")
 
     # 2. A-share 6-digit codes
@@ -171,7 +188,8 @@ def parse(text: str) -> dict:
             seen_symbols.add(code)
 
     # 3. US tickers (1-5 uppercase letters), filtered against stopwords
-    for m in RE_US_TICKER.finditer(text):
+    # runs on stripped text so HK/JP/KR/TW suffixes (HK, TW, KS...) aren't misread as tickers
+    for m in RE_US_TICKER.finditer(text_after_hk):
         tick = m.group(1)
         if tick in US_STOPWORDS:
             continue

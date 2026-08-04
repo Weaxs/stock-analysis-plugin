@@ -17,6 +17,18 @@ class TestDetectMarket:
         assert detect_market("TSLA") == "US"
         assert detect_market("MSFT") == "US"
 
+    def test_jp(self):
+        assert detect_market("7203.T") == "JP"
+        assert detect_market("6758.t") == "JP"
+
+    def test_kr(self):
+        assert detect_market("005930.KS") == "KR"
+        assert detect_market("035720.KQ") == "KR"
+
+    def test_tw(self):
+        assert detect_market("2330.TW") == "TW"
+        assert detect_market("6510.TWO") == "TW"
+
 
 class TestNormalizeStockCode:
     def test_main_board(self):

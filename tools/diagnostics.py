@@ -19,8 +19,8 @@ PROVIDERS = {
     "tushare": ("tushare", ["TUSHARE_TOKEN"], ["A"], None),
     "efinance": ("efinance", [], ["A"], None),
     "pytdx": ("pytdx", [], ["A"], "connects to public Tencent servers"),
-    "yfinance": ("yfinance", [], ["HK", "US"], "quote may be delayed 15-20min"),
-    "finnhub": ("finnhub", ["FINNHUB_API_KEY"], ["US"], None),
+    "yfinance": ("yfinance", [], ["HK", "US", "JP", "KR", "TW"], "quote may be delayed 15-20min"),
+    "finnhub": ("finnhub", ["FINNHUB_API_KEY"], ["HK", "US"], None),
     "longbridge": (
         "longport.openapi",
         ["LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"],
@@ -68,7 +68,7 @@ def diagnose(market: str = "all") -> dict:
     market = (market or "all").upper()
     all_providers = [_check_provider(p) for p in PROVIDERS]
 
-    markets_to_report = ["A", "HK", "US"] if market == "ALL" else [market]
+    markets_to_report = ["A", "HK", "US", "JP", "KR", "TW"] if market == "ALL" else [market]
 
     result = {
         "meta": {
@@ -97,6 +97,8 @@ def diagnose(market: str = "all") -> dict:
             and not any(p["name"] == "finnhub" and p["available"] for p in providers)
         ):
             warnings.append(f"{m} quotes will be delayed (yfinance only)")
+        if m in ("JP", "KR", "TW"):
+            warnings.append(f"{m} is served by yfinance only — quotes delayed 15-20min, no failover")
 
         result["markets"].append(
             {
@@ -118,7 +120,7 @@ def main():
         "--market",
         default="ALL",
         type=str.upper,
-        choices=["A", "HK", "US", "ALL"],
+        choices=["A", "HK", "US", "JP", "KR", "TW", "ALL"],
         help="Market to diagnose (default: ALL)",
     )
     args = parser.parse_args()

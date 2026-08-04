@@ -11,8 +11,15 @@ from datetime import datetime, timedelta
 
 
 def detect_market(symbol: str) -> str:
-    if symbol.upper().endswith(".HK"):
+    s = symbol.upper()
+    if s.endswith(".HK"):
         return "HK"
+    if s.endswith(".T"):
+        return "JP"
+    if s.endswith((".KS", ".KQ")):
+        return "KR"
+    if s.endswith((".TW", ".TWO")):
+        return "TW"
     if re.match(r"^\d{6}$", symbol):
         return "A"
     return "US"
@@ -77,10 +84,10 @@ def _failover(sources: list, label: str = ""):
     return None
 
 
-def _akshare_retry(fn, *args, retries=2, delay=1):
+def _akshare_retry(fn, *args, retries=2, delay=1, **kwargs):
     for attempt in range(retries + 1):
         try:
-            return fn(*args)
+            return fn(*args, **kwargs)
         except Exception:
             if attempt == retries:
                 raise
@@ -247,8 +254,10 @@ def _kline_akshare(symbol: str, period: str, count: int) -> list:
     end = datetime.now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
 
+    # ETFs (51/52/56/58/15/16/18xxxx) are not covered by stock_zh_a_hist
+    hist_fn = ak.fund_etf_hist_em if normalize_stock_code(symbol)["is_etf"] else ak.stock_zh_a_hist
     df = _akshare_retry(
-        ak.stock_zh_a_hist,
+        hist_fn,
         symbol=symbol,
         period=period_map.get(period, "daily"),
         start_date=start.strftime("%Y%m%d"),
@@ -664,13 +673,15 @@ def _quote_alphavantage(symbol: str) -> dict:
 
 
 def kline_yf(symbol: str, period: str, count: int) -> list:
-    """HK/US kline with failover: yfinance → finnhub → longbridge → alphavantage (US only)."""
-    sources = [
-        ("yfinance", lambda: _kline_yfinance(symbol, period, count)),
-        ("finnhub", lambda: _kline_finnhub(symbol, period, count)),
-        ("longbridge", lambda: _kline_longbridge(symbol, period, count)),
-    ]
-    if detect_market(symbol) == "US":
+    """HK/US/JP/KR/TW kline. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
+    market = detect_market(symbol)
+    sources = [("yfinance", lambda: _kline_yfinance(symbol, period, count))]
+    if market in ("HK", "US"):
+        sources += [
+            ("finnhub", lambda: _kline_finnhub(symbol, period, count)),
+            ("longbridge", lambda: _kline_longbridge(symbol, period, count)),
+        ]
+    if market == "US":
         sources.append(("alphavantage", lambda: _kline_alphavantage(symbol, period, count)))
     return _failover(sources, label=f"kline:{symbol}")
 
@@ -691,15 +702,46 @@ def cmd_kline(args):
 
 
 def quote_a(symbol: str) -> dict:
-    """A-share quote with failover: akshare → tushare → efinance → pytdx."""
-    return _failover(
-        [
-            ("akshare", lambda: _quote_akshare(symbol)),
-            ("tushare", lambda: _quote_tushare(symbol)),
-            ("efinance", lambda: _quote_efinance(symbol)),
-            ("pytdx", lambda: _quote_pytdx(symbol)),
-        ],
-        label=f"quote_a:{symbol}",
+    """A-share quote with failover: akshare → tushare → efinance → pytdx. ETFs try fund spot first."""
+    sources = []
+    if normalize_stock_code(symbol)["is_etf"]:
+        sources.append(("akshare_etf", lambda: _quote_akshare_etf(symbol)))
+    sources += [
+        ("akshare", lambda: _quote_akshare(symbol)),
+        ("tushare", lambda: _quote_tushare(symbol)),
+        ("efinance", lambda: _quote_efinance(symbol)),
+        ("pytdx", lambda: _quote_pytdx(symbol)),
+    ]
+    return _failover(sources, label=f"quote_a:{symbol}")
+
+
+def _quote_akshare_etf(symbol: str) -> dict:
+    """A-share ETF realtime quote via akshare fund_etf_spot_em."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.fund_etf_spot_em)
+    row = df[df["代码"] == symbol]
+    if row.empty:
+        raise ValueError(f"ETF {symbol} not found in akshare fund spot")
+    r = row.iloc[0]
+    return _clean_row(
+        {
+            "symbol": symbol,
+            "name": r.get("名称"),
+            "price": r.get("最新价"),
+            "change": r.get("涨跌额"),
+            "change_pct": r.get("涨跌幅"),
+            "volume": r.get("成交量"),
+            "turnover": r.get("成交额"),
+            "high": r.get("最高价"),
+            "low": r.get("最低价"),
+            "open": r.get("开盘价"),
+            "prev_close": r.get("昨收"),
+            "market_cap": r.get("总市值"),
+            "turnover_rate": r.get("换手率"),
+            "volume_ratio": r.get("量比"),
+            "is_etf": True,
+        }
     )
 
 
@@ -788,13 +830,15 @@ def _quote_finnhub(symbol: str) -> dict:
 
 
 def quote_yf(symbol: str) -> dict:
-    """HK/US quote with failover: yfinance → finnhub → longbridge → alphavantage (US only)."""
-    sources = [
-        ("yfinance", lambda: _quote_yfinance(symbol)),
-        ("finnhub", lambda: _quote_finnhub(symbol)),
-        ("longbridge", lambda: _quote_longbridge(symbol)),
-    ]
-    if detect_market(symbol) == "US":
+    """HK/US/JP/KR/TW quote. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
+    market = detect_market(symbol)
+    sources = [("yfinance", lambda: _quote_yfinance(symbol))]
+    if market in ("HK", "US"):
+        sources += [
+            ("finnhub", lambda: _quote_finnhub(symbol)),
+            ("longbridge", lambda: _quote_longbridge(symbol)),
+        ]
+    if market == "US":
         sources.append(("alphavantage", lambda: _quote_alphavantage(symbol)))
     return _failover(sources, label=f"quote:{symbol}")
 
@@ -1212,13 +1256,19 @@ def cmd_market_indices(args):
                     )
                 )
             return results
-        elif region in ("hk", "us"):
+        elif region in ("hk", "us", "jp", "kr", "tw"):
             import yfinance as yf
 
             if region == "hk":
                 symbols = {"^HSI": "恒生指数", "^HSCE": "恒生国企指数", "^HSTECH": "恒生科技指数"}
-            else:
+            elif region == "us":
                 symbols = {"^DJI": "道琼斯", "^IXIC": "纳斯达克", "^GSPC": "标普500", "^RUT": "罗素2000"}
+            elif region == "jp":
+                symbols = {"^N225": "日经225", "^TOPX": "东证指数"}
+            elif region == "kr":
+                symbols = {"^KS11": "韩国KOSPI", "^KQ11": "韩国KOSDAQ"}
+            else:
+                symbols = {"^TWII": "台湾加权指数"}
             results = []
             for sym, name in symbols.items():
                 try:
@@ -1610,7 +1660,7 @@ def main():
     p_snap.add_argument("--market", default="A", choices=["A", "HK", "US"])
 
     p_idx = sub.add_parser("market_indices")
-    p_idx.add_argument("--region", default="cn", choices=["cn", "hk", "us"])
+    p_idx.add_argument("--region", default="cn", choices=["cn", "hk", "us", "jp", "kr", "tw"])
 
     p_sec = sub.add_parser("sector_rankings")
     p_sec.add_argument("--top", type=int, default=10)

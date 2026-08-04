@@ -91,3 +91,33 @@ if __name__ == "__main__":
 
     r = subprocess.run([sys.executable, "-m", "pytest", __file__, "-q"], cwd=os.path.dirname(os.path.dirname(__file__)))
     sys.exit(r.returncode)
+
+
+class TestAsiaSuffixCodes:
+    def test_jp_kr_tw_codes(self, monkeypatch):
+        monkeypatch.setattr(import_parser, "resolve", lambda name, top=1: [])
+        result = import_parser.parse("7203.T 005930.KS 2330.TW")
+        markets = {i["symbol"]: i["market"] for i in result["items"]}
+        assert markets["7203.T"] == "JP"
+        assert markets["005930.KS"] == "KR"
+        assert markets["2330.TW"] == "TW"
+
+    def test_suffix_digits_not_misread_as_a_share(self, monkeypatch):
+        monkeypatch.setattr(import_parser, "resolve", lambda name, top=1: [])
+        result = import_parser.parse("005930.KS")
+        syms = {i["symbol"] for i in result["items"]}
+        assert "005930" not in syms
+
+    def test_suffix_not_misread_as_us_ticker(self, monkeypatch):
+        monkeypatch.setattr(import_parser, "resolve", lambda name, top=1: [])
+        result = import_parser.parse("00700.HK 2330.TW")
+        syms = {i["symbol"] for i in result["items"]}
+        assert "HK" not in syms
+        assert "TW" not in syms
+
+    def test_kq_and_two_suffixes(self, monkeypatch):
+        monkeypatch.setattr(import_parser, "resolve", lambda name, top=1: [])
+        result = import_parser.parse("035720.KQ 6510.TWO")
+        markets = {i["symbol"]: i["market"] for i in result["items"]}
+        assert markets["035720.KQ"] == "KR"
+        assert markets["6510.TWO"] == "TW"
