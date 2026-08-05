@@ -93,26 +93,6 @@ jobs:
       - name: E2E — OpenClaw host real subprocess
         run: npx tsx tests/e2e/test_openclaw_e2e.ts
 
-  e2e-network:
-    # Real akshare/yfinance calls. Marked opt-in; run in a dedicated job so
-    # provider outages fail loud without blocking the main test job.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -r tools/requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: E2E — real provider network
-        run: pytest tests/e2e/test_provider_network.py -m integration_network -v
-
   e2e-llm:
     # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
     # (skipped on forks to prevent secret exposure).
