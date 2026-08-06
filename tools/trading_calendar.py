@@ -6,6 +6,9 @@ import json
 import sys
 from datetime import datetime, timedelta
 
+# Supported markets. argparse uses type=str.upper so lowercase input is accepted too.
+MARKETS = ["CN", "HK", "US", "JP", "KR", "TW"]
+
 
 def _is_weekend(d: datetime) -> bool:
     return d.weekday() >= 5
@@ -191,16 +194,16 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     p_check = sub.add_parser("check")
-    p_check.add_argument("market", choices=["CN", "HK", "US", "JP", "KR", "TW", "cn", "hk", "us", "jp", "kr", "tw"])
+    p_check.add_argument("market", type=str.upper, choices=MARKETS)
     p_check.add_argument("--date", default=None, help="Date in YYYY-MM-DD format")
 
     p_next = sub.add_parser("next")
-    p_next.add_argument("market", choices=["CN", "HK", "US", "JP", "KR", "TW", "cn", "hk", "us", "jp", "kr", "tw"])
+    p_next.add_argument("market", type=str.upper, choices=MARKETS)
     p_next.add_argument("--count", type=int, default=5)
     p_next.add_argument("--date", default=None)
 
     p_prev = sub.add_parser("prev")
-    p_prev.add_argument("market", choices=["CN", "HK", "US", "JP", "KR", "TW", "cn", "hk", "us", "jp", "kr", "tw"])
+    p_prev.add_argument("market", type=str.upper, choices=MARKETS)
     p_prev.add_argument("--count", type=int, default=5)
     p_prev.add_argument("--date", default=None)
 
