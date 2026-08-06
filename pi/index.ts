@@ -1,11 +1,20 @@
 import type { ExtensionAPI } from "pi-agent";
 import { existsSync } from "fs";
+import { fileURLToPath } from "url";
 
 export default (pi: ExtensionAPI) => {
-  const toolsDir = `${__dirname}/../tools`;
+  // Resolve the plugin root robustly: __dirname under jiti/CJS-style loaders,
+  // else import.meta.url under native ESM (where __dirname is undefined).
+  const baseDir =
+    typeof __dirname !== "undefined"
+      ? `${__dirname}/..`
+      : fileURLToPath(new URL("..", import.meta.url));
+  const toolsDir = `${baseDir}/tools`;
   const isWin = process.platform === "win32";
-  const venvPython = `${__dirname}/../.venv/${isWin ? "Scripts" : "bin"}/python3`;
-  const python = existsSync(venvPython) ? venvPython : "python3";
+  // Windows venvs ship Scripts/python.exe (there is no python3); POSIX venvs ship bin/python3.
+  const venvPython = `${baseDir}/.venv/${isWin ? "Scripts/python.exe" : "bin/python3"}`;
+  // Fallback: on Windows "python3" is usually the Microsoft Store stub — prefer "python".
+  const python = existsSync(venvPython) ? venvPython : isWin ? "python" : "python3";
   const py = (script: string, args: string[]) =>
     pi.exec(python, [`${toolsDir}/${script}`, ...args]);
   const asText = (text: string) => ({
@@ -1108,26 +1117,26 @@ export default (pi: ExtensionAPI) => {
 
   pi.on("resources_discover", () => ({
     skillPaths: [
-      `${__dirname}/../skills/stock-analysis/SKILL.md`,
-      `${__dirname}/../skills/stock-screener/SKILL.md`,
-      `${__dirname}/../skills/strategy-backtest/SKILL.md`,
-      `${__dirname}/../skills/bull-trend/SKILL.md`,
-      `${__dirname}/../skills/shrink-pullback/SKILL.md`,
-      `${__dirname}/../skills/ma-crossover/SKILL.md`,
-      `${__dirname}/../skills/volume-breakout/SKILL.md`,
-      `${__dirname}/../skills/bottom-volume/SKILL.md`,
-      `${__dirname}/../skills/dragon-head/SKILL.md`,
-      `${__dirname}/../skills/chan-theory/SKILL.md`,
-      `${__dirname}/../skills/wave-theory/SKILL.md`,
-      `${__dirname}/../skills/box-oscillation/SKILL.md`,
-      `${__dirname}/../skills/emotion-cycle/SKILL.md`,
-      `${__dirname}/../skills/one-yang-three-yin/SKILL.md`,
-      `${__dirname}/../skills/wisburg-research/SKILL.md`,
-      `${__dirname}/../skills/market-review/SKILL.md`,
-      `${__dirname}/../skills/event-driven/SKILL.md`,
-      `${__dirname}/../skills/expectation-repricing/SKILL.md`,
-      `${__dirname}/../skills/growth-quality/SKILL.md`,
-      `${__dirname}/../skills/hot-theme/SKILL.md`,
+      `${baseDir}/skills/stock-analysis/SKILL.md`,
+      `${baseDir}/skills/stock-screener/SKILL.md`,
+      `${baseDir}/skills/strategy-backtest/SKILL.md`,
+      `${baseDir}/skills/bull-trend/SKILL.md`,
+      `${baseDir}/skills/shrink-pullback/SKILL.md`,
+      `${baseDir}/skills/ma-crossover/SKILL.md`,
+      `${baseDir}/skills/volume-breakout/SKILL.md`,
+      `${baseDir}/skills/bottom-volume/SKILL.md`,
+      `${baseDir}/skills/dragon-head/SKILL.md`,
+      `${baseDir}/skills/chan-theory/SKILL.md`,
+      `${baseDir}/skills/wave-theory/SKILL.md`,
+      `${baseDir}/skills/box-oscillation/SKILL.md`,
+      `${baseDir}/skills/emotion-cycle/SKILL.md`,
+      `${baseDir}/skills/one-yang-three-yin/SKILL.md`,
+      `${baseDir}/skills/wisburg-research/SKILL.md`,
+      `${baseDir}/skills/market-review/SKILL.md`,
+      `${baseDir}/skills/event-driven/SKILL.md`,
+      `${baseDir}/skills/expectation-repricing/SKILL.md`,
+      `${baseDir}/skills/growth-quality/SKILL.md`,
+      `${baseDir}/skills/hot-theme/SKILL.md`,
     ],
   }));
 };
