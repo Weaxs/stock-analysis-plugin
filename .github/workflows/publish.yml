@@ -161,15 +161,17 @@ jobs:
       # Guard against regression of the issue behind
       # https://github.com/Weaxs/stock-analysis-plugin/issues/3 — a TS entry
       # (./index.ts) with no compiled sibling makes registry installs fail.
-      # The build step above produces dist/index.js, but it only ships if the
-      # openclaw/package.json `files` whitelist includes dist/, so assert on the
-      # actual packed tarball rather than on the file merely existing on disk.
+      # The two publish paths ship dist/index.js differently, so assert both:
+      #   - npm:     dist must survive the `files` whitelist into the tarball.
+      #   - clawhub: it ships the ./openclaw directory, so dist must exist on disk.
       - name: Verify compiled entry is packaged
         working-directory: openclaw
         run: |
           npm pack --dry-run 2>&1 | tee pack-dry-run.txt
           grep -q "dist/index.js" pack-dry-run.txt \
-            || { echo "::error::dist/index.js missing from openclaw tarball — build ran but files whitelist excludes dist/"; exit 1; }
+            || { echo "::error::dist/index.js missing from openclaw npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
+          test -f dist/index.js \
+            || { echo "::error::openclaw/dist/index.js missing on disk — clawhub publish would ship no compiled entry"; exit 1; }
 
       - name: Install clawhub CLI
         run: npm i -g clawhub

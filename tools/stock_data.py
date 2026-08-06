@@ -672,18 +672,30 @@ def _quote_alphavantage(symbol: str) -> dict:
     )
 
 
+def _yf_failover(symbol: str, yfinance, finnhub, longbridge, alphavantage, label: str):
+    """Shared HK/US/JP/KR/TW failover chain: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only).
+
+    Each provider is a zero-arg callable; callers bind their own symbol/period/count.
+    """
+    market = detect_market(symbol)
+    sources = [("yfinance", yfinance)]
+    if market in ("HK", "US"):
+        sources += [("finnhub", finnhub), ("longbridge", longbridge)]
+    if market == "US":
+        sources.append(("alphavantage", alphavantage))
+    return _failover(sources, label=label)
+
+
 def kline_yf(symbol: str, period: str, count: int) -> list:
     """HK/US/JP/KR/TW kline. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
-    market = detect_market(symbol)
-    sources = [("yfinance", lambda: _kline_yfinance(symbol, period, count))]
-    if market in ("HK", "US"):
-        sources += [
-            ("finnhub", lambda: _kline_finnhub(symbol, period, count)),
-            ("longbridge", lambda: _kline_longbridge(symbol, period, count)),
-        ]
-    if market == "US":
-        sources.append(("alphavantage", lambda: _kline_alphavantage(symbol, period, count)))
-    return _failover(sources, label=f"kline:{symbol}")
+    return _yf_failover(
+        symbol,
+        lambda: _kline_yfinance(symbol, period, count),
+        lambda: _kline_finnhub(symbol, period, count),
+        lambda: _kline_longbridge(symbol, period, count),
+        lambda: _kline_alphavantage(symbol, period, count),
+        label=f"kline:{symbol}",
+    )
 
 
 def cmd_kline(args):
@@ -831,16 +843,14 @@ def _quote_finnhub(symbol: str) -> dict:
 
 def quote_yf(symbol: str) -> dict:
     """HK/US/JP/KR/TW quote. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
-    market = detect_market(symbol)
-    sources = [("yfinance", lambda: _quote_yfinance(symbol))]
-    if market in ("HK", "US"):
-        sources += [
-            ("finnhub", lambda: _quote_finnhub(symbol)),
-            ("longbridge", lambda: _quote_longbridge(symbol)),
-        ]
-    if market == "US":
-        sources.append(("alphavantage", lambda: _quote_alphavantage(symbol)))
-    return _failover(sources, label=f"quote:{symbol}")
+    return _yf_failover(
+        symbol,
+        lambda: _quote_yfinance(symbol),
+        lambda: _quote_finnhub(symbol),
+        lambda: _quote_longbridge(symbol),
+        lambda: _quote_alphavantage(symbol),
+        label=f"quote:{symbol}",
+    )
 
 
 def cmd_quote(args):
@@ -1212,6 +1222,15 @@ def cmd_market_snapshot(args):
 
 # --------------- market_indices ---------------
 
+# region -> {index symbol -> display name}; CN is handled separately via akshare.
+_REGION_INDEX_SYMBOLS = {
+    "hk": {"^HSI": "恒生指数", "^HSCE": "恒生国企指数", "^HSTECH": "恒生科技指数"},
+    "us": {"^DJI": "道琼斯", "^IXIC": "纳斯达克", "^GSPC": "标普500", "^RUT": "罗素2000"},
+    "jp": {"^N225": "日经225", "^TOPX": "东证指数"},
+    "kr": {"^KS11": "韩国KOSPI", "^KQ11": "韩国KOSDAQ"},
+    "tw": {"^TWII": "台湾加权指数"},
+}
+
 
 def cmd_market_indices(args):
     region = args.region.lower()
@@ -1256,19 +1275,10 @@ def cmd_market_indices(args):
                     )
                 )
             return results
-        elif region in ("hk", "us", "jp", "kr", "tw"):
+        elif region in _REGION_INDEX_SYMBOLS:
             import yfinance as yf
 
-            if region == "hk":
-                symbols = {"^HSI": "恒生指数", "^HSCE": "恒生国企指数", "^HSTECH": "恒生科技指数"}
-            elif region == "us":
-                symbols = {"^DJI": "道琼斯", "^IXIC": "纳斯达克", "^GSPC": "标普500", "^RUT": "罗素2000"}
-            elif region == "jp":
-                symbols = {"^N225": "日经225", "^TOPX": "东证指数"}
-            elif region == "kr":
-                symbols = {"^KS11": "韩国KOSPI", "^KQ11": "韩国KOSDAQ"}
-            else:
-                symbols = {"^TWII": "台湾加权指数"}
+            symbols = _REGION_INDEX_SYMBOLS[region]
             results = []
             for sym, name in symbols.items():
                 try:

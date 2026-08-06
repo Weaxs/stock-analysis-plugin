@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from name_resolver import resolve  # noqa: E402
+from stock_data import detect_market  # noqa: E402
 
 # regex patterns
 RE_A_CODE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
@@ -22,9 +23,6 @@ RE_ASIA_SUFFIX_CODE = re.compile(
 )
 RE_US_TICKER = re.compile(r"(?<![A-Za-z0-9])([A-Z]{1,5})(?![A-Za-z0-9\.])")
 RE_CN_NAME = re.compile(r"[一-鿿][一-鿿\w]{1,7}")
-
-# suffix -> market for RE_ASIA_SUFFIX_CODE
-SUFFIX_MARKET = {"T": "JP", "KS": "KR", "KQ": "KR", "TW": "TW", "TWO": "TW"}
 
 # US ticker false-positive filter (common ALL-CAPS words that aren't tickers)
 US_STOPWORDS = {
@@ -168,20 +166,19 @@ def parse(text: str) -> dict:
     asia_matches: list[str] = []
     for m in RE_ASIA_SUFFIX_CODE.finditer(text):
         code = m.group(1).upper()
-        suffix = code.split(".", 1)[1]
         if code not in seen_symbols:
-            items.append({"symbol": code, "market": SUFFIX_MARKET[suffix]})
+            items.append({"symbol": code, "market": detect_market(code)})
             seen_symbols.add(code)
             asia_matches.append(m.group(1))
 
     # strip suffixed codes so their digit part doesn't get picked up as A-share
     # and their suffix doesn't get picked up as a US ticker
-    text_after_hk = text
+    text_without_suffixed = text
     for m in hk_matches + asia_matches:
-        text_after_hk = text_after_hk.replace(m, " ")
+        text_without_suffixed = text_without_suffixed.replace(m, " ")
 
     # 2. A-share 6-digit codes
-    for m in RE_A_CODE.finditer(text_after_hk):
+    for m in RE_A_CODE.finditer(text_without_suffixed):
         code = m.group(1)
         if code not in seen_symbols:
             items.append({"symbol": code, "market": "A"})
@@ -189,7 +186,7 @@ def parse(text: str) -> dict:
 
     # 3. US tickers (1-5 uppercase letters), filtered against stopwords
     # runs on stripped text so HK/JP/KR/TW suffixes (HK, TW, KS...) aren't misread as tickers
-    for m in RE_US_TICKER.finditer(text_after_hk):
+    for m in RE_US_TICKER.finditer(text_without_suffixed):
         tick = m.group(1)
         if tick in US_STOPWORDS:
             continue

@@ -12,6 +12,10 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from capabilities import ALL_MARKETS  # noqa: E402
 
 # provider -> (import_name, required_env_vars, markets, note)
 PROVIDERS = {
@@ -68,7 +72,7 @@ def diagnose(market: str = "all") -> dict:
     market = (market or "all").upper()
     all_providers = [_check_provider(p) for p in PROVIDERS]
 
-    markets_to_report = ["A", "HK", "US", "JP", "KR", "TW"] if market == "ALL" else [market]
+    markets_to_report = ALL_MARKETS if market == "ALL" else [market]
 
     result = {
         "meta": {
@@ -120,7 +124,7 @@ def main():
         "--market",
         default="ALL",
         type=str.upper,
-        choices=["A", "HK", "US", "JP", "KR", "TW", "ALL"],
+        choices=ALL_MARKETS + ["ALL"],
         help="Market to diagnose (default: ALL)",
     )
     args = parser.parse_args()
