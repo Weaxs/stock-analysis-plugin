@@ -60,6 +60,7 @@ class TestRun:
             ["/usr/bin/python3", str(TOOLS_DIR / "stock_data.py"), "quote", "600519"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=60,
         )
 
@@ -100,6 +101,7 @@ class TestRun:
             ["/usr/bin/python3", str(TOOLS_DIR / "screener.py"), "screen"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=120,
         )
 

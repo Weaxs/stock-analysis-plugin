@@ -22,7 +22,7 @@ TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 def _run_tool(script: str, args: str):
     cmd = f"{sys.executable} {TOOLS_DIR}/{script} {args}"
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
     except Exception:
@@ -567,4 +567,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
+    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
     main()
