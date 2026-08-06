@@ -9,12 +9,15 @@ TOOLS_DIR = PROJECT_ROOT / "tools"
 
 
 def _find_python() -> str:
-    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
+    # Windows venvs ship Scripts/python.exe (there is no python3); POSIX venvs ship bin/python3.
     if sys.platform == "win32":
-        venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python3.exe"
+        venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
     if venv_python.exists():
         return str(venv_python)
-    return "python3"
+    # On Windows "python3" is usually the Microsoft Store stub — prefer "python".
+    return "python" if sys.platform == "win32" else "python3"
 
 
 def _run(script: str, args: str) -> str:
