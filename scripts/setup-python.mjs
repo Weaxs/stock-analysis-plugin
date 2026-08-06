@@ -3,15 +3,15 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { venvPythonPath } from "./venv-python.mjs";
 
 // fileURLToPath (not URL.pathname) — the latter yields a bogus "/C:/..." path
 // on Windows, which would put the venv in the wrong place or fail outright.
 const pkgDir = fileURLToPath(new URL("..", import.meta.url));
-const isWin = process.platform === "win32";
 const venvDir = join(pkgDir, ".venv");
 // Drive pip through the venv's own python (`-m pip`) instead of a pip/pip.exe
-// shim — resolves correctly on both POSIX (bin/python) and Windows (Scripts/python.exe).
-const venvPython = join(venvDir, isWin ? "Scripts" : "bin", isWin ? "python.exe" : "python");
+// shim — resolves correctly on both POSIX (bin/python3) and Windows (Scripts/python.exe).
+const venvPython = venvPythonPath(pkgDir);
 const requirements = join(pkgDir, "tools", "requirements.txt");
 
 function run(cmd) {

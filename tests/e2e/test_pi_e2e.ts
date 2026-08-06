@@ -6,23 +6,16 @@
 
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { existsSync } from "fs";
 import { createJiti } from "jiti";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { resolvePython } from "../../scripts/venv-python.mjs";
 
 const execFileAsync = promisify(execFile);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
-const isWin = process.platform === "win32";
-const venvPython = join(
-  repoRoot,
-  ".venv",
-  isWin ? "Scripts" : "bin",
-  isWin ? "python.exe" : "python3"
-);
-const python = existsSync(venvPython) ? venvPython : isWin ? "python" : "python3";
+const python = resolvePython(repoRoot);
 
 // --- Load pi/index.ts and capture the tool registrations ------------------
 
