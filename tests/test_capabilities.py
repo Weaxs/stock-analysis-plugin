@@ -43,3 +43,24 @@ if __name__ == "__main__":
 
     r = subprocess.run([sys.executable, "-m", "pytest", __file__, "-q"], cwd=os.path.dirname(os.path.dirname(__file__)))
     sys.exit(r.returncode)
+
+
+class TestNewMarkets:
+    def test_jp_supports_generic_tools(self):
+        result = capabilities.get_capabilities("JP")
+        for tool in ("get_kline", "get_quote", "get_news", "get_financials", "get_market_indices"):
+            assert tool in result["supported"]
+
+    def test_jp_rejects_a_share_only_and_regime(self):
+        result = capabilities.get_capabilities("JP")
+        unsupported = {u["tool"] for u in result["unsupported"]}
+        assert "get_chip_distribution" in unsupported
+        assert "get_capital_flow" in unsupported
+        assert "detect_market_regime" in unsupported
+        assert "get_market_review" in unsupported
+
+    def test_kr_tw_supported(self):
+        for m in ("KR", "TW"):
+            result = capabilities.get_capabilities(m)
+            assert "get_kline" in result["supported"]
+            assert "get_quote" in result["supported"]

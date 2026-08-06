@@ -142,6 +142,12 @@ jobs:
       - name: Sync version from tag
         run: bash scripts/sync-version.sh
 
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build compiled plugin entry (dist/index.js)
+        run: npm run build:openclaw
+
       - name: Stage payload into openclaw/
         run: |
           set -euo pipefail

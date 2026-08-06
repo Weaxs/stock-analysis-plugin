@@ -80,7 +80,7 @@ class TestDiagnoseDataSourcesRoundTrip:
         out = _run_cli("diagnostics.py", ["check", "--market", "all"])
         assert out["meta"]["provider"] == "diagnostics"
         markets = {m["market"] for m in out["markets"]}
-        assert markets == {"A", "HK", "US"}
+        assert markets == {"A", "HK", "US", "JP", "KR", "TW"}
 
 
 # ---------------------------------------------------------------------------

@@ -71,7 +71,7 @@ class TestDiagnose:
         monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
         result = diagnostics.diagnose("all")
         markets = {m["market"] for m in result["markets"]}
-        assert markets == {"A", "HK", "US"}
+        assert markets == {"A", "HK", "US", "JP", "KR", "TW"}
         assert "meta" in result
         assert result["meta"]["provider"] == "diagnostics"
 

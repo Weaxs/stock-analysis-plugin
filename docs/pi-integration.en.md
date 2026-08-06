@@ -102,16 +102,16 @@ export default (pi: ExtensionAPI) => {
       properties: { /* ... */ },
       required: ["symbol"],
     },
-    async execute({ symbol, period = "daily", count = 60 }) {
-      const result = await pi.exec(`${python} ${toolsDir}/stock_data.py kline ${symbol} --period ${period} --count ${count}`);
-      return result.stdout;
+    async execute(_toolCallId, { symbol, period = "daily", count = 60 }) {
+      const result = await pi.exec(python, [`${toolsDir}/stock_data.py`, "kline", symbol, "--period", period, "--count", String(count)]);
+      return { content: [{ type: "text", text: result.stdout }], details: {} };
     },
   });
-  // ... 30 more tools
+  // ... 38 more tools
 };
 ```
 
-Each tool's `execute` method calls the corresponding Python CLI script via `pi.exec()`, passing arguments on the command line and returning JSON from stdout.
+Each tool's `execute` method calls the corresponding Python CLI script via `pi.exec(python, argv)` (argv array form, no shell) and returns Pi 0.83's `AgentToolResult` shape: `{ content: [{ type: "text", text }], details: {} }` with the JSON payload in `content`.
 
 ### Skill Registration
 

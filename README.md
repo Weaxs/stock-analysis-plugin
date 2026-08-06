@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%3E=3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
 
-A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension、[Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin，或 [OpenClaw](https://docs.openclaw.ai/) Plugin 使用。
+A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension、[Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin，或 [OpenClaw](https://docs.openclaw.ai/) Plugin 使用。
 
 底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层分别适配三个平台的注册机制。
 
@@ -30,7 +30,7 @@ A 股 / 港股 / 美股综合分析、多因子选股和策略回测工具集，
 
 ## 功能概览
 
-- **31 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
+- **39 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
 - **多数据源 Failover** — 9 个数据源自动容灾切换（akshare / tushare / efinance / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage）
@@ -92,10 +92,10 @@ pip install -r tools/requirements.txt
 
 | 包 | 用途 |
 |---|------|
-| akshare | A 股数据源（行情、资金流、财务、新闻） |
-| yfinance | 港股 / 美股数据源 |
+| akshare | A 股数据源（行情、资金流、财务、新闻，含 A 股 ETF） |
+| yfinance | 港股 / 美股 / 日股 / 韩股 / 台股数据源 |
 | pandas / numpy | 数据处理和数值计算 |
-| exchange-calendars | 交易日历（A/HK/US） |
+| exchange-calendars | 交易日历（A/HK/US/JP/KR/TW） |
 | newspaper4k | 新闻正文提取 |
 | pypinyin | 股票名称拼音搜索 |
 | pytdx | A 股 TDX 行情（免费兜底源） |
@@ -122,6 +122,7 @@ pip install -r tools/requirements.txt
 | `BRAVE_API_KEY` | Brave 搜索 |
 | `SERPAPI_KEY` | SerpAPI |
 | `BOCHA_API_KEY` | Bocha AI 搜索 |
+| `SEARXNG_BASE_URLS` | SearXNG 自建实例地址（逗号分隔多个，无需 Key，兜底用） |
 
 **社交舆情（可选）：**
 
@@ -315,10 +316,15 @@ position:
 | 代码格式 | 示例 | 市场 | 数据源 Failover 链 |
 |----------|------|------|---------------------|
 | 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare → tushare → efinance → pytdx → baostock |
+| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | akshare（基金接口）→ tushare → efinance → pytdx → baostock |
 | `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
+| `.T` 结尾 | `7203.T` | 日股 | yfinance |
+| `.KS` / `.KQ` 结尾 | `005930.KS`, `035720.KQ` | 韩股 | yfinance |
+| `.TW` / `.TWO` 结尾 | `2330.TW`, `6510.TWO` | 台股 | yfinance |
 
 > 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
+> 日/韩/台股仅 yfinance 一个数据源（免费数据延迟约 15 分钟）；港股 / 美股 / 日股 / 韩股 / 台股的 ETF 与其所在市场股票走相同链路。
 
 ## 独立 CLI 使用
 

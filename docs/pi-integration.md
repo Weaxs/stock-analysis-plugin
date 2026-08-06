@@ -102,16 +102,16 @@ export default (pi: ExtensionAPI) => {
       properties: { /* ... */ },
       required: ["symbol"],
     },
-    async execute({ symbol, period = "daily", count = 60 }) {
-      const result = await pi.exec(`${python} ${toolsDir}/stock_data.py kline ${symbol} --period ${period} --count ${count}`);
-      return result.stdout;
+    async execute(_toolCallId, { symbol, period = "daily", count = 60 }) {
+      const result = await pi.exec(python, [`${toolsDir}/stock_data.py`, "kline", symbol, "--period", period, "--count", String(count)]);
+      return { content: [{ type: "text", text: result.stdout }], details: {} };
     },
   });
-  // ... 其余 30 个工具
+  // ... 其余 38 个工具
 };
 ```
 
-每个工具的 `execute` 方法通过 `pi.exec()` 调用对应的 Python CLI 脚本，参数通过命令行传递，返回 JSON 格式的标准输出。
+每个工具的 `execute` 方法通过 `pi.exec(python, argv)`（argv 数组形式，不经 shell）调用对应的 Python CLI 脚本，并按 Pi 0.83 的 `AgentToolResult` 契约返回 `{ content: [{ type: "text", text }], details: {} }`（JSON 文本放在 content 里）。
 
 ### Skill 注册
 

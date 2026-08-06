@@ -33,11 +33,15 @@ const python = existsSync(venvPython) ? venvPython : "python3";
 
 // --- Load Pi and capture tool registrations -------------------------------
 
+interface ToolResult {
+  content: { type: string; text: string }[];
+  details: unknown;
+}
 interface Registered {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  execute: (args: Record<string, unknown>) => Promise<string>;
+  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<ToolResult>;
 }
 const registered: Registered[] = [];
 
@@ -46,14 +50,11 @@ const mockPi = {
     registered.push(cfg);
   },
   on() {},
-  exec: async (cmd: string) => {
-    const parts = cmd.split(/\s+/);
-    const bin = parts[0];
-    const argv = parts.slice(1);
-    const { stdout, stderr } = await execFileAsync(bin, argv, {
+  exec: async (cmd: string, args: string[] = []) => {
+    const { stdout, stderr } = await execFileAsync(cmd, args, {
       maxBuffer: 32 * 1024 * 1024,
     });
-    return { stdout, stderr, exitCode: 0 };
+    return { stdout, stderr, code: 0, killed: false };
   },
 };
 
@@ -111,7 +112,7 @@ async function runLoop(userMsg: string, toolNames: string[], maxTurns = 3) {
 
       const tool = registered.find((r) => r.name === name);
       const rawResult = tool
-        ? await tool.execute(args)
+        ? (await tool.execute(call.id, args)).content[0]?.text ?? ""
         : JSON.stringify({ error: "unknown tool" });
 
       let parsedResult: any = null;
@@ -147,9 +148,10 @@ function assert(cond: boolean, msg: string) {
 // returns content=null after tool_use — that's model variability, not our bug).
 {
   const r = await runLoop(
-    "I want to check on Nvidia and Apple. What are their exact stock tickers? " +
-      "Use a tool to extract them — don't guess from memory. " +
-      "Reply with just the tickers, comma-separated.",
+    // Pinned tool input: we test the LLM→tool→python round-trip, not the
+    // model's name→ticker knowledge (DeepSeek drift made that flaky).
+    "Call the parse_stock_list tool with exactly this text: 'NVDA AAPL'. " +
+      "Reply with just the tickers it returns, comma-separated.",
     ["parse_stock_list"]
   );
   const parseCalls = r.toolCalls.filter((t) => t.name === "parse_stock_list");
@@ -181,7 +183,7 @@ function assert(cond: boolean, msg: string) {
 
   // Probe akshare state outside the LLM path
   const tool = registered.find((r) => r.name === "parse_stock_list")!;
-  const probe = JSON.parse(await tool.execute({ text: "贵州茅台和宁德时代" }));
+  const probe = JSON.parse((await tool.execute("probe", { text: "贵州茅台和宁德时代" })).content[0].text);
   const probeCodes = new Set(
     (probe.items || []).filter((i: any) => i.market === "A").map((i: any) => i.symbol as string)
   );

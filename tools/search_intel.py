@@ -146,6 +146,46 @@ def _bocha_search(query: str, max_results: int = 5) -> list[dict]:
         return []
 
 
+def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
+    """SearXNG self-hosted metasearch — no API key, quota-free fallback.
+
+    Set SEARXNG_BASE_URLS to a comma-separated list of instance URLs,
+    e.g. "http://127.0.0.1:8080,https://searx.example.com".
+    """
+    base_urls = [u.strip().rstrip("/") for u in os.environ.get("SEARXNG_BASE_URLS", "").split(",") if u.strip()]
+    if not base_urls:
+        return []
+    try:
+        import requests
+    except ImportError:
+        return []
+    for base in base_urls:
+        try:
+            resp = requests.get(
+                f"{base}/search",
+                params={"q": query, "format": "json"},
+                headers={"Accept": "application/json"},
+                timeout=15,
+            )
+            if not resp.ok:
+                continue
+            data = resp.json()
+            results = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "snippet": (r.get("content") or "")[:200],
+                    "source": "searxng",
+                }
+                for r in data.get("results", [])
+            ]
+            if results:
+                return results
+        except Exception:
+            continue
+    return []
+
+
 def search_news(query: str, max_results: int = 10) -> dict:
     results = []
     engines_tried = []
@@ -156,6 +196,7 @@ def search_news(query: str, max_results: int = 10) -> dict:
         ("brave", _brave_search),
         ("bocha", _bocha_search),
         ("serpapi", _serpapi_search),
+        ("searxng", _searxng_search),
     ]:
         engines_tried.append(name)
         items = fn(query, max_results)
@@ -170,7 +211,10 @@ def search_news(query: str, max_results: int = 10) -> dict:
             "query": query,
             "results": [],
             "engines_tried": engines_tried,
-            "note": "No search engines configured. Set TAVILY_API_KEY, BRAVE_API_KEY, or SERPAPI_KEY in environment.",
+            "note": (
+                "No search engines configured. Set TAVILY_API_KEY, BRAVE_API_KEY, BOCHA_API_KEY, "
+                "SERPAPI_KEY, or SEARXNG_BASE_URLS in environment."
+            ),
         }
 
     seen_urls = set()

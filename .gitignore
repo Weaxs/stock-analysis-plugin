@@ -44,3 +44,12 @@ coverage.xml
 
 # MCP config (contains API keys)
 .mcp.json
+
+# OpenClaw staged publish payload (see publish.yml "Stage payload into openclaw/")
+openclaw/tools/
+openclaw/skills/
+openclaw/schemas/
+openclaw/templates/
+openclaw/strategies/
+openclaw/scripts/
+openclaw/*.tgz

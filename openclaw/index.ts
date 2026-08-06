@@ -28,9 +28,14 @@ const toolsDir = existsSync(join(here, "tools"))
 const repoRoot = dirname(toolsDir);
 const isWin = process.platform === "win32";
 const venvPython = join(repoRoot, ".venv", isWin ? "Scripts" : "bin", "python3");
+// Staged-payload layout (openclaw/tools present in a dev checkout): the venv
+// still lives at the repo root one level up.
+const parentVenvPython = join(repoRoot, "..", ".venv", isWin ? "Scripts" : "bin", "python3");
 
 function pythonBin(): string {
-  return existsSync(venvPython) ? venvPython : "python3";
+  if (existsSync(venvPython)) return venvPython;
+  if (existsSync(parentVenvPython)) return parentVenvPython;
+  return "python3";
 }
 
 async function runPy(script: string, args: string[]): Promise<string> {
@@ -45,17 +50,17 @@ export default definePluginEntry({
   id: "stock-analysis",
   name: "Stock Analysis",
   description:
-    "Stock analysis, screening, and strategy backtesting across A/HK/US markets",
+    "Stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets",
   register(api) {
     // --- Data Tools ---
 
     api.registerTool({
       name: "get_kline",
       description:
-        "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）",
+        "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF",
       parameters: Type.Object({
         symbol: Type.String({
-          description: "股票代码，如 600519（A股）、00700.HK（港股）、AAPL（美股）",
+          description: "股票代码，如 600519（A股）、00700.HK（港股）、AAPL（美股）、7203.T（日股）、005930.KS（韩股）、2330.TW（台股）",
         }),
         period: Type.Optional(
           Type.Union(
@@ -80,7 +85,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "get_quote",
-      description: "获取股票实时行情报价。支持A股、港股、美股",
+      description: "获取股票实时行情报价。支持A股、港股、美股、日股、韩股、台股",
       parameters: Type.Object({
         symbol: Type.String({ description: "股票代码" }),
       }),
@@ -215,11 +220,11 @@ export default definePluginEntry({
     api.registerTool({
       name: "get_market_indices",
       description:
-        "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500",
+        "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500；JP: 日经225/东证；KR: KOSPI/KOSDAQ；TW: 台湾加权",
       parameters: Type.Object({
         region: Type.Optional(
           Type.Union(
-            [Type.Literal("cn"), Type.Literal("hk"), Type.Literal("us")],
+            [Type.Literal("cn"), Type.Literal("hk"), Type.Literal("us"), Type.Literal("jp"), Type.Literal("kr"), Type.Literal("tw")],
             { description: "市场区域，默认 cn" }
           )
         ),
@@ -264,7 +269,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "get_stock_info",
       description:
-        "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，HK/US返回行业/公司简介",
+        "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，其他市场返回行业/公司简介",
       parameters: Type.Object({
         symbol: Type.String({ description: "股票代码" }),
       }),
@@ -457,10 +462,10 @@ export default definePluginEntry({
     api.registerTool({
       name: "check_trading_day",
       description:
-        "查询某日是否为交易日。支持CN（A股）、HK（港股）、US（美股）三市场",
+        "查询某日是否为交易日。支持CN（A股）、HK（港股）、US（美股）、JP（日股）、KR（韩股）、TW（台股）",
       parameters: Type.Object({
         market: Type.Union(
-          [Type.Literal("CN"), Type.Literal("HK"), Type.Literal("US")],
+          [Type.Literal("CN"), Type.Literal("HK"), Type.Literal("US"), Type.Literal("JP"), Type.Literal("KR"), Type.Literal("TW")],
           { description: "市场" }
         ),
         date: Type.Optional(
@@ -477,10 +482,10 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "get_trading_days",
-      description: "获取最近/未来N个交易日列表。支持CN/HK/US三市场",
+      description: "获取最近/未来N个交易日列表。支持CN/HK/US/JP/KR/TW",
       parameters: Type.Object({
         market: Type.Union(
-          [Type.Literal("CN"), Type.Literal("HK"), Type.Literal("US")],
+          [Type.Literal("CN"), Type.Literal("HK"), Type.Literal("US"), Type.Literal("JP"), Type.Literal("KR"), Type.Literal("TW")],
           { description: "市场" }
         ),
         direction: Type.Optional(
@@ -771,6 +776,9 @@ export default definePluginEntry({
               Type.Literal("A"),
               Type.Literal("HK"),
               Type.Literal("US"),
+              Type.Literal("JP"),
+              Type.Literal("KR"),
+              Type.Literal("TW"),
               Type.Literal("all"),
             ],
             { description: "市场，默认 all" }
@@ -794,7 +802,7 @@ export default definePluginEntry({
       parameters: Type.Object({
         market: Type.Optional(
           Type.Union(
-            [Type.Literal("A"), Type.Literal("HK"), Type.Literal("US")],
+            [Type.Literal("A"), Type.Literal("HK"), Type.Literal("US"), Type.Literal("JP"), Type.Literal("KR"), Type.Literal("TW")],
             { description: "市场代码" }
           )
         ),
@@ -944,7 +952,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "parse_stock_list",
       description:
-        "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker，并调用 name_resolver 处理中文股票名",
+        "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker、日股 xxxx.T、韩股 xxxxxx.KS/KQ、台股 xxxx.TW，并调用 name_resolver 处理中文股票名",
       parameters: Type.Object({
         text: Type.String({ description: "待解析的文本" }),
       }),

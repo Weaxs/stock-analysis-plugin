@@ -11,6 +11,7 @@ import pytest
 from tools.stock_data import (
     _capital_flow_efinance,
     _failover,
+    _kline_akshare,
     _kline_alphavantage,
     _kline_finnhub,
     _kline_longbridge,
@@ -870,3 +871,117 @@ class TestKlineYfFailoverExtended:
         with pytest.raises(ValueError, match="down"):
             kline_yf("0700.HK", "daily", 10)
         mock_av.assert_not_called()
+
+
+class TestNewMarketKlineChain:
+    """JP/KR/TW kline/quote should use yfinance only — finnhub/longbridge/alphavantage don't cover them."""
+
+    @patch("tools.stock_data._kline_finnhub")
+    @patch("tools.stock_data._kline_yfinance")
+    def test_jp_kline_yfinance_only(self, mock_yf, mock_fh):
+        mock_yf.return_value = [{"close": 100}]
+        result = kline_yf("7203.T", "daily", 10)
+        assert result == [{"close": 100}]
+        mock_fh.assert_not_called()
+
+    @patch("tools.stock_data._kline_finnhub")
+    @patch("tools.stock_data._kline_yfinance")
+    def test_kr_kline_no_finnhub_fallback(self, mock_yf, mock_fh):
+        mock_yf.side_effect = ValueError("yf down")
+        mock_fh.return_value = [{"close": 200}]
+        with pytest.raises(ValueError, match="yf down"):
+            kline_yf("005930.KS", "daily", 10)
+        mock_fh.assert_not_called()
+
+    @patch("tools.stock_data._quote_finnhub")
+    @patch("tools.stock_data._quote_yfinance")
+    def test_tw_quote_no_finnhub_fallback(self, mock_yf, mock_fh):
+        mock_yf.side_effect = ValueError("yf down")
+        mock_fh.return_value = {"price": 1000}
+        with pytest.raises(ValueError, match="yf down"):
+            quote_yf("2330.TW")
+        mock_fh.assert_not_called()
+
+    @patch("tools.stock_data._quote_finnhub")
+    @patch("tools.stock_data._quote_yfinance")
+    def test_hk_quote_still_has_finnhub_fallback(self, mock_yf, mock_fh):
+        mock_yf.side_effect = ValueError("yf down")
+        mock_fh.return_value = {"price": 500}
+        assert quote_yf("0700.HK") == {"price": 500}
+
+
+class TestAkshareETF:
+    """A-share ETFs (51/15xxxx etc.) must route to fund APIs, not stock APIs."""
+
+    def _etf_hist_df(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "日期": ["2026-01-05", "2026-01-06"],
+                "开盘": [4.0, 4.1],
+                "收盘": [4.05, 4.15],
+                "最高": [4.1, 4.2],
+                "最低": [3.9, 4.0],
+                "成交量": [100000, 200000],
+                "成交额": [400000.0, 800000.0],
+                "涨跌幅": [1.25, 2.47],
+                "换手率": [3.0, 5.0],
+            }
+        )
+
+    def test_etf_kline_uses_fund_api(self):
+        mock_ak = MagicMock()
+        mock_ak.fund_etf_hist_em.return_value = self._etf_hist_df()
+        mock_ak.stock_zh_a_hist.side_effect = AssertionError("stock api must not be called for ETF")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _kline_akshare("510300", "daily", 2)
+        assert len(result) == 2
+        assert result[0]["close"] == 4.05
+        mock_ak.fund_etf_hist_em.assert_called_once()
+
+    def test_stock_kline_still_uses_stock_api(self):
+        mock_ak = MagicMock()
+        mock_ak.stock_zh_a_hist.return_value = self._etf_hist_df()
+        mock_ak.fund_etf_hist_em.side_effect = AssertionError("fund api must not be called for stock")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _kline_akshare("600519", "daily", 2)
+        assert len(result) == 2
+        mock_ak.stock_zh_a_hist.assert_called_once()
+
+    def test_etf_quote_uses_fund_spot(self):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.fund_etf_spot_em.return_value = pd.DataFrame(
+            {
+                "代码": ["510300"],
+                "名称": ["沪深300ETF"],
+                "最新价": [4.05],
+                "涨跌幅": [1.25],
+                "成交量": [100000],
+                "成交额": [400000.0],
+                "开盘价": [4.0],
+                "最高价": [4.1],
+                "最低价": [3.9],
+                "昨收": [4.0],
+                "换手率": [3.0],
+            }
+        )
+        mock_ak.stock_zh_a_spot_em.side_effect = AssertionError("stock spot must not be called first for ETF")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = quote_a("510300")
+        assert result["name"] == "沪深300ETF"
+        assert result["price"] == 4.05
+        assert result["is_etf"] is True
+
+    @patch("tools.stock_data._quote_pytdx")
+    @patch("tools.stock_data._quote_efinance")
+    @patch("tools.stock_data._quote_tushare")
+    @patch("tools.stock_data._quote_akshare")
+    def test_stock_quote_has_no_etf_source(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+        """Non-ETF A-share quote chain unchanged: no fund spot attempt."""
+        mock_ak.return_value = {"price": 1800}
+        result = quote_a("600519")
+        assert result == {"price": 1800}
+        mock_ak.assert_called_once()

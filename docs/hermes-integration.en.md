@@ -93,8 +93,10 @@ Hermes discovers this plugin through two mechanisms:
 
 ```toml
 [project.entry-points."hermes_agent.plugins"]
-stock-analysis = "hermes:register"
+stock-analysis = "hermes"
 ```
+
+> Note: the entry point must reference the **module** (`hermes`), not `hermes:register` — Hermes 0.19's loader calls `ep.load()` and then `getattr(module, "register")`. Pointing at the function makes `ep.load()` return the function itself, and the loader reports "no register() function" and silently skips tool registration.
 
 2. **Directory discovery**: `hermes/plugin.yaml` serves as the plugin manifest for Hermes CLI installs.
 

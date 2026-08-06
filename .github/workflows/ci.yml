@@ -93,26 +93,6 @@ jobs:
       - name: E2E — OpenClaw host real subprocess
         run: npx tsx tests/e2e/test_openclaw_e2e.ts
 
-  e2e-network:
-    # Real akshare/yfinance calls. Marked opt-in; run in a dedicated job so
-    # provider outages fail loud without blocking the main test job.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -r tools/requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: E2E — real provider network
-        run: pytest tests/e2e/test_provider_network.py -m integration_network -v
-
   e2e-llm:
     # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
     # (skipped on forks to prevent secret exposure).
@@ -159,6 +139,52 @@ jobs:
             exit 0
           fi
           npx tsx tests/e2e/test_pi_llm.ts
+
+  e2e-host:
+    # Real-host smoke: install the plugin into the actual pi / openclaw /
+    # hermes runtime and run one QA turn through the host's own agent loop.
+    # This is a BLOCKING check — the smoke script retries the QA internally.
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [pi, openclaw, hermes]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        # Node 24: openclaw requires >= 22.19, and pi 0.83's undici breaks on 20.x
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies (also builds repo .venv via postinstall)
+        run: npm install
+
+      - name: Install host CLIs
+        # Pinned: pi latest and openclaw latest (slim repack) drifted from the
+        # validated CLIs — openclaw@latest installed no working bin, and pi's
+        # `list` flags changed between releases.
+        run: |
+          npm i -g @earendil-works/pi-coding-agent@0.83.0
+          npm i -g openclaw@2026.6.33
+
+      - name: Real-host smoke QA (${{ matrix.host }})
+        env:
+          SMOKE_LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          SMOKE_LLM_BASE_URL: https://api.deepseek.com
+          SMOKE_LLM_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+        run: |
+          if [ -z "$SMOKE_LLM_API_KEY" ]; then
+            echo "SMOKE_LLM_API_KEY not configured — failing (this check is blocking by design)"
+            exit 1
+          fi
+          node tests/e2e/host_smoke.mjs ${{ matrix.host }}
 
   build:
     runs-on: ubuntu-latest

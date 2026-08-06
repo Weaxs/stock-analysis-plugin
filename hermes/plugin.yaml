@@ -1,6 +1,6 @@
 name: stock-analysis
 version: 0.1.0
-description: "Stock analysis, screening, and strategy backtesting across A/HK/US markets"
+description: "Stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets"
 provides_tools:
   - get_kline
   - get_quote

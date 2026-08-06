@@ -151,14 +151,15 @@ class TestSingleToolFlow:
     """
 
     def test_parse_stock_list_english(self, client, hermes_handlers):
-        """English: company names → US tickers. Doesn't hit akshare, fully stable."""
+        """English tickers round-trip. Tool input is pinned: we test the
+        LLM→tool→python loop, not the model's name→ticker knowledge (DeepSeek
+        drifted to passing company names, which legitimately extract nothing)."""
         result = _run_agent_loop(
             client,
             hermes_handlers,
             user_msg=(
-                "I want to check on Nvidia and Apple. What are their exact stock tickers? "
-                "Use a tool to extract them — don't guess from memory. "
-                "Reply with just the tickers, comma-separated."
+                "Call the parse_stock_list tool with exactly this text: 'NVDA AAPL'. "
+                "Reply with just the tickers it returns, comma-separated."
             ),
             tool_names=["parse_stock_list"],
         )

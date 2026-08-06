@@ -1,7 +1,7 @@
 {
   "id": "stock-analysis",
   "name": "Stock Analysis",
-  "description": "Stock analysis, screening, and strategy backtesting across A/HK/US markets (akshare/yfinance/tushare)",
+  "description": "Stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets (akshare/yfinance/tushare)",
   "contracts": {
     "tools": [
       "get_kline",

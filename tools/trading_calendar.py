@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trading calendar — determine trading days for CN/HK/US markets."""
+"""Trading calendar — determine trading days for CN/HK/US/JP/KR/TW markets."""
 
 import argparse
 import json
@@ -119,6 +119,26 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
             return {"date": date_str, "market": market, "is_trading_day": False, "reason": "US_holiday"}
         return {"date": date_str, "market": market, "is_trading_day": True, "reason": "trading_day"}
 
+    elif market in ("JP", "KR", "TW"):
+        exchange_map = {"JP": "XTKS", "KR": "XKRX", "TW": "XTAI"}
+        try:
+            is_td = _is_exchange_trading_day(exchange_map[market], date_str)
+            return {
+                "date": date_str,
+                "market": market,
+                "is_trading_day": is_td,
+                "reason": "trading_day" if is_td else "holiday",
+                "source": "exchange-calendars",
+            }
+        except Exception:
+            pass
+        return {
+            "date": date_str,
+            "market": market,
+            "is_trading_day": True,
+            "reason": "assumed_trading_day (calendar unavailable)",
+        }
+
     return {"date": date_str, "market": market, "error": f"Unknown market: {market}"}
 
 
@@ -171,16 +191,16 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     p_check = sub.add_parser("check")
-    p_check.add_argument("market", choices=["CN", "HK", "US", "cn", "hk", "us"])
+    p_check.add_argument("market", choices=["CN", "HK", "US", "JP", "KR", "TW", "cn", "hk", "us", "jp", "kr", "tw"])
     p_check.add_argument("--date", default=None, help="Date in YYYY-MM-DD format")
 
     p_next = sub.add_parser("next")
-    p_next.add_argument("market", choices=["CN", "HK", "US", "cn", "hk", "us"])
+    p_next.add_argument("market", choices=["CN", "HK", "US", "JP", "KR", "TW", "cn", "hk", "us", "jp", "kr", "tw"])
     p_next.add_argument("--count", type=int, default=5)
     p_next.add_argument("--date", default=None)
 
     p_prev = sub.add_parser("prev")
-    p_prev.add_argument("market", choices=["CN", "HK", "US", "cn", "hk", "us"])
+    p_prev.add_argument("market", choices=["CN", "HK", "US", "JP", "KR", "TW", "cn", "hk", "us", "jp", "kr", "tw"])
     p_prev.add_argument("--count", type=int, default=5)
     p_prev.add_argument("--date", default=None)
 
