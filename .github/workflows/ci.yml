@@ -115,12 +115,13 @@ jobs:
         with:
           node-version: "20"
 
-      # requirements-dev.txt gives system python pytest (for the hermes test).
-      # npm install runs the postinstall, which builds .venv and installs the
-      # tools' full requirements into it — that .venv python is what the
-      # host↔python round-trips spawn. Heavy deps are only installed once, there.
+      # tests/conftest.py imports numpy/pandas at module load, so any pytest run
+      # needs the tools' runtime deps in system python. npm install's postinstall
+      # separately builds .venv (full requirements) — that's the python the
+      # host↔python round-trips spawn.
       - name: Install dependencies
         run: |
+          pip install -r tools/requirements.txt
           pip install -r requirements-dev.txt
           npm install
 
