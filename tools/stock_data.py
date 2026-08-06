@@ -973,6 +973,7 @@ def _news_search_intel_fallback(symbol: str) -> list:
             [sys.executable, str(tools_dir / "search_intel.py"), "search", f"{symbol} 最新消息"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=30,
         )
     except (subprocess.TimeoutExpired, OSError):

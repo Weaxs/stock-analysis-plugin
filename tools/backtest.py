@@ -68,6 +68,7 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
         [sys.executable, script, "kline", symbol, "--period", "daily", "--count", str(count)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     data = json.loads(r.stdout)
     if isinstance(data, dict) and "error" in data:

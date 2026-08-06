@@ -17,6 +17,7 @@ def fetch_kline(symbol: str, period: str = "daily", count: int = 60) -> list:
         [sys.executable, script, "kline", symbol, "--period", period, "--count", str(count)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     return json.loads(r.stdout)
 

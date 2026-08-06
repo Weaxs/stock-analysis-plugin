@@ -31,6 +31,7 @@ def fetch_snapshot(market: str) -> list:
         [sys.executable, script, "market_snapshot", "--market", market],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     return json.loads(r.stdout)
 

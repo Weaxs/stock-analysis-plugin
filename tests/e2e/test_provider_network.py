@@ -25,7 +25,7 @@ pytestmark = pytest.mark.integration_network
 
 def _run_cli(script: str, args: list[str], timeout: int = 60) -> dict | list:
     cmd = [sys.executable, str(TOOLS_DIR / script)] + args
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
     assert r.returncode == 0, f"exit {r.returncode}\nstderr: {r.stderr[:500]}"
     return json.loads(r.stdout)
 
