@@ -20,9 +20,9 @@ const venvPython = join(
   repoRoot,
   ".venv",
   isWin ? "Scripts" : "bin",
-  "python3"
+  isWin ? "python.exe" : "python3"
 );
-const python = existsSync(venvPython) ? venvPython : "python3";
+const python = existsSync(venvPython) ? venvPython : isWin ? "python" : "python3";
 
 // --- Load pi/index.ts and capture the tool registrations ------------------
 

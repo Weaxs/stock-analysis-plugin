@@ -28,8 +28,8 @@ const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
 const isWin = process.platform === "win32";
-const venvPython = join(repoRoot, ".venv", isWin ? "Scripts" : "bin", "python3");
-const python = existsSync(venvPython) ? venvPython : "python3";
+const venvPython = join(repoRoot, ".venv", isWin ? "Scripts" : "bin", isWin ? "python.exe" : "python3");
+const python = existsSync(venvPython) ? venvPython : isWin ? "python" : "python3";
 
 // --- Load Pi and capture tool registrations -------------------------------
 

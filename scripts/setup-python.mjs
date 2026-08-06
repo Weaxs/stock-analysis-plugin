@@ -2,11 +2,16 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const pkgDir = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+// fileURLToPath (not URL.pathname) — the latter yields a bogus "/C:/..." path
+// on Windows, which would put the venv in the wrong place or fail outright.
+const pkgDir = fileURLToPath(new URL("..", import.meta.url));
 const isWin = process.platform === "win32";
 const venvDir = join(pkgDir, ".venv");
-const pip = join(venvDir, isWin ? "Scripts" : "bin", "pip");
+// Drive pip through the venv's own python (`-m pip`) instead of a pip/pip.exe
+// shim — resolves correctly on both POSIX (bin/python) and Windows (Scripts/python.exe).
+const venvPython = join(venvDir, isWin ? "Scripts" : "bin", isWin ? "python.exe" : "python");
 const requirements = join(pkgDir, "tools", "requirements.txt");
 
 function run(cmd) {
@@ -41,12 +46,12 @@ try {
   }
 
   if (existsSync(requirements)) {
-    run(`"${pip}" install -q -r "${requirements}"`);
+    run(`"${venvPython}" -m pip install -q -r "${requirements}"`);
   }
 } catch (err) {
   console.warn(
     `\n[pi-stock-analysis] Python setup failed: ${err.message}\n` +
-    "You can manually run: python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt\n"
+    "You can manually create the venv and install tools/requirements.txt with your platform's python.\n"
   );
   process.exit(0);
 }
