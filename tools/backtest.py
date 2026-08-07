@@ -68,6 +68,7 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
         [sys.executable, script, "kline", symbol, "--period", "daily", "--count", str(count)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     data = json.loads(r.stdout)
     if isinstance(data, dict) and "error" in data:
@@ -755,4 +756,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
+    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
     main()

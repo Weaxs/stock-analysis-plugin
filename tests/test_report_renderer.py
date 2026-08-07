@@ -89,6 +89,7 @@ class TestCLI:
             [sys.executable, str(RENDERER_SCRIPT), "stock", "--template", "brief", "--input-b64", payload],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=30,
         )
         assert r.returncode == 0, f"stderr: {r.stderr}"

@@ -241,8 +241,9 @@ for (const tool of tools) {
     `${tool.name}: execute did not call Python`
   );
   const lastCall = execCalls[execCalls.length - 1];
+  const scriptPath = lastCall.script.replace(/\\/g, "/"); // tolerate Windows separators
   assert(
-    lastCall.script.endsWith(".py") && lastCall.script.includes("/tools/"),
+    scriptPath.endsWith(".py") && scriptPath.includes("/tools/"),
     `${tool.name}: should invoke a script under tools/, got ${lastCall.script}`
   );
 }

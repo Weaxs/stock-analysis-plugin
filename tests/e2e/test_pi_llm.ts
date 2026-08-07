@@ -9,10 +9,10 @@
 
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { existsSync } from "fs";
 import { createJiti } from "jiti";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { resolvePython } from "../../scripts/venv-python.mjs";
 import OpenAI from "openai";
 
 const execFileAsync = promisify(execFile);
@@ -27,9 +27,7 @@ const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
-const isWin = process.platform === "win32";
-const venvPython = join(repoRoot, ".venv", isWin ? "Scripts" : "bin", "python3");
-const python = existsSync(venvPython) ? venvPython : "python3";
+const python = resolvePython(repoRoot);
 
 // --- Load Pi and capture tool registrations -------------------------------
 

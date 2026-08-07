@@ -93,6 +93,56 @@ jobs:
       - name: E2E — OpenClaw host real subprocess
         run: npx tsx tests/e2e/test_openclaw_e2e.ts
 
+  compat:
+    # Cross-platform host↔python integration on the free runners. This is the
+    # regression surface for OS-specific path bugs like #2 (Windows venv python
+    # location, __dirname/baseDir resolution) that the ubuntu-only jobs above
+    # structurally cannot see. Deterministic by design: no LLM, no secrets, and
+    # the 4 round-trip tools are the non-network set (see tests/e2e/*.ts).
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # tests/conftest.py imports numpy/pandas at module load, so any pytest run
+      # needs the tools' runtime deps in system python. npm install's postinstall
+      # separately builds .venv (full requirements) — that's the python the
+      # host↔python round-trips spawn.
+      - name: Install dependencies
+        run: |
+          pip install -r tools/requirements.txt
+          pip install -r requirements-dev.txt
+          npm install
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Pi extension registration (jiti load + skill paths)
+        run: npx tsx tests/test_pi_integration.ts
+
+      - name: OpenClaw plugin registration
+        run: npx tsx tests/test_openclaw_integration.ts
+
+      - name: Hermes plugin registration
+        run: pytest tests/test_hermes_integration.py -v
+
+      - name: Pi host real subprocess round-trip
+        run: npx tsx tests/e2e/test_pi_e2e.ts
+
+      - name: OpenClaw host real subprocess round-trip
+        run: npx tsx tests/e2e/test_openclaw_e2e.ts
+
   e2e-llm:
     # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
     # (skipped on forks to prevent secret exposure).

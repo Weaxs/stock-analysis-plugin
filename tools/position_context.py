@@ -25,7 +25,7 @@ def _find_python() -> str:
 def _run_json(script: str, args: list[str], timeout: int = 30):
     cmd = [_find_python(), str(TOOLS_DIR / script)] + args
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
     except Exception:
@@ -153,4 +153,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
+    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8")
     main()
