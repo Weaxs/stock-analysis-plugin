@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%3E=3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
 
-A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension、[Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin，或 [OpenClaw](https://docs.openclaw.ai/) Plugin 使用。
+A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension、[Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin、[OpenClaw](https://docs.openclaw.ai/) Plugin，或 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) Plugin 使用。
 
-底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层分别适配三个平台的注册机制。
+底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层分别适配四个平台的注册机制。
 
 ## 目录
 
@@ -16,6 +16,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
   - [Pi Agent Extension](#pi-agent-extension)
   - [Hermes Agent Plugin](#hermes-agent-plugin)
   - [OpenClaw Plugin](#openclaw-plugin)
+  - [dsh (DeepSeek Harness) Plugin](#dsh-deepseek-harness-plugin)
   - [Python 依赖](#python-依赖)
 - [快速开始](#快速开始)
 - [Skills 一览](#skills-一览)
@@ -35,7 +36,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
 - **多数据源 Failover** — 9 个数据源自动容灾切换（akshare / tushare / efinance / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage）
 - **社交舆情增强** — A 股（东财股吧 + 雪球）/ 美港股（Reddit / X / Polymarket），市场自动路由
-- **三平台适配** — 同一套工具同时支持 Pi Agent、Hermes Agent 和 OpenClaw
+- **四平台适配** — 同一套工具同时支持 Pi Agent、Hermes Agent、OpenClaw 和 dsh
 
 ## 安装
 
@@ -78,9 +79,20 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 31 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
+OpenClaw Gateway 启动后自动加载并注册 39 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
+
+### dsh (DeepSeek Harness) Plugin
+
+```bash
+dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
+dsh --profile <你的profile>
+```
+
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 39 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+
+详见 [`dsh/README.md`](dsh/README.md)。
 
 ### Python 依赖
 
@@ -370,16 +382,20 @@ python tools/market_regime.py detect A
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 31 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 39 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   31 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   39 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×31
+│   └── index.ts                     #   definePluginEntry + registerTool ×39
+├── dsh/                             # DeepSeek Harness (dsh) Plugin
+│   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
+│   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×39
 │
 ├── tools/                           # 共享 Python CLI 工具（12 个脚本）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务
@@ -414,11 +430,11 @@ stock-analysis/
 用户 (自然语言)
     │
     ▼
-Agent (Pi / Hermes / OpenClaw)
+Agent (Pi / Hermes / OpenClaw / dsh)
     │
     ├── 加载 SKILL.md → 分析框架 / 流程指引
     │
-    ├── 调用工具 → pi/index.ts 或 hermes/tools.py 或 openclaw/index.ts → python3 tools/xxx.py → JSON
+    ├── 调用工具 → pi/index.ts 或 hermes/tools.py 或 openclaw/index.ts 或 dsh/index.ts → python3 tools/xxx.py → JSON
     │
     ▼
 Agent (LLM 分析 + 生成报告)

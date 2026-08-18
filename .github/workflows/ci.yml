@@ -84,6 +84,9 @@ jobs:
       - name: Test OpenClaw plugin registration
         run: npx tsx tests/test_openclaw_integration.ts
 
+      - name: Test dsh plugin registration
+        run: npx tsx tests/test_dsh_integration.ts
+
       - name: E2E — host↔python round-trip (pytest)
         run: pytest tests/e2e/test_host_to_python.py -v
 
@@ -92,6 +95,9 @@ jobs:
 
       - name: E2E — OpenClaw host real subprocess
         run: npx tsx tests/e2e/test_openclaw_e2e.ts
+
+      - name: E2E — dsh host real subprocess
+        run: npx tsx tests/e2e/test_dsh_e2e.ts
 
   compat:
     # Cross-platform host↔python integration on the free runners. This is the
@@ -134,6 +140,9 @@ jobs:
       - name: OpenClaw plugin registration
         run: npx tsx tests/test_openclaw_integration.ts
 
+      - name: dsh plugin registration
+        run: npx tsx tests/test_dsh_integration.ts
+
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
 
@@ -142,6 +151,9 @@ jobs:
 
       - name: OpenClaw host real subprocess round-trip
         run: npx tsx tests/e2e/test_openclaw_e2e.ts
+
+      - name: dsh host real subprocess round-trip
+        run: npx tsx tests/e2e/test_dsh_e2e.ts
 
   e2e-llm:
     # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
@@ -192,14 +204,15 @@ jobs:
 
   e2e-host:
     # Real-host smoke: install the plugin into the actual pi / openclaw /
-    # hermes runtime and run one QA turn through the host's own agent loop.
-    # This is a BLOCKING check — the smoke script retries the QA internally.
+    # hermes / dsh runtime and run one QA turn through the host's own agent
+    # loop. This is a BLOCKING check — the smoke script retries the QA
+    # internally.
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     strategy:
       fail-fast: false
       matrix:
-        host: [pi, openclaw, hermes]
+        host: [pi, openclaw, hermes, dsh]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -210,6 +223,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         # Node 24: openclaw requires >= 22.19, and pi 0.83's undici breaks on 20.x
+        # (dsh also requires ^22.19 || >=24)
         with:
           node-version: "24"
 
@@ -219,10 +233,13 @@ jobs:
       - name: Install host CLIs
         # Pinned: pi latest and openclaw latest (slim repack) drifted from the
         # validated CLIs — openclaw@latest installed no working bin, and pi's
-        # `list` flags changed between releases.
+        # `list` flags changed between releases. dsh is a developer preview
+        # (rc line), so pin it too. `dsh plugin` forwards to pnpm.
         run: |
           npm i -g @earendil-works/pi-coding-agent@0.83.0
           npm i -g openclaw@2026.6.33
+          npm i -g @deepseek-ai/dsh@0.1.0-rc.7
+          npm i -g pnpm@10
 
       - name: Real-host smoke QA (${{ matrix.host }})
         env:

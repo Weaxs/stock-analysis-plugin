@@ -43,7 +43,8 @@
   ],
   "scripts": {
     "postinstall": "node scripts/setup-python.mjs",
-    "build:openclaw": "esbuild openclaw/index.ts --bundle --format=esm --platform=node --external:openclaw/* --outfile=openclaw/dist/index.js"
+    "build:openclaw": "esbuild openclaw/index.ts --bundle --format=esm --platform=node --external:openclaw/* --outfile=openclaw/dist/index.js",
+    "build:dsh": "esbuild dsh/index.ts --bundle --format=esm --platform=node --external:@deepseek-ai/* --outfile=dsh/dist/index.js"
   },
   "keywords": [
     "pi-agent",
@@ -73,6 +74,9 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.0",
     "jiti": "^2.7.0",

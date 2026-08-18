@@ -10,6 +10,7 @@
 #   - package.json            (npm root package)
 #   - package-lock.json       (kept in lockstep so `npm publish` doesn't warn)
 #   - openclaw/package.json   (OpenClaw npm package version)
+#   - dsh/package.json        (dsh npm package version)
 #
 # Idempotent: running twice with the same tag is a no-op.
 set -euo pipefail
@@ -42,10 +43,10 @@ p.write_text(new)
 print(f"  pyproject.toml: {n} substitution(s)")
 PY
 
-# npm root and openclaw sub-package
+# npm root and host sub-packages
 # `npm version` refuses in a workspace unless we bypass with --no-git-tag-version
 # --allow-same-version keeps it idempotent when the tag already matches.
-for dir in "." "openclaw"; do
+for dir in "." "openclaw" "dsh"; do
   if [[ -f "$dir/package.json" ]]; then
     (cd "$dir" && npm version "$VERSION" --no-git-tag-version --allow-same-version) >/dev/null
     echo "  $dir/package.json: bumped"

@@ -3,7 +3,7 @@
  * Real-host smoke QA: install the plugin into a real host runtime and run one
  * QA turn through the host's own agent loop.
  *
- * Usage: node tests/e2e/host_smoke.mjs <pi|openclaw|hermes>
+ * Usage: node tests/e2e/host_smoke.mjs <pi|openclaw|hermes|dsh>
  *
  * Env:
  *   SMOKE_LLM_API_KEY  (required) API key for the QA model
@@ -21,13 +21,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { zstdDecompressSync } from "node:zlib";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const host = process.argv[2];
-if (!["pi", "openclaw", "hermes"].includes(host)) {
-  console.error("usage: host_smoke.mjs <pi|openclaw|hermes>");
+if (!["pi", "openclaw", "hermes", "dsh"].includes(host)) {
+  console.error("usage: host_smoke.mjs <pi|openclaw|hermes|dsh>");
   process.exit(2);
 }
 
@@ -242,7 +243,88 @@ function smokeHermes() {
   });
 }
 
-const runners = { pi: smokePi, openclaw: smokeOpenclaw, hermes: smokeHermes };
+// ------------------------------------------------------------- dsh --------
+function smokeDsh() {
+  // Replicate the publish payload: stage shared dirs, build dist, pack.
+  for (const d of ["tools", "skills", "schemas", "templates", "strategies", "scripts"]) {
+    sh("rm", ["-rf", join(repoRoot, "dsh", d)]);
+    sh("cp", ["-R", join(repoRoot, d), join(repoRoot, "dsh", d)]);
+  }
+  sh("npm", ["run", "build:dsh"], { cwd: repoRoot });
+  const packOut = sh("npm", ["pack"], { cwd: join(repoRoot, "dsh") });
+  const tgz = join(repoRoot, "dsh", packOut.trim().split("\n").pop());
+
+  // Isolated Harness home. The "headless" profile auto-initializes from the
+  // shipped template (dsh-base + dsh-headless) on first `dsh plugin add`;
+  // the CLI reconciles our bundle into dsh.profile.bundles from the package's
+  // dsh.bundle.patch manifest.
+  const dshHome = join(WORK, "dsh-home");
+  const env = { ...process.env, DSH_HOME: dshHome, DEEPSEEK_API_KEY: API_KEY };
+  const dsh = (args, opts = {}) => sh("dsh", args, { env, ...opts });
+
+  dsh(["plugin", "--profile", "headless", "add", tgz]);
+  const pkgDir = join(dshHome, "profiles", "headless", "node_modules", "@weaxs", "dsh-stock-analysis");
+  assertCond(existsSync(join(pkgDir, "dist", "index.js")), "installed plugin has dist/index.js");
+  assertCond(existsSync(join(pkgDir, "tools", "stock_data.py")), "installed plugin has tools/");
+
+  // Profile installs go through pnpm, which skips dependency lifecycle scripts
+  // without an allowBuilds entry — set the python env up like the docs tell
+  // users to.
+  if (!existsSync(join(pkgDir, ".venv"))) {
+    sh("node", [join(pkgDir, "scripts", "setup-python.mjs")], { cwd: pkgDir, env });
+  }
+
+  // Non-default endpoint/model overrides ride the documented surfaces: the
+  // `llm-deepseek:` section of $DSH_HOME/settings.yaml (what the Models page
+  // writes) and a --patch overlay replacing the agent-default-model row.
+  // The CI defaults (api.deepseek.com / deepseek-v4-flash) need neither —
+  // the key resolves from the inherited DEEPSEEK_API_KEY env per request.
+  const bootArgs = ["--profile", "headless"];
+  if (BASE_URL && BASE_URL !== "https://api.deepseek.com") {
+    writeFileSync(join(dshHome, "settings.yaml"), `llm-deepseek:\n  baseURL: ${BASE_URL}\n`);
+  }
+  if (MODEL !== "deepseek-v4-flash") {
+    const overlay = join(WORK, "dsh-model-overlay.yml");
+    writeFileSync(
+      overlay,
+      `- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: ${MODEL}\n`
+    );
+    bootArgs.push("--patch", overlay);
+  }
+
+  retryQA("dsh", () => {
+    // The headless runner prints the last assistant text to stdout and exits
+    // non-zero on an incompleted turn — catch so a failed attempt retries.
+    let out = "";
+    try {
+      out = dsh([...bootArgs, QUESTION], { timeout: 480_000 });
+    } catch (err) {
+      const tail = String(err.stdout ?? "") + String(err.stderr ?? "");
+      return { ok: false, log: `exit=${err.status ?? "?"}`, tail: tail.slice(-800) };
+    }
+    // Tool-call trace lives in the persisted session event logs:
+    // $DSH_HOME/sessions/<cwd-slug>/session-*/session.jsonl.zstd
+    let calledGetQuote = false;
+    const sessionsRoot = join(dshHome, "sessions");
+    if (existsSync(sessionsRoot)) {
+      for (const slug of readdirSync(sessionsRoot)) {
+        for (const dir of readdirSync(join(sessionsRoot, slug))) {
+          const log = join(sessionsRoot, slug, dir, "session.jsonl.zstd");
+          if (existsSync(log) && zstdDecompressSync(readFileSync(log)).toString("utf-8").includes("get_quote")) {
+            calledGetQuote = true;
+          }
+        }
+      }
+    }
+    return {
+      ok: calledGetQuote && /\d/.test(out),
+      log: `toolCalled=${calledGetQuote} final=${out.trim().slice(0, 80)}`,
+      tail: out,
+    };
+  });
+}
+
+const runners = { pi: smokePi, openclaw: smokeOpenclaw, hermes: smokeHermes, dsh: smokeDsh };
 try {
   await runners[host]();
   console.log(`\nOK: ${host} real-host smoke passed`);
