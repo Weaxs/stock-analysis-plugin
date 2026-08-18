@@ -21,7 +21,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { zstdDecompressSync } from "node:zlib";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -279,18 +278,33 @@ function smokeDsh() {
   // writes) and a --patch overlay replacing the agent-default-model row.
   // The CI defaults (api.deepseek.com / deepseek-v4-flash) need neither —
   // the key resolves from the inherited DEEPSEEK_API_KEY env per request.
-  const bootArgs = ["--profile", "headless"];
   if (BASE_URL && BASE_URL !== "https://api.deepseek.com") {
     writeFileSync(join(dshHome, "settings.yaml"), `llm-deepseek:\n  baseURL: ${BASE_URL}\n`);
   }
+
+  // One --patch overlay for the whole smoke:
+  //   - smoke-tool-spy: logs every executed tool name (dsh's durable session
+  //     log only carries the session header in one-shot runs, so the spy —
+  //     via the emit-mode `tools/result` event — is the tool-call trace).
+  //   - tool-web disabled: removes the built-in web_search fallback so the
+  //     model must reach the price through OUR get_quote, not a search.
+  //   - agent-default-model: only when SMOKE_LLM_MODEL is non-default.
+  const calledToolsLog = join(WORK, "dsh-called-tools.log");
+  const spyPlugin = join(repoRoot, "tests", "e2e", "dsh_tool_spy.mjs");
+  let overlay =
+    `- insert:\n` +
+    `    - id: smoke-tool-spy\n` +
+    `      name: "${spyPlugin}"\n` +
+    `      config:\n` +
+    `        logFile: "${calledToolsLog}"\n` +
+    `- id: tool-web\n` +
+    `  disabled: true\n`;
   if (MODEL !== "deepseek-v4-flash") {
-    const overlay = join(WORK, "dsh-model-overlay.yml");
-    writeFileSync(
-      overlay,
-      `- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: ${MODEL}\n`
-    );
-    bootArgs.push("--patch", overlay);
+    overlay += `- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: ${MODEL}\n`;
   }
+  const overlayPath = join(WORK, "dsh-smoke-overlay.yml");
+  writeFileSync(overlayPath, overlay);
+  const bootArgs = ["--profile", "headless", "--patch", overlayPath];
 
   retryQA("dsh", () => {
     // The headless runner prints the last assistant text to stdout and exits
@@ -302,23 +316,11 @@ function smokeDsh() {
       const tail = String(err.stdout ?? "") + String(err.stderr ?? "");
       return { ok: false, log: `exit=${err.status ?? "?"}`, tail: tail.slice(-800) };
     }
-    // Tool-call trace lives in the persisted session event logs:
-    // $DSH_HOME/sessions/<cwd-slug>/session-*/session.jsonl.zstd
-    let calledGetQuote = false;
-    const sessionsRoot = join(dshHome, "sessions");
-    if (existsSync(sessionsRoot)) {
-      for (const slug of readdirSync(sessionsRoot)) {
-        for (const dir of readdirSync(join(sessionsRoot, slug))) {
-          const log = join(sessionsRoot, slug, dir, "session.jsonl.zstd");
-          if (existsSync(log) && zstdDecompressSync(readFileSync(log)).toString("utf-8").includes("get_quote")) {
-            calledGetQuote = true;
-          }
-        }
-      }
-    }
+    const calledTools = existsSync(calledToolsLog) ? readFileSync(calledToolsLog, "utf-8") : "";
+    const calledGetQuote = calledTools.split("\n").includes("get_quote");
     return {
       ok: calledGetQuote && /\d/.test(out),
-      log: `toolCalled=${calledGetQuote} final=${out.trim().slice(0, 80)}`,
+      log: `toolCalled=${calledGetQuote} tools=[${calledTools.trim().replaceAll("\n", ",")}] final=${out.trim().slice(0, 80)}`,
       tail: out,
     };
   });
