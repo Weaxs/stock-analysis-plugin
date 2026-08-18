@@ -7,8 +7,9 @@
     "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
+    "allowJs": true,
     "types": ["node"],
     "typeRoots": ["./typings", "./node_modules/@types"]
   },
-  "include": ["pi/index.ts", "openclaw/index.ts", "typings/**/*.d.ts"]
+  "include": ["pi/index.ts", "openclaw/index.ts", "dsh/index.ts", "typings/**/*.d.ts"]
 }

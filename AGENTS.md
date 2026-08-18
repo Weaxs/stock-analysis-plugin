@@ -2,17 +2,18 @@
 
 ## Project Overview
 
-A multi-host agent plugin for stock analysis, screening, and strategy backtesting across **A / HK / US / JP / KR / TW** markets. The same capability ships as a **Pi Agent** extension, a **Hermes Agent** plugin, and an **OpenClaw** plugin.
+A multi-host agent plugin for stock analysis, screening, and strategy backtesting across **A / HK / US / JP / KR / TW** markets. The same capability ships as a **Pi Agent** extension, a **Hermes Agent** plugin, an **OpenClaw** plugin, and a **DeepSeek Harness (dsh)** plugin.
 
-The architecture is **one Python core, three thin host adapters**:
+The architecture is **one Python core, four thin host adapters**:
 
 - `tools/*.py` — the shared CLI tools. **This is the single source of truth** for all behavior. Every tool prints JSON to stdout.
 - `pi/index.ts` — Pi extension. `pi.registerTool` ×39, each spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
 - `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×39). Bundled with esbuild.
-- `skills/*/SKILL.md` — 20 workflow / strategy-methodology skills shared by all three hosts.
+- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×39 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
+- `skills/*/SKILL.md` — 20 workflow / strategy-methodology skills shared by all four hosts.
 
-> **The invariant that matters most:** the three adapters expose the *same* 39 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all three adapters and the relevant SKILL.md together** — never just one.
+> **The invariant that matters most:** the four adapters expose the *same* 39 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one.
 
 ---
 
@@ -28,7 +29,7 @@ Every code change follows ponytail's ladder — stop at the first rung that hold
 
 ```
 1. Does this need to exist?   → no: skip it (YAGNI)
-2. Already in this codebase?  → reuse it, don't rewrite (check tools/ and the three host adapters first)
+2. Already in this codebase?  → reuse it, don't rewrite (check tools/ and the four host adapters first)
 3. Stdlib does it?            → use it
 4. Native platform feature?   → use it
 5. Installed dependency?      → use it — no new deps for one-call problems
@@ -60,7 +61,7 @@ Files the skills.sh installer copies into the repo are local tooling — do not 
 
 ---
 
-## Architecture: One Core, Three Adapters
+## Architecture: One Core, Four Adapters
 
 All real work happens in `tools/*.py`. The adapters only translate a host-native tool call into a subprocess invocation of a CLI and relay the JSON stdout back. Keep them thin — no business logic in TypeScript or in `hermes/tools.py` beyond argument mapping and subprocess plumbing.
 
@@ -97,6 +98,19 @@ def get_kline(args: dict, **kwargs) -> str:
 // definePluginEntry + typebox schemas. The executor is indirected via
 // __setExecutor() so tests can stub it without touching node:child_process.
 // toolsDir has a dev vs published fallback; venv has a repo-root vs staged-payload fallback.
+```
+
+### dsh — `dsh/index.ts`
+
+```typescript
+// Cordis function-plugin form: `export const name/inject` + `apply(ctx)`.
+// Each tool is defineTool() (dsh's JSON-Schema-subset DSL — `required: true`
+// per property, enums as `enum: [...]`) registered via ctx.tools.register;
+// execute() returns the CLI's raw JSON text and output.render relays it as
+// one text block. The package is a dsh *bundle*: package.json carries
+// `dsh.bundle.patch` and cordis.patch.yml inserts the entry into a profile.
+// @deepseek-ai/* stay external in the esbuild bundle (peer deps resolved
+// from the profile); skills are registered by scanning skills/*/SKILL.md.
 ```
 
 ---
@@ -142,12 +156,14 @@ Commands:
 .venv/bin/python -m pytest tests/test_hermes_integration.py -v     # Hermes registration
 npx tsx tests/test_pi_integration.ts                       # Pi registration (jiti load + skill paths)
 npx tsx tests/test_openclaw_integration.ts                 # OpenClaw registration
+npx tsx tests/test_dsh_integration.ts                      # dsh registration (tools + skills + bundle manifest)
 .venv/bin/python -m pytest tests/e2e/test_host_to_python.py -v     # host↔python round-trip
 npx tsx tests/e2e/test_pi_e2e.ts                           # Pi real-subprocess e2e
 npx tsx tests/e2e/test_openclaw_e2e.ts                     # OpenClaw real-subprocess e2e
+npx tsx tests/e2e/test_dsh_e2e.ts                          # dsh real-subprocess e2e
 ```
 
-`tests/e2e/host_smoke.mjs <pi|openclaw|hermes>` is the **blocking** real-host smoke (installs the plugin into the actual runtime and runs one QA turn). It needs `SMOKE_LLM_API_KEY` and is a CI gate — run it before releasing, not on every edit.
+`tests/e2e/host_smoke.mjs <pi|openclaw|hermes|dsh>` is the **blocking** real-host smoke (installs the plugin into the actual runtime and runs one QA turn). It needs `SMOKE_LLM_API_KEY` and is a CI gate — run it before releasing, not on every edit.
 
 ---
 
@@ -157,28 +173,28 @@ npx tsx tests/e2e/test_openclaw_e2e.ts                     # OpenClaw real-subpr
 ruff check tools/ skills/ tests/ hermes/          # lint
 ruff format --check tools/ skills/ tests/ hermes/ # format check (autofix.yml auto-fixes on PRs)
 ruff check --fix tools/ skills/ tests/ hermes/ && ruff format tools/ skills/ tests/ hermes/   # apply locally
-npx tsc --noEmit                                  # TS type check (pi/, openclaw/, tests/*.ts)
+npx tsc --noEmit                                  # TS type check (pi/, openclaw/, dsh/, tests/*.ts)
 ```
 
 ---
 
 ## Versioning & Release
 
-Versions live in **four** manifests that must stay in lockstep: `pyproject.toml`, `package.json`, `package-lock.json`, `openclaw/package.json`.
+Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`, `package.json`, `package-lock.json`, `openclaw/package.json`, `dsh/package.json`.
 
-- **Do not hand-edit versions for a release.** Publishing is tag-driven: push a `vX.Y.Z` tag and `publish.yml` runs `scripts/sync-version.sh "$TAG"`, which rewrites all four in-CI (never committed back). The repo's checked-in version is just the last-released baseline.
+- **Do not hand-edit versions for a release.** Publishing is tag-driven: push a `vX.Y.Z` tag and `publish.yml` runs `scripts/sync-version.sh "$TAG"`, which rewrites all five in-CI (never committed back). The repo's checked-in version is just the last-released baseline.
 - `scripts/sync-version.sh` is idempotent and validates the tag shape; you can dry-run it locally with `GITHUB_REF_NAME=v9.9.9 scripts/sync-version.sh`.
 - Verify package contents before publishing: `npm pack --dry-run` (the `build` CI job does this and uploads the tarball).
-- Build the OpenClaw bundle with `npm run build:openclaw` (esbuild → `openclaw/dist/index.js`).
+- Build the OpenClaw bundle with `npm run build:openclaw` (esbuild → `openclaw/dist/index.js`) and the dsh bundle with `npm run build:dsh` (esbuild → `dsh/dist/index.js`, `@deepseek-ai/*` external).
 - The `postinstall` (`scripts/setup-python.mjs`) builds the repo `.venv` and installs `tools/requirements.txt`. Syntax-check it with `node --check scripts/setup-python.mjs` after edits.
 
 ---
 
 ## Implementation Discipline
 
-- **Match the existing adapter you're editing** — read the sibling registrations first and copy their style, argument mapping, and error shape. The three adapters are deliberately parallel; keep them parallel.
-- **One tool = three registrations + docs.** Adding/renaming/re-paraming a tool touches `pi/index.ts`, `openclaw/index.ts`, `hermes/tools.py` + `hermes/schemas.py`, the relevant `skills/*/SKILL.md`, and the README tool table — together, in one change. Don't land a tool in one host only.
-- **Keep the JSON contract stable.** Host adapters and tests parse `tools/` stdout. Changing a key is a breaking change across all three hosts — update all consumers and tests in the same change, or add the new key alongside the old.
+- **Match the existing adapter you're editing** — read the sibling registrations first and copy their style, argument mapping, and error shape. The four adapters are deliberately parallel; keep them parallel.
+- **One tool = four registrations + docs.** Adding/renaming/re-paraming a tool touches `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py`, the relevant `skills/*/SKILL.md`, and the README tool table — together, in one change. Don't land a tool in one host only.
+- **Keep the JSON contract stable.** Host adapters and tests parse `tools/` stdout. Changing a key is a breaking change across all four hosts — update all consumers and tests in the same change, or add the new key alongside the old.
 - Minimal, scoped diffs. Don't "improve" unrelated code or do cross-cutting refactors unless asked.
 - New config keys / tool params need corresponding test coverage (pytest for the core, tsx for the adapter registration).
 - Don't swallow exceptions: expected failures (missing symbol, bad input, provider down) become clean JSON `error` results; unexpected exceptions should not leak raw stack traces or response bodies to the user.
@@ -195,7 +211,7 @@ Versions live in **four** manifests that must stay in lockstep: `pyproject.toml`
 
 ## Code Review Rules
 
-- **Adapter sync** — flag any tool name/param/JSON-shape change that landed in fewer than all three adapters + SKILL.md + README. Safe path: one PR updates every host together.
+- **Adapter sync** — flag any tool name/param/JSON-shape change that landed in fewer than all four adapters + SKILL.md + README. Safe path: one PR updates every host together.
 - **Cross-platform paths** — flag hardcoded `bin/python3`/`Scripts/python.exe`, `__dirname` without the ESM fallback, `URL.pathname`, or pip-shim invocations. Safe path: reuse `scripts/venv-python.mjs` and the existing dev/published and venv/fallback chains.
 - **Host↔Python contract** — flag `tools/` changes that emit non-JSON on stdout, emit secrets/stack traces, or rename output keys without updating all adapters and tests. Safe path: JSON-only stdout, additive key changes, coverage in pytest + tsx.
 - **Dependency additions** — flag new entries to `tools/requirements.txt` / `pyproject.toml` that duplicate stdlib or an installed dep (ponytail rung 5).
@@ -206,10 +222,10 @@ Versions live in **four** manifests that must stay in lockstep: `pyproject.toml`
 
 1. Implement the CLI in the appropriate `tools/*.py` (argparse subcommand, JSON stdout, py3.9-compatible).
 2. Add a failing pytest first (`tests/test_<module>.py`), then make it pass (see `tdd`).
-3. Register it in all three adapters: `pi/index.ts`, `openclaw/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params.
+3. Register it in all four adapters: `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params.
 4. Wire it into the relevant `skills/*/SKILL.md` workflow if an agent should call it.
 5. Update the README tool table (and tool count if surfaced).
-6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, and the three registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_hermes_integration.py`).
+6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, and the four registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_dsh_integration.ts`, `test_hermes_integration.py`).
 
 ---
 
@@ -220,8 +236,9 @@ npm install                        # also builds repo .venv via postinstall
 ruff check tools/ skills/ tests/ hermes/ && ruff format --check tools/ skills/ tests/ hermes/
 npx tsc --noEmit
 .venv/bin/python -m pytest -q
-npx tsx tests/test_pi_integration.ts && npx tsx tests/test_openclaw_integration.ts
+npx tsx tests/test_pi_integration.ts && npx tsx tests/test_openclaw_integration.ts && npx tsx tests/test_dsh_integration.ts
 .venv/bin/python -m pytest tests/test_hermes_integration.py -v
 npm run build:openclaw             # esbuild bundle for OpenClaw
+npm run build:dsh                  # esbuild bundle for dsh (@deepseek-ai/* external)
 npm pack --dry-run                 # verify publish contents
 ```

@@ -1,0 +1,6 @@
+# dsh bundle layer: inserts this package's plugin entry into the profile
+# composition. The entry module is resolved from the profile's node_modules
+# and must export the cordis function-plugin form (name/inject/apply).
+- insert:
+    - id: stock-analysis
+      name: "@weaxs/dsh-stock-analysis"

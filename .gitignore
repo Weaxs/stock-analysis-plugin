@@ -53,3 +53,12 @@ openclaw/templates/
 openclaw/strategies/
 openclaw/scripts/
 openclaw/*.tgz
+
+# dsh staged publish payload (see publish.yml "Stage payload into dsh/")
+dsh/tools/
+dsh/skills/
+dsh/schemas/
+dsh/templates/
+dsh/strategies/
+dsh/scripts/
+dsh/*.tgz

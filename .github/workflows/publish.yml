@@ -193,9 +193,60 @@ jobs:
       - name: Publish to ClawHub
         run: clawhub package publish ./openclaw
 
+  publish-dsh:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync version from tag
+        run: bash scripts/sync-version.sh
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build compiled plugin entry (dist/index.js)
+        run: npm run build:dsh
+
+      - name: Stage payload into dsh/
+        run: |
+          set -euo pipefail
+          for d in tools skills schemas templates strategies scripts; do
+            if [ -d "$d" ]; then
+              rm -rf "dsh/$d"
+              cp -R "$d" "dsh/$d"
+            fi
+          done
+
+      # Same regression guard as the OpenClaw job: the dsh profile loader
+      # imports built JS, so dist must survive the `files` whitelist, and the
+      # bundle manifest must ship its patch file.
+      - name: Verify compiled entry and patch are packaged
+        working-directory: dsh
+        run: |
+          npm pack --dry-run 2>&1 | tee pack-dry-run.txt
+          grep -q "dist/index.js" pack-dry-run.txt \
+            || { echo "::error::dist/index.js missing from dsh npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
+          grep -q "cordis.patch.yml" pack-dry-run.txt \
+            || { echo "::error::cordis.patch.yml missing from dsh npm tarball — dsh bundle manifest would dangle"; exit 1; }
+
+      - name: npm publish
+        working-directory: dsh
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   github-release:
     runs-on: ubuntu-latest
-    needs: [publish-npm, publish-pypi, publish-openclaw]
+    needs: [publish-npm, publish-pypi, publish-openclaw, publish-dsh]
     permissions:
       contents: write
     steps:
@@ -214,6 +265,7 @@ jobs:
           - **npm**: \`npm install @weaxs/stock-analysis-plugin@${VERSION}\`
           - **pip**: \`pip install stock-analysis-plugin==${VERSION}\`
           - **OpenClaw**: \`openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis\`
+          - **dsh**: \`dsh plugin --profile <name> add @weaxs/dsh-stock-analysis\`
           EOF
 
       - name: Create GitHub Release

@@ -3,7 +3,7 @@
  * Real-host smoke QA: install the plugin into a real host runtime and run one
  * QA turn through the host's own agent loop.
  *
- * Usage: node tests/e2e/host_smoke.mjs <pi|openclaw|hermes>
+ * Usage: node tests/e2e/host_smoke.mjs <pi|openclaw|hermes|dsh>
  *
  * Env:
  *   SMOKE_LLM_API_KEY  (required) API key for the QA model
@@ -26,8 +26,8 @@ const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const host = process.argv[2];
-if (!["pi", "openclaw", "hermes"].includes(host)) {
-  console.error("usage: host_smoke.mjs <pi|openclaw|hermes>");
+if (!["pi", "openclaw", "hermes", "dsh"].includes(host)) {
+  console.error("usage: host_smoke.mjs <pi|openclaw|hermes|dsh>");
   process.exit(2);
 }
 
@@ -242,7 +242,91 @@ function smokeHermes() {
   });
 }
 
-const runners = { pi: smokePi, openclaw: smokeOpenclaw, hermes: smokeHermes };
+// ------------------------------------------------------------- dsh --------
+function smokeDsh() {
+  // Replicate the publish payload: stage shared dirs, build dist, pack.
+  for (const d of ["tools", "skills", "schemas", "templates", "strategies", "scripts"]) {
+    sh("rm", ["-rf", join(repoRoot, "dsh", d)]);
+    sh("cp", ["-R", join(repoRoot, d), join(repoRoot, "dsh", d)]);
+  }
+  sh("npm", ["run", "build:dsh"], { cwd: repoRoot });
+  const packOut = sh("npm", ["pack"], { cwd: join(repoRoot, "dsh") });
+  const tgz = join(repoRoot, "dsh", packOut.trim().split("\n").pop());
+
+  // Isolated Harness home. The "headless" profile auto-initializes from the
+  // shipped template (dsh-base + dsh-headless) on first `dsh plugin add`;
+  // the CLI reconciles our bundle into dsh.profile.bundles from the package's
+  // dsh.bundle.patch manifest.
+  const dshHome = join(WORK, "dsh-home");
+  const env = { ...process.env, DSH_HOME: dshHome, DEEPSEEK_API_KEY: API_KEY };
+  const dsh = (args, opts = {}) => sh("dsh", args, { env, ...opts });
+
+  dsh(["plugin", "--profile", "headless", "add", tgz]);
+  const pkgDir = join(dshHome, "profiles", "headless", "node_modules", "@weaxs", "dsh-stock-analysis");
+  assertCond(existsSync(join(pkgDir, "dist", "index.js")), "installed plugin has dist/index.js");
+  assertCond(existsSync(join(pkgDir, "tools", "stock_data.py")), "installed plugin has tools/");
+
+  // Profile installs go through pnpm, which skips dependency lifecycle scripts
+  // without an allowBuilds entry — set the python env up like the docs tell
+  // users to.
+  if (!existsSync(join(pkgDir, ".venv"))) {
+    sh("node", [join(pkgDir, "scripts", "setup-python.mjs")], { cwd: pkgDir, env });
+  }
+
+  // Non-default endpoint/model overrides ride the documented surfaces: the
+  // `llm-deepseek:` section of $DSH_HOME/settings.yaml (what the Models page
+  // writes) and a --patch overlay replacing the agent-default-model row.
+  // The CI defaults (api.deepseek.com / deepseek-v4-flash) need neither —
+  // the key resolves from the inherited DEEPSEEK_API_KEY env per request.
+  if (BASE_URL && BASE_URL !== "https://api.deepseek.com") {
+    writeFileSync(join(dshHome, "settings.yaml"), `llm-deepseek:\n  baseURL: ${BASE_URL}\n`);
+  }
+
+  // One --patch overlay for the whole smoke:
+  //   - smoke-tool-spy: logs every executed tool name (dsh's durable session
+  //     log only carries the session header in one-shot runs, so the spy —
+  //     via the emit-mode `tools/result` event — is the tool-call trace).
+  //   - tool-web disabled: removes the built-in web_search fallback so the
+  //     model must reach the price through OUR get_quote, not a search.
+  //   - agent-default-model: only when SMOKE_LLM_MODEL is non-default.
+  const calledToolsLog = join(WORK, "dsh-called-tools.log");
+  const spyPlugin = join(repoRoot, "tests", "e2e", "dsh_tool_spy.mjs");
+  let overlay =
+    `- insert:\n` +
+    `    - id: smoke-tool-spy\n` +
+    `      name: "${spyPlugin}"\n` +
+    `      config:\n` +
+    `        logFile: "${calledToolsLog}"\n` +
+    `- id: tool-web\n` +
+    `  disabled: true\n`;
+  if (MODEL !== "deepseek-v4-flash") {
+    overlay += `- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: ${MODEL}\n`;
+  }
+  const overlayPath = join(WORK, "dsh-smoke-overlay.yml");
+  writeFileSync(overlayPath, overlay);
+  const bootArgs = ["--profile", "headless", "--patch", overlayPath];
+
+  retryQA("dsh", () => {
+    // The headless runner prints the last assistant text to stdout and exits
+    // non-zero on an incompleted turn — catch so a failed attempt retries.
+    let out = "";
+    try {
+      out = dsh([...bootArgs, QUESTION], { timeout: 480_000 });
+    } catch (err) {
+      const tail = String(err.stdout ?? "") + String(err.stderr ?? "");
+      return { ok: false, log: `exit=${err.status ?? "?"}`, tail: tail.slice(-800) };
+    }
+    const calledTools = existsSync(calledToolsLog) ? readFileSync(calledToolsLog, "utf-8") : "";
+    const calledGetQuote = calledTools.split("\n").includes("get_quote");
+    return {
+      ok: calledGetQuote && /\d/.test(out),
+      log: `toolCalled=${calledGetQuote} tools=[${calledTools.trim().replaceAll("\n", ",")}] final=${out.trim().slice(0, 80)}`,
+      tail: out,
+    };
+  });
+}
+
+const runners = { pi: smokePi, openclaw: smokeOpenclaw, hermes: smokeHermes, dsh: smokeDsh };
 try {
   await runners[host]();
   console.log(`\nOK: ${host} real-host smoke passed`);

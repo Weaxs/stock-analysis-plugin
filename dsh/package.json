@@ -1,0 +1,51 @@
+{
+  "name": "@weaxs/dsh-stock-analysis",
+  "version": "0.1.4",
+  "description": "DeepSeek Harness (dsh) plugin for stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "postinstall": "node scripts/setup-python.mjs"
+  },
+  "files": [
+    "dist/",
+    "cordis.patch.yml",
+    "README.md",
+    "tools/",
+    "skills/",
+    "schemas/",
+    "templates/",
+    "strategies/",
+    "scripts/"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "stock-analysis",
+    "stock-screener",
+    "backtest",
+    "a-shares",
+    "hk-stocks",
+    "us-stocks"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Weaxs/stock-analysis-plugin"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+  }
+}
