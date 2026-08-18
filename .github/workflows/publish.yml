@@ -95,6 +95,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Publish unscoped variant to npm
+        # Same payload under the unscoped name; users may install either.
+        run: |
+          npm pkg set name=stock-analysis-plugin
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   publish-pypi:
     runs-on: ubuntu-latest
     needs: [lint, test]
@@ -193,6 +201,16 @@ jobs:
       - name: Publish to ClawHub
         run: clawhub package publish ./openclaw
 
+      - name: Publish unscoped variant to npm
+        # Same payload under the unscoped name. Runs after ClawHub so the
+        # manifest-facing name stays scoped for the clawhub publish.
+        working-directory: openclaw
+        run: |
+          npm pkg set name=openclaw-stock-analysis
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   publish-dsh:
     runs-on: ubuntu-latest
     needs: [lint, test]
@@ -244,6 +262,20 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Publish unscoped variant to npm
+        # The bundle manifest references the plugin by package name, so the
+        # unscoped variant's patch (and README install command) must name the
+        # unscoped package — otherwise a profile installing it would resolve
+        # the scoped name at boot and fail.
+        working-directory: dsh
+        run: |
+          npm pkg set name=dsh-stock-analysis
+          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml README.md
+          grep -q 'name: "dsh-stock-analysis"' cordis.patch.yml
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   github-release:
     runs-on: ubuntu-latest
     needs: [publish-npm, publish-pypi, publish-openclaw, publish-dsh]
@@ -266,6 +298,7 @@ jobs:
           - **pip**: \`pip install stock-analysis-plugin==${VERSION}\`
           - **OpenClaw**: \`openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis\`
           - **dsh**: \`dsh plugin --profile <name> add @weaxs/dsh-stock-analysis\`
+          - 非 scoped 同名变体（内容一致）：\`stock-analysis-plugin\` / \`openclaw-stock-analysis\` / \`dsh-stock-analysis\`
           EOF
 
       - name: Create GitHub Release

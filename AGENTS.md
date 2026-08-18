@@ -186,6 +186,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 - `scripts/sync-version.sh` is idempotent and validates the tag shape; you can dry-run it locally with `GITHUB_REF_NAME=v9.9.9 scripts/sync-version.sh`.
 - Verify package contents before publishing: `npm pack --dry-run` (the `build` CI job does this and uploads the tarball).
 - Build the OpenClaw bundle with `npm run build:openclaw` (esbuild → `openclaw/dist/index.js`) and the dsh bundle with `npm run build:dsh` (esbuild → `dsh/dist/index.js`, `@deepseek-ai/*` external).
+- **Each npm package ships under two names**: the canonical `@weaxs/*` scoped name and an unscoped twin with identical payload (twin steps in `publish.yml`, right after each scoped publish). The dsh twin additionally rewrites the package-name reference in `cordis.patch.yml` and the README install command before publishing — a profile installing the unscoped variant resolves the plugin by that name at boot. If a manifest or package name ever changes, update the twin steps in the same change.
 - The `postinstall` (`scripts/setup-python.mjs`) builds the repo `.venv` and installs `tools/requirements.txt`. Syntax-check it with `node --check scripts/setup-python.mjs` after edits.
 
 ---

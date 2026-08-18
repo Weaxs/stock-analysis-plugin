@@ -40,6 +40,8 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 安装
 
+> 所有 npm 包同时以 scoped（`@weaxs/*`）和非 scoped 同名两种名字发布，内容一致，任选其一即可。
+
 ### Pi Agent Extension
 
 ```bash
