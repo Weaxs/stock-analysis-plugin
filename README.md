@@ -42,6 +42,17 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 > 所有 npm 包同时以 scoped（`@weaxs/*`）和非 scoped 同名两种名字发布，内容一致，任选其一即可。
 
+插件包地址：
+
+| 平台 | 包名 | 地址 | 安装命令 |
+|------|------|------|----------|
+| Pi Agent | `@weaxs/stock-analysis-plugin`（或 `stock-analysis-plugin`） | [npm](https://www.npmjs.com/package/@weaxs/stock-analysis-plugin) | `npm install @weaxs/stock-analysis-plugin` |
+| Hermes Agent | `stock-analysis-plugin` | [PyPI](https://pypi.org/project/stock-analysis-plugin/) | `pip install stock-analysis-plugin` |
+| OpenClaw | `@weaxs/openclaw-stock-analysis`（或 `openclaw-stock-analysis`） | [npm](https://www.npmjs.com/package/@weaxs/openclaw-stock-analysis) | `openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis` |
+| DeepSeek Harness (dsh) | `@weaxs/dsh-stock-analysis`（或 `dsh-stock-analysis`） | [npm](https://www.npmjs.com/package/@weaxs/dsh-stock-analysis) | `dsh plugin --profile <profile> add @weaxs/dsh-stock-analysis` |
+
+各平台的详细安装步骤见下方对应小节。
+
 ### Pi Agent Extension
 
 ```bash
