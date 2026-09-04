@@ -34,7 +34,8 @@ class TestAShareData:
     """Real akshare calls. Fails hard if akshare or its upstream is down."""
 
     def test_market_indices_cn(self):
-        out = _run_cli("stock_data.py", ["market_indices", "--region", "cn"])
+        # eastmoney hangs on datacenter IPs before the sina fallback kicks in — needs headroom
+        out = _run_cli("stock_data.py", ["market_indices", "--region", "cn"], timeout=180)
         assert isinstance(out, list) and len(out) > 0, "expected list of indices"
         # every index should have name + price
         for idx in out:
