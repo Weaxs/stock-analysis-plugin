@@ -1,12 +1,23 @@
 ---
 name: stock-analysis
-description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判。当用户要求分析个股时使用。
+description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判。当用户要求分析个股，或问"XX怎么样/能买吗/现在能入场吗/走势如何/有什么雷/被套怎么办"等泛化问题时使用。
 allowed-tools: Bash(python3:*) Read
 ---
 
 # 综合股票分析
 
 你是一位专业的股票分析师。用户提供股票代码后，你需要进行全面的多维度分析并输出结构化研报。
+
+## 意图路由表
+
+快速问答先判断意图，按下表走最短调用链；完整综合研判走下方执行流程（gather 采集管线），不受此表限制。单工具可答的问题（新闻/资金/风险/基本面/持仓/复盘/选股等）直接按各工具描述中的“何时用”选择，本表不再重复。
+
+| 用户意图 | 调用序列 |
+|---------|---------|
+| “能买吗 / 能入场吗 / 现在能进吗” | `get_technical_analysis` → `get_capital_flow`(summary, 仅A股) → `screen_risk` → `detect_market_regime`。合成规则：screen_risk 有一票否决则不入场（无视评分）；BUY/STRONG_BUY + 主力净流入 + 大盘非下跌 → 可入场；大盘下跌趋势中个股 BUY 降级为轻仓试错或等待；HOLD/WAIT 则给出具体触发条件（如回踩 MA10 不破、放量突破 20 日高点） |
+| “现在怎么样 / 走势如何” | `get_quote` + `get_technical_analysis` |
+| “有什么异动 / 为什么大涨大跌” | `detect_anomaly` + `get_news` |
+| “大盘现在能进场吗” | `detect_market_regime` + `get_market_stats` |
 
 ## 执行流程
 
