@@ -27,123 +27,130 @@ def _cache_set(key: str, data):
 
 # --------------- Web Search ---------------
 
+_SECRET_PARAM_RE = re.compile(r"(?i)((?:api[_-]?key|token|secret|access[_-]?token)=)[^&\s]+")
+
+
+def _scrub_secrets(msg: str) -> str:
+    """Error text may embed request URLs (requests connection errors) — never leak keys to stdout JSON."""
+    return _SECRET_PARAM_RE.sub(r"\1***", msg)
+
 
 def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
         return []
-    try:
-        import requests
+    import requests
 
-        resp = requests.post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": api_key,
-                "query": query,
-                "max_results": max_results,
-                "search_depth": "basic",
-            },
-            timeout=15,
-        )
-        data = resp.json()
-        return [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": r.get("content", "")[:200],
-                "source": "tavily",
-            }
-            for r in data.get("results", [])
-        ]
-    except Exception:
-        return []
+    resp = requests.post(
+        "https://api.tavily.com/search",
+        json={
+            "api_key": api_key,
+            "query": query,
+            "max_results": max_results,
+            "search_depth": "basic",
+        },
+        timeout=15,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"tavily HTTP {resp.status_code}")
+    data = resp.json()
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", "")[:200],
+            "source": "tavily",
+        }
+        for r in data.get("results", [])
+    ]
 
 
 def _brave_search(query: str, count: int = 5) -> list[dict]:
     api_key = os.environ.get("BRAVE_API_KEY")
     if not api_key:
         return []
-    try:
-        import requests
+    import requests
 
-        resp = requests.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-            params={"q": query, "count": count},
-            timeout=15,
-        )
-        data = resp.json()
-        return [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": r.get("description", "")[:200],
-                "source": "brave",
-            }
-            for r in data.get("web", {}).get("results", [])
-        ]
-    except Exception:
-        return []
+    resp = requests.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+        params={"q": query, "count": count},
+        timeout=15,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"brave HTTP {resp.status_code}")
+    data = resp.json()
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("description", "")[:200],
+            "source": "brave",
+        }
+        for r in data.get("web", {}).get("results", [])
+    ]
 
 
 def _serpapi_search(query: str, num: int = 5) -> list[dict]:
     api_key = os.environ.get("SERPAPI_KEY")
     if not api_key:
         return []
-    try:
-        import requests
+    import requests
 
-        resp = requests.get(
-            "https://serpapi.com/search",
-            params={
-                "api_key": api_key,
-                "q": query,
-                "num": num,
-                "engine": "google",
-            },
-            timeout=15,
-        )
-        data = resp.json()
-        return [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("link", ""),
-                "snippet": r.get("snippet", "")[:200],
-                "source": "serpapi",
-            }
-            for r in data.get("organic_results", [])
-        ]
-    except Exception:
-        return []
+    resp = requests.get(
+        "https://serpapi.com/search",
+        params={
+            "api_key": api_key,
+            "q": query,
+            "num": num,
+            "engine": "google",
+        },
+        timeout=15,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"serpapi HTTP {resp.status_code}")
+    data = resp.json()
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("link", ""),
+            "snippet": r.get("snippet", "")[:200],
+            "source": "serpapi",
+        }
+        for r in data.get("organic_results", [])
+    ]
 
 
 def _bocha_search(query: str, max_results: int = 5) -> list[dict]:
     api_key = os.environ.get("BOCHA_API_KEY")
     if not api_key:
         return []
-    try:
-        import requests
+    import requests
 
-        resp = requests.post(
-            "https://api.bochaai.com/v1/web-search",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"query": query, "count": max_results},
-            timeout=15,
-        )
-        data = resp.json()
-        results = []
-        for item in data.get("web", {}).get("results", []):
-            results.append(
-                {
-                    "title": item.get("name", ""),
-                    "url": item.get("url", ""),
-                    "snippet": item.get("snippet", "")[:200],
-                    "source": "bocha",
-                }
-            )
-        return results
-    except Exception:
-        return []
+    resp = requests.post(
+        "https://api.bochaai.com/v1/web-search",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"query": query, "count": max_results},
+        timeout=15,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"bocha HTTP {resp.status_code}")
+    data = resp.json()
+    code = data.get("code")
+    if code is not None and str(code) != "200":
+        # Bocha can signal quota/auth failure via HTTP 200 + non-200 envelope code
+        raise RuntimeError(f"bocha code {code}: {data.get('msg') or data.get('message') or 'unknown'}")
+    # Bocha web-search returns Bing-style data.webPages.value[] (issue #13)
+    items = ((data.get("data") or {}).get("webPages") or {}).get("value") or []
+    return [
+        {
+            "title": item.get("name", ""),
+            "url": item.get("url", ""),
+            "snippet": (item.get("snippet") or "")[:200],
+            "source": "bocha",
+        }
+        for item in items
+    ]
 
 
 def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
@@ -155,10 +162,10 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
     base_urls = [u.strip().rstrip("/") for u in os.environ.get("SEARXNG_BASE_URLS", "").split(",") if u.strip()]
     if not base_urls:
         return []
-    try:
-        import requests
-    except ImportError:
-        return []
+    import requests
+
+    last_error = None
+    responded = False
     for base in base_urls:
         try:
             resp = requests.get(
@@ -168,7 +175,9 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
                 timeout=15,
             )
             if not resp.ok:
+                last_error = f"searxng {base} HTTP {resp.status_code}"
                 continue
+            responded = True
             data = resp.json()
             results = [
                 {
@@ -181,8 +190,10 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
             ]
             if results:
                 return results
-        except Exception:
-            continue
+        except Exception as e:
+            last_error = f"searxng {base}: {e}"
+    if last_error and not responded:
+        raise RuntimeError(last_error)
     return []
 
 
@@ -190,6 +201,7 @@ def search_news(query: str, max_results: int = 10) -> dict:
     results = []
     engines_tried = []
     engines_available = []
+    engines_errors = {}
 
     for name, fn in [
         ("tavily", _tavily_search),
@@ -199,7 +211,11 @@ def search_news(query: str, max_results: int = 10) -> dict:
         ("searxng", _searxng_search),
     ]:
         engines_tried.append(name)
-        items = fn(query, max_results)
+        try:
+            items = fn(query, max_results)
+        except Exception as e:
+            engines_errors[name] = _scrub_secrets(str(e))
+            continue
         if items:
             engines_available.append(name)
             results.extend(items)
@@ -207,14 +223,19 @@ def search_news(query: str, max_results: int = 10) -> dict:
                 break
 
     if not results:
+        if engines_errors:
+            note = "All configured search engines failed; see engines_errors for per-engine reasons."
+        else:
+            note = (
+                "No search engines configured. Set TAVILY_API_KEY, BRAVE_API_KEY, BOCHA_API_KEY, "
+                "SERPAPI_KEY, or SEARXNG_BASE_URLS in environment."
+            )
         return {
             "query": query,
             "results": [],
             "engines_tried": engines_tried,
-            "note": (
-                "No search engines configured. Set TAVILY_API_KEY, BRAVE_API_KEY, BOCHA_API_KEY, "
-                "SERPAPI_KEY, or SEARXNG_BASE_URLS in environment."
-            ),
+            "engines_errors": engines_errors,
+            "note": note,
         }
 
     seen_urls = set()
@@ -228,6 +249,7 @@ def search_news(query: str, max_results: int = 10) -> dict:
         "query": query,
         "results": deduped[:max_results],
         "engines_used": engines_available,
+        "engines_errors": engines_errors,
         "total": len(deduped),
     }
 
@@ -244,11 +266,13 @@ def search_comprehensive(symbol: str, name: str = None) -> dict:
     }
 
     results = {}
+    engines_errors = {}
     for dim, query in dimensions.items():
         data = search_news(query, max_results=3)
         results[dim] = data.get("results", [])
+        engines_errors.update(data.get("engines_errors") or {})
 
-    return {"symbol": symbol, "name": label, "dimensions": results}
+    return {"symbol": symbol, "name": label, "dimensions": results, "engines_errors": engines_errors}
 
 
 # --------------- A-share Sentiment Sources ---------------
