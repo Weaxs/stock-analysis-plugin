@@ -24,7 +24,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_quote",
-        "description": "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股。问“现在多少钱/涨了多少”用本工具",
+        "description": "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股",
         "parameters": {
             "type": "object",
             "properties": {
@@ -38,7 +38,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_capital_flow",
-        "description": "获取A股资金流向（主力/超大单/大单/中单/小单净流入）。detail=个股每日明细，summary=多日汇总+趋势，sector_flow=板块资金流排行。问“主力在买还是卖/资金流入流出”用本工具，可配合 get_chip_distribution 验证",
+        "description": "获取A股资金流向（主力/超大单/大单/中单/小单净流入）。detail=个股每日明细，summary=多日汇总+趋势，sector_flow=板块资金流排行。可配合 get_chip_distribution 验证主力行为",
         "parameters": {
             "type": "object",
             "properties": {
@@ -88,7 +88,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_technical_analysis",
-        "description": "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）。“能买吗/现在能入场吗/技术面怎么样”首选本工具；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
+        "description": "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
         "parameters": {
             "type": "object",
             "properties": {
@@ -111,7 +111,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "analyze_pattern",
-        "description": "K线形态识别 — 检测十字星、锤子线、吞没、启明星、黄昏星、双底、20日突破等12+种经典形态。问“出现了什么形态”时用；综合技术面判断用 get_technical_analysis",
+        "description": "K线形态识别 — 检测十字星、锤子线、吞没、启明星、黄昏星、双底、20日突破等12+种经典形态。综合技术面判断用 get_technical_analysis",
         "parameters": {
             "type": "object",
             "properties": {
@@ -134,7 +134,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_indices",
-        "description": "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500；JP: 日经225/东证；KR: KOSPI/KOSDAQ；TW: 台湾加权。“复盘今天大盘”用 get_market_review 一站式获取",
+        "description": "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500；JP: 日经225/东证；KR: KOSPI/KOSDAQ；TW: 台湾加权。大盘复盘用 get_market_review 一站式获取",
         "parameters": {
             "type": "object",
             "properties": {
@@ -148,7 +148,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_sector_rankings",
-        "description": "获取A股行业板块涨跌幅排行（含领涨股、涨跌家数等）。支持查看涨幅榜/跌幅榜/双向。找热点板块/领涨板块用本工具",
+        "description": "获取A股行业板块涨跌幅排行（含领涨股、涨跌家数等）。支持查看涨幅榜/跌幅榜/双向",
         "parameters": {
             "type": "object",
             "properties": {
@@ -194,7 +194,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_stats",
-        "description": "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）。问“今天市场情绪/温度如何”用本工具",
+        "description": "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）。用于衡量市场整体情绪与温度",
         "parameters": {
             "type": "object",
             "properties": {
@@ -208,7 +208,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_fundamental_context",
-        "description": "获取A股深度基本面（估值PE/PB/PS + 成长性营收/净利增速 + 盈利能力ROE/毛利率 + 分红历史）。“公司质地如何/能不能长期持有”用本工具；快速查PE/PB用 get_financials",
+        "description": "获取A股深度基本面（估值PE/PB/PS + 成长性营收/净利增速 + 盈利能力ROE/毛利率 + 分红历史）。用于评估公司质地与长期持有价值；快速查PE/PB用 get_financials",
         "parameters": {
             "type": "object",
             "properties": {
@@ -222,7 +222,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "screen_stocks",
-        "description": "全市场股票筛选（AlphaSift L1 多因子硬筛）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分。“帮我选股/筛选低估值/高换手股票”用本工具",
+        "description": "全市场股票筛选（AlphaSift L1 多因子硬筛）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分",
         "parameters": {
             "type": "object",
             "properties": {
@@ -274,7 +274,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "evaluate_signal",
-        "description": "技术信号历史准确率评估 — 回溯历史数据，统计某个技术信号触发后N日的胜率和平均收益。支持9种信号：macd_golden_cross/macd_death_cross/rsi_oversold/rsi_overbought/breakout_20d/breakdown_20d/volume_surge/ma_golden_cross/ma_death_cross。“金叉/突破策略靠不靠谱”用本工具；要完整模拟交易过程用 run_backtest",
+        "description": "技术信号历史准确率评估 — 回溯历史数据，统计某个技术信号触发后N日的胜率和平均收益。支持9种信号：macd_golden_cross/macd_death_cross/rsi_oversold/rsi_overbought/breakout_20d/breakdown_20d/volume_surge/ma_golden_cross/ma_death_cross。要完整模拟交易过程用 run_backtest",
         "parameters": {
             "type": "object",
             "properties": {
@@ -399,7 +399,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_volume_analysis",
-        "description": "独立量价分析 — 量价相关性、上涨/下跌日成交量对比、量能趋势、量价模式解读（放量上涨/缩量回调等）。专问量能/量价配合时用本工具；综合技术面判断用 get_technical_analysis，扫当日异动用 detect_anomaly",
+        "description": "独立量价分析 — 量价相关性、上涨/下跌日成交量对比、量能趋势、量价模式解读（放量上涨/缩量回调等）。综合技术面判断用 get_technical_analysis，扫当日异动用 detect_anomaly",
         "parameters": {
             "type": "object",
             "properties": {
@@ -440,7 +440,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "search_comprehensive_intel",
-        "description": "股票综合情报搜索 — 从6个维度（新闻/公告/行情分析/风险/业绩/行业）搜索综合信息。“深入研究/全面调研这家公司”用本工具；快速看新闻用 get_news",
+        "description": "股票综合情报搜索 — 从6个维度（新闻/公告/行情分析/风险/业绩/行业）搜索综合信息。用于个股的深入研究/全面调研；快速看新闻用 get_news",
         "parameters": {
             "type": "object",
             "properties": {
@@ -458,7 +458,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_social_sentiment",
-        "description": "获取股票社交媒体情绪数据。A股：东方财富股吧热度+雪球讨论热度（无需配置）；美股/港股：Reddit/X/Polymarket情绪（需 SENTIMENT_API_KEY）。自动按市场选数据源。“散户在讨论什么/情绪如何”用本工具；看全市场热门讨论用 get_trending_sentiment",
+        "description": "获取股票社交媒体情绪数据。A股：东方财富股吧热度+雪球讨论热度（无需配置）；美股/港股：Reddit/X/Polymarket情绪（需 SENTIMENT_API_KEY）。自动按市场选数据源。面向个股维度；全市场热门讨论用 get_trending_sentiment",
         "parameters": {
             "type": "object",
             "properties": {
@@ -472,7 +472,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_trending_sentiment",
-        "description": "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。“现在市场热点是什么/大家都在买什么”用本工具；查个股情绪用 get_social_sentiment",
+        "description": "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点；查个股情绪用 get_social_sentiment",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -494,7 +494,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "screen_risk",
-        "description": "风险专项筛查 — 7维度风险检测（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策），返回风险评级和一票否决标记。“这股票有什么雷”用本工具；入场决策前排雷必调",
+        "description": "风险专项筛查 — 7维度风险检测（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策），返回风险评级和一票否决标记。入场决策前的排雷必调本工具",
         "parameters": {
             "type": "object",
             "properties": {
@@ -512,7 +512,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "detect_market_regime",
-        "description": "市场状态检测 — 分析大盘指数判断当前市场阶段（上涨趋势/下跌趋势/横盘震荡/高波动/板块热点），并推荐适合的分析策略。“现在大盘能进场吗/该用什么策略”用本工具",
+        "description": "市场状态检测 — 分析大盘指数判断当前市场阶段（上涨趋势/下跌趋势/横盘震荡/高波动/板块热点），并推荐适合的分析策略",
         "parameters": {
             "type": "object",
             "properties": {
@@ -526,7 +526,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_review",
-        "description": "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议。“复盘一下今天市场/今天大盘怎么样”首选本工具，无需再分别调指数/统计/板块工具",
+        "description": "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议。复盘类需求的首选，无需再分别调指数/统计/板块工具",
         "parameters": {
             "type": "object",
             "properties": {
@@ -540,7 +540,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "run_watchlist_analysis",
-        "description": "批量自选股分析 — 对多只股票并行采集行情/技术/资金/风险等数据，返回汇总结果。“批量分析我的自选股”/每日定时分析用本工具",
+        "description": "批量自选股分析 — 对多只股票并行采集行情/技术/资金/风险等数据，返回汇总结果。适用于每日定时分析自选股列表",
         "parameters": {
             "type": "object",
             "properties": {
@@ -558,7 +558,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "detect_anomaly",
-        "description": "异常/事件检测 — 一键扫描股票当前所有异动信号（MACD金叉死叉、RSI超买超卖、20日突破、放量异动、涨跌停、布林突破、KDJ极值、资金异动等），返回结构化异常列表。“今天有什么异动/为什么大涨大跌”首选本工具；综合技术面判断用 get_technical_analysis",
+        "description": "异常/事件检测 — 一键扫描股票当前所有异动信号（MACD金叉死叉、RSI超买超卖、20日突破、放量异动、涨跌停、布林突破、KDJ极值、资金异动等），返回结构化异常列表。当日异动归因的首选；综合技术面判断用 get_technical_analysis",
         "parameters": {
             "type": "object",
             "properties": {
@@ -634,7 +634,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "analyze_position_context",
-        "description": "持仓上下文分析 — 输入成本/仓位/止损止盈，结合现价和技术位输出浮盈亏、离止损距离、风险级别、操作建议。“我XX成本买的被套了/要不要止损止盈”用本工具。无状态、不存账户",
+        "description": "持仓上下文分析 — 输入成本/仓位/止损止盈，结合现价和技术位输出浮盈亏、离止损距离、风险级别、操作建议。无状态、不存账户",
         "parameters": {
             "type": "object",
             "properties": {
@@ -649,7 +649,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "check_alert_rules",
-        "description": "无状态告警规则检查 — 传入规则数组，返回当前是否触发。规则类型：price_below/price_above/change_pct_above/change_pct_below/volume_ratio_above/anomaly/risk_veto/risk_level_at_least。“到价/涨跌幅提醒是否触发”用本工具。不做调度不存历史",
+        "description": "无状态告警规则检查 — 传入规则数组，返回当前是否触发。规则类型：price_below/price_above/change_pct_above/change_pct_below/volume_ratio_above/anomaly/risk_veto/risk_level_at_least。不做调度不存历史",
         "parameters": {
             "type": "object",
             "properties": {
