@@ -1,7 +1,7 @@
 TOOL_SCHEMAS = [
     {
         "name": "get_kline",
-        "description": "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF",
+        "description": "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF。需要原始历史价格自行计算或画图时用；只问指标用 get_technical_analysis，只问现价用 get_quote",
         "parameters": {
             "type": "object",
             "properties": {
@@ -24,7 +24,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_quote",
-        "description": "获取股票实时行情报价。支持A股、港股、美股、日股、韩股、台股",
+        "description": "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股",
         "parameters": {
             "type": "object",
             "properties": {
@@ -38,7 +38,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_capital_flow",
-        "description": "获取A股资金流向数据。detail=个股每日明细，summary=多日汇总+趋势，sector_flow=板块资金流排行",
+        "description": "获取A股资金流向（主力/超大单/大单/中单/小单净流入）。detail=个股每日明细，summary=多日汇总+趋势，sector_flow=板块资金流排行。可配合 get_chip_distribution 验证主力行为",
         "parameters": {
             "type": "object",
             "properties": {
@@ -56,7 +56,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_news",
-        "description": "获取股票相关财经新闻",
+        "description": "获取个股最近N天财经新闻快讯（轻量、无需配置）。需要深度全网情报用 search_comprehensive_intel，按主题搜索用 search_stock_news，读文章全文用 extract_article",
         "parameters": {
             "type": "object",
             "properties": {
@@ -74,7 +74,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_financials",
-        "description": "获取股票关键财务指标（PE/PB/市值/营收/净利润/ROE等）",
+        "description": "获取股票关键财务指标（PE/PB/市值/营收/净利润/ROE等），适合快速估值快查。A股深度基本面（成长性/盈利能力/分红）用 get_fundamental_context",
         "parameters": {
             "type": "object",
             "properties": {
@@ -88,7 +88,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_technical_analysis",
-        "description": "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）",
+        "description": "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
         "parameters": {
             "type": "object",
             "properties": {
@@ -111,7 +111,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "analyze_pattern",
-        "description": "K线形态识别 — 检测十字星、锤子线、吞没、启明星、黄昏星、双底、20日突破等12+种经典形态",
+        "description": "K线形态识别 — 检测十字星、锤子线、吞没、启明星、黄昏星、双底、20日突破等12+种经典形态。综合技术面判断用 get_technical_analysis",
         "parameters": {
             "type": "object",
             "properties": {
@@ -134,7 +134,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_indices",
-        "description": "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500；JP: 日经225/东证；KR: KOSPI/KOSDAQ；TW: 台湾加权",
+        "description": "获取主要市场指数行情。CN: 上证/深证/创业板/科创50/沪深300；HK: 恒生/国企/科技；US: 道琼斯/纳斯达克/标普500；JP: 日经225/东证；KR: KOSPI/KOSDAQ；TW: 台湾加权。大盘复盘用 get_market_review 一站式获取",
         "parameters": {
             "type": "object",
             "properties": {
@@ -180,7 +180,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_chip_distribution",
-        "description": "获取A股筹码分布数据（获利比例、平均成本、90%/70%成本集中度）。仅支持A股",
+        "description": "获取A股筹码分布数据（获利比例、平均成本、90%/70%成本集中度）。仅支持A股。与 get_capital_flow 配合验证主力行为",
         "parameters": {
             "type": "object",
             "properties": {
@@ -194,7 +194,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_stats",
-        "description": "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）",
+        "description": "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）。用于衡量市场整体情绪与温度",
         "parameters": {
             "type": "object",
             "properties": {
@@ -208,7 +208,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_fundamental_context",
-        "description": "获取A股深度基本面（估值PE/PB/PS + 成长性营收/净利增速 + 盈利能力ROE/毛利率 + 分红历史）",
+        "description": "获取A股深度基本面（估值PE/PB/PS + 成长性营收/净利增速 + 盈利能力ROE/毛利率 + 分红历史）。用于评估公司质地与长期持有价值；快速查PE/PB用 get_financials",
         "parameters": {
             "type": "object",
             "properties": {
@@ -244,7 +244,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "run_backtest",
-        "description": "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标",
+        "description": "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal",
         "parameters": {
             "type": "object",
             "properties": {
@@ -274,7 +274,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "evaluate_signal",
-        "description": "技术信号历史准确率评估 — 回溯历史数据，统计某个技术信号触发后N日的胜率和平均收益。支持9种信号：macd_golden_cross/macd_death_cross/rsi_oversold/rsi_overbought/breakout_20d/breakdown_20d/volume_surge/ma_golden_cross/ma_death_cross",
+        "description": "技术信号历史准确率评估 — 回溯历史数据，统计某个技术信号触发后N日的胜率和平均收益。支持9种信号：macd_golden_cross/macd_death_cross/rsi_oversold/rsi_overbought/breakout_20d/breakdown_20d/volume_surge/ma_golden_cross/ma_death_cross。要完整模拟交易过程用 run_backtest",
         "parameters": {
             "type": "object",
             "properties": {
@@ -311,7 +311,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "resolve_stock_name",
-        "description": "股票名称智能解析 — 输入中文名（贵州茅台）、拼音（guizhou maotai/gzmt）、部分代码，返回匹配的股票代码。仅支持A股",
+        "description": "股票名称智能解析 — 输入中文名（贵州茅台）、拼音（guizhou maotai/gzmt）、部分代码，返回匹配的股票代码。仅支持A股。用户给出中文名/拼音/部分代码时先调本工具换成代码再调其他工具",
         "parameters": {
             "type": "object",
             "properties": {
@@ -376,7 +376,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "calculate_ma",
-        "description": "独立均线计算器 — 支持任意周期MA（5/10/20/30/60/120/250或自定义）+ 偏离度 + 均线排列 + 金叉死叉检测",
+        "description": "独立均线计算器 — 支持任意周期MA（5/10/20/30/60/120/250或自定义）+ 偏离度 + 均线排列 + 金叉死叉检测。只要均线数值或需要30/120/250等非默认周期时用本工具；综合技术面分析用 get_technical_analysis",
         "parameters": {
             "type": "object",
             "properties": {
@@ -399,7 +399,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_volume_analysis",
-        "description": "独立量价分析 — 量价相关性、上涨/下跌日成交量对比、量能趋势、量价模式解读（放量上涨/缩量回调等）",
+        "description": "独立量价分析 — 量价相关性、上涨/下跌日成交量对比、量能趋势、量价模式解读（放量上涨/缩量回调等）。综合技术面判断用 get_technical_analysis，扫当日异动用 detect_anomaly",
         "parameters": {
             "type": "object",
             "properties": {
@@ -422,7 +422,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "search_stock_news",
-        "description": "多引擎股票新闻搜索（支持 Tavily/Brave/SerpAPI）。需配置对应 API Key 环境变量",
+        "description": "多引擎股票新闻搜索（支持 Tavily/Brave/SerpAPI）。需配置对应 API Key 环境变量。get_news 快讯不够或要按主题搜索时用本工具；深度6维情报用 search_comprehensive_intel",
         "parameters": {
             "type": "object",
             "properties": {
@@ -440,7 +440,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "search_comprehensive_intel",
-        "description": "股票综合情报搜索 — 从6个维度（新闻/公告/行情分析/风险/业绩/行业）搜索综合信息",
+        "description": "股票综合情报搜索 — 从6个维度（新闻/公告/行情分析/风险/业绩/行业）搜索综合信息。用于个股的深入研究/全面调研；快速看新闻用 get_news",
         "parameters": {
             "type": "object",
             "properties": {
@@ -458,7 +458,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_social_sentiment",
-        "description": "获取股票社交媒体情绪数据。A股：东方财富股吧热度+雪球讨论热度；美股/港股：Reddit/X/Polymarket情绪。自动根据市场选择数据源",
+        "description": "获取股票社交媒体情绪数据。A股：东方财富股吧热度+雪球讨论热度（无需配置）；美股/港股：Reddit/X/Polymarket情绪（需 SENTIMENT_API_KEY）。自动按市场选数据源。面向个股维度；全市场热门讨论用 get_trending_sentiment",
         "parameters": {
             "type": "object",
             "properties": {
@@ -472,7 +472,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_trending_sentiment",
-        "description": "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点",
+        "description": "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点；查个股情绪用 get_social_sentiment",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -480,7 +480,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "extract_article",
-        "description": "网页文章全文提取 — 输入URL，提取文章标题、正文（最多3000字）、作者、发布日期等。适用于深度阅读搜索结果中的新闻/研报",
+        "description": "网页文章全文提取 — 输入URL，提取文章标题、正文（最多3000字）、作者、发布日期等。配合 get_news/search_stock_news 的搜索结果做深度阅读",
         "parameters": {
             "type": "object",
             "properties": {
@@ -494,7 +494,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "screen_risk",
-        "description": "风险专项筛查 — 7维度风险检测（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策），返回风险评级和一票否决标记",
+        "description": "风险专项筛查 — 7维度风险检测（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策），返回风险评级和一票否决标记。入场决策前的排雷必调本工具",
         "parameters": {
             "type": "object",
             "properties": {
@@ -526,7 +526,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_review",
-        "description": "大盘复盘 — 获取市场日度复盘数据，包含指数表现、涨跌统计、板块排名、重要新闻、市场温度与策略建议",
+        "description": "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议。复盘类需求的首选，无需再分别调指数/统计/板块工具",
         "parameters": {
             "type": "object",
             "properties": {
@@ -558,7 +558,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "detect_anomaly",
-        "description": "异常/事件检测 — 一键扫描股票当前所有异动信号（MACD金叉死叉、RSI超买超卖、20日突破、放量异动、涨跌停、布林突破、KDJ极值、资金异动等），返回结构化异常列表",
+        "description": "异常/事件检测 — 一键扫描股票当前所有异动信号（MACD金叉死叉、RSI超买超卖、20日突破、放量异动、涨跌停、布林突破、KDJ极值、资金异动等），返回结构化异常列表。当日异动归因的首选；综合技术面判断用 get_technical_analysis",
         "parameters": {
             "type": "object",
             "properties": {
@@ -572,7 +572,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "diagnose_data_sources",
-        "description": "数据源诊断 — 检查当前环境可用的数据 provider（akshare/tushare/yfinance/finnhub/longbridge/alphavantage），输出每个市场的可用链路、缺失 env、warnings。用于让 agent 自解释为何拿不到数据",
+        "description": "数据源诊断 — 检查当前环境可用的数据 provider（akshare/tushare/yfinance/finnhub/longbridge/alphavantage），输出每个市场的可用链路、缺失 env、warnings。工具拿不到数据或报错时调用排查",
         "parameters": {
             "type": "object",
             "properties": {
@@ -586,7 +586,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_market_capabilities",
-        "description": "市场能力边界 — 返回指定市场支持/不支持的工具列表，避免 agent 对港股调 get_chip_distribution 或对美股调 get_capital_flow 后编造数据",
+        "description": "市场能力边界 — 返回指定市场支持/不支持的工具列表。不确定某市场能否用某工具（如港股的筹码分布、美股的资金流）时先调本工具，避免调用不支持的工具后编造数据",
         "parameters": {
             "type": "object",
             "properties": {
@@ -597,7 +597,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "render_stock_report",
-        "description": "股票分析报告渲染 — 将结构化 JSON（符合 schemas/report_schema.json）通过 j2 模板渲染为 Markdown。template: brief|full。仅渲染，不保存不推送",
+        "description": "股票分析报告渲染 — 将结构化 JSON（符合 schemas/report_schema.json）通过 j2 模板渲染为 Markdown。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送",
         "parameters": {
             "type": "object",
             "properties": {
