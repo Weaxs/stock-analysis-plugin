@@ -1248,7 +1248,11 @@ def cmd_market_indices(args):
                 ("sh000016", "上证50"),
             ]
             results = []
-            df = _akshare_retry(ak.stock_zh_index_spot_em)
+            try:
+                df = _akshare_retry(ak.stock_zh_index_spot_em)
+            except Exception:
+                # eastmoney refuses datacenter/proxy IPs (RemoteDisconnected) — sina is the fallback
+                df = _akshare_retry(ak.stock_zh_index_spot_sina)
             for code, name in indices:
                 clean_code = code[2:] if code[:2] in ("sh", "sz") else code
                 row = df[df["代码"] == clean_code]

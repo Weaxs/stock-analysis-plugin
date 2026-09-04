@@ -49,7 +49,7 @@ L2_WEIGHTS = {
 _INDEX_REGION = {"A": "cn", "HK": "hk", "US": "us"}
 
 
-def _fetch_json(args: list[str]) -> dict | list | None:
+def _fetch_json(args: list[str], timeout: int = 30) -> dict | list | None:
     """Run a stock_data.py CLI command and parse its JSON stdout; None on any failure."""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
     try:
@@ -58,7 +58,7 @@ def _fetch_json(args: list[str]) -> dict | list | None:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=30,
+            timeout=timeout,
         )
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
@@ -68,7 +68,8 @@ def _fetch_json(args: list[str]) -> dict | list | None:
 
 
 def fetch_snapshot(market: str) -> list:
-    return _fetch_json(["market_snapshot", "--market", market])
+    # a cold full-market snapshot can exceed 30s (CI runners) — allow longer
+    return _fetch_json(["market_snapshot", "--market", market], timeout=120)
 
 
 def load_config(path: str) -> dict:

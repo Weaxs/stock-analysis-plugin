@@ -156,12 +156,12 @@ class TestSentimentMultiplier:
 
 class TestComputeSentiment:
     def test_degrades_on_fetch_failure(self, monkeypatch):
-        monkeypatch.setattr(screener, "_fetch_json", lambda args: None)
+        monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: None)
         result = compute_sentiment("A", snapshot=_snapshot())
         assert result == {"score": None, "level": "unknown", "signal": None, "multiplier": 1.0}
 
     def test_degrades_on_error_dict(self, monkeypatch):
-        monkeypatch.setattr(screener, "_fetch_json", lambda args: {"error": "boom"})
+        monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: {"error": "boom"})
         result = compute_sentiment("US")
         assert result["multiplier"] == 1.0
         assert result["level"] == "unknown"
@@ -183,7 +183,7 @@ class TestComputeSentiment:
         monkeypatch.setattr(
             screener,
             "_fetch_json",
-            lambda args: [{"code": "sh000001", "change_pct": 2.0}],
+            lambda args, timeout=30: [{"code": "sh000001", "change_pct": 2.0}],
         )
         result = compute_sentiment("A", snapshot=snapshot)
         assert calls["data"] is snapshot
@@ -198,7 +198,7 @@ class TestComputeSentiment:
             raise AssertionError("compute_market_stats must not be called without a snapshot")
 
         monkeypatch.setattr(screener, "compute_market_stats", _no_stats)
-        monkeypatch.setattr(screener, "_fetch_json", lambda args: [{"code": "^GSPC", "change_pct": 1.0}])
+        monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: [{"code": "^GSPC", "change_pct": 1.0}])
         result = compute_sentiment("US")
         # index-only: 50 + 1.0 * 12 = 62 → ≥ 60 is constructive
         assert result["score"] == 62.0
@@ -216,7 +216,7 @@ class TestComputeSentiment:
             return {"up_count": 3, "down_count": 0, "limit_up_count": 0, "limit_down_count": 0}
 
         monkeypatch.setattr(screener, "compute_market_stats", _stats)
-        monkeypatch.setattr(screener, "_fetch_json", lambda args: [{"code": "^GSPC", "change_pct": 1.0}])
+        monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: [{"code": "^GSPC", "change_pct": 1.0}])
         result = compute_sentiment("US", snapshot=snapshot)
         assert calls["data"] is snapshot
         # breadth 100 (w .45) + index 62 (w .35); limit_total=0 drops the limit component,
