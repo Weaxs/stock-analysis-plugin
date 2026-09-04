@@ -114,7 +114,8 @@ def screen_stocks(args: dict, **kwargs) -> str:
     top = args.get("top", 20)
     config = args.get("config", "")
     config_arg = f" --config {config}" if config else ""
-    return _run("screener.py", f"screen --market {market} --top {top}{config_arg}")
+    l2_arg = " --l2" if args.get("l2") else ""
+    return _run("screener.py", f"screen --market {market} --top {top}{config_arg}{l2_arg}")
 
 
 def run_backtest(args: dict, **kwargs) -> str:

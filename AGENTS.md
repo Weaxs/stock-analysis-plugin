@@ -144,7 +144,7 @@ Frameworks: **pytest** (Python) + **tsx** (TypeScript integration/e2e). No vites
 - Python unit tests live in `tests/test_*.py`; shared fixtures in `tests/conftest.py` (e.g. `make_kline_data` for synthetic OHLCV). Reuse these fixtures instead of hand-rolling DataFrames.
 - `tests/conftest.py` imports numpy/pandas at module load, so **any** pytest run needs the tools' runtime deps in the active interpreter. Use the repo venv: `.venv/bin/python -m pytest …`.
 - Default run excludes network/LLM tests via `addopts = "-m 'not integration_network and not integration_llm'"`. Markers:
-  - `integration_network` — real provider calls (akshare/yfinance/…), needs network.
+  - `integration_network` — real provider calls (akshare/yfinance/…), needs network. Runs in CI's `network` job on same-repo PRs and pushes (skipped on forks); locally via `pytest -m integration_network`.
   - `integration_llm` — real LLM calls, needs `DEEPSEEK_API_KEY` + network.
 - Deterministic by design: the CI `compat` job and the host↔python round-trips use only the non-network tool set — no LLM, no secrets. Keep new e2e tests deterministic the same way.
 

@@ -366,7 +366,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "screen_stocks",
     description:
-      "全市场股票筛选（AlphaSift L1 多因子硬筛）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分",
+      "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强",
     parameters: {
       type: "object",
       properties: {
@@ -383,9 +383,13 @@ export default (pi: ExtensionAPI) => {
           type: "string",
           description: "自定义筛选配置YAML文件路径（可选）",
         },
+        l2: {
+          type: "boolean",
+          description: "开启L2量化增强（质量/成长/真实动量/波动率/资金流因子，逐股抓取数据较慢），默认关闭",
+        },
       },
     },
-    async execute(_id, { market = "A", top = 20, config }) {
+    async execute(_id, { market = "A", top = 20, config, l2 = false }) {
       const result = await py("screener.py", [
         "screen",
         "--market",
@@ -393,6 +397,7 @@ export default (pi: ExtensionAPI) => {
         "--top",
         String(top),
         ...(config ? ["--config", config] : []),
+        ...(l2 ? ["--l2"] : []),
       ]);
       return asText(result.stdout);
     },

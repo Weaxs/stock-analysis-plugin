@@ -1497,76 +1497,80 @@ def cmd_chip_distribution(args):
 # --------------- market_stats ---------------
 
 
+def compute_market_stats(data: list) -> dict:
+    """Compute breadth/limit/turnover statistics from a market snapshot list."""
+    import numpy as np
+
+    changes = []
+    turnovers = []
+    limit_ups = []
+    limit_downs = []
+    up_count = down_count = flat_count = 0
+
+    for s in data:
+        chg = s.get("change_pct")
+        if chg is not None:
+            changes.append(float(chg))
+            if chg > 0:
+                up_count += 1
+            elif chg < 0:
+                down_count += 1
+            else:
+                flat_count += 1
+        t = s.get("turnover")
+        if t is not None:
+            turnovers.append(float(t))
+
+        price = s.get("price")
+        prev = s.get("prev_close")
+        sym = s.get("symbol", "")
+        if price and prev and prev > 0:
+            code_info = normalize_stock_code(sym)
+            lp = code_info.get("limit_pct")
+            if lp:
+                limit_up = calc_limit_price(float(prev), lp, "up")
+                limit_down = calc_limit_price(float(prev), lp, "down")
+                if abs(float(price) - limit_up) < 0.01:
+                    limit_ups.append({"symbol": sym, "name": s.get("name"), "change_pct": chg})
+                elif abs(float(price) - limit_down) < 0.01:
+                    limit_downs.append({"symbol": sym, "name": s.get("name"), "change_pct": chg})
+
+    changes_arr = np.array(changes) if changes else np.array([0])
+    sorted_data = sorted(data, key=lambda x: x.get("change_pct") or 0, reverse=True)
+
+    return _clean_row(
+        {
+            "total_stocks": len(data),
+            "up_count": up_count,
+            "down_count": down_count,
+            "flat_count": flat_count,
+            "limit_up_count": len(limit_ups),
+            "limit_down_count": len(limit_downs),
+            "avg_change_pct": round(float(changes_arr.mean()), 2),
+            "median_change_pct": round(float(np.median(changes_arr)), 2),
+            "total_turnover": round(sum(turnovers), 0) if turnovers else None,
+            "top5_gainers": [
+                {"symbol": s.get("symbol"), "name": s.get("name"), "change_pct": s.get("change_pct")}
+                for s in sorted_data[:5]
+            ],
+            "top5_losers": [
+                {"symbol": s.get("symbol"), "name": s.get("name"), "change_pct": s.get("change_pct")}
+                for s in sorted_data[-5:]
+            ],
+            "limit_up_samples": limit_ups[:5],
+            "limit_down_samples": limit_downs[:5],
+        }
+    )
+
+
 def cmd_market_stats(args):
     try:
-        import numpy as np
-
         data = snapshot_a()
         if isinstance(data, dict) and "error" in data:
             return data
         if not data:
             return {"error": "No market data"}
-
-        changes = []
-        turnovers = []
-        limit_ups = []
-        limit_downs = []
-        up_count = down_count = flat_count = 0
-
-        for s in data:
-            chg = s.get("change_pct")
-            if chg is not None:
-                changes.append(float(chg))
-                if chg > 0:
-                    up_count += 1
-                elif chg < 0:
-                    down_count += 1
-                else:
-                    flat_count += 1
-            t = s.get("turnover")
-            if t is not None:
-                turnovers.append(float(t))
-
-            price = s.get("price")
-            prev = s.get("prev_close")
-            sym = s.get("symbol", "")
-            if price and prev and prev > 0:
-                code_info = normalize_stock_code(sym)
-                lp = code_info.get("limit_pct")
-                if lp:
-                    limit_up = calc_limit_price(float(prev), lp, "up")
-                    limit_down = calc_limit_price(float(prev), lp, "down")
-                    if abs(float(price) - limit_up) < 0.01:
-                        limit_ups.append({"symbol": sym, "name": s.get("name"), "change_pct": chg})
-                    elif abs(float(price) - limit_down) < 0.01:
-                        limit_downs.append({"symbol": sym, "name": s.get("name"), "change_pct": chg})
-
-        changes_arr = np.array(changes) if changes else np.array([0])
-        sorted_data = sorted(data, key=lambda x: x.get("change_pct") or 0, reverse=True)
-
-        return _clean_row(
-            {
-                "total_stocks": len(data),
-                "up_count": up_count,
-                "down_count": down_count,
-                "flat_count": flat_count,
-                "limit_up_count": len(limit_ups),
-                "limit_down_count": len(limit_downs),
-                "avg_change_pct": round(float(changes_arr.mean()), 2),
-                "median_change_pct": round(float(np.median(changes_arr)), 2),
-                "total_turnover": round(sum(turnovers), 0) if turnovers else None,
-                "top5_gainers": [
-                    {"symbol": s.get("symbol"), "name": s.get("name"), "change_pct": s.get("change_pct")}
-                    for s in sorted_data[:5]
-                ],
-                "top5_losers": [
-                    {"symbol": s.get("symbol"), "name": s.get("name"), "change_pct": s.get("change_pct")}
-                    for s in sorted_data[-5:]
-                ],
-                "limit_up_samples": limit_ups[:5],
-                "limit_down_samples": limit_downs[:5],
-            }
-        )
+        return compute_market_stats(data)
     except Exception as e:
         return {"error": str(e)}
 
@@ -1708,7 +1712,10 @@ def main():
         "market_stats": cmd_market_stats,
         "fundamental_context": cmd_fundamental_context,
     }
-    result = dispatch[args.command](args)
+    # Provider libraries (baostock etc.) print prose to stdout on failure,
+    # which would corrupt the JSON-only contract — divert that noise to stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        result = dispatch[args.command](args)
     output(result)
 
 

@@ -22,7 +22,7 @@ def _run_tool(script: str, args: str, timeout: int = 30):
     return None
 
 
-def _calc_temperature(stats: dict, indices: list) -> dict:
+def calc_temperature(stats: dict, indices: list) -> dict:
     """Calculate market temperature score from breadth, index change, and limit data."""
     scores = []
     weights = []
@@ -105,7 +105,7 @@ def review_market(market: str = "A") -> dict:
             except Exception:
                 results[key] = None
 
-    temperature = _calc_temperature(results.get("stats"), results.get("indices"))
+    temperature = calc_temperature(results.get("stats"), results.get("indices"))
 
     output = {
         "market": market,

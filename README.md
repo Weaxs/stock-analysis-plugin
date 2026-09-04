@@ -201,7 +201,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | Skill | 调用方式 | 功能 |
 |-------|----------|------|
 | 综合分析 | `/skill:stock-analysis` | 技术面 + 基本面 + 资金面 + 消息面多维研判，输出结构化研报 |
-| 全市场选股 | `/skill:stock-screener` | L1 多因子硬筛 → L2 LLM 智能排序 → 输出推荐列表 |
+| 全市场选股 | `/skill:stock-screener` | L1 多因子硬筛（市场情绪调节，可选 `--l2` 量化增强）→ L2 LLM 智能排序 → 输出推荐列表 |
 | 策略回测 | `/skill:strategy-backtest` | YAML 策略定义 → 回测 → 诊断 → LLM 变异优化 → 迭代 |
 
 ### 策略方法论（12 个）
@@ -253,7 +253,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 | 工具 | 说明 |
 |------|------|
-| `screen_stocks` | 全市场多因子筛选 |
+| `screen_stocks` | 全市场多因子筛选（市场情绪调节，可选 L2 量化增强） |
 | `screen_risk` | 风险因子筛查 |
 | `run_backtest` | YAML 策略回测 |
 | `detect_market_regime` | 市场状态检测（牛/熊/震荡） |
@@ -370,6 +370,7 @@ python tools/technical.py analyze AAPL --period weekly
 
 # 全市场筛选
 python tools/screener.py screen --market A --top 20
+python tools/screener.py screen --market A --top 20 --l2
 python tools/screener.py screen --market A --config my_filter.yaml
 
 # 策略回测
@@ -414,7 +415,7 @@ stock-analysis/
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务
 │   ├── technical.py                 #   技术指标分析
 │   ├── pattern.py                   #   K 线形态识别
-│   ├── screener.py                  #   全市场多因子筛选
+│   ├── screener.py                  #   全市场多因子筛选（含市场情绪调节，--l2 量化增强）
 │   ├── backtest.py                  #   策略回测引擎
 │   ├── volume_analysis.py           #   量价分析
 │   ├── search_intel.py              #   搜索 / 舆情 / 正文提取
