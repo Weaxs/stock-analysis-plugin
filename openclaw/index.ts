@@ -338,7 +338,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "screen_stocks",
       description:
-        "全市场股票筛选（AlphaSift L1 多因子硬筛）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分",
+        "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强",
       parameters: Type.Object({
         market: Type.Optional(
           Type.Union(
@@ -352,6 +352,9 @@ export default definePluginEntry({
         config: Type.Optional(
           Type.String({ description: "自定义筛选配置YAML文件路径（可选）" })
         ),
+        l2: Type.Optional(
+          Type.Boolean({ description: "开启L2量化增强（质量/成长/真实动量/波动率/资金流因子，逐股抓取数据较慢），默认关闭" })
+        ),
       }),
       async execute(_id, params) {
         const args = [
@@ -362,6 +365,7 @@ export default definePluginEntry({
           String(params.top ?? 20),
         ];
         if (params.config) args.push("--config", params.config);
+        if (params.l2) args.push("--l2");
         const out = await runPy("screener.py", args);
         return asText(out);
       },

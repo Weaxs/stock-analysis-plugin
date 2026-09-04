@@ -99,6 +99,27 @@ jobs:
       - name: E2E — dsh host real subprocess
         run: npx tsx tests/e2e/test_dsh_e2e.ts
 
+  network:
+    # Real provider calls (akshare/yfinance) — flaky upstreams by nature, so
+    # gated to same-repo PRs and pushes (forks skip it, like e2e-llm).
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r tools/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Network integration tests
+        run: pytest tests/e2e/test_provider_network.py -m integration_network -v
+
   compat:
     # Cross-platform host↔python integration on the free runners. This is the
     # regression surface for OS-specific path bugs like #2 (Windows venv python
