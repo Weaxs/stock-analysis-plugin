@@ -62,4 +62,6 @@ def register(ctx):
     for child in sorted(SKILLS_DIR.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
-            ctx.register_skill(child.name, str(skill_md))
+            # Hermes PluginContext.register_skill 期望 Path（内部调用 path.exists()），
+            # 传 str 会报 'str' object has no attribute 'exists' 导致整个插件加载失败
+            ctx.register_skill(child.name, skill_md)
