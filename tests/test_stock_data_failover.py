@@ -26,6 +26,7 @@ from tools.stock_data import (
     _quote_tushare,
     _quote_yfinance,
     _sector_rankings_efinance,
+    _to_baostock_code,
     cmd_capital_flow,
     cmd_news,
     cmd_sector_rankings,
@@ -573,12 +574,13 @@ class TestQuoteTushare:
 
 
 class TestKlinePytdx:
+    """pytdx connect() returns bool, not a context manager — mocks must reflect that."""
+
     def test_returns_data(self):
         mock_api_cls = MagicMock()
         mock_api = MagicMock()
         mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value.__enter__ = MagicMock(return_value=mock_api)
-        mock_api.connect.return_value.__exit__ = MagicMock(return_value=False)
+        mock_api.connect.return_value = True
         mock_api.get_security_bars.return_value = [
             {
                 "datetime": "2026-05-18 15:00",
@@ -603,13 +605,13 @@ class TestKlinePytdx:
             result = _kline_pytdx("600519", "daily", 5)
         assert len(result) == 2
         assert result[0]["close"] == 10.0
+        mock_api.disconnect.assert_called_once()
 
     def test_empty_raises(self):
         mock_api_cls = MagicMock()
         mock_api = MagicMock()
         mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value.__enter__ = MagicMock(return_value=mock_api)
-        mock_api.connect.return_value.__exit__ = MagicMock(return_value=False)
+        mock_api.connect.return_value = True
         mock_api.get_security_bars.return_value = []
         with (
             patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}),
@@ -623,8 +625,7 @@ class TestQuotePytdx:
         mock_api_cls = MagicMock()
         mock_api = MagicMock()
         mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value.__enter__ = MagicMock(return_value=mock_api)
-        mock_api.connect.return_value.__exit__ = MagicMock(return_value=False)
+        mock_api.connect.return_value = True
         mock_api.get_security_quotes.return_value = [
             {
                 "name": "贵州茅台",
@@ -640,6 +641,56 @@ class TestQuotePytdx:
             result = _quote_pytdx("600519")
         assert result["price"] == 1800.0
         assert result["change_pct"] == pytest.approx(1.1236, rel=0.01)
+        mock_api.disconnect.assert_called_once()
+
+    def test_connect_false_raises_connection_error_not_typeerror(self):
+        """connect() returning False (server unreachable) must surface a clear ConnectionError."""
+        mock_api_cls = MagicMock()
+        mock_api = MagicMock()
+        mock_api_cls.return_value = mock_api
+        mock_api.connect.return_value = False
+        with (
+            patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}),
+            pytest.raises(ConnectionError, match="pytdx.*connect"),
+        ):
+            _quote_pytdx("600519")
+
+    def test_connect_exception_falls_over_to_next_server(self):
+        """A raising connect() on one server must not abort — the next server is tried."""
+        mock_api_cls = MagicMock()
+        mock_api = MagicMock()
+        mock_api_cls.return_value = mock_api
+        mock_api.connect.side_effect = [OSError("timed out"), True]
+        mock_api.get_security_quotes.return_value = [
+            {"name": "x", "price": 1.0, "last_close": 1.0, "vol": 1, "high": 1.0, "low": 1.0, "open": 1.0}
+        ]
+        with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}):
+            result = _quote_pytdx("600519")
+        assert result["price"] == 1.0
+        assert mock_api.connect.call_count == 2
+
+
+class TestToBaostockCode:
+    """Index codes collide with SZ stocks on 000xxx — they must map to the index exchange."""
+
+    def test_shanghai_index_codes(self):
+        assert _to_baostock_code("000001") == "sh.000001"  # 上证综指, not 平安银行
+        assert _to_baostock_code("000300") == "sh.000300"  # 沪深300
+        assert _to_baostock_code("000016") == "sh.000016"  # 上证50
+        assert _to_baostock_code("000688") == "sh.000688"  # 科创50
+
+    def test_shenzhen_index_codes(self):
+        assert _to_baostock_code("399001") == "sz.399001"  # 深证成指
+        assert _to_baostock_code("399006") == "sz.399006"  # 创业板指
+
+    def test_sz_stocks_not_hijacked_by_whitelist(self):
+        assert _to_baostock_code("000063") == "sz.000063"  # 中兴通讯 stays SZ
+        assert _to_baostock_code("000333") == "sz.000333"  # 美的集团 stays SZ
+
+    def test_stock_prefixes_unchanged(self):
+        assert _to_baostock_code("600519") == "sh.600519"
+        assert _to_baostock_code("510300") == "sh.510300"
+        assert _to_baostock_code("300750") == "sz.300750"
 
 
 class TestKlineLongbridge:

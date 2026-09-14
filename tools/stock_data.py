@@ -94,7 +94,25 @@ def _akshare_retry(fn, *args, retries=2, delay=1, **kwargs):
             time.sleep(delay)
 
 
+# Index codes collide with SZ stocks in the 000xxx range (000001 is both the
+# SSE Composite and Ping An Bank), so indices need an explicit exchange mapping.
+_BAOSTOCK_INDEX_CODES = {
+    "000001": "sh",  # 上证综指
+    "000016": "sh",  # 上证50
+    "000300": "sh",  # 沪深300
+    "000688": "sh",  # 科创50
+    "000852": "sh",  # 中证1000
+    "000905": "sh",  # 中证500
+    "399001": "sz",  # 深证成指
+    "399005": "sz",  # 中小100
+    "399006": "sz",  # 创业板指
+}
+
+
 def _to_baostock_code(symbol: str) -> str:
+    index_exchange = _BAOSTOCK_INDEX_CODES.get(symbol)
+    if index_exchange:
+        return f"{index_exchange}.{symbol}"
     if symbol.startswith(
         ("600", "601", "603", "605", "688", "689", "510", "512", "513", "515", "516", "518", "560", "588")
     ):
@@ -377,6 +395,34 @@ def _quote_tushare(symbol: str) -> dict:
     )
 
 
+# Public TDX quote servers, tried in order — a datacenter IP often gets only
+# some of them refused, so a single hardcoded endpoint is a needless failure mode.
+_TDX_SERVERS = [
+    ("119.147.212.81", 7709),  # Tencent, Shenzhen
+    ("180.153.18.170", 7709),  # Shanghai
+    ("202.108.253.130", 7709),  # Beijing
+    ("59.173.18.69", 7709),  # Wuhan
+]
+
+
+def _pytdx_connect(api) -> None:
+    """Connect to the first reachable TDX server.
+
+    pytdx's connect() returns True/False instead of raising (and is not a context
+    manager), so wrap it here to keep a failed connection from surfacing as a
+    misleading TypeError downstream.
+    """
+    errors = []
+    for ip, port in _TDX_SERVERS:
+        try:
+            if api.connect(ip, port):
+                return
+            errors.append(f"{ip}:{port} refused")
+        except Exception as e:
+            errors.append(f"{ip}:{port} {e}")
+    raise ConnectionError(f"pytdx failed to connect to any TDX server ({'; '.join(errors)})")
+
+
 def _kline_pytdx(symbol: str, period: str, count: int) -> list:
     """pytdx kline from TDX market servers. No credentials needed."""
     from pytdx.hq import TdxHq_API
@@ -385,8 +431,11 @@ def _kline_pytdx(symbol: str, period: str, count: int) -> list:
     freq_map = {"daily": 9, "weekly": 5, "monthly": 6}
 
     api = TdxHq_API()
-    with api.connect("119.147.212.81", 7709):
+    try:
+        _pytdx_connect(api)
         data = api.get_security_bars(freq_map.get(period, 9), market, symbol, 0, count)
+    finally:
+        api.disconnect()
 
     if not data:
         raise ValueError("pytdx returned empty data")
@@ -416,8 +465,11 @@ def _quote_pytdx(symbol: str) -> dict:
     market = 1 if symbol.startswith(("6", "9", "5")) else 0
 
     api = TdxHq_API()
-    with api.connect("119.147.212.81", 7709):
+    try:
+        _pytdx_connect(api)
         data = api.get_security_quotes([(market, symbol)])
+    finally:
+        api.disconnect()
 
     if not data:
         raise ValueError("pytdx quote returned empty")
