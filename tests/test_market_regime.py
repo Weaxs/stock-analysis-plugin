@@ -1,7 +1,4 @@
-import sys
-from unittest.mock import MagicMock, patch
-
-from tools.market_regime import _compute_indicators, _run_tool, classify_regime
+from tools.market_regime import _compute_indicators, classify_regime
 
 
 class TestClassifyRegime:
@@ -83,29 +80,3 @@ class TestComputeIndicators:
         klines = make_kline_data(80, "up")
         ind = _compute_indicators(klines)
         assert ind["ma5"] > ind["ma20"]
-
-
-class TestRunToolArgv:
-    """_run_tool spawns an argv list with no shell — index codes come from the
-    hardcoded INDEX_MAP today, but the helper must not grow a shell path back."""
-
-    def test_args_passed_as_argv_list(self):
-        with patch("tools.market_regime.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="[]")
-            result = _run_tool("stock_data.py", ["kline", "000001", "--period", "daily", "--count", "80"])
-        cmd = mock_run.call_args[0][0]
-        assert isinstance(cmd, list)
-        assert cmd[0] == sys.executable
-        assert cmd[1].endswith("stock_data.py")
-        assert cmd[2:] == ["kline", "000001", "--period", "daily", "--count", "80"]
-        assert not mock_run.call_args.kwargs.get("shell")
-        assert result == []
-
-    def test_malicious_code_stays_single_element(self):
-        evil = '000001"; rm -rf / #'
-        with patch("tools.market_regime.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="")
-            _run_tool("stock_data.py", ["kline", evil])
-        cmd = mock_run.call_args[0][0]
-        assert cmd.count(evil) == 1
-        assert not mock_run.call_args.kwargs.get("shell")

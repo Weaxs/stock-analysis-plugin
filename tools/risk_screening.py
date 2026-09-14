@@ -4,28 +4,12 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def _run_tool(script: str, args: list) -> dict:
-    # argv list: 参数原样进子进程，不经 shell
-    try:
-        r = subprocess.run(
-            [sys.executable, os.path.join(TOOLS_DIR, script), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=30,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return {}
+from _subproc import run_tool as _run_tool
 
 
 def _safe_float(val) -> float | None:
@@ -42,7 +26,7 @@ def _safe_float(val) -> float | None:
 
 
 def check_valuation(symbol: str) -> dict:
-    quote = _run_tool("stock_data.py", ["quote", symbol])
+    quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
     pe = _safe_float(quote.get("pe"))
     pb = _safe_float(quote.get("pb"))
     result = {"pe": pe, "pb": pb, "status": "normal", "flags": []}

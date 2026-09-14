@@ -3,8 +3,6 @@
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -13,27 +11,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _subproc import run_tool as _run_tool
 from stock_data import detect_market, normalize_stock_code
 from technical import fetch_kline, to_dataframe
-
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _run_tool(script: str, args: list):
-    # argv list: 参数原样进子进程，不经 shell
-    try:
-        r = subprocess.run(
-            [sys.executable, os.path.join(TOOLS_DIR, script), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=30,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return None
 
 
 def _anomaly(type_: str, severity: str, direction: str, description: str, **extra) -> dict:

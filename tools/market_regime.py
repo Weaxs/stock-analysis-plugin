@@ -4,28 +4,11 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def _run_tool(script: str, args: list) -> dict | list:
-    # argv list: 参数原样进子进程，不经 shell
-    try:
-        r = subprocess.run(
-            [sys.executable, os.path.join(TOOLS_DIR, script), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=30,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return {}
-
+from _subproc import run_tool as _run_tool
 
 INDEX_MAP = {
     "A": ("000001", "上证综指"),
