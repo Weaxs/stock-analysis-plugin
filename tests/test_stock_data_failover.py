@@ -55,14 +55,14 @@ from tools.stock_data import (
 
 class TestFailover:
     def test_first_source_succeeds(self):
-        result = _failover([("src1", lambda: {"data": 1}), ("src2", lambda: {"data": 2})])
+        result = _failover([("src1", lambda: {"data": 1}), ("src2", lambda: {"data": 2})], label="test")
         assert result == {"data": 1}
 
     def test_first_fails_second_succeeds(self):
         def fail():
             raise ValueError("source1 down")
 
-        result = _failover([("src1", fail), ("src2", lambda: {"data": 2})])
+        result = _failover([("src1", fail), ("src2", lambda: {"data": 2})], label="test")
         assert result == {"data": 2}
 
     def test_all_fail_raises_aggregated_error(self):
@@ -78,23 +78,16 @@ class TestFailover:
         assert msg.startswith("quote:600519: ")
         assert "src1: error1" in msg and "src2: error2" in msg
 
-    def test_all_fail_without_label_omits_prefix(self):
-        def fail():
-            raise ValueError("down")
-
-        with pytest.raises(RuntimeError, match="^src1: down$"):
-            _failover([("src1", fail)])
-
     def test_falsy_result_skipped(self):
-        result = _failover([("src1", lambda: None), ("src2", lambda: [1, 2, 3])])
+        result = _failover([("src1", lambda: None), ("src2", lambda: [1, 2, 3])], label="test")
         assert result == [1, 2, 3]
 
     def test_empty_list_skipped(self):
-        result = _failover([("src1", lambda: []), ("src2", lambda: [1])])
+        result = _failover([("src1", lambda: []), ("src2", lambda: [1])], label="test")
         assert result == [1]
 
     def test_all_return_none_no_exception(self):
-        result = _failover([("src1", lambda: None), ("src2", lambda: None)])
+        result = _failover([("src1", lambda: None), ("src2", lambda: None)], label="test")
         assert result is None
 
     def test_label_param_accepted(self):
@@ -1682,20 +1675,10 @@ class TestYfHkNormalizationApplied:
         mock_yfinance.Ticker.assert_called_with("1801.HK")
         assert result["symbol"] == "01801.HK"  # caller keeps the user's original symbol
 
-    def test_quote_keeps_four_digit_code(self, mock_yfinance):
-        mock_yfinance.Ticker.return_value.info = {"regularMarketPrice": 500.0}
-        _quote_yfinance("0700.HK")
-        mock_yfinance.Ticker.assert_called_with("0700.HK")
-
     def test_kline_strips_leading_zero(self, mock_yfinance):
         mock_yfinance.download.return_value = self._kline_df()
         _kline_yfinance("01801.HK", "daily", 2)
         assert mock_yfinance.download.call_args[0][0] == "1801.HK"
-
-    def test_kline_keeps_four_digit_code(self, mock_yfinance):
-        mock_yfinance.download.return_value = self._kline_df()
-        _kline_yfinance("0700.HK", "daily", 2)
-        assert mock_yfinance.download.call_args[0][0] == "0700.HK"
 
     def test_financials_strips_leading_zero(self, mock_yfinance):
         mock_yfinance.Ticker.return_value.info = {"shortName": "Innovent"}

@@ -72,10 +72,8 @@ def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> f
     return np.floor(pre_close * (1 + sign * ratio) * 100 + 0.5) / 100.0
 
 
-def _failover(sources: list, label: str = ""):
-    """Try each (name, fn) in order and return the first truthy result. When every
-    source fails, raise one RuntimeError aggregating each source's error, prefixed
-    by label so the caller can tell which chain gave up (e.g. "quote:0700.HK: ...")."""
+def _failover(sources: list, label: str):
+    """Return first truthy result; else raise RuntimeError aggregating each source's error."""
     errors = []
     for name, fn in sources:
         try:
@@ -85,8 +83,7 @@ def _failover(sources: list, label: str = ""):
         except Exception as e:
             errors.append(f"{name}: {e}")
     if errors:
-        detail = "; ".join(errors)
-        raise RuntimeError(f"{label}: {detail}" if label else detail)
+        raise RuntimeError(f"{label}: {'; '.join(errors)}")
     return None
 
 
