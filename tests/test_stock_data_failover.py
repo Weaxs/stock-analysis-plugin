@@ -65,15 +65,25 @@ class TestFailover:
         result = _failover([("src1", fail), ("src2", lambda: {"data": 2})])
         assert result == {"data": 2}
 
-    def test_all_fail_raises_last_error(self):
+    def test_all_fail_raises_aggregated_error(self):
         def fail1():
             raise ValueError("error1")
 
         def fail2():
             raise RuntimeError("error2")
 
-        with pytest.raises(RuntimeError, match="error2"):
-            _failover([("src1", fail1), ("src2", fail2)])
+        with pytest.raises(RuntimeError) as exc_info:
+            _failover([("src1", fail1), ("src2", fail2)], label="quote:600519")
+        msg = str(exc_info.value)
+        assert msg.startswith("quote:600519: ")
+        assert "src1: error1" in msg and "src2: error2" in msg
+
+    def test_all_fail_without_label_omits_prefix(self):
+        def fail():
+            raise ValueError("down")
+
+        with pytest.raises(RuntimeError, match="^src1: down$"):
+            _failover([("src1", fail)])
 
     def test_falsy_result_skipped(self):
         result = _failover([("src1", lambda: None), ("src2", lambda: [1, 2, 3])])
@@ -296,7 +306,7 @@ class TestKlineYfFailover:
         mock_fh.side_effect = ValueError("fh down")
         mock_lb.side_effect = ValueError("lb down")
         mock_av.side_effect = ValueError("av down")
-        with pytest.raises(ValueError, match="av down"):
+        with pytest.raises(RuntimeError, match="av down"):
             kline_yf("AAPL", "daily", 10)
 
 
@@ -326,7 +336,7 @@ class TestQuoteYfFailover:
         mock_fh.side_effect = RuntimeError("fh down")
         mock_lb.side_effect = ValueError("lb down")
         mock_av.side_effect = ValueError("av down")
-        with pytest.raises(ValueError, match="av down"):
+        with pytest.raises(RuntimeError, match="av down"):
             quote_yf("AAPL")
 
 
@@ -856,13 +866,13 @@ class TestKlineAFailover:
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_all_fail_raises_last(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
         mock_ptdx.side_effect = ValueError("ptdx down")
         mock_bs.side_effect = ValueError("bs down")
-        with pytest.raises(ValueError, match="bs down"):
+        with pytest.raises(RuntimeError, match="bs down"):
             kline_a("600519", "daily", 10)
 
 
@@ -893,12 +903,12 @@ class TestQuoteAFailover:
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_all_fail_raises_last(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
         mock_ptdx.side_effect = ValueError("ptdx down")
-        with pytest.raises(ValueError, match="ptdx down"):
+        with pytest.raises(RuntimeError, match="ptdx down"):
             quote_a("600519")
 
 
@@ -935,7 +945,7 @@ class TestKlineYfFailoverExtended:
         mock_yf.side_effect = ValueError("down")
         mock_fh.side_effect = ValueError("down")
         mock_lb.side_effect = ValueError("down")
-        with pytest.raises(ValueError, match="down"):
+        with pytest.raises(RuntimeError, match="down"):
             kline_yf("0700.HK", "daily", 10)
         mock_av.assert_not_called()
 
@@ -956,7 +966,7 @@ class TestNewMarketKlineChain:
     def test_kr_kline_no_finnhub_fallback(self, mock_yf, mock_fh):
         mock_yf.side_effect = ValueError("yf down")
         mock_fh.return_value = [{"close": 200}]
-        with pytest.raises(ValueError, match="yf down"):
+        with pytest.raises(RuntimeError, match="yf down"):
             kline_yf("005930.KS", "daily", 10)
         mock_fh.assert_not_called()
 
@@ -965,7 +975,7 @@ class TestNewMarketKlineChain:
     def test_tw_quote_no_finnhub_fallback(self, mock_yf, mock_fh):
         mock_yf.side_effect = ValueError("yf down")
         mock_fh.return_value = {"price": 1000}
-        with pytest.raises(ValueError, match="yf down"):
+        with pytest.raises(RuntimeError, match="yf down"):
             quote_yf("2330.TW")
         mock_fh.assert_not_called()
 
@@ -1189,7 +1199,7 @@ class TestConstituentsSina:
         mock_ak.stock_sector_spot.return_value = pd.DataFrame({"label": ["new_bdt"], "板块": ["半导体"]})
         with (
             patch.dict(sys.modules, {"akshare": mock_ak}),
-            pytest.raises(ValueError, match="no sina board"),
+            pytest.raises(RuntimeError, match="no sina board"),
         ):
             _constituents_sina("创新药")
 
@@ -1232,7 +1242,7 @@ class TestConstituentsSina:
         mock_ak = self._mock_ak_multi_indicator()
         with (
             patch.dict(sys.modules, {"akshare": mock_ak}),
-            pytest.raises(ValueError, match="no sina board"),
+            pytest.raises(RuntimeError, match="no sina board"),
         ):
             _constituents_sina("白酒", "industry")
         indicators = [c.kwargs["indicator"] for c in mock_ak.stock_sector_spot.call_args_list]
@@ -1258,10 +1268,10 @@ class TestSectorConstituentsFailover:
 
     @patch("tools.stock_data._constituents_sina")
     @patch("tools.stock_data._constituents_em")
-    def test_all_down_raises_last(self, mock_em, mock_sina):
+    def test_all_down_raises_aggregated(self, mock_em, mock_sina):
         mock_em.side_effect = ValueError("em down")
         mock_sina.side_effect = ValueError("sina down")
-        with pytest.raises(ValueError, match="sina down"):
+        with pytest.raises(RuntimeError, match="sina down"):
             sector_constituents_a("创新药", "auto")
 
     @patch("tools.stock_data._constituents_sina")

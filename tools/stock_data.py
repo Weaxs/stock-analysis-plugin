@@ -73,17 +73,20 @@ def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> f
 
 
 def _failover(sources: list, label: str = ""):
-    """Try each (name, fn) in order; return first success or raise last error."""
-    last_err = None
-    for _name, fn in sources:
+    """Try each (name, fn) in order and return the first truthy result. When every
+    source fails, raise one RuntimeError aggregating each source's error, prefixed
+    by label so the caller can tell which chain gave up (e.g. "quote:0700.HK: ...")."""
+    errors = []
+    for name, fn in sources:
         try:
             result = fn()
             if result:
                 return result
         except Exception as e:
-            last_err = e
-    if last_err:
-        raise last_err
+            errors.append(f"{name}: {e}")
+    if errors:
+        detail = "; ".join(errors)
+        raise RuntimeError(f"{label}: {detail}" if label else detail)
     return None
 
 
