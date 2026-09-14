@@ -503,7 +503,9 @@ def _kline_yfinance(symbol: str, period: str, count: int) -> list:
     days = count * 2 if period == "daily" else count * 10 if period == "weekly" else count * 35
     start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-    df = yf.download(symbol, start=start, interval=period_map.get(period, "1d"), progress=False, auto_adjust=True)
+    df = yf.download(
+        _yf_hk_symbol(symbol), start=start, interval=period_map.get(period, "1d"), progress=False, auto_adjust=True
+    )
     if df.empty:
         raise ValueError(f"yfinance returned empty data for {symbol}")
     df = df.reset_index()
@@ -847,7 +849,7 @@ def _quote_akshare(symbol: str) -> dict:
 def _quote_yfinance(symbol: str) -> dict:
     import yfinance as yf
 
-    t = yf.Ticker(symbol)
+    t = yf.Ticker(_yf_hk_symbol(symbol))
     info = t.info
     if not info or "regularMarketPrice" not in info:
         raise ValueError(f"No data for {symbol}")
@@ -1075,7 +1077,7 @@ def cmd_news(args):
         else:
             import yfinance as yf
 
-            t = yf.Ticker(args.symbol)
+            t = yf.Ticker(_yf_hk_symbol(args.symbol))
             news = t.news
             if not news:
                 raise ValueError("yfinance news empty")
@@ -1124,7 +1126,7 @@ def financials_a(symbol: str) -> dict:
 def financials_yf(symbol: str) -> dict:
     import yfinance as yf
 
-    t = yf.Ticker(symbol)
+    t = yf.Ticker(_yf_hk_symbol(symbol))
     info = t.info
     return _clean_row(
         {
@@ -1797,7 +1799,7 @@ def cmd_stock_info(args):
         else:
             import yfinance as yf
 
-            t = yf.Ticker(args.symbol)
+            t = yf.Ticker(_yf_hk_symbol(args.symbol))
             info = t.info
             return _clean_row(
                 {

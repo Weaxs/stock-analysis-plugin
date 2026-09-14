@@ -43,6 +43,7 @@ from tools.stock_data import (
     cmd_sector_constituents,
     cmd_sector_rankings,
     cmd_stock_info,
+    financials_yf,
     kline_a,
     kline_yf,
     quote_a,
@@ -1644,6 +1645,65 @@ class TestYfHkSymbol:
 
     def test_non_hk_unchanged(self):
         assert _yf_hk_symbol("AAPL") == "AAPL"
+
+
+class TestYfHkNormalizationApplied:
+    """Every yfinance call site must route HK symbols through _yf_hk_symbol:
+    Yahoo 404s on 5-digit HK codes (01801.HK), while 4-digit codes (0700.HK)
+    must NOT be rewritten."""
+
+    def _kline_df(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "Date": pd.date_range("2026-01-01", periods=2),
+                "Open": [10.0, 11.0],
+                "High": [11.0, 12.0],
+                "Low": [9.0, 10.0],
+                "Close": [10.5, 11.5],
+                "Volume": [1000, 2000],
+            }
+        )
+
+    def test_quote_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"regularMarketPrice": 10.0}
+        result = _quote_yfinance("01801.HK")
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+        assert result["symbol"] == "01801.HK"  # caller keeps the user's original symbol
+
+    def test_quote_keeps_four_digit_code(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"regularMarketPrice": 500.0}
+        _quote_yfinance("0700.HK")
+        mock_yfinance.Ticker.assert_called_with("0700.HK")
+
+    def test_kline_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.download.return_value = self._kline_df()
+        _kline_yfinance("01801.HK", "daily", 2)
+        assert mock_yfinance.download.call_args[0][0] == "1801.HK"
+
+    def test_kline_keeps_four_digit_code(self, mock_yfinance):
+        mock_yfinance.download.return_value = self._kline_df()
+        _kline_yfinance("0700.HK", "daily", 2)
+        assert mock_yfinance.download.call_args[0][0] == "0700.HK"
+
+    def test_financials_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"shortName": "Innovent"}
+        financials_yf("01801.HK")
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+
+    def test_stock_info_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"shortName": "Innovent"}
+        cmd_stock_info(Namespace(symbol="01801.HK"))
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+
+    def test_news_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.news = [
+            {"title": "t", "publisher": "p", "link": "u", "providerPublishTime": 1, "type": "STORY"}
+        ]
+        result = cmd_news(Namespace(symbol="01801.HK", days=3))
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+        assert result[0]["title"] == "t"
 
 
 class TestStockSectorsHkRetry:
