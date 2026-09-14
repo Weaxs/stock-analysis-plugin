@@ -138,6 +138,7 @@ pip install -r tools/requirements.txt
 | `LONGBRIDGE_ACCESS_TOKEN` | Longbridge SDK |
 | `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股 K 线 / 行情） |
 | `FINNHUB_API_KEY` | Finnhub（港股 / 美股） |
+| `XUEQIU_TOKEN` | 雪球（A 股个股所属板块反查，东财不可用时的兜底） |
 
 **搜索引擎（可选，配置任一即可）：**
 
