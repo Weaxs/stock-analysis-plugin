@@ -15,6 +15,8 @@ _HANDLER_MAP = {
     "analyze_pattern": tools.analyze_pattern,
     "get_market_indices": tools.get_market_indices,
     "get_sector_rankings": tools.get_sector_rankings,
+    "get_sector_constituents": tools.get_sector_constituents,
+    "resolve_stock_sectors": tools.resolve_stock_sectors,
     "get_stock_info": tools.get_stock_info,
     "get_chip_distribution": tools.get_chip_distribution,
     "get_market_stats": tools.get_market_stats,

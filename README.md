@@ -31,7 +31,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **39 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
+- **41 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
 - **多数据源 Failover** — 9 个数据源自动容灾切换（akshare / tushare / efinance / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage）
@@ -92,7 +92,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 39 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
+OpenClaw Gateway 启动后自动加载并注册 41 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -103,7 +103,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 39 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 41 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 详见 [`dsh/README.md`](dsh/README.md)。
 
@@ -138,6 +138,7 @@ pip install -r tools/requirements.txt
 | `LONGBRIDGE_ACCESS_TOKEN` | Longbridge SDK |
 | `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股 K 线 / 行情） |
 | `FINNHUB_API_KEY` | Finnhub（港股 / 美股） |
+| `XUEQIU_TOKEN` | 雪球（A 股个股所属板块反查，东财不可用时的兜底） |
 
 **搜索引擎（可选，配置任一即可）：**
 
@@ -236,6 +237,8 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_chip_distribution` | 筹码分布 |
 | `get_market_indices` | 主要指数行情 |
 | `get_sector_rankings` | 板块涨跌排行 |
+| `get_sector_constituents` | 板块成分股查询（仅 A 股，板块名模糊匹配） |
+| `resolve_stock_sectors` | 个股所属板块查询（A 股行业+概念 / 港股 GICS） |
 | `get_market_stats` | 市场统计（涨跌家数、涨停等） |
 | `get_fundamental_context` | 基本面综合上下文 |
 
@@ -396,20 +399,20 @@ python tools/market_regime.py detect A
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 39 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 41 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   39 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   41 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×39
+│   └── index.ts                     #   definePluginEntry + registerTool ×41
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×39
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×41
 │
 ├── tools/                           # 共享 Python CLI 工具（12 个脚本）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务

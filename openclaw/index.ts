@@ -270,6 +270,46 @@ export default definePluginEntry({
     });
 
     api.registerTool({
+      name: "get_sector_constituents",
+      description:
+        "查询A股板块成分股（正向映射：板块→股票列表）。板块名支持模糊匹配（如「创新药」自动解析到精确板块名），东财行业/概念 + 新浪多源 failover，结果缓存24小时。仅支持A股；反向查个股所属板块用 resolve_stock_sectors",
+      parameters: Type.Object({
+        sector: Type.String({ description: "板块名称（可模糊，如 创新药、半导体）" }),
+        board_type: Type.Optional(
+          Type.Union(
+            [Type.Literal("industry"), Type.Literal("concept"), Type.Literal("auto")],
+            { description: "板块类型：industry=行业，concept=概念，auto=自动（默认）" }
+          )
+        ),
+      }),
+      async execute(_id, params) {
+        const out = await runPy("stock_data.py", [
+          "sector_constituents",
+          params.sector,
+          "--board-type",
+          params.board_type ?? "auto",
+        ]);
+        return asText(out);
+      },
+    });
+
+    api.registerTool({
+      name: "resolve_stock_sectors",
+      description:
+        "查询个股所属板块（反向映射：个股→板块）。A股返回东财行业 + efinance 概念/板块（雪球行业兜底，需 XUEQIU_TOKEN），港股返回 yfinance GICS 英文 sector/industry 口径。板块级情报（如「创新药回调」）映射到池内个股时调本工具；正向查板块成分股用 get_sector_constituents",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "股票代码（A股如 600519，港股如 00700.HK）" }),
+      }),
+      async execute(_id, params) {
+        const out = await runPy("stock_data.py", [
+          "resolve_stock_sectors",
+          params.symbol,
+        ]);
+        return asText(out);
+      },
+    });
+
+    api.registerTool({
       name: "get_stock_info",
       description:
         "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，其他市场返回行业/公司简介",

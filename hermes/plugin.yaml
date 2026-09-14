@@ -11,6 +11,8 @@ provides_tools:
   - analyze_pattern
   - get_market_indices
   - get_sector_rankings
+  - get_sector_constituents
+  - resolve_stock_sectors
   - get_stock_info
   - get_chip_distribution
   - get_market_stats
@@ -84,6 +86,10 @@ requires_env:
   - name: TUSHARE_TOKEN
     description: "Tushare token (A-share enhanced data, optional)"
     url: "https://tushare.pro"
+    secret: true
+  - name: XUEQIU_TOKEN
+    description: "Xueqiu token (optional, A-share industry fallback for resolve_stock_sectors)"
+    url: "https://xueqiu.com"
     secret: true
 requires_mcp:
   - name: wisburg-mcp-server

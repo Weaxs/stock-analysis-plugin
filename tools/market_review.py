@@ -4,22 +4,12 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def _run_tool(script: str, args: str, timeout: int = 30):
-    cmd = [sys.executable, os.path.join(TOOLS_DIR, script)] + args.split()
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return None
+from _subproc import run_tool as _run_tool
 
 
 def calc_temperature(stats: dict, indices: list) -> dict:
@@ -80,19 +70,20 @@ def review_market(market: str = "A") -> dict:
     tasks = {}
 
     if market == "A":
-        tasks["indices"] = ("stock_data.py", "market_indices --region cn")
-        tasks["stats"] = ("stock_data.py", "market_stats --market A")
-        tasks["sectors"] = ("stock_data.py", "sector_rankings --top 5 --direction both")
-        tasks["news"] = ("search_intel.py", "search A股 今日 市场")
-        tasks["regime"] = ("market_regime.py", "detect A")
+        tasks["indices"] = ("stock_data.py", ["market_indices", "--region", "cn"])
+        tasks["stats"] = ("stock_data.py", ["market_stats", "--market", "A"])
+        tasks["sectors"] = ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"])
+        # query 含空格，必须保持单个 argv 元素
+        tasks["news"] = ("search_intel.py", ["search", "A股 今日 市场"])
+        tasks["regime"] = ("market_regime.py", ["detect", "A"])
     elif market == "HK":
-        tasks["indices"] = ("stock_data.py", "market_indices --region hk")
-        tasks["news"] = ("search_intel.py", "search 港股 今日 市场")
-        tasks["regime"] = ("market_regime.py", "detect HK")
+        tasks["indices"] = ("stock_data.py", ["market_indices", "--region", "hk"])
+        tasks["news"] = ("search_intel.py", ["search", "港股 今日 市场"])
+        tasks["regime"] = ("market_regime.py", ["detect", "HK"])
     elif market == "US":
-        tasks["indices"] = ("stock_data.py", "market_indices --region us")
-        tasks["news"] = ("search_intel.py", "search 美股 今日 市场")
-        tasks["regime"] = ("market_regime.py", "detect US")
+        tasks["indices"] = ("stock_data.py", ["market_indices", "--region", "us"])
+        tasks["news"] = ("search_intel.py", ["search", "美股 今日 市场"])
+        tasks["regime"] = ("market_regime.py", ["detect", "US"])
     else:
         return {"error": f"Unknown market: {market}"}
 

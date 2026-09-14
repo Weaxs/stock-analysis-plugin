@@ -3,8 +3,6 @@
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -13,21 +11,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _subproc import run_tool as _run_tool
 from stock_data import detect_market, normalize_stock_code
 from technical import fetch_kline, to_dataframe
-
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _run_tool(script: str, args: str):
-    cmd = f"{sys.executable} {TOOLS_DIR}/{script} {args}"
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return None
 
 
 def _anomaly(type_: str, severity: str, direction: str, description: str, **extra) -> dict:
@@ -347,7 +333,7 @@ def detect_capital_flow_anomaly(symbol: str) -> list:
     if market != "A":
         return []
 
-    flow_data = _run_tool("stock_data.py", f"capital_flow {symbol} --mode detail")
+    flow_data = _run_tool("stock_data.py", ["capital_flow", symbol, "--mode", "detail"])
     if not flow_data or not isinstance(flow_data, list) or len(flow_data) < 3:
         return []
 
@@ -505,7 +491,7 @@ def detect_anomalies(symbol: str) -> dict:
     low = df["low"]
     volume = df["volume"]
 
-    quote = _run_tool("stock_data.py", f"quote {symbol}") or {}
+    quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
 
     anomalies = []
     anomalies.extend(detect_macd_cross(close))

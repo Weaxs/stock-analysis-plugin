@@ -1,7 +1,12 @@
 """Verify that the Hermes plugin registers all expected tools and skills."""
 
+import json
 import os
+import subprocess
 
+import pytest
+
+import hermes.tools as hermes_tools
 from hermes import register
 
 EXPECTED_TOOLS = sorted(
@@ -15,6 +20,8 @@ EXPECTED_TOOLS = sorted(
         "analyze_pattern",
         "get_market_indices",
         "get_sector_rankings",
+        "get_sector_constituents",
+        "resolve_stock_sectors",
         "get_stock_info",
         "get_chip_distribution",
         "get_market_stats",
@@ -120,3 +127,54 @@ def test_skill_files_exist():
     ctx = _make_ctx()
     for skill in ctx.skills:
         assert os.path.isfile(skill["path"]), f"SKILL.md not found: {skill['path']}"
+
+
+class TestRunArgv:
+    """_run spawns argv lists without a shell, so tool input reaches the CLI
+    verbatim and is never shell-interpreted (injection-safe on POSIX and Windows)."""
+
+    @pytest.fixture
+    def captured(self, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append({"cmd": cmd, "kwargs": kwargs})
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+        monkeypatch.setattr(hermes_tools.subprocess, "run", fake_run)
+        return calls
+
+    def test_malicious_input_is_single_argv_element(self, captured):
+        payload = "'; echo PWNED #"
+        hermes_tools.get_quote({"symbol": payload})
+        cmd, kwargs = captured[0]["cmd"], captured[0]["kwargs"]
+        assert isinstance(cmd, list)
+        assert not kwargs.get("shell", False)  # no shell (subprocess default) — nothing interprets metacharacters
+        assert cmd.count(payload) == 1  # verbatim, one element — not embedded in a shell string
+
+    def test_numeric_args_are_stringified(self, captured):
+        hermes_tools.get_kline({"symbol": "600519", "count": 60})
+        cmd = captured[0]["cmd"]
+        assert all(isinstance(a, str) for a in cmd[2:])  # cmd[0] = python, cmd[1] = script Path
+        assert cmd[-2:] == ["--count", "60"]
+
+    def test_optional_args_appended_only_when_set(self, captured):
+        hermes_tools.analyze_position_context({"symbol": "600519", "cost": 1800, "quantity": 100, "stop_loss": 1700})
+        cmd = captured[0]["cmd"]
+        sl = cmd.index("--stop-loss")
+        assert cmd[sl + 1] == "1700"
+        assert "--take-profit" not in cmd
+
+    def test_error_contract_preserved(self, monkeypatch):
+        monkeypatch.setattr(
+            hermes_tools.subprocess,
+            "run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom"),
+        )
+        assert json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"] == "boom"
+
+        def timeout(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 120)
+
+        monkeypatch.setattr(hermes_tools.subprocess, "run", timeout)
+        assert "timed out" in json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"]

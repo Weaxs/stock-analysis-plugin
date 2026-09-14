@@ -62,3 +62,4 @@ dsh/templates/
 dsh/strategies/
 dsh/scripts/
 dsh/*.tgz
+.alma-snapshots/

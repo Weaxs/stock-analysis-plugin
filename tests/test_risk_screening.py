@@ -1,4 +1,6 @@
-from tools.risk_screening import _safe_float, compute_risk
+from unittest.mock import patch
+
+from tools.risk_screening import _safe_float, check_news_risks, compute_risk
 
 
 class TestSafeFloat:
@@ -74,3 +76,31 @@ class TestComputeRisk:
         result = compute_risk(flags)
         assert result["risk_score"] == 60
         assert result["veto_buy"] is False
+
+
+class TestCheckNewsRisksArgv:
+    """Regression: search_intel.py's search subcommand only accepts --count —
+    the old --max made argparse exit 2 and _run_tool silently swallowed it,
+    so the news context degraded to empty forever."""
+
+    @patch("tools.risk_screening._run_tool")
+    def test_search_uses_count_param(self, mock_run):
+        mock_run.return_value = []
+        check_news_risks("600519", "贵州茅台")
+        assert mock_run.call_count == 4
+        for call in mock_run.call_args_list:
+            script, argv = call[0]
+            assert script == "search_intel.py"
+            assert argv[0] == "search"
+            assert "--count" in argv
+            assert "--max" not in argv
+
+    @patch("tools.risk_screening._run_tool")
+    def test_free_text_query_stays_single_element(self, mock_run):
+        mock_run.return_value = []
+        check_news_risks("600519", "贵州茅台")
+        for call in mock_run.call_args_list:
+            _, argv = call[0]
+            query = argv[1]
+            assert " " in query  # e.g. "贵州茅台 减持 股东减持" — one argv element, not split
+            assert query.startswith("贵州茅台 ")

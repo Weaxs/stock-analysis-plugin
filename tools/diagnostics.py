@@ -22,6 +22,7 @@ PROVIDERS = {
     "akshare": ("akshare", [], ["A"], None),
     "tushare": ("tushare", ["TUSHARE_TOKEN"], ["A"], None),
     "efinance": ("efinance", [], ["A"], None),
+    "xueqiu": ("akshare", ["XUEQIU_TOKEN"], ["A"], "industry board fallback via akshare"),
     "pytdx": ("pytdx", [], ["A"], "connects to public Tencent servers"),
     "yfinance": ("yfinance", [], ["HK", "US", "JP", "KR", "TW"], "quote may be delayed 15-20min"),
     "finnhub": ("finnhub", ["FINNHUB_API_KEY"], ["HK", "US"], None),

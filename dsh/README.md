@@ -1,6 +1,6 @@
 # Stock Analysis — DeepSeek Harness (dsh) Plugin
 
-A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。作为 dsh bundle 安装到 profile 后，对话中可调用 39 个工具，并自动注册 20 个工作流/策略方法论 skill。
+A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。作为 dsh bundle 安装到 profile 后，对话中可调用 41 个工具，并自动注册 20 个工作流/策略方法论 skill。
 
 ## 安装
 
@@ -49,6 +49,8 @@ allowBuilds:
 ### 市场全景
 - `get_market_indices` — 主要指数（CN/HK/US/JP/KR/TW）
 - `get_sector_rankings` — A股板块涨跌幅排行
+- `get_sector_constituents` — A股板块成分股查询（板块名模糊匹配）
+- `resolve_stock_sectors` — 个股所属板块查询（A股行业+概念 / 港股 GICS）
 - `get_market_stats` — A股大盘统计
 - `get_stock_info` — 股票基本信息
 - `get_chip_distribution` — A股筹码分布

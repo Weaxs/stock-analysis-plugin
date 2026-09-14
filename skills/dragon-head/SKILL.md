@@ -22,6 +22,8 @@ allowed-tools: Bash(python3:*) Read
 python3 scripts/gather.py <symbol>
 ```
 
+同时用 resolve_stock_sectors 确认个股所属板块，再用 get_sector_constituents 拉取同板块个股列表——后续「龙头 vs 跟风」的强弱对比都在这个板块池内进行。
+
 ### 2. 龙头股特征识别
 
 **一字特征**（最强龙头）：

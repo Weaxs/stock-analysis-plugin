@@ -10,7 +10,10 @@ import pytest
 
 from tools.stock_data import (
     _capital_flow_efinance,
+    _constituents_em,
+    _constituents_sina,
     _failover,
+    _fuzzy_match_sector,
     _kline_akshare,
     _kline_alphavantage,
     _kline_finnhub,
@@ -25,55 +28,67 @@ from tools.stock_data import (
     _quote_pytdx,
     _quote_tushare,
     _quote_yfinance,
+    _sector_cache_set,
     _sector_rankings_efinance,
+    _stock_boards_efinance,
+    _stock_boards_em,
+    _stock_boards_from_cache,
+    _stock_boards_xueqiu,
+    _stock_sectors_hk,
     _to_baostock_code,
+    _xq_symbol,
+    _yf_hk_symbol,
     cmd_capital_flow,
     cmd_news,
+    cmd_sector_constituents,
     cmd_sector_rankings,
+    cmd_stock_info,
+    financials_yf,
     kline_a,
     kline_yf,
     quote_a,
     quote_yf,
+    resolve_stock_sectors,
+    sector_constituents_a,
 )
 
 
 class TestFailover:
     def test_first_source_succeeds(self):
-        result = _failover([("src1", lambda: {"data": 1}), ("src2", lambda: {"data": 2})])
+        result = _failover([("src1", lambda: {"data": 1}), ("src2", lambda: {"data": 2})], label="test")
         assert result == {"data": 1}
 
     def test_first_fails_second_succeeds(self):
         def fail():
             raise ValueError("source1 down")
 
-        result = _failover([("src1", fail), ("src2", lambda: {"data": 2})])
+        result = _failover([("src1", fail), ("src2", lambda: {"data": 2})], label="test")
         assert result == {"data": 2}
 
-    def test_all_fail_raises_last_error(self):
+    def test_all_fail_raises_aggregated_error(self):
         def fail1():
             raise ValueError("error1")
 
         def fail2():
             raise RuntimeError("error2")
 
-        with pytest.raises(RuntimeError, match="error2"):
-            _failover([("src1", fail1), ("src2", fail2)])
+        with pytest.raises(RuntimeError) as exc_info:
+            _failover([("src1", fail1), ("src2", fail2)], label="quote:600519")
+        msg = str(exc_info.value)
+        assert msg.startswith("quote:600519: ")
+        assert "src1: ValueError: error1" in msg and "src2: RuntimeError: error2" in msg
 
     def test_falsy_result_skipped(self):
-        result = _failover([("src1", lambda: None), ("src2", lambda: [1, 2, 3])])
+        result = _failover([("src1", lambda: None), ("src2", lambda: [1, 2, 3])], label="test")
         assert result == [1, 2, 3]
 
     def test_empty_list_skipped(self):
-        result = _failover([("src1", lambda: []), ("src2", lambda: [1])])
+        result = _failover([("src1", lambda: []), ("src2", lambda: [1])], label="test")
         assert result == [1]
 
     def test_all_return_none_no_exception(self):
-        result = _failover([("src1", lambda: None), ("src2", lambda: None)])
+        result = _failover([("src1", lambda: None), ("src2", lambda: None)], label="test")
         assert result is None
-
-    def test_label_param_accepted(self):
-        result = _failover([("src1", lambda: "ok")], label="test:label")
-        assert result == "ok"
 
 
 @pytest.fixture
@@ -280,7 +295,7 @@ class TestKlineYfFailover:
         mock_fh.side_effect = ValueError("fh down")
         mock_lb.side_effect = ValueError("lb down")
         mock_av.side_effect = ValueError("av down")
-        with pytest.raises(ValueError, match="av down"):
+        with pytest.raises(RuntimeError, match="av down"):
             kline_yf("AAPL", "daily", 10)
 
 
@@ -310,7 +325,7 @@ class TestQuoteYfFailover:
         mock_fh.side_effect = RuntimeError("fh down")
         mock_lb.side_effect = ValueError("lb down")
         mock_av.side_effect = ValueError("av down")
-        with pytest.raises(ValueError, match="av down"):
+        with pytest.raises(RuntimeError, match="av down"):
             quote_yf("AAPL")
 
 
@@ -840,13 +855,13 @@ class TestKlineAFailover:
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_all_fail_raises_last(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
         mock_ptdx.side_effect = ValueError("ptdx down")
         mock_bs.side_effect = ValueError("bs down")
-        with pytest.raises(ValueError, match="bs down"):
+        with pytest.raises(RuntimeError, match="bs down"):
             kline_a("600519", "daily", 10)
 
 
@@ -877,12 +892,12 @@ class TestQuoteAFailover:
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_all_fail_raises_last(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
         mock_ptdx.side_effect = ValueError("ptdx down")
-        with pytest.raises(ValueError, match="ptdx down"):
+        with pytest.raises(RuntimeError, match="ptdx down"):
             quote_a("600519")
 
 
@@ -919,7 +934,7 @@ class TestKlineYfFailoverExtended:
         mock_yf.side_effect = ValueError("down")
         mock_fh.side_effect = ValueError("down")
         mock_lb.side_effect = ValueError("down")
-        with pytest.raises(ValueError, match="down"):
+        with pytest.raises(RuntimeError, match="down"):
             kline_yf("0700.HK", "daily", 10)
         mock_av.assert_not_called()
 
@@ -940,7 +955,7 @@ class TestNewMarketKlineChain:
     def test_kr_kline_no_finnhub_fallback(self, mock_yf, mock_fh):
         mock_yf.side_effect = ValueError("yf down")
         mock_fh.return_value = [{"close": 200}]
-        with pytest.raises(ValueError, match="yf down"):
+        with pytest.raises(RuntimeError, match="yf down"):
             kline_yf("005930.KS", "daily", 10)
         mock_fh.assert_not_called()
 
@@ -949,7 +964,7 @@ class TestNewMarketKlineChain:
     def test_tw_quote_no_finnhub_fallback(self, mock_yf, mock_fh):
         mock_yf.side_effect = ValueError("yf down")
         mock_fh.return_value = {"price": 1000}
-        with pytest.raises(ValueError, match="yf down"):
+        with pytest.raises(RuntimeError, match="yf down"):
             quote_yf("2330.TW")
         mock_fh.assert_not_called()
 
@@ -1036,3 +1051,794 @@ class TestAkshareETF:
         result = quote_a("600519")
         assert result == {"price": 1800}
         mock_ak.assert_called_once()
+
+
+# --------------- sector constituents / stock sectors (issue #18) ---------------
+
+
+class TestFuzzyMatchSector:
+    def test_exact_match_wins(self):
+        assert _fuzzy_match_sector("创新药", ["创新药", "创新药ETF"]) == "创新药"
+
+    def test_unique_contains_match(self):
+        assert _fuzzy_match_sector("创新", ["创新药", "半导体"]) == "创新药"
+
+    def test_ambiguous_returns_none(self):
+        assert _fuzzy_match_sector("创新", ["创新药", "创新材料"]) is None
+
+    def test_no_match_returns_none(self):
+        assert _fuzzy_match_sector("不存在的板块", ["半导体"]) is None
+
+    def test_board_suffix_stripped_to_exact(self):
+        # 情报关键词「创新药板块」必须命中板块「创新药」
+        assert _fuzzy_match_sector("创新药板块", ["创新药", "半导体"]) == "创新药"
+
+    def test_industry_suffix_stripped_to_exact(self):
+        assert _fuzzy_match_sector("酿酒行业", ["酿酒", "半导体"]) == "酿酒"
+
+    def test_whitespace_stripped(self):
+        assert _fuzzy_match_sector(" 创新药 ", ["创新药", "半导体"]) == "创新药"
+
+    def test_etf_like_query_not_absorbed(self):
+        # candidate∈query was removed: 「创新药ETF」 must not be absorbed into the 创新药 board
+        assert _fuzzy_match_sector("创新药ETF", ["创新药", "半导体"]) is None
+
+    def test_exact_board_name_beats_suffix_stripping(self):
+        # a board literally named 白酒概念 must not be hijacked by the normalized 白酒
+        assert _fuzzy_match_sector("白酒概念", ["白酒概念", "白酒"]) == "白酒概念"
+
+    def test_suffix_only_query_returns_none(self):
+        assert _fuzzy_match_sector("板块", ["创新药"]) is None
+
+
+class TestConstituentsEm:
+    """Eastmoney board constituents via akshare, with fuzzy name resolution."""
+
+    def _mock_ak(self, industry_names, concept_names, cons_df):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_board_industry_name_em.return_value = pd.DataFrame({"板块名称": industry_names})
+        mock_ak.stock_board_concept_name_em.return_value = pd.DataFrame({"板块名称": concept_names})
+        mock_ak.stock_board_industry_cons_em.return_value = cons_df
+        mock_ak.stock_board_concept_cons_em.return_value = cons_df
+        return mock_ak
+
+    def test_industry_exact_match(self):
+        import pandas as pd
+
+        cons_df = pd.DataFrame({"代码": ["600276", "688235"], "名称": ["恒瑞医药", "百济神州"]})
+        mock_ak = self._mock_ak(["医药生物", "半导体"], ["创新药"], cons_df)
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _constituents_em("医药生物", "industry")
+        assert result["sector"] == "医药生物"
+        assert result["board_type"] == "industry"
+        assert result["source"] == "eastmoney"
+        assert result["count"] == 2
+        assert result["constituents"][0] == {"code": "600276", "name": "恒瑞医药"}
+        mock_ak.stock_board_industry_cons_em.assert_called_once_with(symbol="医药生物")
+
+    def test_fuzzy_resolves_concept_board(self):
+        import pandas as pd
+
+        cons_df = pd.DataFrame({"代码": ["600276"], "名称": ["恒瑞医药"]})
+        mock_ak = self._mock_ak(["半导体", "白酒"], ["创新药", "新能源车"], cons_df)
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _constituents_em("创新", "concept")
+        assert result["sector"] == "创新药"
+        assert result["board_type"] == "concept"
+        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="创新药")
+
+    def test_intel_phrase_with_suffix_resolves_board(self):
+        """Spec scenario: the intel keyword 「创新药板块」 resolves to the board 创新药."""
+        import pandas as pd
+
+        cons_df = pd.DataFrame({"代码": ["600276"], "名称": ["恒瑞医药"]})
+        mock_ak = self._mock_ak(["半导体"], ["创新药"], cons_df)
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _constituents_em("创新药板块", "concept")
+        assert result["sector"] == "创新药"
+        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="创新药")
+
+    def test_no_matching_board_raises(self):
+        import pandas as pd
+
+        cons_df = pd.DataFrame({"代码": ["600276"], "名称": ["恒瑞医药"]})
+        mock_ak = self._mock_ak(["半导体"], ["白酒"], cons_df)
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no eastmoney industry board"),
+        ):
+            _constituents_em("创新药", "industry")
+
+    def test_empty_constituents_raises(self):
+        import pandas as pd
+
+        mock_ak = self._mock_ak(["半导体"], [], pd.DataFrame())
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no constituents"),
+        ):
+            _constituents_em("半导体", "industry")
+
+
+class TestConstituentsSina:
+    def test_fuzzy_match_resolves_label(self):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_sector_spot.return_value = pd.DataFrame(
+            {"label": ["new_cxy", "new_bdt"], "板块": ["创新药", "半导体"]}
+        )
+        mock_ak.stock_sector_detail.return_value = pd.DataFrame(
+            {"代码": ["600276", "688235"], "名称": ["恒瑞医药", "百济神州"]}
+        )
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _constituents_sina("创新")
+        assert result["sector"] == "创新药"
+        assert result["source"] == "sina"
+        assert result["board_type"] == "industry"
+        assert result["count"] == 2
+        mock_ak.stock_sector_detail.assert_called_once_with(sector="new_cxy")
+
+    def test_no_match_raises(self):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_sector_spot.return_value = pd.DataFrame({"label": ["new_bdt"], "板块": ["半导体"]})
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(RuntimeError, match="no sina board"),
+        ):
+            _constituents_sina("创新药")
+
+    def _mock_ak_multi_indicator(self):
+        """Industry indicators hold 酿酒行业; only 概念 holds 白酒概念 (real akshare layout)."""
+        import pandas as pd
+
+        mock_ak = MagicMock()
+
+        def spot(indicator):
+            if indicator == "概念":
+                return pd.DataFrame({"label": ["gn_bjgn"], "板块": ["白酒概念"]})
+            return pd.DataFrame({"label": ["new_nyhy"], "板块": ["酿酒行业"]})
+
+        mock_ak.stock_sector_spot.side_effect = spot
+        mock_ak.stock_sector_detail.return_value = pd.DataFrame({"代码": ["600519"], "名称": ["贵州茅台"]})
+        return mock_ak
+
+    def test_concept_board_type_uses_concept_indicator(self):
+        mock_ak = self._mock_ak_multi_indicator()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _constituents_sina("白酒", "concept")
+        assert result["sector"] == "白酒概念"
+        assert result["board_type"] == "concept"
+        assert result["source"] == "sina"
+        mock_ak.stock_sector_spot.assert_called_once_with(indicator="概念")
+        mock_ak.stock_sector_detail.assert_called_once_with(sector="gn_bjgn")
+
+    def test_auto_falls_through_to_concept_indicator(self):
+        """auto tries 新浪行业 → 行业 → 概念 → 地域; 白酒 hits only in 概念."""
+        mock_ak = self._mock_ak_multi_indicator()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _constituents_sina("白酒")
+        assert result["sector"] == "白酒概念"
+        assert result["board_type"] == "concept"
+        indicators = [c.kwargs["indicator"] for c in mock_ak.stock_sector_spot.call_args_list]
+        assert indicators == ["新浪行业", "行业", "概念"]
+
+    def test_industry_board_type_never_queries_concept_indicator(self):
+        mock_ak = self._mock_ak_multi_indicator()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(RuntimeError, match="no sina board"),
+        ):
+            _constituents_sina("白酒", "industry")
+        indicators = [c.kwargs["indicator"] for c in mock_ak.stock_sector_spot.call_args_list]
+        assert indicators == ["新浪行业", "行业"]
+
+
+class TestSectorConstituentsFailover:
+    @patch("tools.stock_data._constituents_sina")
+    @patch("tools.stock_data._constituents_em")
+    def test_em_success_sina_not_called(self, mock_em, mock_sina):
+        mock_em.return_value = {"sector": "创新药", "board_type": "concept", "source": "eastmoney"}
+        result = sector_constituents_a("创新药", "auto")
+        assert result["source"] == "eastmoney"
+        mock_sina.assert_not_called()
+
+    @patch("tools.stock_data._constituents_sina")
+    @patch("tools.stock_data._constituents_em")
+    def test_em_down_sina_used(self, mock_em, mock_sina):
+        mock_em.side_effect = ValueError("em down")
+        mock_sina.return_value = {"sector": "创新药", "board_type": "industry", "source": "sina"}
+        result = sector_constituents_a("创新药", "auto")
+        assert result["source"] == "sina"
+
+    @patch("tools.stock_data._constituents_sina")
+    @patch("tools.stock_data._constituents_em")
+    def test_all_down_raises_aggregated(self, mock_em, mock_sina):
+        mock_em.side_effect = ValueError("em down")
+        mock_sina.side_effect = ValueError("sina down")
+        with pytest.raises(RuntimeError, match="sina down"):
+            sector_constituents_a("创新药", "auto")
+
+    @patch("tools.stock_data._constituents_sina")
+    @patch("tools.stock_data._constituents_em")
+    def test_board_type_industry_skips_concept(self, mock_em, mock_sina):
+        mock_em.return_value = {"sector": "半导体", "board_type": "industry", "source": "eastmoney"}
+        sector_constituents_a("半导体", "industry")
+        mock_em.assert_called_once_with("半导体", "industry")
+
+    @patch("tools.stock_data._constituents_sina")
+    @patch("tools.stock_data._constituents_em")
+    def test_board_type_concept_skips_industry(self, mock_em, mock_sina):
+        mock_em.return_value = {"sector": "创新药", "board_type": "concept", "source": "eastmoney"}
+        sector_constituents_a("创新药", "concept")
+        mock_em.assert_called_once_with("创新药", "concept")
+
+    def test_em_down_sina_concept_indicator_hit(self):
+        """Smoke scenario: sector_constituents 白酒 --board-type concept with both
+        eastmoney sources down must still resolve via sina's 概念 indicator (白酒概念)."""
+        import pandas as pd
+
+        mock_ak = MagicMock()
+
+        def spot(indicator):
+            if indicator == "概念":
+                return pd.DataFrame({"label": ["gn_bjgn"], "板块": ["白酒概念"]})
+            return pd.DataFrame({"label": ["new_nyhy"], "板块": ["酿酒行业"]})
+
+        mock_ak.stock_sector_spot.side_effect = spot
+        mock_ak.stock_sector_detail.return_value = pd.DataFrame(
+            {"代码": ["600519", "000858"], "名称": ["贵州茅台", "五粮液"]}
+        )
+        with (
+            patch("tools.stock_data._constituents_em", side_effect=ValueError("em down")),
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+        ):
+            result = sector_constituents_a("白酒", "concept")
+        assert result["source"] == "sina"
+        assert result["board_type"] == "concept"
+        assert result["sector"] == "白酒概念"
+        assert result["count"] == 2
+
+
+@pytest.fixture
+def sector_cache_dir(tmp_path):
+    with patch("tools.stock_data._SECTOR_CACHE_DIR", tmp_path):
+        yield tmp_path
+
+
+class TestCmdSectorConstituents:
+    def test_success_then_cache_hit(self, sector_cache_dir):
+        payload = {
+            "sector": "创新药",
+            "board_type": "concept",
+            "source": "eastmoney",
+            "constituents": [{"code": "600276", "name": "恒瑞医药"}],
+            "count": 1,
+        }
+        with patch("tools.stock_data.sector_constituents_a", return_value=payload) as mock_fn:
+            args = Namespace(sector="创新药", board_type="auto")
+            assert cmd_sector_constituents(args) == payload
+            mock_fn.reset_mock()
+            assert cmd_sector_constituents(args) == payload
+            mock_fn.assert_not_called()
+
+    def test_all_sources_down_returns_error(self, sector_cache_dir):
+        with patch("tools.stock_data.sector_constituents_a", side_effect=ValueError("all down")):
+            result = cmd_sector_constituents(Namespace(sector="创新药", board_type="auto"))
+        assert "error" in result
+
+    def test_error_not_cached(self, sector_cache_dir):
+        payload = {"sector": "创新药", "board_type": "concept", "source": "sina", "constituents": [], "count": 0}
+        with patch(
+            "tools.stock_data.sector_constituents_a",
+            side_effect=[ValueError("down"), payload],
+        ) as mock_fn:
+            args = Namespace(sector="创新药", board_type="auto")
+            assert "error" in cmd_sector_constituents(args)
+            assert cmd_sector_constituents(args) == payload
+            assert mock_fn.call_count == 2
+
+    def test_expired_cache_refetches(self, sector_cache_dir):
+        import os
+        import time
+
+        payload = {"sector": "创新药", "board_type": "concept", "source": "sina", "constituents": [], "count": 0}
+        with patch("tools.stock_data.sector_constituents_a", return_value=payload) as mock_fn:
+            args = Namespace(sector="创新药", board_type="auto")
+            cmd_sector_constituents(args)
+            for f in sector_cache_dir.glob("*.json"):
+                old = time.time() - 25 * 3600
+                os.utime(f, (old, old))
+            mock_fn.reset_mock()
+            cmd_sector_constituents(args)
+            mock_fn.assert_called_once()
+
+    def test_whitespace_variants_use_distinct_cache_keys(self, sector_cache_dir):
+        """「创新药」and「创新 药」must not share a cache file — keys are sha256(sector|board_type),
+        not sanitized names, so whitespace/punctuation variants can't collide."""
+        payload = {"sector": "创新药", "board_type": "concept", "source": "sina", "constituents": [], "count": 0}
+        with patch("tools.stock_data.sector_constituents_a", return_value=payload) as mock_fn:
+            cmd_sector_constituents(Namespace(sector="创新药", board_type="auto"))
+            cmd_sector_constituents(Namespace(sector="创新 药", board_type="auto"))
+            assert mock_fn.call_count == 2
+
+
+class TestStockBoardsEm:
+    def test_returns_industry(self):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = pd.DataFrame(
+            {"item": ["股票简称", "行业"], "value": ["贵州茅台", "酿酒行业"]}
+        )
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _stock_boards_em("600519")
+        assert result == [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+
+    def test_empty_raises(self):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = pd.DataFrame()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="unavailable"),
+        ):
+            _stock_boards_em("600519")
+
+    def test_info_map_skips_network(self):
+        """An already-fetched info_map is reused as-is — no akshare call at all."""
+        mock_ak = MagicMock()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _stock_boards_em("600519", info_map={"行业": "酿酒行业"})
+        assert result == [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        mock_ak.stock_individual_info_em.assert_not_called()
+
+    def test_nan_industry_raises(self):
+        """pandas NaN is truthy — a missing 行业 field must not become a "nan" board."""
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = pd.DataFrame(
+            {"item": ["股票简称", "行业"], "value": ["贵州茅台", float("nan")]}
+        )
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no industry"),
+        ):
+            _stock_boards_em("600519")
+
+    def test_nan_industry_in_reused_info_map_raises(self):
+        with pytest.raises(ValueError, match="no industry"):
+            _stock_boards_em("600519", info_map={"行业": float("nan")})
+
+
+class TestStockBoardsEfinance:
+    @patch("efinance.stock.get_belong_board")
+    def test_returns_boards(self, mock_board):
+        import pandas as pd
+
+        mock_board.return_value = pd.DataFrame({"板块代码": ["BK0477", "BK0896"], "板块名称": ["酿酒行业", "白酒"]})
+        result = _stock_boards_efinance("600519")
+        assert [s["name"] for s in result] == ["酿酒行业", "白酒"]
+        assert all(s["source"] == "efinance" and s["board_type"] == "concept" for s in result)
+
+    @patch("efinance.stock.get_belong_board")
+    def test_empty_raises(self, mock_board):
+        import pandas as pd
+
+        mock_board.return_value = pd.DataFrame()
+        with pytest.raises(ValueError, match="unavailable"):
+            _stock_boards_efinance("600519")
+
+    @patch("efinance.stock.get_belong_board")
+    def test_nan_board_names_dropped(self, mock_board):
+        """Missing 板块名称 fields arrive as truthy pandas NaN — str(nan) would
+        pollute the dedup with a bogus "nan" board, so they are filtered out."""
+        import pandas as pd
+
+        mock_board.return_value = pd.DataFrame(
+            {"板块代码": ["BK0477", "BK0896"], "板块名称": ["酿酒行业", float("nan")]}
+        )
+        result = _stock_boards_efinance("600519")
+        assert result == [{"name": "酿酒行业", "source": "efinance", "board_type": "concept"}]
+
+
+class TestXqSymbol:
+    def test_shanghai_prefixed(self):
+        assert _xq_symbol("600519") == "SH600519"
+
+    def test_shenzhen_prefixed(self):
+        assert _xq_symbol("000858") == "SZ000858"
+
+    def test_beijing_prefixed(self):
+        assert _xq_symbol("832000") == "BJ832000"
+
+
+class TestStockBoardsXueqiu:
+    """The xueqiu source is strictly env-gated: akshare's built-in xq_a_token is
+    stale (xueqiu answers error_code 400016), so no XUEQIU_TOKEN → source skipped."""
+
+    def test_no_token_skips_source(self, monkeypatch):
+        monkeypatch.delenv("XUEQIU_TOKEN", raising=False)
+        mock_ak = MagicMock()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            assert _stock_boards_xueqiu("600519") == []
+        mock_ak.stock_individual_basic_info_xq.assert_not_called()
+
+    def test_with_token_returns_industry(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setenv("XUEQIU_TOKEN", "tok123")
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_basic_info_xq.return_value = pd.DataFrame(
+            {
+                "item": ["org_short_name", "affiliate_industry"],
+                "value": ["比亚迪", {"ind_code": "BK0025", "ind_name": "汽车整车"}],
+            }
+        )
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _stock_boards_xueqiu("002594")
+        mock_ak.stock_individual_basic_info_xq.assert_called_once_with(symbol="SZ002594", token="tok123")
+        assert result == [{"name": "汽车整车", "source": "xueqiu", "board_type": "industry"}]
+
+    def test_affiliate_industry_malformed_raises(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setenv("XUEQIU_TOKEN", "tok123")
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_basic_info_xq.return_value = pd.DataFrame(
+            {"item": ["org_short_name", "affiliate_industry"], "value": ["比亚迪", None]}
+        )
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no industry"),
+        ):
+            _stock_boards_xueqiu("002594")
+
+    def test_affiliate_industry_nan_raises(self, monkeypatch):
+        # pandas NaN is truthy — a NaN ind_name must not pass through as a "nan" board
+        import pandas as pd
+
+        monkeypatch.setenv("XUEQIU_TOKEN", "tok123")
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_basic_info_xq.return_value = pd.DataFrame(
+            {
+                "item": ["org_short_name", "affiliate_industry"],
+                "value": ["比亚迪", {"ind_code": "BK0025", "ind_name": float("nan")}],
+            }
+        )
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no industry"),
+        ):
+            _stock_boards_xueqiu("002594")
+
+    def test_empty_raises(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setenv("XUEQIU_TOKEN", "tok123")
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_basic_info_xq.return_value = pd.DataFrame()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="unavailable"),
+        ):
+            _stock_boards_xueqiu("002594")
+
+
+class TestStockBoardsFromCache:
+    """The cache reverse lookup scans the sector_constituents disk cache — the last
+    fallback when eastmoney blocks the caller's IP and xueqiu has no token."""
+
+    def _payload(self, sector="创新药", board_type="concept", codes=("600276", "688235")):
+        return {
+            "sector": sector,
+            "board_type": board_type,
+            "source": "eastmoney",
+            "constituents": [{"code": c, "name": "x"} for c in codes],
+            "count": len(codes),
+        }
+
+    def test_cold_cache_returns_empty(self, sector_cache_dir):
+        assert _stock_boards_from_cache("600276") == []
+
+    def test_hit_returns_board_entry(self, sector_cache_dir):
+        _sector_cache_set("k1", self._payload())
+        assert _stock_boards_from_cache("600276") == [{"name": "创新药", "source": "cache", "board_type": "concept"}]
+
+    def test_symbol_in_multiple_cached_sectors(self, sector_cache_dir):
+        _sector_cache_set("k1", self._payload())
+        _sector_cache_set("k2", self._payload(sector="医药生物", board_type="industry"))
+        names = {b["name"] for b in _stock_boards_from_cache("600276")}
+        assert names == {"创新药", "医药生物"}
+
+    def test_symbol_not_in_constituents_returns_empty(self, sector_cache_dir):
+        _sector_cache_set("k1", self._payload())
+        assert _stock_boards_from_cache("000858") == []
+
+    def test_expired_cache_ignored(self, sector_cache_dir):
+        import os
+        import time
+
+        _sector_cache_set("k1", self._payload())
+        for f in sector_cache_dir.glob("*.json"):
+            old = time.time() - 25 * 3600
+            os.utime(f, (old, old))
+        assert _stock_boards_from_cache("600276") == []
+
+    def test_bad_json_tolerated(self, sector_cache_dir):
+        (sector_cache_dir / "corrupt.json").write_text("not json", encoding="utf-8")
+        (sector_cache_dir / "non-dict.json").write_text("[1, 2]", encoding="utf-8")
+        _sector_cache_set("k1", self._payload())
+        assert _stock_boards_from_cache("600276")[0]["name"] == "创新药"
+
+
+class TestResolveStockSectors:
+    # _stock_boards_xueqiu is patched to [] in every A-share test so a dev machine
+    # with XUEQIU_TOKEN set doesn't silently make a real network call; same for
+    # _stock_boards_from_cache vs a warm sector cache in the real tempdir.
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_a_share_merges_and_dedupes(self, mock_em, mock_ef, _mock_xq, _mock_cache):
+        mock_em.return_value = [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        mock_ef.return_value = [
+            {"name": "酿酒行业", "source": "efinance", "board_type": "concept"},
+            {"name": "白酒", "source": "efinance", "board_type": "concept"},
+        ]
+        result = resolve_stock_sectors("600519")
+        assert result["symbol"] == "600519"
+        assert result["market"] == "A"
+        names = [s["name"] for s in result["sectors"]]
+        assert names == ["酿酒行业", "白酒"]
+        assert result["sectors"][0]["source"] == "eastmoney"
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_a_share_em_down_efinance_degrades(self, mock_em, mock_ef, _mock_xq, _mock_cache):
+        mock_em.side_effect = ValueError("em down")
+        mock_ef.return_value = [{"name": "白酒", "source": "efinance", "board_type": "concept"}]
+        result = resolve_stock_sectors("600519")
+        assert "error" not in result
+        assert [s["name"] for s in result["sectors"]] == ["白酒"]
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu")
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_a_share_eastmoney_sources_down_xueqiu_degrades(self, mock_em, mock_ef, mock_xq, _mock_cache):
+        """xueqiu is the non-eastmoney fallback: em + efinance both down still yields boards."""
+        mock_em.side_effect = ValueError("em down")
+        mock_ef.side_effect = ValueError("ef down")
+        mock_xq.return_value = [{"name": "汽车整车", "source": "xueqiu", "board_type": "industry"}]
+        result = resolve_stock_sectors("002594")
+        assert "error" not in result
+        assert result["sectors"] == [{"name": "汽车整车", "source": "xueqiu", "board_type": "industry"}]
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_a_share_both_down_returns_error(self, mock_em, mock_ef, _mock_xq, _mock_cache):
+        mock_em.side_effect = ValueError("em down")
+        mock_ef.side_effect = ValueError("ef down")
+        result = resolve_stock_sectors("600519")
+        assert "error" in result
+        assert "sectors" not in result
+        # all live sources empty + cold cache → the error must tell the user how to recover
+        assert "get_sector_constituents" in result["error"]
+        assert "XUEQIU_TOKEN" in result["error"]
+
+    @patch("tools.stock_data._stock_boards_from_cache")
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_a_share_live_sources_down_cache_degrades(self, mock_em, mock_ef, _mock_xq, mock_cache):
+        """The cache reverse lookup is the last resort when eastmoney blocks the IP."""
+        mock_em.side_effect = ValueError("em down")
+        mock_ef.side_effect = ValueError("ef down")
+        mock_cache.return_value = [{"name": "酿酒行业", "source": "cache", "board_type": "industry"}]
+        result = resolve_stock_sectors("600519")
+        assert "error" not in result
+        assert result["sectors"] == [{"name": "酿酒行业", "source": "cache", "board_type": "industry"}]
+
+    def test_hk_returns_gics(self, mock_yfinance):
+        mock_ticker = MagicMock()
+        mock_yfinance.Ticker.return_value = mock_ticker
+        mock_ticker.info = {"sector": "Technology", "industry": "Consumer Electronics"}
+        result = resolve_stock_sectors("00700.HK")
+        assert result["market"] == "HK"
+        names = {s["name"] for s in result["sectors"]}
+        assert names == {"Technology", "Consumer Electronics"}
+        assert all(s["source"] == "yfinance" and s["board_type"] == "gics" for s in result["sectors"])
+
+    def test_hk_no_info_returns_error(self, mock_yfinance):
+        mock_ticker = MagicMock()
+        mock_yfinance.Ticker.return_value = mock_ticker
+        mock_ticker.info = {}
+        result = resolve_stock_sectors("00700.HK")
+        assert "error" in result
+
+    def test_unsupported_market_returns_error(self):
+        result = resolve_stock_sectors("AAPL")
+        assert result["market"] == "US"
+        assert "error" in result
+
+    def test_hk_leading_zero_stripped_for_yfinance(self, mock_yfinance):
+        """Yahoo 404s on 5-digit HK codes: 01801.HK must be queried as 1801.HK,
+        while the returned symbol keeps the user's original input."""
+        mock_ticker = MagicMock()
+        mock_yfinance.Ticker.return_value = mock_ticker
+        mock_ticker.info = {"sector": "Health Care", "industry": "Biotechnology"}
+        result = resolve_stock_sectors("01801.HK")
+        mock_yfinance.Ticker.assert_called_once_with("1801.HK")
+        assert result["symbol"] == "01801.HK"
+        assert result["market"] == "HK"
+        assert {s["name"] for s in result["sectors"]} == {"Health Care", "Biotechnology"}
+
+
+class TestYfHkSymbol:
+    def test_five_digit_leading_zero_stripped(self):
+        assert _yf_hk_symbol("01801.HK") == "1801.HK"
+
+    def test_four_digit_preserved(self):
+        assert _yf_hk_symbol("0700.HK") == "0700.HK"
+
+    def test_short_code_padded(self):
+        assert _yf_hk_symbol("5.HK") == "0005.HK"
+
+    def test_lowercase_suffix_normalized(self):
+        assert _yf_hk_symbol("01801.hk") == "1801.HK"
+
+    def test_non_hk_unchanged(self):
+        assert _yf_hk_symbol("AAPL") == "AAPL"
+
+
+class TestYfHkNormalizationApplied:
+    """Every yfinance call site must route HK symbols through _yf_hk_symbol:
+    Yahoo 404s on 5-digit HK codes (01801.HK), while 4-digit codes (0700.HK)
+    must NOT be rewritten."""
+
+    def _kline_df(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "Date": pd.date_range("2026-01-01", periods=2),
+                "Open": [10.0, 11.0],
+                "High": [11.0, 12.0],
+                "Low": [9.0, 10.0],
+                "Close": [10.5, 11.5],
+                "Volume": [1000, 2000],
+            }
+        )
+
+    def test_quote_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"regularMarketPrice": 10.0}
+        result = _quote_yfinance("01801.HK")
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+        assert result["symbol"] == "01801.HK"  # caller keeps the user's original symbol
+
+    def test_kline_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.download.return_value = self._kline_df()
+        _kline_yfinance("01801.HK", "daily", 2)
+        assert mock_yfinance.download.call_args[0][0] == "1801.HK"
+
+    def test_financials_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"shortName": "Innovent"}
+        financials_yf("01801.HK")
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+
+    def test_stock_info_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"shortName": "Innovent"}
+        cmd_stock_info(Namespace(symbol="01801.HK"))
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+
+    def test_news_strips_leading_zero(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.news = [
+            {"title": "t", "publisher": "p", "link": "u", "providerPublishTime": 1, "type": "STORY"}
+        ]
+        result = cmd_news(Namespace(symbol="01801.HK", days=3))
+        mock_yfinance.Ticker.assert_called_with("1801.HK")
+        assert result[0]["title"] == "t"
+
+
+class TestStockSectorsHkRetry:
+    """HK lookups ride the shared _akshare_retry policy (2 retries, 1s delay) —
+    one integration-style check that a transient Yahoo failure recovers."""
+
+    def test_first_failure_retries_and_succeeds(self, mock_yfinance):
+        mock_ticker = MagicMock()
+        mock_ticker.info = {"sector": "Technology", "industry": "Consumer Electronics"}
+        mock_yfinance.Ticker.side_effect = [ConnectionError("boom"), mock_ticker]
+        with patch("tools.stock_data.time.sleep") as mock_sleep:
+            result = _stock_sectors_hk("00700.HK")
+        assert mock_yfinance.Ticker.call_count == 2
+        mock_sleep.assert_called_once_with(1)
+        assert {s["name"] for s in result} == {"Technology", "Consumer Electronics"}
+
+
+class TestCmdStockInfoBoards:
+    """Regression: boards was dead code — stock_board_industry_cons_em was called with a
+    stock code instead of a board name and the exception was swallowed forever."""
+
+    def _info_df(self):
+        import pandas as pd
+
+        return pd.DataFrame({"item": ["股票简称", "行业", "上市时间"], "value": ["贵州茅台", "酿酒行业", "2001-08-27"]})
+
+    def test_boards_filled_from_resolve(self):
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = self._info_df()
+        mock_ak.stock_board_industry_cons_em.side_effect = AssertionError(
+            "stock_board_industry_cons_em must not be called with a stock code"
+        )
+        resolved = {
+            "symbol": "600519",
+            "market": "A",
+            "sectors": [
+                {"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"},
+                {"name": "白酒", "source": "efinance", "board_type": "concept"},
+            ],
+        }
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data.resolve_stock_sectors", return_value=resolved),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert result["boards"] == ["酿酒行业", "白酒"]
+        assert result["industry"] == "酿酒行业"
+
+    def test_boards_absent_when_resolve_fails(self):
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = self._info_df()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data.resolve_stock_sectors", side_effect=Exception("all sources down")),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert "boards" not in result
+        assert result["industry"] == "酿酒行业"
+
+    def test_boards_reuse_info_map_single_fetch(self):
+        """cmd_stock_info hands its already-parsed info_map down to the boards
+        reverse map — eastmoney individual info must be fetched exactly once."""
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = self._info_df()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch(
+                "tools.stock_data._stock_boards_efinance",
+                return_value=[{"name": "白酒", "source": "efinance", "board_type": "concept"}],
+            ),
+            patch("tools.stock_data._stock_boards_xueqiu", return_value=[]),
+            patch("tools.stock_data._stock_boards_from_cache", return_value=[]),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert mock_ak.stock_individual_info_em.call_count == 1
+        assert result["industry"] == "酿酒行业"
+        assert result["boards"] == ["酿酒行业", "白酒"]
+
+    def test_boards_refetch_when_info_fetch_failed(self):
+        """First fetch failed → info_map is None → resolve_stock_sectors fetches
+        the individual info itself (standalone behavior unchanged)."""
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.side_effect = [ConnectionError("blocked"), self._info_df()]
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data._akshare_retry", side_effect=lambda fn, **kw: fn(**kw)),
+            patch("tools.stock_data._stock_boards_efinance", return_value=[]),
+            patch("tools.stock_data._stock_boards_xueqiu", return_value=[]),
+            patch("tools.stock_data._stock_boards_from_cache", return_value=[]),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert mock_ak.stock_individual_info_em.call_count == 2
+        assert result["boards"] == ["酿酒行业"]

@@ -311,6 +311,50 @@ export function apply(ctx: Context) {
 
   ctx.tools.register(
     pyTool({
+      name: "get_sector_constituents",
+      description:
+        "查询A股板块成分股（正向映射：板块→股票列表）。板块名支持模糊匹配（如「创新药」自动解析到精确板块名），东财行业/概念 + 新浪多源 failover，结果缓存24小时。仅支持A股；反向查个股所属板块用 resolve_stock_sectors",
+      parameters: {
+        sector: {
+          type: "string",
+          required: true,
+          description: "板块名称（可模糊，如 创新药、半导体）",
+        },
+        board_type: {
+          type: "string",
+          enum: ["industry", "concept", "auto"],
+          description: "板块类型：industry=行业，concept=概念，auto=自动（默认）",
+        },
+      },
+      script: "stock_data.py",
+      argv: (p) => [
+        "sector_constituents",
+        p.sector,
+        "--board-type",
+        p.board_type ?? "auto",
+      ],
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "resolve_stock_sectors",
+      description:
+        "查询个股所属板块（反向映射：个股→板块）。A股返回东财行业 + efinance 概念/板块（雪球行业兜底，需 XUEQIU_TOKEN），港股返回 yfinance GICS 英文 sector/industry 口径。板块级情报（如「创新药回调」）映射到池内个股时调本工具；正向查板块成分股用 get_sector_constituents",
+      parameters: {
+        symbol: {
+          type: "string",
+          required: true,
+          description: "股票代码（A股如 600519，港股如 00700.HK）",
+        },
+      },
+      script: "stock_data.py",
+      argv: (p) => ["resolve_stock_sectors", p.symbol],
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
       name: "get_stock_info",
       description:
         "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，其他市场返回行业/公司简介",
