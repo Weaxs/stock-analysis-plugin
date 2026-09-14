@@ -1398,6 +1398,24 @@ class TestStockBoardsEm:
         assert result == [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
         mock_ak.stock_individual_info_em.assert_not_called()
 
+    def test_nan_industry_raises(self):
+        """pandas NaN is truthy — a missing 行业 field must not become a "nan" board."""
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = pd.DataFrame(
+            {"item": ["股票简称", "行业"], "value": ["贵州茅台", float("nan")]}
+        )
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no industry"),
+        ):
+            _stock_boards_em("600519")
+
+    def test_nan_industry_in_reused_info_map_raises(self):
+        with pytest.raises(ValueError, match="no industry"):
+            _stock_boards_em("600519", info_map={"行业": float("nan")})
+
 
 class TestStockBoardsEfinance:
     @patch("efinance.stock.get_belong_board")
@@ -1416,6 +1434,18 @@ class TestStockBoardsEfinance:
         mock_board.return_value = pd.DataFrame()
         with pytest.raises(ValueError, match="unavailable"):
             _stock_boards_efinance("600519")
+
+    @patch("efinance.stock.get_belong_board")
+    def test_nan_board_names_dropped(self, mock_board):
+        """Missing 板块名称 fields arrive as truthy pandas NaN — str(nan) would
+        pollute the dedup with a bogus "nan" board, so they are filtered out."""
+        import pandas as pd
+
+        mock_board.return_value = pd.DataFrame(
+            {"板块代码": ["BK0477", "BK0896"], "板块名称": ["酿酒行业", float("nan")]}
+        )
+        result = _stock_boards_efinance("600519")
+        assert result == [{"name": "酿酒行业", "source": "efinance", "board_type": "concept"}]
 
 
 class TestXqSymbol:

@@ -1628,7 +1628,8 @@ def _stock_boards_em(symbol: str, info_map=None) -> list:
             raise ValueError("eastmoney individual info unavailable")
         info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
     industry = info_map.get("行业")
-    if not industry:
+    # pandas NaN is truthy — only a real string counts as an industry name
+    if not (isinstance(industry, str) and industry):
         raise ValueError("eastmoney individual info has no industry")
     return [_board_entry(industry, "eastmoney", "industry")]
 
@@ -1640,7 +1641,11 @@ def _stock_boards_efinance(symbol: str) -> list:
     df = ef.stock.get_belong_board(symbol)
     if df is None or df.empty or "板块名称" not in df.columns:
         raise ValueError("efinance belong-board unavailable")
-    return [_board_entry(name, "efinance", "concept") for name in df["板块名称"].tolist()]
+    # pandas NaN is truthy and str(nan) == "nan" — drop non-string names or they
+    # would pollute the dedup in resolve_stock_sectors as a bogus "nan" board
+    return [
+        _board_entry(name, "efinance", "concept") for name in df["板块名称"].tolist() if isinstance(name, str) and name
+    ]
 
 
 def _xq_symbol(symbol: str) -> str:
