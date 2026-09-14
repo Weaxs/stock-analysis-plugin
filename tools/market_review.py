@@ -73,8 +73,7 @@ def review_market(market: str = "A") -> dict:
         tasks["indices"] = ("stock_data.py", ["market_indices", "--region", "cn"])
         tasks["stats"] = ("stock_data.py", ["market_stats", "--market", "A"])
         tasks["sectors"] = ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"])
-        # query 是单个 argv 元素——旧实现 args.split() 会把带空格的查询拆成多个
-        # positional，search_intel 只收一个 query，argparse exit 2 后新闻静默为空
+        # query 含空格，必须保持单个 argv 元素
         tasks["news"] = ("search_intel.py", ["search", "A股 今日 市场"])
         tasks["regime"] = ("market_regime.py", ["detect", "A"])
     elif market == "HK":

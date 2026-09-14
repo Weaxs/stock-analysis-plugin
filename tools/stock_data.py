@@ -1713,9 +1713,7 @@ def _yf_hk_symbol(symbol: str) -> str:
 
 def _stock_sectors_hk(symbol: str) -> list:
     """HK stock GICS sector/industry from yfinance (English names). Retries ride on
-    _akshare_retry — despite the name it is a generic fn(*args, retries=2, delay=1)
-    wrapper. It only retries on exceptions; an empty info dict is a data problem,
-    not a transient failure, so it is checked after the call and not retried."""
+    _akshare_retry — despite the name it is a generic fn(*args, retries=2, delay=1) wrapper."""
     import yfinance as yf
 
     # 5-digit inputs like 01801.HK 404 on Yahoo — normalize; the caller keeps the
@@ -1797,9 +1795,7 @@ def cmd_stock_info(args):
             except Exception:
                 pass
             try:
-                # boards 来自个股→板块反向映射（resolve_stock_sectors 的核心逻辑）；
-                # 之前的实现把股票代码传给 stock_board_industry_cons_em（它要的是板块名），
-                # 永远抛异常被吞掉，是死代码。info_map 已拉过就透传复用，避免东财二次调用。
+                # boards 复用 resolve_stock_sectors；info_map 透传避免东财二次拉取
                 resolved = resolve_stock_sectors(args.symbol, info_map=info_map)
                 boards = [s["name"] for s in resolved.get("sectors", [])]
                 if boards:
