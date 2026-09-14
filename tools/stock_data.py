@@ -1617,14 +1617,16 @@ def _board_entry(name, source: str, board_type: str) -> dict:
     return {"name": str(name), "source": source, "board_type": board_type}
 
 
-def _stock_boards_em(symbol: str) -> list:
-    """A-share industry board from eastmoney individual info."""
-    import akshare as ak
+def _stock_boards_em(symbol: str, info_map=None) -> list:
+    """A-share industry board from eastmoney individual info. Pass an already-fetched
+    info_map (item → value) to reuse it instead of hitting the network again."""
+    if info_map is None:
+        import akshare as ak
 
-    df = _akshare_retry(ak.stock_individual_info_em, symbol=symbol)
-    if df is None or df.empty:
-        raise ValueError("eastmoney individual info unavailable")
-    info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
+        df = _akshare_retry(ak.stock_individual_info_em, symbol=symbol)
+        if df is None or df.empty:
+            raise ValueError("eastmoney individual info unavailable")
+        info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
     industry = info_map.get("行业")
     if not industry:
         raise ValueError("eastmoney individual info has no industry")
@@ -1719,14 +1721,15 @@ def _stock_sectors_hk(symbol: str) -> list:
     return sectors
 
 
-def resolve_stock_sectors(symbol: str) -> dict:
+def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
     """Reverse map: stock → boards it belongs to (A/HK). A single source failing
-    is not fatal — the other source's boards are still returned."""
+    is not fatal — the other source's boards are still returned. An already-fetched
+    eastmoney info_map is reused for the em source instead of re-fetching."""
     market = detect_market(symbol)
     result = {"symbol": symbol, "market": market}
     if market == "A":
         sources = [
-            ("eastmoney", lambda: _stock_boards_em(symbol)),
+            ("eastmoney", lambda: _stock_boards_em(symbol, info_map)),
             ("efinance", lambda: _stock_boards_efinance(symbol)),
             ("xueqiu", lambda: _stock_boards_xueqiu(symbol)),
             ("cache", lambda: _stock_boards_from_cache(symbol)),
@@ -1770,6 +1773,7 @@ def cmd_stock_info(args):
             import akshare as ak
 
             result = {"symbol": args.symbol, "market": "A"}
+            info_map = None
             try:
                 df = _akshare_retry(ak.stock_individual_info_em, symbol=args.symbol)
                 if df is not None and not df.empty:
@@ -1788,8 +1792,8 @@ def cmd_stock_info(args):
             try:
                 # boards 来自个股→板块反向映射（resolve_stock_sectors 的核心逻辑）；
                 # 之前的实现把股票代码传给 stock_board_industry_cons_em（它要的是板块名），
-                # 永远抛异常被吞掉，是死代码。
-                resolved = resolve_stock_sectors(args.symbol)
+                # 永远抛异常被吞掉，是死代码。info_map 已拉过就透传复用，避免东财二次调用。
+                resolved = resolve_stock_sectors(args.symbol, info_map=info_map)
                 boards = [s["name"] for s in resolved.get("sectors", [])]
                 if boards:
                     result["boards"] = boards[:10]

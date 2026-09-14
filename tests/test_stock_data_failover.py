@@ -1390,6 +1390,14 @@ class TestStockBoardsEm:
         ):
             _stock_boards_em("600519")
 
+    def test_info_map_skips_network(self):
+        """An already-fetched info_map is reused as-is — no akshare call at all."""
+        mock_ak = MagicMock()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _stock_boards_em("600519", info_map={"行业": "酿酒行业"})
+        assert result == [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        mock_ak.stock_individual_info_em.assert_not_called()
+
 
 class TestStockBoardsEfinance:
     @patch("efinance.stock.get_belong_board")
@@ -1751,3 +1759,38 @@ class TestCmdStockInfoBoards:
             result = cmd_stock_info(Namespace(symbol="600519"))
         assert "boards" not in result
         assert result["industry"] == "酿酒行业"
+
+    def test_boards_reuse_info_map_single_fetch(self):
+        """cmd_stock_info hands its already-parsed info_map down to the boards
+        reverse map — eastmoney individual info must be fetched exactly once."""
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = self._info_df()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch(
+                "tools.stock_data._stock_boards_efinance",
+                return_value=[{"name": "白酒", "source": "efinance", "board_type": "concept"}],
+            ),
+            patch("tools.stock_data._stock_boards_xueqiu", return_value=[]),
+            patch("tools.stock_data._stock_boards_from_cache", return_value=[]),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert mock_ak.stock_individual_info_em.call_count == 1
+        assert result["industry"] == "酿酒行业"
+        assert result["boards"] == ["酿酒行业", "白酒"]
+
+    def test_boards_refetch_when_info_fetch_failed(self):
+        """First fetch failed → info_map is None → resolve_stock_sectors fetches
+        the individual info itself (standalone behavior unchanged)."""
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.side_effect = [ConnectionError("blocked"), self._info_df()]
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data._akshare_retry", side_effect=lambda fn, **kw: fn(**kw)),
+            patch("tools.stock_data._stock_boards_efinance", return_value=[]),
+            patch("tools.stock_data._stock_boards_xueqiu", return_value=[]),
+            patch("tools.stock_data._stock_boards_from_cache", return_value=[]),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert mock_ak.stock_individual_info_em.call_count == 2
+        assert result["boards"] == ["酿酒行业"]
