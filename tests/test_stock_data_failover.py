@@ -76,7 +76,7 @@ class TestFailover:
             _failover([("src1", fail1), ("src2", fail2)], label="quote:600519")
         msg = str(exc_info.value)
         assert msg.startswith("quote:600519: ")
-        assert "src1: error1" in msg and "src2: error2" in msg
+        assert "src1: ValueError: error1" in msg and "src2: RuntimeError: error2" in msg
 
     def test_falsy_result_skipped(self):
         result = _failover([("src1", lambda: None), ("src2", lambda: [1, 2, 3])], label="test")

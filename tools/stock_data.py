@@ -81,7 +81,7 @@ def _failover(sources: list, label: str):
             if result:
                 return result
         except Exception as e:
-            errors.append(f"{name}: {e}")
+            errors.append(f"{name}: {type(e).__name__}: {e}")
     if errors:
         raise RuntimeError(f"{label}: {'; '.join(errors)}")
     return None
@@ -1751,7 +1751,7 @@ def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
         try:
             sectors.extend(fn() or [])
         except Exception as e:
-            errors.append(f"{name}: {e}")
+            errors.append(f"{name}: {type(e).__name__}: {e}")
     seen = set()
     deduped = []
     for s in sectors:
