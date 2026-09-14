@@ -20,15 +20,12 @@ def _find_python() -> str:
     return "python" if sys.platform == "win32" else "python3"
 
 
-def _run(script: str, args: list) -> str:
-    # argv list + shell=False: tool input is passed verbatim, never shell-interpreted.
-    # This is what actually kills shell injection on Windows too — cmd.exe metacharacters
-    # (& | % etc.) are inert when no shell is involved.
+def _run(script: str, argv: list) -> str:
+    # argv list: 参数原样进子进程，不经 shell（Windows 同理）
     python = _find_python()
     try:
         result = subprocess.run(
-            [python, str(TOOLS_DIR / script), *[str(a) for a in args]],
-            shell=False,
+            [python, TOOLS_DIR / script, *map(str, argv)],
             capture_output=True,
             text=True,
             encoding="utf-8",

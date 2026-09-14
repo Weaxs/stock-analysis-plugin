@@ -86,10 +86,11 @@ pi.registerTool({
 ### Hermes — `hermes/tools.py`
 
 ```python
-# _find_python() applies the same Windows/POSIX venv rule; _run() shells the CLI
-# with a 120s timeout and always returns a JSON string (errors included).
+# _find_python() applies the same Windows/POSIX venv rule; _run() spawns the CLI
+# as an argv list (no shell) with a 120s timeout and always returns a JSON string
+# (errors included).
 def get_kline(args: dict, **kwargs) -> str:
-    return _run("stock_data.py", f"kline {args['symbol']} --period {args.get('period','daily')} --count {args.get('count',60)}")
+    return _run("stock_data.py", ["kline", args["symbol"], "--period", args.get("period", "daily"), "--count", args.get("count", 60)])
 ```
 
 ### OpenClaw — `openclaw/index.ts`

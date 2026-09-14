@@ -130,7 +130,7 @@ def test_skill_files_exist():
 
 
 class TestRunArgv:
-    """_run spawns argv lists with shell=False, so tool input reaches the CLI
+    """_run spawns argv lists without a shell, so tool input reaches the CLI
     verbatim and is never shell-interpreted (injection-safe on POSIX and Windows)."""
 
     @pytest.fixture
@@ -149,13 +149,13 @@ class TestRunArgv:
         hermes_tools.get_quote({"symbol": payload})
         cmd, kwargs = captured[0]["cmd"], captured[0]["kwargs"]
         assert isinstance(cmd, list)
-        assert kwargs.get("shell") is False
+        assert not kwargs.get("shell", False)  # no shell (subprocess default) — nothing interprets metacharacters
         assert cmd.count(payload) == 1  # verbatim, one element — not embedded in a shell string
 
     def test_numeric_args_are_stringified(self, captured):
         hermes_tools.get_kline({"symbol": "600519", "count": 60})
         cmd = captured[0]["cmd"]
-        assert all(isinstance(a, str) for a in cmd)
+        assert all(isinstance(a, str) for a in cmd[2:])  # cmd[0] = python, cmd[1] = script Path
         assert cmd[-2:] == ["--count", "60"]
 
     def test_optional_args_appended_only_when_set(self, captured):
