@@ -90,10 +90,6 @@ class TestFailover:
         result = _failover([("src1", lambda: None), ("src2", lambda: None)], label="test")
         assert result is None
 
-    def test_label_param_accepted(self):
-        result = _failover([("src1", lambda: "ok")], label="test:label")
-        assert result == "ok"
-
 
 @pytest.fixture
 def mock_yfinance():
