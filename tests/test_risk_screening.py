@@ -1,4 +1,7 @@
-from tools.risk_screening import _safe_float, compute_risk
+import sys
+from unittest.mock import MagicMock, patch
+
+from tools.risk_screening import _run_tool, _safe_float, compute_risk
 
 
 class TestSafeFloat:
@@ -74,3 +77,29 @@ class TestComputeRisk:
         result = compute_risk(flags)
         assert result["risk_score"] == 60
         assert result["veto_buy"] is False
+
+
+class TestRunToolArgv:
+    """_run_tool spawns an argv list with no shell: user-controlled symbols/queries
+    arrive as one literal list element, never interpolated into a shell command."""
+
+    def test_args_passed_as_argv_list(self):
+        with patch("tools.risk_screening.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="{}")
+            result = _run_tool("stock_data.py", ["quote", "600519"])
+        cmd = mock_run.call_args[0][0]
+        assert isinstance(cmd, list)
+        assert cmd[0] == sys.executable
+        assert cmd[1].endswith("stock_data.py")
+        assert cmd[2:] == ["quote", "600519"]
+        assert not mock_run.call_args.kwargs.get("shell")
+        assert result == {}
+
+    def test_malicious_symbol_stays_single_element(self):
+        evil = '600519"; rm -rf / #'
+        with patch("tools.risk_screening.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            _run_tool("stock_data.py", ["quote", evil])
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count(evil) == 1
+        assert not mock_run.call_args.kwargs.get("shell")

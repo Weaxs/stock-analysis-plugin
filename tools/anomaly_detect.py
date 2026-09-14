@@ -19,10 +19,16 @@ from technical import fetch_kline, to_dataframe
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _run_tool(script: str, args: str):
-    cmd = f"{sys.executable} {TOOLS_DIR}/{script} {args}"
+def _run_tool(script: str, args: list):
+    # argv list: 参数原样进子进程，不经 shell
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        r = subprocess.run(
+            [sys.executable, os.path.join(TOOLS_DIR, script), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
     except Exception:
@@ -347,7 +353,7 @@ def detect_capital_flow_anomaly(symbol: str) -> list:
     if market != "A":
         return []
 
-    flow_data = _run_tool("stock_data.py", f"capital_flow {symbol} --mode detail")
+    flow_data = _run_tool("stock_data.py", ["capital_flow", symbol, "--mode", "detail"])
     if not flow_data or not isinstance(flow_data, list) or len(flow_data) < 3:
         return []
 
@@ -505,7 +511,7 @@ def detect_anomalies(symbol: str) -> dict:
     low = df["low"]
     volume = df["volume"]
 
-    quote = _run_tool("stock_data.py", f"quote {symbol}") or {}
+    quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
 
     anomalies = []
     anomalies.extend(detect_macd_cross(close))

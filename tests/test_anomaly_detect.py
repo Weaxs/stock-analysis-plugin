@@ -1,8 +1,10 @@
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
 from tools.anomaly_detect import (
+    _run_tool,
     detect_anomalies,
     detect_bollinger_breakout,
     detect_capital_flow_anomaly,
@@ -523,3 +525,29 @@ class TestDetectGap:
     def test_insufficient_data(self):
         df = _make_df([100])
         assert detect_gap(df) == []
+
+
+class TestRunToolArgv:
+    """_run_tool spawns an argv list with no shell: user-controlled symbols arrive
+    as one literal list element, never interpolated into a shell command string."""
+
+    def test_args_passed_as_argv_list(self):
+        with patch("tools.anomaly_detect.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="{}")
+            result = _run_tool("stock_data.py", ["quote", "600519"])
+        cmd = mock_run.call_args[0][0]
+        assert isinstance(cmd, list)
+        assert cmd[0] == sys.executable
+        assert cmd[1].endswith("stock_data.py")
+        assert cmd[2:] == ["quote", "600519"]
+        assert not mock_run.call_args.kwargs.get("shell")
+        assert result == {}
+
+    def test_malicious_symbol_stays_single_element(self):
+        evil = '600519"; rm -rf / #'
+        with patch("tools.anomaly_detect.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            _run_tool("stock_data.py", ["quote", evil])
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count(evil) == 1
+        assert not mock_run.call_args.kwargs.get("shell")

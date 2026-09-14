@@ -10,10 +10,16 @@ import sys
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _run_tool(script: str, args: str) -> dict | list:
-    cmd = f"python3 {TOOLS_DIR}/{script} {args}"
+def _run_tool(script: str, args: list) -> dict | list:
+    # argv list: 参数原样进子进程，不经 shell
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        r = subprocess.run(
+            [sys.executable, os.path.join(TOOLS_DIR, script), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
     except Exception:
@@ -49,10 +55,7 @@ SKILL_RECOMMEND = {
 
 def _get_index_kline(market: str) -> list:
     code, _ = INDEX_MAP[market]
-    if market == "A":
-        data = _run_tool("stock_data.py", f"kline {code} --period daily --count 80")
-    else:
-        data = _run_tool("stock_data.py", f"kline {code} --period daily --count 80")
+    data = _run_tool("stock_data.py", ["kline", code, "--period", "daily", "--count", "80"])
     if isinstance(data, list) and len(data) > 0:
         return data
     return []
@@ -164,7 +167,7 @@ def classify_regime(ind: dict) -> tuple:
 def _detect_sector_heat(market: str) -> bool:
     if market != "A":
         return False
-    data = _run_tool("stock_data.py", "sector_rankings --top 5 --direction both")
+    data = _run_tool("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"])
     if not isinstance(data, dict):
         return False
     top = data.get("top", [])
