@@ -1593,10 +1593,12 @@ def sector_constituents_a(sector: str, board_type: str = "auto") -> dict:
 
 
 def cmd_sector_constituents(args):
-    sector = (args.sector or "").strip()
+    # argparse 已保证两属性存在（required positional + --board-type default="auto"），
+    # 但空字符串 sector 仍可能从 CLI 传入，if not sector 检查保留
+    sector = args.sector.strip()
     if not sector:
         return {"error": "sector name required"}
-    board_type = getattr(args, "board_type", "auto")
+    board_type = args.board_type
     # Sector names are user input — hash them instead of sanitizing, so names that
     # differ only in whitespace/punctuation (创新药 vs 创新 药) can't collide.
     cache_key = hashlib.sha256(f"{sector}|{board_type}".encode()).hexdigest()[:16]
