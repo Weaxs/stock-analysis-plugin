@@ -3,11 +3,14 @@
 
 import argparse
 import contextlib
+import hashlib
 import json
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 
 def detect_market(symbol: str) -> str:
@@ -1451,6 +1454,310 @@ def cmd_sector_rankings(args):
             return {"error": str(e2)}
 
 
+# --------------- sector constituents / stock sectors (issue #18) ---------------
+
+# No repo-wide disk-cache convention exists yet; tempdir keeps this cross-platform
+# (Windows has no ~/.cache). Sector membership changes slowly — 24h TTL.
+_SECTOR_CACHE_DIR = Path(tempfile.gettempdir()) / "pi-stock-analysis"
+_SECTOR_CACHE_TTL = 24 * 3600
+
+
+def _sector_cache_get(key: str):
+    try:
+        path = _SECTOR_CACHE_DIR / f"{key}.json"
+        if path.exists() and time.time() - path.stat().st_mtime < _SECTOR_CACHE_TTL:
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def _sector_cache_set(key: str, data):
+    try:
+        _SECTOR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (_SECTOR_CACHE_DIR / f"{key}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _fuzzy_match_sector(query: str, candidates: list):
+    """Resolve a possibly-partial sector name. Priority: exact match > the unique
+    candidate containing the query. The query is normalized first (whitespace
+    stripped, trailing 板块/行业/概念 suffix dropped) so 情报 phrasing like
+    「创新药板块」 hits the board 创新药. The reverse direction (candidate inside
+    the query) is deliberately not tried — it would absorb inputs like 创新药ETF
+    into the 创新药 board. Ambiguous or no match returns None."""
+    if query in candidates:
+        return query
+    q = re.sub(r"\s+", "", query)
+    for suffix in ("板块", "行业", "概念"):
+        if q.endswith(suffix):
+            q = q[: -len(suffix)]
+    if not q:
+        return None
+    if q in candidates:
+        return q
+    matches = [c for c in candidates if q in c]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _constituent_rows(df) -> list:
+    col_map = {"代码": "code", "名称": "name"}
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [_clean_row(r) for r in df[keep].to_dict("records")]
+
+
+def _constituents_em(sector: str, board_kind: str) -> dict:
+    """Eastmoney industry/concept board constituents via akshare, fuzzy-resolved."""
+    import akshare as ak
+
+    if board_kind == "industry":
+        name_fn, cons_fn = ak.stock_board_industry_name_em, ak.stock_board_industry_cons_em
+    else:
+        name_fn, cons_fn = ak.stock_board_concept_name_em, ak.stock_board_concept_cons_em
+    names_df = _akshare_retry(name_fn)
+    if names_df is None or names_df.empty or "板块名称" not in names_df.columns:
+        raise ValueError(f"eastmoney {board_kind} board list unavailable")
+    exact = _fuzzy_match_sector(sector, [str(n) for n in names_df["板块名称"].tolist()])
+    if not exact:
+        raise ValueError(f"no eastmoney {board_kind} board matching '{sector}'")
+    df = _akshare_retry(cons_fn, symbol=exact)
+    if df is None or df.empty:
+        raise ValueError(f"eastmoney {board_kind} board '{exact}' returned no constituents")
+    constituents = _constituent_rows(df)
+    return {
+        "sector": exact,
+        "board_type": board_kind,
+        "source": "eastmoney",
+        "constituents": constituents,
+        "count": len(constituents),
+    }
+
+
+# Sina (indicator, board_type) pairs to search per board_type, tried in order — the
+# first fuzzy hit wins. 概念 carries concept boards (e.g. 白酒概念) and 地域 regional
+# ones, so a sina fallback restricted to 新浪行业 missed them entirely (issue #18 smoke test).
+_SINA_SECTOR_INDICATORS = {
+    "industry": [("新浪行业", "industry"), ("行业", "industry")],
+    "concept": [("概念", "concept")],
+    "auto": [("新浪行业", "industry"), ("行业", "industry"), ("概念", "concept"), ("地域", "region")],
+}
+
+
+def _constituents_sina_indicator(sector: str, indicator: str, board_type: str) -> dict:
+    """One sina indicator query: fuzzy-match the sector in the spot list, then fetch
+    constituents. Raises on any failure so _failover moves to the next indicator."""
+    import akshare as ak
+
+    spot = _akshare_retry(ak.stock_sector_spot, indicator=indicator)
+    if spot is None or spot.empty or "label" not in spot.columns:
+        raise ValueError(f"sina sector list unavailable (indicator={indicator})")
+    name_col = "板块" if "板块" in spot.columns else "label"
+    exact = _fuzzy_match_sector(sector, [str(n) for n in spot[name_col].tolist()])
+    if not exact:
+        raise ValueError(f"no sina board matching '{sector}' (indicator={indicator})")
+    label = str(spot.loc[spot[name_col] == exact, "label"].iloc[0])
+    df = _akshare_retry(ak.stock_sector_detail, sector=label)
+    if df is None or df.empty:
+        raise ValueError(f"sina board '{exact}' returned no constituents")
+    constituents = _constituent_rows(df)
+    return {
+        "sector": exact,
+        "board_type": board_type,
+        "source": "sina",
+        "constituents": constituents,
+        "count": len(constituents),
+    }
+
+
+def _constituents_sina(sector: str, board_type: str = "auto") -> dict:
+    """Sina board constituents as fallback, fuzzy-resolved via the spot list(s)
+    selected by board_type; the first indicator with a fuzzy hit wins."""
+    indicators = _SINA_SECTOR_INDICATORS.get(board_type, _SINA_SECTOR_INDICATORS["auto"])
+    sources = [(ind, lambda ind=ind, bt=bt: _constituents_sina_indicator(sector, ind, bt)) for ind, bt in indicators]
+    return _failover(sources, label=f"sina:{sector}")
+
+
+def sector_constituents_a(sector: str, board_type: str = "auto") -> dict:
+    """A-share sector → constituents with failover: eastmoney industry/concept → sina."""
+    sources = []
+    if board_type in ("industry", "auto"):
+        sources.append(("eastmoney_industry", lambda: _constituents_em(sector, "industry")))
+    if board_type in ("concept", "auto"):
+        sources.append(("eastmoney_concept", lambda: _constituents_em(sector, "concept")))
+    sources.append(("sina", lambda: _constituents_sina(sector, board_type)))
+    return _failover(sources, label=f"sector_constituents:{sector}")
+
+
+def cmd_sector_constituents(args):
+    sector = (args.sector or "").strip()
+    if not sector:
+        return {"error": "sector name required"}
+    board_type = getattr(args, "board_type", "auto")
+    # Sector names are user input — hash them instead of sanitizing, so names that
+    # differ only in whitespace/punctuation (创新药 vs 创新 药) can't collide.
+    cache_key = hashlib.sha256(f"{sector}|{board_type}".encode()).hexdigest()[:16]
+    cached = _sector_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = sector_constituents_a(sector, board_type)
+    except Exception as e:
+        return {"error": str(e)}
+    _sector_cache_set(cache_key, result)
+    return result
+
+
+def _board_entry(name, source: str, board_type: str) -> dict:
+    """One stock→board membership record; keeps the {name, source, board_type}
+    shape in one place instead of hand-building it per source."""
+    return {"name": str(name), "source": source, "board_type": board_type}
+
+
+def _stock_boards_em(symbol: str) -> list:
+    """A-share industry board from eastmoney individual info."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_individual_info_em, symbol=symbol)
+    if df is None or df.empty:
+        raise ValueError("eastmoney individual info unavailable")
+    info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
+    industry = info_map.get("行业")
+    if not industry:
+        raise ValueError("eastmoney individual info has no industry")
+    return [_board_entry(industry, "eastmoney", "industry")]
+
+
+def _stock_boards_efinance(symbol: str) -> list:
+    """A-share concept/membership boards from efinance."""
+    import efinance as ef
+
+    df = ef.stock.get_belong_board(symbol)
+    if df is None or df.empty or "板块名称" not in df.columns:
+        raise ValueError("efinance belong-board unavailable")
+    return [_board_entry(name, "efinance", "concept") for name in df["板块名称"].tolist()]
+
+
+def _xq_symbol(symbol: str) -> str:
+    """Xueqiu codes are exchange-prefixed: 600519 → SH600519, 000858 → SZ000858."""
+    if symbol.startswith(("4", "8", "92")):
+        return f"BJ{symbol}"
+    return f"SH{symbol}" if symbol.startswith(("5", "6", "9")) else f"SZ{symbol}"
+
+
+def _stock_boards_xueqiu(symbol: str) -> list:
+    """A-share industry board from the Xueqiu F10 company profile — the non-eastmoney
+    fallback. Returns [] (source skipped) unless XUEQIU_TOKEN is set: akshare's
+    built-in xq_a_token is stale (xueqiu answers 400016), so a user token is required."""
+    import os
+
+    token = os.environ.get("XUEQIU_TOKEN", "")
+    if not token:
+        return []
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_individual_basic_info_xq, symbol=_xq_symbol(symbol), token=token)
+    if df is None or df.empty:
+        raise ValueError("xueqiu basic info unavailable")
+    info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
+    # affiliate_industry is a nested dict: {'ind_code': 'BK0025', 'ind_name': '汽车整车'}
+    industry = info_map.get("affiliate_industry")
+    name = industry.get("ind_name") if isinstance(industry, dict) else None
+    if not name:
+        raise ValueError("xueqiu basic info has no industry")
+    return [_board_entry(name, "xueqiu", "industry")]
+
+
+def _stock_boards_from_cache(symbol: str) -> list:
+    """Reverse lookup against the get_sector_constituents disk cache — the honest
+    fallback when eastmoney blocks the caller's IP and xueqiu has no token (the two
+    live A-share sources are both eastmoney-flavored). Reads every unexpired
+    constituents payload in the cache dir and returns one entry per cached sector
+    containing the symbol. Cold cache → []; malformed cache files are skipped
+    (_sector_cache_get returns None on expiry, bad JSON, or read errors)."""
+    boards = []
+    for path in _SECTOR_CACHE_DIR.glob("*.json"):
+        data = _sector_cache_get(path.stem)
+        if not isinstance(data, dict):
+            continue
+        sector = data.get("sector")
+        if not sector:
+            continue
+        for row in data.get("constituents") or []:
+            if isinstance(row, dict) and str(row.get("code")) == symbol:
+                boards.append(_board_entry(sector, "cache", data.get("board_type", "")))
+                break
+    return boards
+
+
+def _yf_hk_symbol(symbol: str) -> str:
+    """Yahoo HK tickers are zero-padded to exactly 4 digits: 01801.HK → 1801.HK.
+    A bare lstrip('0') would turn 0700.HK into the bogus 700.HK, so pad back."""
+    code, sep, suffix = symbol.upper().partition(".HK")
+    if not sep or not code.isdigit():
+        return symbol
+    return f"{code.lstrip('0').zfill(4)}{sep}{suffix}"
+
+
+def _stock_sectors_hk(symbol: str) -> list:
+    """HK stock GICS sector/industry from yfinance (English names). Retries ride on
+    _akshare_retry — despite the name it is a generic fn(*args, retries=2, delay=1)
+    wrapper. It only retries on exceptions; an empty info dict is a data problem,
+    not a transient failure, so it is checked after the call and not retried."""
+    import yfinance as yf
+
+    # 5-digit inputs like 01801.HK 404 on Yahoo — normalize; the caller keeps the
+    # user's original symbol for the result payload.
+    yf_symbol = _yf_hk_symbol(symbol)
+    info = _akshare_retry(lambda: yf.Ticker(yf_symbol).info) or {}
+    sectors = [_board_entry(info[key], "yfinance", "gics") for key in ("sector", "industry") if info.get(key)]
+    if not sectors:
+        raise ValueError(f"no sector info for {symbol}")
+    return sectors
+
+
+def resolve_stock_sectors(symbol: str) -> dict:
+    """Reverse map: stock → boards it belongs to (A/HK). A single source failing
+    is not fatal — the other source's boards are still returned."""
+    market = detect_market(symbol)
+    result = {"symbol": symbol, "market": market}
+    if market == "A":
+        sources = [
+            ("eastmoney", lambda: _stock_boards_em(symbol)),
+            ("efinance", lambda: _stock_boards_efinance(symbol)),
+            ("xueqiu", lambda: _stock_boards_xueqiu(symbol)),
+            ("cache", lambda: _stock_boards_from_cache(symbol)),
+        ]
+    elif market == "HK":
+        sources = [("yfinance", lambda: _stock_sectors_hk(symbol))]
+    else:
+        result["error"] = f"resolve_stock_sectors only supports A-share and HK stocks, got market {market}"
+        return result
+    sectors, errors = [], []
+    for name, fn in sources:
+        try:
+            sectors.extend(fn() or [])
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+    seen = set()
+    deduped = []
+    for s in sectors:
+        if s["name"] not in seen:
+            seen.add(s["name"])
+            deduped.append(s)
+    if not deduped:
+        error = "; ".join(errors) or "no sector data"
+        if market == "A":
+            # em/efinance are both eastmoney-flavored and xueqiu is usually untokened,
+            # so an all-empty A-share result almost always means eastmoney blocked us.
+            error += "; 东财不可用且缓存为空，可先跑 get_sector_constituents 预热或设置 XUEQIU_TOKEN"
+        result["error"] = error
+        return result
+    result["sectors"] = deduped
+    return result
+
+
 # --------------- stock_info ---------------
 
 
@@ -1477,9 +1784,13 @@ def cmd_stock_info(args):
             except Exception:
                 pass
             try:
-                board_df = _akshare_retry(ak.stock_board_industry_cons_em, symbol=args.symbol)
-                if board_df is not None and not board_df.empty and "板块名称" in board_df.columns:
-                    result["boards"] = board_df["板块名称"].tolist()[:10]
+                # boards 来自个股→板块反向映射（resolve_stock_sectors 的核心逻辑）；
+                # 之前的实现把股票代码传给 stock_board_industry_cons_em（它要的是板块名），
+                # 永远抛异常被吞掉，是死代码。
+                resolved = resolve_stock_sectors(args.symbol)
+                boards = [s["name"] for s in resolved.get("sectors", [])]
+                if boards:
+                    result["boards"] = boards[:10]
             except Exception:
                 pass
             return _clean_row(result)
@@ -1737,6 +2048,13 @@ def main():
     p_sec.add_argument("--top", type=int, default=10)
     p_sec.add_argument("--direction", default="top", choices=["top", "bottom", "both"])
 
+    p_cons = sub.add_parser("sector_constituents")
+    p_cons.add_argument("sector")
+    p_cons.add_argument("--board-type", default="auto", choices=["industry", "concept", "auto"])
+
+    p_rss = sub.add_parser("resolve_stock_sectors")
+    p_rss.add_argument("symbol")
+
     p_info = sub.add_parser("stock_info")
     p_info.add_argument("symbol")
 
@@ -1763,6 +2081,8 @@ def main():
         "market_snapshot": cmd_market_snapshot,
         "market_indices": cmd_market_indices,
         "sector_rankings": cmd_sector_rankings,
+        "sector_constituents": cmd_sector_constituents,
+        "resolve_stock_sectors": lambda a: resolve_stock_sectors(a.symbol),
         "stock_info": cmd_stock_info,
         "chip_distribution": cmd_chip_distribution,
         "market_stats": cmd_market_stats,

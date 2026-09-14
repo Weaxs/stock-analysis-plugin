@@ -7,13 +7,13 @@ A multi-host agent plugin for stock analysis, screening, and strategy backtestin
 The architecture is **one Python core, four thin host adapters**:
 
 - `tools/*.py` — the shared CLI tools. **This is the single source of truth** for all behavior. Every tool prints JSON to stdout.
-- `pi/index.ts` — Pi extension. `pi.registerTool` ×39, each spawns a `tools/*.py` CLI.
+- `pi/index.ts` — Pi extension. `pi.registerTool` ×41, each spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
-- `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×39). Bundled with esbuild.
-- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×39 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
+- `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×41). Bundled with esbuild.
+- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×41 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
 - `skills/*/SKILL.md` — 20 workflow / strategy-methodology skills shared by all four hosts.
 
-> **The invariant that matters most:** the four adapters expose the *same* 39 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one.
+> **The invariant that matters most:** the four adapters expose the *same* 41 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one.
 
 ---
 

@@ -170,6 +170,8 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   analyze_pattern: { symbol: "600519" },
   get_market_indices: {},
   get_sector_rankings: {},
+  get_sector_constituents: { sector: "创新药" },
+  resolve_stock_sectors: { symbol: "600519" },
   get_stock_info: { symbol: "600519" },
   get_chip_distribution: { symbol: "600519" },
   get_market_stats: {},

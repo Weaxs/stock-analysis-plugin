@@ -1,5 +1,6 @@
 import base64
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -87,6 +88,18 @@ def get_sector_rankings(args: dict, **kwargs) -> str:
     top = args.get("top", 10)
     direction = args.get("direction", "top")
     return _run("stock_data.py", f"sector_rankings --top {top} --direction {direction}")
+
+
+def get_sector_constituents(args: dict, **kwargs) -> str:
+    sector = args["sector"]
+    board_type = args.get("board_type", "auto")
+    # shell=True: quote user input (POSIX-only until _run takes argv)
+    return _run("stock_data.py", f"sector_constituents {shlex.quote(sector)} --board-type {shlex.quote(board_type)}")
+
+
+def resolve_stock_sectors(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    return _run("stock_data.py", f"resolve_stock_sectors {shlex.quote(symbol)}")
 
 
 def get_stock_info(args: dict, **kwargs) -> str:
