@@ -1593,8 +1593,7 @@ def sector_constituents_a(sector: str, board_type: str = "auto") -> dict:
 
 
 def cmd_sector_constituents(args):
-    # argparse 已保证两属性存在（required positional + --board-type default="auto"），
-    # 但空字符串 sector 仍可能从 CLI 传入，if not sector 检查保留
+    # argparse 保证属性存在；空串仍可传入
     sector = args.sector.strip()
     if not sector:
         return {"error": "sector name required"}

@@ -7,9 +7,7 @@ from tools._subproc import run_tool
 
 class TestRunToolArgv:
     """run_tool spawns an argv list with no shell: user-controlled symbols/queries
-    arrive as one literal list element, never interpolated into a shell command.
-    (Converged from the per-tool TestRunToolArgv copies when the four _run_tool
-    variants were extracted into tools/_subproc.py.)"""
+    arrive as one literal list element, never interpolated into a shell command."""
 
     def test_args_passed_as_argv_list(self):
         with patch("tools._subproc.subprocess.run") as mock_run:
