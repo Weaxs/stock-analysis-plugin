@@ -4,7 +4,7 @@
 // (defineTool is identity, so the options object is captured verbatim).
 // Verifies:
 //   - the plugin exports the cordis function-plugin form (name/inject/apply)
-//   - all 39 tools register, aligned with the canonical cross-host tool list
+//   - all 41 tools register, aligned with the canonical cross-host tool list
 //     (openclaw.plugin.json contracts.tools — the repo invariant says every
 //     host exposes the same set)
 //   - the dsh bundle manifest (package.json dsh.bundle.patch + cordis.patch.yml)
