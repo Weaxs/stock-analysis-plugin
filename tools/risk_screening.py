@@ -211,7 +211,7 @@ def check_news_risks(symbol: str, name: str = "") -> dict:
     }
     result = {"flags": []}
     for cat, query in categories.items():
-        data = _run_tool("search_intel.py", ["search", query, "--max", "3"])
+        data = _run_tool("search_intel.py", ["search", query, "--count", "3"])
         items = []
         if isinstance(data, list):
             items = data
