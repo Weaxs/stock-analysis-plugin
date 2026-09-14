@@ -1673,7 +1673,8 @@ def _stock_boards_xueqiu(symbol: str) -> list:
     # affiliate_industry is a nested dict: {'ind_code': 'BK0025', 'ind_name': '汽车整车'}
     industry = info_map.get("affiliate_industry")
     name = industry.get("ind_name") if isinstance(industry, dict) else None
-    if not name:
+    # pandas NaN is truthy — only a real string counts as an industry name
+    if not (isinstance(name, str) and name):
         raise ValueError("xueqiu basic info has no industry")
     return [_board_entry(name, "xueqiu", "industry")]
 

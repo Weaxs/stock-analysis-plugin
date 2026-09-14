@@ -1500,6 +1500,24 @@ class TestStockBoardsXueqiu:
         ):
             _stock_boards_xueqiu("002594")
 
+    def test_affiliate_industry_nan_raises(self, monkeypatch):
+        # pandas NaN is truthy — a NaN ind_name must not pass through as a "nan" board
+        import pandas as pd
+
+        monkeypatch.setenv("XUEQIU_TOKEN", "tok123")
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_basic_info_xq.return_value = pd.DataFrame(
+            {
+                "item": ["org_short_name", "affiliate_industry"],
+                "value": ["比亚迪", {"ind_code": "BK0025", "ind_name": float("nan")}],
+            }
+        )
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no industry"),
+        ):
+            _stock_boards_xueqiu("002594")
+
     def test_empty_raises(self, monkeypatch):
         import pandas as pd
 
