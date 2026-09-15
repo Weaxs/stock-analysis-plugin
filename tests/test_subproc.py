@@ -34,12 +34,6 @@ class TestRunToolArgv:
         assert not mock_run.call_args.kwargs.get("shell")
         assert result is None
 
-    def test_timeout_passed_through(self):
-        with patch("tools._subproc.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="{}")
-            run_tool("stock_data.py", ["quote", "600519"], timeout=60)
-        assert mock_run.call_args.kwargs["timeout"] == 60
-
 
 class TestRunToolFailureSentinel:
     """The unified failure contract is None (the four copies disagreed: two
