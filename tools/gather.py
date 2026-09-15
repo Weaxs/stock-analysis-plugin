@@ -3,33 +3,19 @@
 
 import argparse
 import json
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import run_tool  # noqa: E402
 
 
-def _find_python() -> str:
-    venv = TOOLS_DIR.parent / ".venv" / "bin" / "python3"
-    if venv.exists():
-        return str(venv)
-    return sys.executable
-
-
-def _run(script: str, args: list[str], timeout: int = 60) -> str | None:
-    python = _find_python()
-    cmd = [python, str(TOOLS_DIR / script)] + args
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    except subprocess.TimeoutExpired:
-        pass
-    except Exception:
-        pass
-    return None
+# gather fans out the heavier CLIs, so the default timeout stays 60s; JSON parsing
+# is _parse_json's job, so raw stdout is wanted here. A def wrapper (not
+# functools.partial) keeps timeout passable both positionally and by keyword.
+def _run(script, args, timeout=60):
+    return run_tool(script, args, timeout=timeout, parse_json=False)
 
 
 def _parse_json(raw: str | None):

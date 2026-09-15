@@ -1,12 +1,9 @@
 import json
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tools.gather import (
-    TOOLS_DIR,
-    _find_python,
     _parse_json,
     _run,
     gather_analysis,
@@ -33,77 +30,24 @@ class TestParseJson:
         assert _parse_json("") == ""
 
 
-class TestFindPython:
-    @patch("tools.gather.TOOLS_DIR")
-    def test_uses_venv_when_exists(self, mock_tools_dir):
-        mock_venv = MagicMock()
-        mock_venv.exists.return_value = True
-        mock_venv.__str__ = lambda self: "/project/.venv/bin/python3"
-        mock_tools_dir.parent.__truediv__.return_value.__truediv__.return_value.__truediv__.return_value = mock_venv
-        result = _find_python()
-        assert isinstance(result, str)
-
-    def test_returns_string(self):
-        result = _find_python()
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-
 class TestRun:
-    @patch("tools.gather.subprocess.run")
-    @patch("tools.gather._find_python", return_value="/usr/bin/python3")
-    def test_success(self, mock_python, mock_run):
+    """gather's _run is _subproc.run_tool pinned to raw stdout + a 60s default
+    timeout (helper internals are covered in tests/test_subproc.py)."""
+
+    @patch("tools._subproc.subprocess.run")
+    def test_raw_stdout_and_default_timeout(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout='{"ok": true}\n')
-        result = _run("stock_data.py", ["quote", "600519"])
-        assert result == '{"ok": true}'
-        mock_run.assert_called_once_with(
-            ["/usr/bin/python3", str(TOOLS_DIR / "stock_data.py"), "quote", "600519"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=60,
-        )
+        assert _run("stock_data.py", ["quote", "600519"]) == '{"ok": true}'
+        cmd = mock_run.call_args[0][0]
+        assert cmd[1].endswith("stock_data.py")
+        assert cmd[2:] == ["quote", "600519"]
+        assert mock_run.call_args.kwargs["timeout"] == 60
 
-    @patch("tools.gather.subprocess.run")
-    @patch("tools.gather._find_python", return_value="/usr/bin/python3")
-    def test_nonzero_returncode(self, mock_python, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stdout="error output")
-        result = _run("stock_data.py", ["quote", "INVALID"])
-        assert result is None
-
-    @patch("tools.gather.subprocess.run")
-    @patch("tools.gather._find_python", return_value="/usr/bin/python3")
-    def test_empty_stdout(self, mock_python, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="   \n")
-        result = _run("stock_data.py", ["quote", "600519"])
-        assert result is None
-
-    @patch("tools.gather.subprocess.run")
-    @patch("tools.gather._find_python", return_value="/usr/bin/python3")
-    def test_timeout(self, mock_python, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="x", timeout=60)
-        result = _run("stock_data.py", ["quote", "600519"])
-        assert result is None
-
-    @patch("tools.gather.subprocess.run")
-    @patch("tools.gather._find_python", return_value="/usr/bin/python3")
-    def test_exception(self, mock_python, mock_run):
-        mock_run.side_effect = OSError("No such file")
-        result = _run("stock_data.py", ["quote", "600519"])
-        assert result is None
-
-    @patch("tools.gather.subprocess.run")
-    @patch("tools.gather._find_python", return_value="/usr/bin/python3")
-    def test_custom_timeout(self, mock_python, mock_run):
+    @patch("tools._subproc.subprocess.run")
+    def test_custom_timeout(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="data")
         _run("screener.py", ["screen"], timeout=120)
-        mock_run.assert_called_once_with(
-            ["/usr/bin/python3", str(TOOLS_DIR / "screener.py"), "screen"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=120,
-        )
+        assert mock_run.call_args.kwargs["timeout"] == 120
 
 
 class TestGatherAnalysis:

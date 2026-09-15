@@ -7,33 +7,15 @@ so the host agent can decide what to do next (write daily briefing, dig deeper, 
 
 import argparse
 import json
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import run_tool as _run_json  # noqa: E402
 from stock_data import detect_market  # noqa: E402
 from watchlist import analyze_watchlist  # noqa: E402
-
-TOOLS_DIR = Path(__file__).resolve().parent
-
-
-def _find_python() -> str:
-    venv = TOOLS_DIR.parent / ".venv" / "bin" / "python3"
-    return str(venv) if venv.exists() else sys.executable
-
-
-def _run_json(script: str, args: list[str], timeout: int = 30):
-    cmd = [_find_python(), str(TOOLS_DIR / script)] + args
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return None
 
 
 def _trend_label(overall: str) -> str:
