@@ -14,20 +14,27 @@ import sys
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_tool(script: str, args: list, timeout: int = 30):
+def find_python() -> str:
+    """Prefer the repo .venv interpreter (POSIX layout); fall back to the current one."""
+    venv = os.path.join(os.path.dirname(TOOLS_DIR), ".venv", "bin", "python3")
+    return venv if os.path.exists(venv) else sys.executable
+
+
+def run_tool(script: str, args: list, timeout: int = 30, parse_json: bool = True):
     """Run tools/<script> with an argv list (never a shell). Returns parsed JSON
-    stdout, or None on any failure (non-zero exit, empty/invalid output, timeout) —
-    callers pick their own sentinel with `or {}` / `or []`."""
+    stdout (raw stripped stdout when parse_json=False), or None on any failure
+    (non-zero exit, empty/invalid output, timeout) — callers pick their own
+    sentinel with `or {}` / `or []`."""
     try:
         r = subprocess.run(
-            [sys.executable, os.path.join(TOOLS_DIR, script), *args],
+            [find_python(), os.path.join(TOOLS_DIR, script), *args],
             capture_output=True,
             text=True,
             encoding="utf-8",
             timeout=timeout,
         )
         if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
+            return json.loads(r.stdout) if parse_json else r.stdout.strip()
     except Exception:
         pass
     return None

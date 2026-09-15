@@ -2,34 +2,18 @@
 """Unified data gathering — parallel subprocess calls to tools for skill scripts."""
 
 import argparse
+import functools
 import json
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import run_tool  # noqa: E402
 
-
-def _find_python() -> str:
-    venv = TOOLS_DIR.parent / ".venv" / "bin" / "python3"
-    if venv.exists():
-        return str(venv)
-    return sys.executable
-
-
-def _run(script: str, args: list[str], timeout: int = 60) -> str | None:
-    python = _find_python()
-    cmd = [python, str(TOOLS_DIR / script)] + args
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    except subprocess.TimeoutExpired:
-        pass
-    except Exception:
-        pass
-    return None
+# gather fans out the heavier CLIs, so the default timeout stays 60s; JSON parsing
+# is _parse_json's job, so raw stdout is wanted here.
+_run = functools.partial(run_tool, parse_json=False, timeout=60)
 
 
 def _parse_json(raw: str | None):
