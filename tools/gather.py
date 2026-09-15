@@ -2,7 +2,6 @@
 """Unified data gathering — parallel subprocess calls to tools for skill scripts."""
 
 import argparse
-import functools
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,9 +10,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import run_tool  # noqa: E402
 
+
 # gather fans out the heavier CLIs, so the default timeout stays 60s; JSON parsing
-# is _parse_json's job, so raw stdout is wanted here.
-_run = functools.partial(run_tool, parse_json=False, timeout=60)
+# is _parse_json's job, so raw stdout is wanted here. A def wrapper (not
+# functools.partial) keeps timeout passable both positionally and by keyword.
+def _run(script, args, timeout=60):
+    return run_tool(script, args, timeout=timeout, parse_json=False)
 
 
 def _parse_json(raw: str | None):

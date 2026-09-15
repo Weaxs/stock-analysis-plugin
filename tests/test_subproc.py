@@ -10,12 +10,15 @@ class TestRunToolArgv:
     arrive as one literal list element, never interpolated into a shell command."""
 
     def test_args_passed_as_argv_list(self):
-        with patch("tools._subproc.subprocess.run") as mock_run:
+        # 接线语义：cmd[0] 必须是 find_python() 的返回值 —— 哨兵值钉住这条接线，
+        # 而不是断言 run_tool 与自身比较（恒真）。
+        sentinel = patch("tools._subproc.find_python", return_value="/sentinel/python")
+        with sentinel, patch("tools._subproc.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="{}")
             result = run_tool("stock_data.py", ["quote", "600519"])
         cmd = mock_run.call_args[0][0]
         assert isinstance(cmd, list)
-        assert cmd[0] == find_python()
+        assert cmd[0] == "/sentinel/python"
         assert cmd[1].endswith("stock_data.py")
         assert cmd[2:] == ["quote", "600519"]
         assert not mock_run.call_args.kwargs.get("shell")
@@ -89,5 +92,19 @@ class TestFindPython:
         assert find_python() == str(venv)
 
     def test_falls_back_to_sys_executable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools._subproc.TOOLS_DIR", str(tmp_path / "tools"))
+        assert find_python() == sys.executable
+
+    def test_windows_venv_layout_preferred_when_present(self, tmp_path, monkeypatch):
+        # Windows venvs ship Scripts/python.exe, not bin/python3
+        monkeypatch.setattr("tools._subproc.sys.platform", "win32")
+        venv = tmp_path / ".venv" / "Scripts" / "python.exe"
+        venv.parent.mkdir(parents=True)
+        venv.touch()
+        monkeypatch.setattr("tools._subproc.TOOLS_DIR", str(tmp_path / "tools"))
+        assert find_python() == str(venv)
+
+    def test_windows_falls_back_to_sys_executable(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools._subproc.sys.platform", "win32")
         monkeypatch.setattr("tools._subproc.TOOLS_DIR", str(tmp_path / "tools"))
         assert find_python() == sys.executable
