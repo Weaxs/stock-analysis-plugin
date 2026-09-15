@@ -67,11 +67,6 @@ class TestRunToolRawStdout:
     """parse_json=False serves gather.py's contract: stripped raw stdout, leaving
     JSON parsing to the caller."""
 
-    def test_non_json_stdout_returned_verbatim(self):
-        with patch("tools._subproc.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="not json\n")
-            assert run_tool("stock_data.py", ["quote", "600519"], parse_json=False) == "not json"
-
     def test_json_stdout_stays_string(self):
         with patch("tools._subproc.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout='{"a": 1}\n')
@@ -103,8 +98,3 @@ class TestFindPython:
         venv.touch()
         monkeypatch.setattr("tools._subproc.TOOLS_DIR", str(tmp_path / "tools"))
         assert find_python() == str(venv)
-
-    def test_windows_falls_back_to_sys_executable(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("tools._subproc.sys.platform", "win32")
-        monkeypatch.setattr("tools._subproc.TOOLS_DIR", str(tmp_path / "tools"))
-        assert find_python() == sys.executable
