@@ -66,6 +66,23 @@ class TestUSStockData:
             assert field in first, f"kline missing {field}"
 
 
+class TestNonEastmoneyFallbacks:
+    """Tencent/Sina are the eastmoney-independent A-share fallbacks (issue #25) —
+    exactly the sources that must stay up when push2.eastmoney.com is blocked."""
+
+    def test_quote_tencent_live(self):
+        from tools.stock_data import _quote_tencent
+
+        q = _quote_tencent("600519")
+        assert q["price"] and q["name"]
+
+    def test_kline_sina_live(self):
+        from tools.stock_data import _kline_sina
+
+        rows = _kline_sina("600519", "daily", 5)
+        assert rows and rows[-1]["close"] > 0
+
+
 class TestTradingCalendar:
     """exchange-calendars is a local library — not network per se, but exercises the same path."""
 

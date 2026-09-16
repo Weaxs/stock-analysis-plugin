@@ -95,13 +95,29 @@ class TestDiagnose:
         )
         result = diagnostics.diagnose("A")
         assert result["markets"][0]["available"] is False
-        assert any("no working" in w for w in result["markets"][0]["warnings"])
+        assert any("package/credentials not ready" in w for w in result["markets"][0]["warnings"])
 
     def test_warns_when_no_tushare(self, monkeypatch):
         monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
         result = diagnostics.diagnose("A")
         warnings = result["markets"][0]["warnings"]
-        assert any("TUSHARE_TOKEN" in w for w in warnings)
+        warning = next(w for w in warnings if "TUSHARE_TOKEN" in w)
+        assert "Tushare unavailable" in warning
+        assert "akshare-only" not in warning
+
+    def test_tencent_sina_listed_as_auth_free_a_share_fallbacks(self):
+        """Issue #25: the non-eastmoney fallbacks must show up in A-share diagnostics."""
+        result = diagnostics.diagnose("A")
+        providers = {p["name"]: p for p in result["markets"][0]["providers"]}
+        assert "tencent" in providers and "sina" in providers
+        assert providers["tencent"]["available"] is True  # needs only `requests`, no env
+        # reachability is explicitly not probed — null, not a guess
+        assert providers["tencent"]["reachable"] is None
+        assert providers["sina"]["reachable"] is None
+
+    def test_baostock_is_listed_in_a_share_diagnostics(self):
+        providers = {p["name"] for p in diagnostics.diagnose("A")["markets"][0]["providers"]}
+        assert "baostock" in providers
 
 
 if __name__ == "__main__":

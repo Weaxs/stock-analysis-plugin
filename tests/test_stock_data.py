@@ -8,6 +8,10 @@ class TestDetectMarket:
         assert detect_market("300750") == "A"
         assert detect_market("688981") == "A"
 
+    def test_a_share_explicit_exchange_prefix(self):
+        assert detect_market("sh000001") == "A"
+        assert detect_market("SZ399006") == "A"
+
     def test_hk(self):
         assert detect_market("0700.HK") == "HK"
         assert detect_market("9988.hk") == "HK"

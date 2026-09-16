@@ -10,8 +10,10 @@ import pytest
 
 from tools.stock_data import (
     _capital_flow_efinance,
+    _cn_code,
     _constituents_em,
     _constituents_sina,
+    _disk_cache_set,
     _failover,
     _fuzzy_match_sector,
     _kline_akshare,
@@ -19,6 +21,8 @@ from tools.stock_data import (
     _kline_finnhub,
     _kline_longbridge,
     _kline_pytdx,
+    _kline_sina,
+    _kline_tencent,
     _kline_tushare,
     _kline_yfinance,
     _news_search_intel_fallback,
@@ -26,9 +30,10 @@ from tools.stock_data import (
     _quote_finnhub,
     _quote_longbridge,
     _quote_pytdx,
+    _quote_sina,
+    _quote_tencent,
     _quote_tushare,
     _quote_yfinance,
-    _sector_cache_set,
     _sector_rankings_efinance,
     _stock_boards_efinance,
     _stock_boards_em,
@@ -39,6 +44,7 @@ from tools.stock_data import (
     _xq_symbol,
     _yf_hk_symbol,
     cmd_capital_flow,
+    cmd_market_stats,
     cmd_news,
     cmd_sector_constituents,
     cmd_sector_rankings,
@@ -50,7 +56,16 @@ from tools.stock_data import (
     quote_yf,
     resolve_stock_sectors,
     sector_constituents_a,
+    snapshot_a,
 )
+
+
+@pytest.fixture(autouse=True)
+def _sticky_isolation(tmp_path, monkeypatch):
+    """Sticky provider ordering persists via the sector disk cache in tempdir — isolate
+    it per test so call-order assertions never depend on a real cache file left behind
+    by earlier CLI runs."""
+    monkeypatch.setattr("tools.stock_data._DATA_CACHE_DIR", tmp_path)
 
 
 class TestFailover:
@@ -686,13 +701,15 @@ class TestQuotePytdx:
 
 
 class TestToBaostockCode:
-    """Index codes collide with SZ stocks on 000xxx — they must map to the index exchange."""
+    """Bare six-digit symbols are stocks; explicit exchange prefixes identify indices."""
 
-    def test_shanghai_index_codes(self):
-        assert _to_baostock_code("000001") == "sh.000001"  # 上证综指, not 平安银行
-        assert _to_baostock_code("000300") == "sh.000300"  # 沪深300
-        assert _to_baostock_code("000016") == "sh.000016"  # 上证50
-        assert _to_baostock_code("000688") == "sh.000688"  # 科创50
+    def test_ambiguous_bare_codes_stay_shenzhen_stocks(self):
+        assert _to_baostock_code("000001") == "sz.000001"  # 平安银行, not 上证综指
+        assert _to_baostock_code("000016") == "sz.000016"  # 深康佳A, not 上证50
+
+    def test_explicit_shanghai_index_codes(self):
+        assert _to_baostock_code("sh000001") == "sh.000001"
+        assert _to_baostock_code("sh000300") == "sh.000300"
 
     def test_shenzhen_index_codes(self):
         assert _to_baostock_code("399001") == "sz.399001"  # 深证成指
@@ -824,27 +841,69 @@ class TestQuoteAlphavantage:
 
 
 class TestKlineAFailover:
+    def test_explicit_index_uses_index_capable_sources_only(self):
+        with (
+            patch("tools.stock_data._kline_akshare") as mock_ak,
+            patch("tools.stock_data._kline_tushare") as mock_ts,
+            patch("tools.stock_data._kline_efinance") as mock_ef,
+            patch("tools.stock_data._kline_tencent", return_value=[{"close": 1}]),
+            patch("tools.stock_data._kline_sina"),
+            patch("tools.stock_data._kline_pytdx") as mock_ptdx,
+            patch("tools.stock_data._kline_baostock"),
+        ):
+            assert kline_a("sh000001", "daily", 10) == [{"close": 1}]
+        mock_ak.assert_not_called()
+        mock_ts.assert_not_called()
+        mock_ef.assert_not_called()
+        mock_ptdx.assert_not_called()
+
     @patch("tools.stock_data._kline_baostock")
     @patch("tools.stock_data._kline_pytdx")
+    @patch("tools.stock_data._kline_sina")
+    @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_akshare_success_others_not_called(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
+    def test_akshare_success_others_not_called(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
         mock_ak.return_value = [{"close": 100}]
         result = kline_a("600519", "daily", 10)
         assert result == [{"close": 100}]
         mock_ts.assert_not_called()
         mock_ef.assert_not_called()
+        mock_tx.assert_not_called()
+        mock_sina.assert_not_called()
 
     @patch("tools.stock_data._kline_baostock")
     @patch("tools.stock_data._kline_pytdx")
+    @patch("tools.stock_data._kline_sina")
+    @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_falls_through_to_pytdx(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
+    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+        """The issue #25 scenario: all eastmoney-flavored sources down, tencent saves the day."""
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
         mock_ef.side_effect = ValueError("down")
+        mock_tx.return_value = [{"close": 150}]
+        result = kline_a("600519", "daily", 10)
+        assert result == [{"close": 150}]
+        mock_sina.assert_not_called()
+        mock_ptdx.assert_not_called()
+
+    @patch("tools.stock_data._kline_baostock")
+    @patch("tools.stock_data._kline_pytdx")
+    @patch("tools.stock_data._kline_sina")
+    @patch("tools.stock_data._kline_tencent")
+    @patch("tools.stock_data._kline_efinance")
+    @patch("tools.stock_data._kline_tushare")
+    @patch("tools.stock_data._kline_akshare")
+    def test_falls_through_to_pytdx(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+        mock_ak.side_effect = ValueError("down")
+        mock_ts.side_effect = ValueError("down")
+        mock_ef.side_effect = ValueError("down")
+        mock_tx.side_effect = ValueError("down")
+        mock_sina.side_effect = ValueError("down")
         mock_ptdx.return_value = [{"close": 200}]
         result = kline_a("600519", "daily", 10)
         assert result == [{"close": 200}]
@@ -852,13 +911,17 @@ class TestKlineAFailover:
 
     @patch("tools.stock_data._kline_baostock")
     @patch("tools.stock_data._kline_pytdx")
+    @patch("tools.stock_data._kline_sina")
+    @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_ptdx, mock_bs):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
+        mock_tx.side_effect = ValueError("tx down")
+        mock_sina.side_effect = ValueError("sina down")
         mock_ptdx.side_effect = ValueError("ptdx down")
         mock_bs.side_effect = ValueError("bs down")
         with pytest.raises(RuntimeError, match="bs down"):
@@ -867,20 +930,25 @@ class TestKlineAFailover:
 
 class TestQuoteAFailover:
     @patch("tools.stock_data._quote_pytdx")
+    @patch("tools.stock_data._quote_sina")
+    @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_akshare_success(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+    def test_akshare_success(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
         mock_ak.return_value = {"price": 1800}
         result = quote_a("600519")
         assert result == {"price": 1800}
         mock_ts.assert_not_called()
+        mock_tx.assert_not_called()
 
     @patch("tools.stock_data._quote_pytdx")
+    @patch("tools.stock_data._quote_sina")
+    @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_falls_through_to_efinance(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+    def test_falls_through_to_efinance(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
         mock_ef.return_value = {"price": 1800}
@@ -889,16 +957,84 @@ class TestQuoteAFailover:
         mock_ptdx.assert_not_called()
 
     @patch("tools.stock_data._quote_pytdx")
+    @patch("tools.stock_data._quote_sina")
+    @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+        """The issue #25 scenario: eastmoney dead + no tushare token, tencent still answers."""
+        mock_ak.side_effect = ValueError("down")
+        mock_ts.side_effect = ValueError("down")
+        mock_ef.side_effect = ValueError("down")
+        mock_tx.return_value = {"price": 1258.75}
+        result = quote_a("600519")
+        assert result == {"price": 1258.75}
+        mock_sina.assert_not_called()
+        mock_ptdx.assert_not_called()
+
+    @patch("tools.stock_data._quote_pytdx")
+    @patch("tools.stock_data._quote_sina")
+    @patch("tools.stock_data._quote_tencent")
+    @patch("tools.stock_data._quote_efinance")
+    @patch("tools.stock_data._quote_tushare")
+    @patch("tools.stock_data._quote_akshare")
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
+        mock_tx.side_effect = ValueError("tx down")
+        mock_sina.side_effect = ValueError("sina down")
         mock_ptdx.side_effect = ValueError("ptdx down")
         with pytest.raises(RuntimeError, match="ptdx down"):
             quote_a("600519")
+
+    @patch("tools.stock_data._quote_akshare")
+    @patch("tools.stock_data._quote_sina")
+    @patch("tools.stock_data._quote_tencent")
+    def test_prefixed_symbol_skips_eastmoney_sources(self, mock_tx, mock_sina, mock_ak):
+        """sh000001-style explicit codes go straight to tencent/sina — the eastmoney
+        sources take bare 6-digit codes only and would fail slowly first."""
+        mock_tx.return_value = {"price": 3891.6}
+        assert quote_a("sh000001") == {"price": 3891.6}
+        mock_ak.assert_not_called()
+        mock_sina.assert_not_called()
+
+
+class TestSnapshotAFailover:
+    def test_eastmoney_down_falls_through_to_sina(self):
+        import pandas as pd
+
+        mock_ef = MagicMock()
+        mock_ef.stock.get_realtime_quotes.side_effect = OSError("eastmoney down")
+        mock_ak = MagicMock()
+        mock_ak.stock_zh_a_spot.return_value = pd.DataFrame(
+            {
+                "代码": ["sh600519"],
+                "名称": ["贵州茅台"],
+                "最新价": [1258.0],
+                "涨跌额": [-14.75],
+                "涨跌幅": [-1.16],
+                "成交量": [2_623_524],
+                "成交额": [3_307_926_407.0],
+                "昨收": [1272.75],
+                "今开": [1273.93],
+                "最高": [1274.98],
+                "最低": [1254.10],
+            }
+        )
+        with (
+            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
+            patch.dict(sys.modules, {"efinance": mock_ef, "akshare": mock_ak}),
+        ):
+            result = snapshot_a()
+        assert result[0]["symbol"] == "600519"
+        assert result[0]["price"] == 1258.0
+        assert result[0]["volume"] == 26235.24
+
+    def test_market_stats_returns_snapshot_error(self):
+        with patch("tools.stock_data.snapshot_a", return_value=[{"error": "all sources down"}]):
+            assert cmd_market_stats(Namespace(market="A")) == {"error": "all sources down"}
 
 
 class TestKlineYfFailoverExtended:
@@ -1051,6 +1187,24 @@ class TestAkshareETF:
         result = quote_a("600519")
         assert result == {"price": 1800}
         mock_ak.assert_called_once()
+
+    def test_stock_sticky_does_not_demote_etf_fund_spot(self):
+        """A stock-side sticky winner (tencent) must not leak into ETF queries: ETFs
+        use their own sticky chain key, so akshare_etf keeps its declared priority."""
+        with (
+            patch("tools.stock_data._quote_akshare", side_effect=ValueError("em down")),
+            patch("tools.stock_data._quote_tushare", side_effect=ValueError("no token")),
+            patch("tools.stock_data._quote_efinance", side_effect=ValueError("em down")),
+            patch("tools.stock_data._quote_tencent", return_value={"price": 100}),
+        ):
+            assert quote_a("600519") == {"price": 100}  # tencent wins → sticky-quote_a
+        with (
+            patch("tools.stock_data._quote_akshare_etf", return_value={"price": 4.05, "is_etf": True}) as mock_etf,
+            patch("tools.stock_data._quote_tencent", return_value={"price": 4.04}),
+        ):
+            result = quote_a("510300")
+        mock_etf.assert_called_once()  # fund spot still tried first despite the stock-side sticky
+        assert result["is_etf"] is True
 
 
 # --------------- sector constituents / stock sectors (issue #18) ---------------
@@ -1306,7 +1460,7 @@ class TestSectorConstituentsFailover:
 
 @pytest.fixture
 def sector_cache_dir(tmp_path):
-    with patch("tools.stock_data._SECTOR_CACHE_DIR", tmp_path):
+    with patch("tools.stock_data._DATA_CACHE_DIR", tmp_path):
         yield tmp_path
 
 
@@ -1548,24 +1702,24 @@ class TestStockBoardsFromCache:
         assert _stock_boards_from_cache("600276") == []
 
     def test_hit_returns_board_entry(self, sector_cache_dir):
-        _sector_cache_set("k1", self._payload())
+        _disk_cache_set("k1", self._payload())
         assert _stock_boards_from_cache("600276") == [{"name": "创新药", "source": "cache", "board_type": "concept"}]
 
     def test_symbol_in_multiple_cached_sectors(self, sector_cache_dir):
-        _sector_cache_set("k1", self._payload())
-        _sector_cache_set("k2", self._payload(sector="医药生物", board_type="industry"))
+        _disk_cache_set("k1", self._payload())
+        _disk_cache_set("k2", self._payload(sector="医药生物", board_type="industry"))
         names = {b["name"] for b in _stock_boards_from_cache("600276")}
         assert names == {"创新药", "医药生物"}
 
     def test_symbol_not_in_constituents_returns_empty(self, sector_cache_dir):
-        _sector_cache_set("k1", self._payload())
+        _disk_cache_set("k1", self._payload())
         assert _stock_boards_from_cache("000858") == []
 
     def test_expired_cache_ignored(self, sector_cache_dir):
         import os
         import time
 
-        _sector_cache_set("k1", self._payload())
+        _disk_cache_set("k1", self._payload())
         for f in sector_cache_dir.glob("*.json"):
             old = time.time() - 25 * 3600
             os.utime(f, (old, old))
@@ -1574,7 +1728,7 @@ class TestStockBoardsFromCache:
     def test_bad_json_tolerated(self, sector_cache_dir):
         (sector_cache_dir / "corrupt.json").write_text("not json", encoding="utf-8")
         (sector_cache_dir / "non-dict.json").write_text("[1, 2]", encoding="utf-8")
-        _sector_cache_set("k1", self._payload())
+        _disk_cache_set("k1", self._payload())
         assert _stock_boards_from_cache("600276")[0]["name"] == "创新药"
 
 
@@ -1842,3 +1996,308 @@ class TestCmdStockInfoBoards:
             result = cmd_stock_info(Namespace(symbol="600519"))
         assert mock_ak.stock_individual_info_em.call_count == 2
         assert result["boards"] == ["酿酒行业"]
+
+
+# --------------- tencent / sina providers + sticky ordering (issue #25) ---------------
+
+
+def _tencent_quote_payload(fields: dict) -> bytes:
+    """Build a gtimg `v_sh600519="..."` body with the given field indices set."""
+    f = [""] * 50
+    f[0] = "1"
+    for idx, val in fields.items():
+        f[idx] = val
+    return f'v_sh600519="{"~".join(f)}";'.encode("gbk")
+
+
+class TestQuoteTencent:
+    _FIELDS = {
+        1: "贵州茅台",
+        2: "600519",
+        3: "1258.75",
+        4: "1272.75",
+        5: "1273.93",
+        6: "23438",
+        30: "20260916143406",
+        31: "-14.00",
+        32: "-1.10",
+        33: "1274.98",
+        34: "1254.10",
+        37: "295576",  # 万元
+        38: "0.19",
+        39: "19.32",
+        43: "1.64",
+        45: "15735.40",  # 亿元
+        46: "6.26",
+    }
+
+    @patch("requests.get")
+    def test_returns_data(self, mock_get):
+        mock_get.return_value = MagicMock(content=_tencent_quote_payload(self._FIELDS))
+        result = _quote_tencent("600519")
+        assert result["name"] == "贵州茅台"
+        assert result["price"] == 1258.75
+        assert result["change"] == -14.0
+        assert result["change_pct"] == -1.1
+        assert result["volume"] == 23438
+        assert result["turnover"] == 295576e4  # 万元 → 元
+        assert result["market_cap"] == 15735.40e8  # 亿元 → 元
+        assert result["pe"] == 19.32
+        assert result["pb"] == 6.26
+        assert result["prev_close"] == 1272.75
+
+    @patch("requests.get")
+    def test_uses_exchange_prefixed_code(self, mock_get):
+        mock_get.return_value = MagicMock(content=_tencent_quote_payload(self._FIELDS))
+        _quote_tencent("000858")
+        assert "q=sz000858" in mock_get.call_args[0][0]
+
+    @patch("requests.get")
+    def test_short_payload_no_index_error(self, mock_get):
+        """Short payloads (e.g. indices) lack the pb tail — padding must prevent IndexError."""
+        fields = ["1", "上证指数", "000001", "3891.60", "3864.28", "3861.75", "459125108"] + ["0.00"] * 28
+        mock_get.return_value = MagicMock(content=f'v_sh000001="{"~".join(fields)}";'.encode("gbk"))
+        result = _quote_tencent("sh000001")
+        assert result["name"] == "上证指数"
+        assert result["price"] == 3891.6
+        assert result["pb"] is None
+
+    @patch("requests.get")
+    def test_etf_flag_set(self, mock_get):
+        """Parity with _quote_akshare_etf: ETF quotes carry is_etf even on the fallback path."""
+        mock_get.return_value = MagicMock(content=_tencent_quote_payload(self._FIELDS))
+        assert _quote_tencent("510300")["is_etf"] is True
+        assert "is_etf" not in _quote_tencent("600519")
+
+    @patch("requests.get")
+    def test_unknown_symbol_raises(self, mock_get):
+        mock_get.return_value = MagicMock(content=b'v_pv_none_match="1";')
+        with pytest.raises(ValueError, match="no quote"):
+            _quote_tencent("999999")
+
+
+class TestKlineTencent:
+    def _response(self, key="qfqday", code="sh600519"):
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                code: {
+                    key: [
+                        ["2026-09-15", "1281.000", "1272.750", "1284.500", "1271.280", "13762.000"],
+                        ["2026-09-16", "1273.93", "1258.75", "1274.98", "1254.10", "23438"],
+                    ]
+                }
+            },
+        }
+
+    @patch("requests.get")
+    def test_returns_data(self, mock_get):
+        mock_get.return_value = MagicMock(json=lambda: self._response())
+        result = _kline_tencent("600519", "daily", 5)
+        assert len(result) == 2
+        # tencent row order is [date, open, close, high, low, volume]
+        assert result[0] == {
+            "date": "2026-09-15",
+            "open": 1281.0,
+            "high": 1284.5,
+            "low": 1271.28,
+            "close": 1272.75,
+            "volume": 13762.0,
+        }
+
+    @patch("requests.get")
+    def test_weekly_uses_week_param(self, mock_get):
+        mock_get.return_value = MagicMock(json=lambda: self._response(key="qfqweek"))
+        result = _kline_tencent("600519", "weekly", 5)
+        assert len(result) == 2
+        assert ",week," in mock_get.call_args.kwargs["params"]["param"]
+
+    @patch("requests.get")
+    def test_falls_back_to_raw_key(self, mock_get):
+        """BSE codes have no qfq series — the endpoint answers with a plain `day` key."""
+        mock_get.return_value = MagicMock(json=lambda: self._response(key="day", code="bj920001"))
+        result = _kline_tencent("920001", "daily", 5)
+        assert len(result) == 2
+
+    @patch("requests.get")
+    def test_api_error_raises(self, mock_get):
+        mock_get.return_value = MagicMock(json=lambda: {"code": 1, "msg": "bad param"})
+        with pytest.raises(ValueError, match="bad param"):
+            _kline_tencent("600519", "daily", 5)
+
+    @patch("requests.get")
+    def test_empty_rows_raise(self, mock_get):
+        mock_get.return_value = MagicMock(json=lambda: {"code": 0, "data": {"sh600519": {}}})
+        with pytest.raises(ValueError, match="empty data"):
+            _kline_tencent("600519", "daily", 5)
+
+
+class TestQuoteSina:
+    _PAYLOAD = (
+        "贵州茅台,1273.930,1272.750,1258.750,1274.980,1254.100,1258.750,1258.800,2343752,2955763682.000,"
+        + ",".join(["100"] * 20)
+        + ",2026-09-16,14:34:06,00,"
+    )
+
+    @patch("requests.get")
+    def test_returns_data(self, mock_get):
+        mock_get.return_value = MagicMock(content=f'var hq_str_sh600519="{self._PAYLOAD}";'.encode("gbk"))
+        result = _quote_sina("600519")
+        assert result["name"] == "贵州茅台"
+        assert result["price"] == 1258.75
+        assert result["prev_close"] == 1272.75
+        assert result["change"] == pytest.approx(-14.0)
+        assert result["change_pct"] == pytest.approx(-1.1, abs=0.01)
+        assert result["volume"] == 23437.52  # 股 → 手
+        assert result["turnover"] == 2955763682.0  # already 元
+        assert result["open"] == 1273.93
+        assert result["high"] == 1274.98
+
+    @patch("requests.get")
+    def test_sends_referer_header(self, mock_get):
+        """hq.sinajs.cn answers 403 without a finance.sina.com.cn Referer."""
+        mock_get.return_value = MagicMock(content=f'var hq_str_sh600519="{self._PAYLOAD}";'.encode("gbk"))
+        _quote_sina("600519")
+        assert mock_get.call_args.kwargs["headers"]["Referer"] == "https://finance.sina.com.cn"
+
+    @patch("requests.get")
+    def test_empty_payload_raises(self, mock_get):
+        mock_get.return_value = MagicMock(content=b'var hq_str_sh999999="";')
+        with pytest.raises(ValueError, match="no quote"):
+            _quote_sina("999999")
+
+
+class TestKlineSina:
+    _JSONP = (
+        "/*<script>location.href='//sina.com';</script>*/\n"
+        'var _k=([{"day":"2026-09-15","open":"1281.000","high":"1284.500","low":"1271.280",'
+        '"close":"1272.750","volume":"1376172"},'
+        '{"day":"2026-09-16","open":"1273.93","high":"1274.98","low":"1254.10",'
+        '"close":"1258.75","volume":"2343752"}]);'
+    )
+
+    @patch("requests.get")
+    def test_parses_jsonp_with_comment_prefix(self, mock_get):
+        mock_get.return_value = MagicMock(text=self._JSONP)
+        result = _kline_sina("600519", "daily", 5)
+        assert len(result) == 2
+        assert result[0]["date"] == "2026-09-15"
+        assert result[0]["close"] == 1272.75
+        assert result[0]["volume"] == 13761.72  # 股 → 手
+
+    @patch("requests.get")
+    def test_non_daily_raises_without_http(self, mock_get):
+        with pytest.raises(ValueError, match="daily"):
+            _kline_sina("600519", "weekly", 5)
+        mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_empty_raises(self, mock_get):
+        mock_get.return_value = MagicMock(text="var _k=([]);")
+        with pytest.raises(ValueError, match="empty data"):
+            _kline_sina("600519", "daily", 5)
+
+    @patch("requests.get")
+    def test_unparseable_raises(self, mock_get):
+        mock_get.return_value = MagicMock(text="<html>403</html>")
+        with pytest.raises(ValueError, match="unparseable"):
+            _kline_sina("600519", "daily", 5)
+
+
+class TestStickyFailover:
+    """Sticky ordering: the last winning source is tried first next time (and next
+    process — the record lives on disk), so a chronically-dead provider stops adding
+    latency to every call."""
+
+    def _make_fn(self, calls, name, ok):
+        def fn():
+            calls.append(name)
+            if not ok:
+                raise ValueError(f"{name} down")
+            return {"src": name}
+
+        return fn
+
+    def test_winner_recorded_and_promoted_next_call(self):
+        calls = []
+        sources = [("a", self._make_fn(calls, "a", False)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote_a:x") == {"src": "b"}
+        assert calls == ["a", "b"]
+
+        # next call: b jumps the queue even though listed second
+        calls.clear()
+        sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote_a:x") == {"src": "b"}
+        assert calls == ["b"]
+
+    def test_dead_sticky_falls_through_and_new_winner_replaces(self):
+        calls = []
+        sources = [("a", self._make_fn(calls, "a", False)), ("b", self._make_fn(calls, "b", True))]
+        _failover(sources, label="quote_a:x")
+
+        # b (sticky) now dies; a recovers → a wins and becomes the new sticky source
+        calls.clear()
+        sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", False))]
+        assert _failover(sources, label="quote_a:x") == {"src": "a"}
+        assert calls == ["b", "a"]
+
+        calls.clear()
+        sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote_a:x") == {"src": "a"}
+        assert calls == ["a"]
+
+    def test_sticky_persisted_to_disk(self, tmp_path):
+        _failover([("a", lambda: None), ("b", lambda: {"ok": 1})], label="quote_a:x")
+        assert json.loads((tmp_path / "sticky-quote_a.json").read_text(encoding="utf-8")) == "b"
+
+    def test_chain_key_ignores_symbol(self):
+        """quote_a:600519 and quote_a:000858 share one sticky entry — the point is
+        remembering which *provider* is reachable from this network, not per-stock."""
+        calls = []
+        sources = [("a", self._make_fn(calls, "a", False)), ("b", self._make_fn(calls, "b", True))]
+        _failover(sources, label="quote_a:600519")
+        calls.clear()
+        sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote_a:000858") == {"src": "b"}
+        assert calls == ["b"]
+
+    def test_unknown_sticky_entry_keeps_declared_order(self, tmp_path):
+        (tmp_path / "sticky-quote_a.json").write_text(json.dumps("gone"), encoding="utf-8")
+        calls = []
+        sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote_a:x") == {"src": "a"}
+        assert calls == ["a"]
+
+    def test_corrupt_sticky_file_ignored(self, tmp_path):
+        (tmp_path / "sticky-quote_a.json").write_text("not json", encoding="utf-8")
+        result = _failover([("a", lambda: {"ok": 1})], label="quote_a:x")
+        assert result == {"ok": 1}
+
+    def test_yf_chains_are_not_sticky(self, tmp_path):
+        """HK/US chains (label `quote:`/`kline:`) keep declared order: a transient
+        yfinance blip must not promote a sparser fallback for the rest of the day."""
+        calls = []
+        sources = [("a", self._make_fn(calls, "a", False)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote:AAPL") == {"src": "b"}
+        assert not list(tmp_path.glob("sticky-*.json")), "no sticky entry written for yf chains"
+
+        calls.clear()
+        sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
+        assert _failover(sources, label="quote:AAPL") == {"src": "a"}
+        assert calls == ["a"]
+
+
+class TestCnCode:
+    def test_stock_prefixes(self):
+        assert _cn_code("600519") == "sh600519"
+        assert _cn_code("000858") == "sz000858"
+        assert _cn_code("920001") == "bj920001"
+
+    def test_ambiguous_bare_codes_stay_shenzhen_stocks(self):
+        assert _cn_code("000001") == "sz000001"
+        assert _cn_code("000016") == "sz000016"
+
+    def test_explicit_index_prefix_is_preserved(self):
+        assert _cn_code("sh000001") == "sh000001"
+        assert _cn_code("sz399006") == "sz399006"
