@@ -1,6 +1,6 @@
 ---
 name: strategy-backtest
-description: 策略回测与优化 — AlphaEvo YAML策略定义、回测、诊断、进化。当用户要求回测交易策略时使用。
+description: 策略回测与优化 — AlphaEvo YAML策略定义、回测、诊断、进化。当用户要求回测交易策略时使用。典型话术："回测一下这个策略""这个策略历史上赚不赚钱""帮我优化策略参数""写一个双均线策略并验证"。综合研判走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 

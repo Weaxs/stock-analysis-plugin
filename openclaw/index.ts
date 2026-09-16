@@ -90,7 +90,7 @@ export default definePluginEntry({
       name: "get_quote",
       description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
       }),
       async execute(_id, params) {
         const out = await runPy("stock_data.py", ["quote", params.symbol]);
@@ -130,7 +130,7 @@ export default definePluginEntry({
       name: "get_news",
       description: "获取个股最近N天财经新闻快讯（轻量、无需配置）。需要深度全网情报用 search_comprehensive_intel，按主题搜索用 search_stock_news，读文章全文用 extract_article",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         days: Type.Optional(
           Type.Number({ description: "获取最近几天的新闻，默认 3" })
         ),
@@ -150,7 +150,7 @@ export default definePluginEntry({
       name: "get_financials",
       description: "获取股票关键财务指标（PE/PB/市值/营收/净利润/ROE等），适合快速估值快查。A股深度基本面（成长性/盈利能力/分红）用 get_fundamental_context",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
       }),
       async execute(_id, params) {
         const out = await runPy("stock_data.py", ["financials", params.symbol]);
@@ -165,7 +165,7 @@ export default definePluginEntry({
       description:
         "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         period: Type.Optional(
           Type.Union(
             [Type.Literal("daily"), Type.Literal("weekly"), Type.Literal("monthly")],
@@ -194,7 +194,7 @@ export default definePluginEntry({
       description:
         "K线形态识别 — 检测十字星、锤子线、吞没、启明星、黄昏星、双底、20日突破等12+种经典形态。综合技术面判断用 get_technical_analysis",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         period: Type.Optional(
           Type.Union(
             [Type.Literal("daily"), Type.Literal("weekly"), Type.Literal("monthly")],
@@ -314,7 +314,7 @@ export default definePluginEntry({
       description:
         "获取股票基本信息（行业、板块、上市日期、总股本等）。A股返回板块/行业，其他市场返回行业/公司简介",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
       }),
       async execute(_id, params) {
         const out = await runPy("stock_data.py", ["stock_info", params.symbol]);
@@ -390,7 +390,7 @@ export default definePluginEntry({
           Type.Number({ description: "返回排名前N的股票，默认 20" })
         ),
         config: Type.Optional(
-          Type.String({ description: "自定义筛选配置YAML文件路径（可选）" })
+          Type.String({ description: "自定义筛选配置YAML文件路径，不填用默认配置" })
         ),
         l2: Type.Optional(
           Type.Boolean({ description: "开启L2量化增强（质量/成长/真实动量/波动率/资金流因子，逐股抓取数据较慢），默认关闭" })
@@ -417,7 +417,7 @@ export default definePluginEntry({
         "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal",
       parameters: Type.Object({
         strategy: Type.String({ description: "策略YAML文件路径" }),
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         start: Type.Optional(
           Type.String({ description: "回测起始日期，格式 YYYY-MM-DD" })
         ),
@@ -443,7 +443,7 @@ export default definePluginEntry({
       description:
         "技术信号历史准确率评估 — 回溯历史数据，统计某个技术信号触发后N日的胜率和平均收益。支持9种信号：macd_golden_cross/macd_death_cross/rsi_oversold/rsi_overbought/breakout_20d/breakdown_20d/volume_surge/ma_golden_cross/ma_death_cross。要完整模拟交易过程用 run_backtest",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         signal: Type.Union(
           [
             Type.Literal("macd_golden_cross"),
@@ -567,7 +567,7 @@ export default definePluginEntry({
       description:
         "独立均线计算器 — 支持任意周期MA（5/10/20/30/60/120/250或自定义）+ 偏离度 + 均线排列 + 金叉死叉检测。只要均线数值或需要30/120/250等非默认周期时用本工具；综合技术面分析用 get_technical_analysis",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         periods: Type.Optional(
           Type.String({
             description: "逗号分隔的MA周期列表，如 5,10,20,60,120,250",
@@ -602,7 +602,7 @@ export default definePluginEntry({
       description:
         "独立量价分析 — 量价相关性、上涨/下跌日成交量对比、量能趋势、量价模式解读（放量上涨/缩量回调等）。综合技术面判断用 get_technical_analysis，扫当日异动用 detect_anomaly",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         period: Type.Optional(
           Type.Union(
             [Type.Literal("daily"), Type.Literal("weekly"), Type.Literal("monthly")],
@@ -654,7 +654,7 @@ export default definePluginEntry({
       description:
         "股票综合情报搜索 — 从6个维度（新闻/公告/行情分析/风险/业绩/行业）搜索综合信息。用于个股的深入研究/全面调研；快速看新闻用 get_news",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         name: Type.Optional(
           Type.String({ description: "股票名称（可选，提升搜索准确度）" })
         ),
@@ -672,7 +672,7 @@ export default definePluginEntry({
       description:
         "获取股票社交媒体情绪数据。A股：东方财富股吧热度+雪球讨论热度（无需配置）；美股/港股：Reddit/X/Polymarket情绪（需 SENTIMENT_API_KEY）。自动按市场选数据源。面向个股维度；全市场热门讨论用 get_trending_sentiment",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码（如 AAPL）" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
       }),
       async execute(_id, params) {
         const out = await runPy("search_intel.py", ["sentiment", params.symbol]);
@@ -709,7 +709,7 @@ export default definePluginEntry({
       description:
         "风险专项筛查 — 7维度风险检测（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策），返回风险评级和一票否决标记。入场决策前的排雷必调本工具",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码（如 600519）" }),
+        symbol: Type.String({ description: "A股股票代码，如 600519" }),
         name: Type.Optional(
           Type.String({ description: "股票名称（可选，提升新闻搜索准确度）" })
         ),
@@ -801,7 +801,7 @@ export default definePluginEntry({
         "异常/事件检测 — 一键扫描股票当前所有异动信号（MACD金叉死叉、RSI超买超卖、20日突破、放量异动、涨跌停、布林突破、KDJ极值、资金异动等），返回结构化异常列表。当日异动归因的首选；综合技术面判断用 get_technical_analysis",
       parameters: Type.Object({
         symbol: Type.String({
-          description: "股票代码（如 600519、AAPL、00700.HK）",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         }),
       }),
       async execute(_id, params) {
@@ -871,9 +871,9 @@ export default definePluginEntry({
     api.registerTool({
       name: "render_stock_report",
       description:
-        "股票分析报告渲染 — 将结构化 JSON（符合 schemas/report_schema.json）通过 j2 模板渲染为 Markdown。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送",
+        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送",
       parameters: Type.Object({
-        report: Type.Object({}, { additionalProperties: true, description: "结构化股票报告" }),
+        report: Type.Object({}, { additionalProperties: true, description: "结构化股票报告 JSON" }),
         template: Type.Optional(
           Type.Union([Type.Literal("brief"), Type.Literal("full")], {
             description: "模板类型，默认 full",
@@ -896,7 +896,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "render_market_report",
       description:
-        "大盘复盘报告渲染 — 将结构化 JSON（符合 schemas/market_review_schema.json）通过 j2 模板渲染为 Markdown",
+        "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 market_review_schema 为准，不要自造字段",
       parameters: Type.Object({
         report: Type.Object({}, { additionalProperties: true, description: "结构化市场复盘" }),
         template: Type.Optional(
@@ -947,7 +947,7 @@ export default definePluginEntry({
       description:
         "持仓上下文分析 — 输入成本/仓位/止损止盈，结合现价和技术位输出浮盈亏、离止损距离、风险级别、操作建议。无状态、不存账户",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         cost: Type.Number({ description: "成本价" }),
         quantity: Type.Number({ description: "持仓数量" }),
         stop_loss: Type.Optional(Type.Number({ description: "止损价" })),
@@ -978,7 +978,7 @@ export default definePluginEntry({
       description:
         "无状态告警规则检查 — 传入规则数组，返回当前是否触发。规则类型：price_below/price_above/change_pct_above/change_pct_below/volume_ratio_above/anomaly/risk_veto/risk_level_at_least。不做调度不存历史",
       parameters: Type.Object({
-        symbol: Type.String({ description: "股票代码" }),
+        symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         rules: Type.Array(
           Type.Object({}, { additionalProperties: true }),
           { description: "规则列表，每项 { type, value }" }

@@ -69,7 +69,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
       },
       required: ["symbol"],
@@ -117,7 +117,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         days: {
           type: "number",
@@ -141,7 +141,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
       },
       required: ["symbol"],
@@ -163,7 +163,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         period: {
           type: "string",
@@ -199,7 +199,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         period: {
           type: "string",
@@ -340,7 +340,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
       },
       required: ["symbol"],
@@ -431,7 +431,7 @@ export default (pi: ExtensionAPI) => {
         },
         config: {
           type: "string",
-          description: "自定义筛选配置YAML文件路径（可选）",
+          description: "自定义筛选配置YAML文件路径，不填用默认配置",
         },
         l2: {
           type: "boolean",
@@ -466,7 +466,7 @@ export default (pi: ExtensionAPI) => {
         },
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         start: {
           type: "string",
@@ -506,7 +506,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         signal: {
           type: "string",
@@ -661,7 +661,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         periods: {
           type: "string",
@@ -701,7 +701,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         period: {
           type: "string",
@@ -768,7 +768,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
         name: {
           type: "string",
@@ -796,7 +796,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码（如 AAPL）",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
       },
       required: ["symbol"],
@@ -850,7 +850,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码（如 600519）",
+          description: "A股股票代码，如 600519",
         },
         name: {
           type: "string",
@@ -949,7 +949,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         symbol: {
           type: "string",
-          description: "股票代码（如 600519、AAPL、00700.HK）",
+          description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
       },
       required: ["symbol"],
@@ -1007,13 +1007,13 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "render_stock_report",
     description:
-      "股票分析报告渲染 — 将结构化 JSON（符合 schemas/report_schema.json）通过 j2 模板渲染为 Markdown。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送",
+      "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送",
     parameters: {
       type: "object",
       properties: {
         report: {
           type: "object",
-          description: "结构化股票报告，字段参考 schemas/report_schema.json",
+          description: "结构化股票报告 JSON",
         },
         template: {
           type: "string",
@@ -1039,7 +1039,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "render_market_report",
     description:
-      "大盘复盘报告渲染 — 将结构化 JSON（符合 schemas/market_review_schema.json）通过 j2 模板渲染为 Markdown",
+      "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 market_review_schema 为准，不要自造字段",
     parameters: {
       type: "object",
       properties: {
@@ -1098,11 +1098,11 @@ export default (pi: ExtensionAPI) => {
     parameters: {
       type: "object",
       properties: {
-        symbol: { type: "string", description: "股票代码" },
+        symbol: { type: "string", description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
         cost: { type: "number", description: "成本价" },
         quantity: { type: "number", description: "持仓数量" },
-        stop_loss: { type: "number", description: "止损价（可选）" },
-        take_profit: { type: "number", description: "止盈价（可选）" },
+        stop_loss: { type: "number", description: "止损价" },
+        take_profit: { type: "number", description: "止盈价" },
       },
       required: ["symbol", "cost", "quantity"],
     },
@@ -1128,7 +1128,7 @@ export default (pi: ExtensionAPI) => {
     parameters: {
       type: "object",
       properties: {
-        symbol: { type: "string", description: "股票代码" },
+        symbol: { type: "string", description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
         rules: {
           type: "array",
           description: "规则列表，每项 { type, value }",

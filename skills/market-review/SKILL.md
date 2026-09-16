@@ -1,6 +1,6 @@
 ---
 name: market-review
-description: 多市场大盘日度复盘 — 全面分析市场状态、温度与策略方向
+description: 多市场大盘日度复盘 — 全面分析市场状态、温度与策略方向。当用户要求大盘复盘或市场研判时使用。典型话术："今天大盘怎么样""做个市场复盘""市场情绪温度""明天市场怎么看"。个股层面的分析走 stock-analysis。
 allowed-tools:
   - name: gather
     script: scripts/gather.py

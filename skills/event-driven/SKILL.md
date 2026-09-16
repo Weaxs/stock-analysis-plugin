@@ -1,6 +1,6 @@
 ---
 name: event-driven
-description: 事件驱动策略 — 基于重大事件（业绩/政策/订单/资本运作）评估个股影响并制定交易计划
+description: 事件驱动策略 — 基于重大事件（业绩/政策/订单/资本运作）评估个股影响并制定交易计划。当用户问某条公告/新闻/政策对个股的影响时使用。典型话术："业绩预告怎么看""签了大单""定增""回购""中标"。综合研判走 stock-analysis。
 allowed-tools:
   - name: gather
     script: scripts/gather.py

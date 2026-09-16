@@ -1,6 +1,6 @@
 ---
 name: chan-theory
-description: 缠论分析 — 基于缠中说禅理论的笔、段、中枢分析。当用户要求缠论分析时使用。
+description: 缠论分析 — 基于缠中说禅理论的笔、段、中枢分析。当用户要求缠论分析时使用。典型话术："用缠论看看""中枢""背驰""缠论买卖点"。综合研判走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 

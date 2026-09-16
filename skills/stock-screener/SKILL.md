@@ -1,6 +1,6 @@
 ---
 name: stock-screener
-description: 全市场股票筛选 — AlphaSift L1硬筛 + LLM智能排序。当用户要求选股或筛选时使用。
+description: 全市场股票筛选 — AlphaSift L1硬筛 + LLM智能排序。当用户要求选股或筛选时使用。典型话术："帮我选股""筛选符合条件的股票""找出某板块里满足条件的票"。已有明确个股要做深度分析时走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 

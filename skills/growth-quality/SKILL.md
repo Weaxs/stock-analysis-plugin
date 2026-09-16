@@ -1,6 +1,6 @@
 ---
 name: growth-quality
-description: 成长质量策略 — 从财务数据评估企业成长的真实性和可持续性
+description: 成长质量策略 — 从财务数据评估企业成长的真实性和可持续性。当用户问业绩增长的质量和真实性时使用。典型话术："业绩含金量""增长质量怎么样""增收不增利""利润和现金流匹配吗""有没有财务造假风险"。泛风险排雷走 stock-analysis。
 allowed-tools:
   - name: gather
     script: scripts/gather.py

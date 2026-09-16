@@ -1,6 +1,6 @@
 ---
 name: hot-theme
-description: 热点题材策略 — 评估板块热度、个股关联度和参与节奏
+description: 热点题材策略 — 评估板块热度、个股关联度和参与节奏。当用户问题材/板块的热度和参与时机时使用。典型话术："这个题材还能不能炒""板块热度怎么样""这个概念正宗吗""现在上车晚不晚"。找板块内的龙头个股走 dragon-head。
 allowed-tools:
   - name: gather
     script: scripts/gather.py

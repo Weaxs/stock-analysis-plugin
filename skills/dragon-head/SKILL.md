@@ -1,6 +1,6 @@
 ---
 name: dragon-head
-description: 龙头战法 — 识别板块龙头股和领涨个股。当用户要求龙头股分析时使用。
+description: 龙头战法 — 识别板块龙头股和领涨个股。当用户要求龙头股分析时使用。典型话术："谁是龙头""板块龙头""领涨股""龙一龙二"。评估题材热度和参与节奏走 hot-theme。
 allowed-tools: Bash(python3:*) Read
 ---
 
