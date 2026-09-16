@@ -1,6 +1,6 @@
 ---
 name: expectation-repricing
-description: 预期重估策略 — 识别市场预期差（正向/负向），评估估值重估空间
+description: 预期重估策略 — 识别市场预期差（正向/负向），评估估值重估空间。当用户问预期差或估值重估空间时使用。典型话术："预期差""超预期/低于预期""估值还有多少空间""市场已经price in了吗"。综合研判走 stock-analysis。
 allowed-tools:
   - name: gather
     script: scripts/gather.py

@@ -1,6 +1,6 @@
 ---
 name: emotion-cycle
-description: 情绪周期策略 — 基于市场情绪周期的择时分析。当用户要求情绪分析时使用。
+description: 情绪周期策略 — 基于市场情绪周期的择时分析。当用户要求情绪分析时使用。典型话术："市场情绪""冰点期""高潮期""退潮期""连板高度"。大盘整体复盘走 market-review。
 allowed-tools: Bash(python3:*) Read
 ---
 

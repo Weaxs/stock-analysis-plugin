@@ -1,6 +1,6 @@
 ---
 name: bottom-volume
-description: 底部放量策略 — 识别底部区域的异动放量信号。当用户要求分析底部放量时使用。
+description: 底部放量策略 — 识别底部区域的异动放量信号。当用户要求分析底部放量时使用。典型话术："低位突然放巨量""地量后放量""底部异动""跌久了突然放量"。综合研判走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 

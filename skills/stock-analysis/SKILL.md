@@ -1,6 +1,6 @@
 ---
 name: stock-analysis
-description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判。用于个股综合研判类问题：走势判断、买卖时机、风险排雷、持仓处理。
+description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判。用于个股综合研判类问题：走势判断、买卖时机、风险排雷、持仓处理。拿不准用哪个 skill 时，默认用本 skill。
 allowed-tools: Bash(python3:*) Read
 ---
 

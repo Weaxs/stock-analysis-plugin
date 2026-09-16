@@ -1,6 +1,6 @@
 ---
 name: bull-trend
-description: 趋势追踪策略 — 识别并跟随中长期上升趋势。当用户要求趋势分析时使用。
+description: 趋势追踪策略 — 识别并跟随中长期上升趋势。当用户要求趋势分析时使用。典型话术："多头排列""上升通道""主升浪""趋势还能不能拿"。综合研判走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 

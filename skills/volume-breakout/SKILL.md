@@ -1,6 +1,6 @@
 ---
 name: volume-breakout
-description: 放量突破策略 — 识别关键位置的放量突破行情。当用户要求分析突破形态时使用。
+description: 放量突破策略 — 识别关键位置的放量突破行情。当用户要求分析突破形态时使用。典型话术："放量突破""平台突破""突破前高""带量上攻"。底部区域的放量异动走 bottom-volume。
 allowed-tools: Bash(python3:*) Read
 ---
 

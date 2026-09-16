@@ -1,6 +1,6 @@
 ---
 name: wave-theory
-description: 波浪理论分析 — 基于Elliott波浪理论的浪形识别和推演。当用户要求波浪分析时使用。
+description: 波浪理论分析 — 基于Elliott波浪理论的浪形识别和推演。当用户要求波浪分析时使用。典型话术："数浪""现在是第几浪""波浪理论""三浪主升"。综合研判走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 

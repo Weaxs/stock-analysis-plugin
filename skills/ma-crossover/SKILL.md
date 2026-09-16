@@ -1,6 +1,6 @@
 ---
 name: ma-crossover
-description: 均线金叉策略 — 基于均线交叉信号的趋势判断。当用户要求均线分析时使用。
+description: 均线金叉策略 — 基于均线交叉信号的趋势判断。当用户要求均线分析时使用。典型话术："金叉死叉""均线多头排列""5日线上穿20日线""死叉要不要跑"。综合研判走 stock-analysis。
 allowed-tools: Bash(python3:*) Read
 ---
 
