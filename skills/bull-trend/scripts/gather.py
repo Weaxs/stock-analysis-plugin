@@ -11,7 +11,7 @@ for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
         _s.reconfigure(encoding="utf-8")
 
-tools = Path(__file__).resolve().parents[2] / "tools"
+tools = Path(__file__).resolve().parents[3] / "tools"
 result = subprocess.run(
     [sys.executable, str(tools / "gather.py"), "technical", sys.argv[1], "--kline-count", "120"],
     capture_output=True,

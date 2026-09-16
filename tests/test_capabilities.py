@@ -6,14 +6,17 @@ class TestGetCapabilities:
         result = capabilities.get_capabilities("A")
         assert "get_chip_distribution" in result["supported"]
         assert "get_capital_flow" in result["supported"]
+        assert "get_social_sentiment" in result["supported"]
 
     def test_hk_rejects_a_share_only_tools(self):
         result = capabilities.get_capabilities("HK")
         unsupported_tools = {u["tool"] for u in result["unsupported"]}
         assert "get_chip_distribution" in unsupported_tools
         assert "get_capital_flow" in unsupported_tools
+        assert "screen_risk" in unsupported_tools
         # kline is universal
         assert "get_kline" in result["supported"]
+        assert "get_social_sentiment" in result["supported"]
 
     def test_us_rejects_a_share_only_tools(self):
         result = capabilities.get_capabilities("US")

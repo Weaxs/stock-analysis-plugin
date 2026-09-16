@@ -1,12 +1,9 @@
 ---
 name: volume-breakout
-description: 放量突破策略 — 识别关键位置的放量突破行情。当用户要求分析突破形态时使用。典型话术："放量突破""平台突破""突破前高""带量上攻"。底部区域的放量异动走 bottom-volume。
-allowed-tools: Bash(python3:*) Read
+description: 放量突破分析：判断价格对前高、平台或其他阻力位的突破是否有效。低位异常放量用 bottom-volume。
 ---
 
 # 放量突破分析
-
-你是一位专注突破形态的交易专家。
 
 ## 核心理念
 

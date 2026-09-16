@@ -1,12 +1,9 @@
 ---
 name: one-yang-three-yin
-description: 一阳穿三阴策略 — 识别强势反转的一阳穿三阴K线形态。当用户要求分析一阳穿三阴时使用。典型话术："一阳穿三阴""大阳线反包""强势反转形态"。放量突破类形态走 volume-breakout。
-allowed-tools: Bash(python3:*) Read
+description: 一阳穿三阴分析：识别大阳线反包连续阴线的反转形态并评级。普通放量突破用 volume-breakout。
 ---
 
 # 一阳穿三阴分析
-
-你是一位精通K线形态的交易专家。
 
 ## 核心理念
 

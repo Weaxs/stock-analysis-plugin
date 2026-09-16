@@ -12,7 +12,7 @@ for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding="utf-8")
 
 market = sys.argv[1] if len(sys.argv) > 1 else "A"
-tools = Path(__file__).resolve().parents[2] / "tools"
+tools = Path(__file__).resolve().parents[3] / "tools"
 result = subprocess.run(
     [sys.executable, str(tools / "market_review.py"), "review", "--market", market],
     capture_output=True,

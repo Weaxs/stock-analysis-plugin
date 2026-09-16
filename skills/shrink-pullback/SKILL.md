@@ -1,12 +1,9 @@
 ---
 name: shrink-pullback
-description: 缩量回调策略 — 识别上升趋势中的缩量回调买点。当用户要求分析缩量回调时使用。典型话术："缩量回调""回踩不破""洗盘结束了吗""回调到位了吗"。综合研判走 stock-analysis。
-allowed-tools: Bash(python3:*) Read
+description: 缩量回调分析：在已确认上升趋势中判断回调质量、支撑和再启动条件。
 ---
 
 # 缩量回调分析
-
-你是一位专注缩量回调形态的交易专家。
 
 ## 核心理念
 

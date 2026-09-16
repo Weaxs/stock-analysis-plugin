@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gather technical data for emotion-cycle analysis."""
+"""Gather market data for emotion-cycle analysis."""
 
 import subprocess
 import sys
@@ -11,9 +11,10 @@ for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
         _s.reconfigure(encoding="utf-8")
 
-tools = Path(__file__).resolve().parents[2] / "tools"
+market = sys.argv[1] if len(sys.argv) > 1 else "A"
+tools = Path(__file__).resolve().parents[3] / "tools"
 result = subprocess.run(
-    [sys.executable, str(tools / "gather.py"), "technical", sys.argv[1], "--kline-count", "60", "--with-quote"],
+    [sys.executable, str(tools / "market_review.py"), "review", "--market", market],
     capture_output=True,
     text=True,
     encoding="utf-8",

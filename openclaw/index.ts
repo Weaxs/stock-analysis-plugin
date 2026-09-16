@@ -148,7 +148,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "get_financials",
-      description: "获取股票关键财务指标（PE/PB/市值/营收/净利润/ROE等），适合快速估值快查。A股深度基本面（成长性/盈利能力/分红）用 get_fundamental_context",
+      description: "获取股票财务摘要。A股返回最新报告期 ROE/毛利率/净利率/负债率/流动比率；其他市场返回 PE/PB/市值/营收/净利润等。A股估值、成长和分红用 get_fundamental_context",
       parameters: Type.Object({
         symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
       }),
@@ -360,7 +360,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "get_fundamental_context",
       description:
-        "获取A股深度基本面（估值PE/PB/PS + 成长性营收/净利增速 + 盈利能力ROE/毛利率 + 分红历史）。用于评估公司质地与长期持有价值；快速查PE/PB用 get_financials",
+        "获取A股基本面上下文（估值 PE/PB/市值 + 营收/净利增速 + ROE/毛利率/净利率 + 分红历史）。用于评估公司质地与长期持有价值",
       parameters: Type.Object({
         symbol: Type.String({ description: "A股股票代码，如 600519" }),
       }),
@@ -631,7 +631,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "search_stock_news",
       description:
-        "多引擎股票新闻搜索（支持 Tavily/Brave/SerpAPI）。需配置对应 API Key 环境变量。get_news 快讯不够或要按主题搜索时用本工具；深度6维情报用 search_comprehensive_intel",
+        "多引擎股票新闻搜索（Tavily/Brave/SerpAPI/Bocha/SearXNG）。需配置至少一个搜索源的 Key 或 SearXNG URL。get_news 快讯不够或要按主题搜索时用；深度6维情报用 search_comprehensive_intel",
       parameters: Type.Object({
         query: Type.String({ description: "搜索关键词" }),
         count: Type.Optional(
@@ -707,7 +707,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "screen_risk",
       description:
-        "风险专项筛查 — 7维度风险检测（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策），返回风险评级和一票否决标记。入场决策前的排雷必调本工具",
+        "A股风险专项筛查 — 检查估值、技术预警、解禁、减持、业绩预警、监管和行业政策，返回风险评级和 veto_buy。新闻搜索命中是待核实线索，不是已证实风险",
       parameters: Type.Object({
         symbol: Type.String({ description: "A股股票代码，如 600519" }),
         name: Type.Optional(
@@ -896,7 +896,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "render_market_report",
       description:
-        "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 market_review_schema 为准，不要自造字段",
+      "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。仅渲染，不保存不推送",
       parameters: Type.Object({
         report: Type.Object({}, { additionalProperties: true, description: "结构化市场复盘" }),
         template: Type.Optional(

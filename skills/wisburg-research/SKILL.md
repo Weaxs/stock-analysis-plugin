@@ -1,11 +1,11 @@
 ---
 name: wisburg-research
-description: 智堡投研数据检索 — 投行研报、个股研究、财报公告、电话会纪要、市场日报、资讯流。当用户要查研报/公告/电话会纪要原文时使用。典型话术："券商研报怎么说""电话会讲了什么""最近有什么研报"。依赖 wisburg MCP 服务已配置；未配置时用 search_comprehensive_intel 工具替代。
+description: 智堡投研检索：查找机构研报、财报公告、电话会纪要和市场日报。需要 Wisburg MCP；不可用时改用 search_comprehensive_intel。
 ---
 
 # 智堡（Wisburg）投研数据检索
 
-你是一位投研分析助手，通过智堡 MCP 服务获取专业金融研究数据。智堡涵盖海外投行研报、国内券商研究、资管报告、央行/政府文献、电话会纪要、财报公告等。
+智堡 MCP 涵盖海外投行研报、国内券商研究、资管报告、央行/政府文献、电话会纪要和财报公告。首先检查这些 MCP 工具是否可用；不可用时直接改用 `search_comprehensive_intel`。
 
 ## 可用工具
 
