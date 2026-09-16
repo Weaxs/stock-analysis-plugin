@@ -12,9 +12,16 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
+# Bare 6-digit codes are always stocks; the prefix is the disambiguation escape
+# hatch for index codes (sh000001 = 上证指数, not 平安银行).
+_A_PREFIXED_RE = re.compile(r"(?:sh|sz|bj)\d{6}", re.IGNORECASE)
+
 
 def detect_market(symbol: str) -> str:
     s = symbol.upper()
+    if _A_PREFIXED_RE.fullmatch(symbol):
+        return "A"
     if s.endswith(".HK"):
         return "HK"
     if s.endswith(".T"):
@@ -72,13 +79,35 @@ def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> f
     return np.floor(pre_close * (1 + sign * ratio) * 100 + 0.5) / 100.0
 
 
+# Chains that get sticky ordering: the CN free-source chains, where failures are
+# typically chronic (regional blocking). The yf chains (`kline:`/`quote:`) are
+# excluded on purpose — their failures are usually transient yfinance blips, and
+# stickiness would let one blip degrade HK/US quote richness (finnhub has no
+# name/market_cap/pe/pb) for the whole TTL.
+_STICKY_CHAINS = {"kline_a", "quote_a", "quote_a_etf", "snapshot_a", "sector_constituents", "sina"}
+
+
 def _failover(sources: list, label: str):
-    """Return first truthy result; else raise RuntimeError aggregating each source's error."""
+    """Return first truthy result; else raise RuntimeError aggregating each source's error.
+
+    Sticky ordering (issue #25): for chains in _STICKY_CHAINS (keyed by the label
+    before ":"), the last winning source is tried first next time; the rest keep
+    their declared order. Persisted via the sector disk cache below (tempdir, 24h
+    TTL), so it survives across the one-process-per-CLI-call host model; a stale
+    entry costs one failed attempt, then the new winner replaces it (self-healing).
+    """
+    chain = label.split(":", 1)[0]
+    if chain in _STICKY_CHAINS:
+        sticky = _disk_cache_get(f"sticky-{chain}")
+        if sticky:
+            sources = sorted(sources, key=lambda s: s[0] != sticky)
     errors = []
     for name, fn in sources:
         try:
             result = fn()
             if result:
+                if chain in _STICKY_CHAINS:
+                    _disk_cache_set(f"sticky-{chain}", name)
                 return result
         except Exception as e:
             errors.append(f"{name}: {type(e).__name__}: {e}")
@@ -97,30 +126,9 @@ def _akshare_retry(fn, *args, retries=2, delay=1, **kwargs):
             time.sleep(delay)
 
 
-# Index codes collide with SZ stocks in the 000xxx range (000001 is both the
-# SSE Composite and Ping An Bank), so indices need an explicit exchange mapping.
-_BAOSTOCK_INDEX_CODES = {
-    "000001": "sh",  # 上证综指
-    "000016": "sh",  # 上证50
-    "000300": "sh",  # 沪深300
-    "000688": "sh",  # 科创50
-    "000852": "sh",  # 中证1000
-    "000905": "sh",  # 中证500
-    "399001": "sz",  # 深证成指
-    "399005": "sz",  # 中小100
-    "399006": "sz",  # 创业板指
-}
-
-
 def _to_baostock_code(symbol: str) -> str:
-    index_exchange = _BAOSTOCK_INDEX_CODES.get(symbol)
-    if index_exchange:
-        return f"{index_exchange}.{symbol}"
-    if symbol.startswith(
-        ("600", "601", "603", "605", "688", "689", "510", "512", "513", "515", "516", "518", "560", "588")
-    ):
-        return f"sh.{symbol}"
-    return f"sz.{symbol}"
+    code = _cn_code(symbol)
+    return f"{code[:2]}.{code[2:]}"
 
 
 def _kline_efinance(symbol: str, period: str, count: int) -> list:
@@ -229,6 +237,181 @@ def _quote_efinance(symbol: str) -> dict:
     return _clean_row(result)
 
 
+# --------------- tencent / sina (non-eastmoney A-share fallbacks, issue #25) ---------------
+#
+# akshare/efinance both resolve to eastmoney hosts, so an eastmoney-blocked network
+# kills the whole A-share chain. Tencent (qt.gtimg.cn) and Sina (hq.sinajs.cn) are
+# independent quote endpoints needing no credentials; both cover stocks, ETFs,
+# indices and BSE codes.
+
+
+def _cn_code(symbol: str) -> str:
+    """Exchange-prefixed code shared by Tencent and Sina: 600519 → sh600519, BSE → bj920001."""
+    if _A_PREFIXED_RE.fullmatch(symbol):
+        return symbol.lower()
+    if symbol.startswith(("43", "81", "82", "83", "87", "88", "92")):
+        return f"bj{symbol}"
+    return f"sh{symbol}" if symbol.startswith(("5", "6", "9")) else f"sz{symbol}"
+
+
+def _parse_float(value):
+    """Provider string field → float; empty/garbage → None (never raises)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _gbk_var_payload(content: bytes) -> str:
+    """Extract the quoted payload from a GBK `v_sh600519="..."` / `var hq_str_...="..."` body."""
+    return content.decode("gbk", errors="replace").split('="', 1)[-1].rsplit('"', 1)[0]
+
+
+def _quote_tencent(symbol: str) -> dict:
+    """Tencent quote via qt.gtimg.cn. GBK-encoded `v_sh600519="1~name~code~..."` fields.
+
+    Units differ from akshare: turnover arrives in 万元 and market_cap in 亿元 —
+    both are normalized to 元 to match the rest of the chain."""
+    import requests
+
+    resp = requests.get(f"https://qt.gtimg.cn/q={_cn_code(symbol)}", timeout=10)
+    f = _gbk_var_payload(resp.content).split("~")
+    if len(f) < 35 or not f[1]:
+        raise ValueError(f"tencent returned no quote for {symbol}")
+    f += [""] * (47 - len(f))  # pad optional tail fields (pe/pb/market_cap…) on short payloads
+    turnover = _parse_float(f[37])
+    market_cap = _parse_float(f[45])
+    row = {
+        "symbol": symbol,
+        "name": f[1],
+        "price": _parse_float(f[3]),
+        "change": _parse_float(f[31]),
+        "change_pct": _parse_float(f[32]),
+        "volume": _parse_float(f[6]),  # 手, same as akshare
+        "turnover": turnover * 1e4 if turnover is not None else None,
+        "high": _parse_float(f[33]),
+        "low": _parse_float(f[34]),
+        "open": _parse_float(f[5]),
+        "prev_close": _parse_float(f[4]),
+        "market_cap": market_cap * 1e8 if market_cap is not None else None,
+        "pe": _parse_float(f[39]),
+        "pb": _parse_float(f[46]),
+        "turnover_rate": _parse_float(f[38]),
+        "amplitude": _parse_float(f[43]),
+    }
+    if normalize_stock_code(symbol)["is_etf"]:
+        row["is_etf"] = True
+    return _clean_row(row)
+
+
+def _kline_tencent(symbol: str, period: str, count: int) -> list:
+    """Tencent kline via web.ifzq.gtimg.cn. Rows are [date, open, close, high, low,
+    volume(手)] ascending; qfq-adjusted like akshare. When a symbol has no qfq series
+    (e.g. BSE codes) the endpoint returns the raw `day/week/month` key instead."""
+    import requests
+
+    p_map = {"daily": "day", "weekly": "week", "monthly": "month"}
+    p = p_map.get(period, "day")
+    code = _cn_code(symbol)
+    resp = requests.get(
+        "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+        params={"param": f"{code},{p},,,{count},qfq"},
+        timeout=10,
+    )
+    data = resp.json()
+    if data.get("code") != 0:
+        raise ValueError(f"tencent kline failed: {data.get('msg', '')}")
+    node = data.get("data", {}).get(code, {})
+    rows = node.get(f"qfq{p}") or node.get(p)
+    if not rows:
+        raise ValueError("tencent kline returned empty data")
+    return [
+        _clean_row(
+            {
+                "date": r[0],
+                "open": _parse_float(r[1]),
+                "high": _parse_float(r[3]),
+                "low": _parse_float(r[4]),
+                "close": _parse_float(r[2]),
+                "volume": _parse_float(r[5]),
+            }
+        )
+        for r in rows[-count:]
+    ]
+
+
+def _quote_sina(symbol: str) -> dict:
+    """Sina quote via hq.sinajs.cn. Requires a finance.sina.com.cn Referer or the
+    endpoint answers 403. GBK-encoded CSV; volume arrives in 股 → normalized to 手."""
+    import requests
+
+    resp = requests.get(
+        f"https://hq.sinajs.cn/list={_cn_code(symbol)}",
+        headers={"Referer": "https://finance.sina.com.cn"},
+        timeout=10,
+    )
+    f = _gbk_var_payload(resp.content).split(",")
+    if len(f) < 10 or not f[0]:
+        raise ValueError(f"sina returned no quote for {symbol}")
+    price = _parse_float(f[3])
+    prev_close = _parse_float(f[2])
+    volume = _parse_float(f[8])
+    row = {
+        "symbol": symbol,
+        "name": f[0],
+        "price": price,
+        "change": (price - prev_close) if price is not None and prev_close else None,
+        "change_pct": ((price / prev_close) - 1) * 100 if price is not None and prev_close else None,
+        "volume": volume / 100 if volume is not None else None,
+        "turnover": _parse_float(f[9]),  # already 元
+        "high": _parse_float(f[4]),
+        "low": _parse_float(f[5]),
+        "open": _parse_float(f[1]),
+        "prev_close": prev_close,
+    }
+    if normalize_stock_code(symbol)["is_etf"]:
+        row["is_etf"] = True
+    return _clean_row(row)
+
+
+def _kline_sina(symbol: str, period: str, count: int) -> list:
+    """Sina daily kline via quotes.sina.cn (JSONP-wrapped; scale=240 = daily is the
+    only supported period). Unadjusted; volume arrives in 股 → normalized to 手."""
+    if period != "daily":
+        raise ValueError("sina kline supports daily period only")
+    import requests
+
+    resp = requests.get(
+        "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_k=/CN_MarketDataService.getKLineData",
+        params={"symbol": _cn_code(symbol), "scale": "240", "ma": "no", "datalen": str(min(count, 1023))},
+        headers={"Referer": "https://finance.sina.com.cn"},
+        timeout=10,
+    )
+    text = resp.text
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end <= start:
+        raise ValueError("sina kline returned unparseable data")
+    rows = json.loads(text[start : end + 1])
+    if not rows:
+        raise ValueError("sina kline returned empty data")
+    result = []
+    for r in rows[-count:]:
+        volume = _parse_float(r.get("volume"))
+        result.append(
+            _clean_row(
+                {
+                    "date": r.get("day"),
+                    "open": _parse_float(r.get("open")),
+                    "high": _parse_float(r.get("high")),
+                    "low": _parse_float(r.get("low")),
+                    "close": _parse_float(r.get("close")),
+                    "volume": volume / 100 if volume is not None else None,
+                }
+            )
+        )
+    return result
+
+
 def _sanitize(obj):
     """Convert pandas types to JSON-serializable Python types."""
     import numpy as np
@@ -255,17 +438,27 @@ def _clean_row(d: dict) -> dict:
 
 
 def kline_a(symbol: str, period: str, count: int) -> list:
-    """A-share kline with failover: akshare → tushare → efinance → pytdx → baostock."""
-    return _failover(
-        [
+    """A-share kline with failover: akshare → tushare → efinance → tencent → sina → pytdx → baostock.
+
+    Explicitly-prefixed symbols (sh000001, typically indices) skip the eastmoney
+    sources — they take bare 6-digit codes only and would fail slowly first."""
+    if _A_PREFIXED_RE.fullmatch(symbol):
+        sources = [
+            ("tencent", lambda: _kline_tencent(symbol, period, count)),
+            ("sina", lambda: _kline_sina(symbol, period, count)),
+            ("baostock", lambda: _kline_baostock(symbol, period, count)),
+        ]
+    else:
+        sources = [
             ("akshare", lambda: _kline_akshare(symbol, period, count)),
             ("tushare", lambda: _kline_tushare(symbol, period, count)),
             ("efinance", lambda: _kline_efinance(symbol, period, count)),
+            ("tencent", lambda: _kline_tencent(symbol, period, count)),
+            ("sina", lambda: _kline_sina(symbol, period, count)),
             ("pytdx", lambda: _kline_pytdx(symbol, period, count)),
             ("baostock", lambda: _kline_baostock(symbol, period, count)),
-        ],
-        label=f"kline_a:{symbol}",
-    )
+        ]
+    return _failover(sources, label=f"kline_a:{symbol}")
 
 
 def _kline_akshare(symbol: str, period: str, count: int) -> list:
@@ -771,17 +964,29 @@ def cmd_kline(args):
 
 
 def quote_a(symbol: str) -> dict:
-    """A-share quote with failover: akshare → tushare → efinance → pytdx. ETFs try fund spot first."""
+    """A-share quote with failover: akshare → tushare → efinance → tencent → sina → pytdx. ETFs try fund spot first.
+
+    Explicitly-prefixed symbols (sh000001, typically indices) go straight to
+    tencent/sina — the eastmoney sources take bare 6-digit codes only, and pytdx
+    can't place prefixed codes either. ETF quotes use their own sticky chain key
+    (quote_a_etf) so a stock-side winner never demotes the fund-spot source."""
+    if _A_PREFIXED_RE.fullmatch(symbol):
+        sources = [("tencent", lambda: _quote_tencent(symbol)), ("sina", lambda: _quote_sina(symbol))]
+        return _failover(sources, label=f"quote_a:{symbol}")
+    is_etf = normalize_stock_code(symbol)["is_etf"]
     sources = []
-    if normalize_stock_code(symbol)["is_etf"]:
+    if is_etf:
         sources.append(("akshare_etf", lambda: _quote_akshare_etf(symbol)))
     sources += [
         ("akshare", lambda: _quote_akshare(symbol)),
         ("tushare", lambda: _quote_tushare(symbol)),
         ("efinance", lambda: _quote_efinance(symbol)),
+        ("tencent", lambda: _quote_tencent(symbol)),
+        ("sina", lambda: _quote_sina(symbol)),
         ("pytdx", lambda: _quote_pytdx(symbol)),
     ]
-    return _failover(sources, label=f"quote_a:{symbol}")
+    chain = "quote_a_etf" if is_etf else "quote_a"
+    return _failover(sources, label=f"{chain}:{symbol}")
 
 
 def _quote_akshare_etf(symbol: str) -> dict:
@@ -1159,35 +1364,69 @@ def cmd_financials(args):
 
 def snapshot_a() -> list:
     try:
-        return _snapshot_akshare()
-    except Exception:
-        pass
-    try:
-        import efinance as ef
-
-        df = ef.stock.get_realtime_quotes()
-        if df is None or df.empty:
-            raise ValueError("efinance snapshot empty")
-        col_map = {
-            "股票代码": "symbol",
-            "股票名称": "name",
-            "最新价": "price",
-            "涨跌幅": "change_pct",
-            "涨跌额": "change",
-            "成交量": "volume",
-            "成交额": "turnover",
-            "市盈率": "pe",
-            "换手率": "turnover_rate",
-            "最高": "high",
-            "最低": "low",
-            "今开": "open",
-            "昨收": "prev_close",
-        }
-        df = df.rename(columns=col_map)
-        keep = [c for c in col_map.values() if c in df.columns]
-        return [_clean_row(r) for r in df[keep].to_dict("records")]
+        return _failover(
+            [
+                ("akshare", _snapshot_akshare),
+                ("efinance", _snapshot_efinance),
+                ("sina", _snapshot_sina),
+            ],
+            label="snapshot_a",
+        )
     except Exception:
         return [{"error": "A-share snapshot unavailable from all sources"}]
+
+
+def _snapshot_efinance() -> list:
+    import efinance as ef
+
+    df = ef.stock.get_realtime_quotes()
+    if df is None or df.empty:
+        raise ValueError("efinance snapshot empty")
+    col_map = {
+        "股票代码": "symbol",
+        "股票名称": "name",
+        "最新价": "price",
+        "涨跌幅": "change_pct",
+        "涨跌额": "change",
+        "成交量": "volume",
+        "成交额": "turnover",
+        "市盈率": "pe",
+        "换手率": "turnover_rate",
+        "最高": "high",
+        "最低": "low",
+        "今开": "open",
+        "昨收": "prev_close",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [_clean_row(r) for r in df[keep].to_dict("records")]
+
+
+def _snapshot_sina() -> list:
+    import akshare as ak
+    import pandas as pd
+
+    df = _akshare_retry(ak.stock_zh_a_spot)
+    if df is None or df.empty:
+        raise ValueError("sina snapshot empty")
+    df["代码"] = df["代码"].astype(str).str.replace(r"^(?:sh|sz|bj)", "", regex=True)
+    df["成交量"] = pd.to_numeric(df["成交量"], errors="coerce") / 100
+    col_map = {
+        "代码": "symbol",
+        "名称": "name",
+        "最新价": "price",
+        "涨跌额": "change",
+        "涨跌幅": "change_pct",
+        "成交量": "volume",
+        "成交额": "turnover",
+        "昨收": "prev_close",
+        "今开": "open",
+        "最高": "high",
+        "最低": "low",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [_clean_row(r) for r in df[keep].to_dict("records")]
 
 
 def _snapshot_akshare() -> list:
@@ -1458,26 +1697,27 @@ def cmd_sector_rankings(args):
 
 # --------------- sector constituents / stock sectors (issue #18) ---------------
 
-# No repo-wide disk-cache convention exists yet; tempdir keeps this cross-platform
-# (Windows has no ~/.cache). Sector membership changes slowly — 24h TTL.
-_SECTOR_CACHE_DIR = Path(tempfile.gettempdir()) / "pi-stock-analysis"
-_SECTOR_CACHE_TTL = 24 * 3600
+# Disk cache lives in tempdir — cross-platform (Windows has no ~/.cache). Stores
+# sector constituents (24h TTL; membership changes slowly) and sticky failover
+# winners (keys prefixed `sticky-`, see _failover).
+_DATA_CACHE_DIR = Path(tempfile.gettempdir()) / "pi-stock-analysis"
+_DATA_CACHE_TTL = 24 * 3600
 
 
-def _sector_cache_get(key: str):
+def _disk_cache_get(key: str):
     try:
-        path = _SECTOR_CACHE_DIR / f"{key}.json"
-        if path.exists() and time.time() - path.stat().st_mtime < _SECTOR_CACHE_TTL:
+        path = _DATA_CACHE_DIR / f"{key}.json"
+        if path.exists() and time.time() - path.stat().st_mtime < _DATA_CACHE_TTL:
             return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         pass
     return None
 
 
-def _sector_cache_set(key: str, data):
+def _disk_cache_set(key: str, data):
     try:
-        _SECTOR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        (_SECTOR_CACHE_DIR / f"{key}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        _DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (_DATA_CACHE_DIR / f"{key}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
 
@@ -1601,14 +1841,14 @@ def cmd_sector_constituents(args):
     # Sector names are user input — hash them instead of sanitizing, so names that
     # differ only in whitespace/punctuation (创新药 vs 创新 药) can't collide.
     cache_key = hashlib.sha256(f"{sector}|{board_type}".encode()).hexdigest()[:16]
-    cached = _sector_cache_get(cache_key)
+    cached = _disk_cache_get(cache_key)
     if cached is not None:
         return cached
     try:
         result = sector_constituents_a(sector, board_type)
     except Exception as e:
         return {"error": str(e)}
-    _sector_cache_set(cache_key, result)
+    _disk_cache_set(cache_key, result)
     return result
 
 
@@ -1686,10 +1926,10 @@ def _stock_boards_from_cache(symbol: str) -> list:
     live A-share sources are both eastmoney-flavored). Reads every unexpired
     constituents payload in the cache dir and returns one entry per cached sector
     containing the symbol. Cold cache → []; malformed cache files are skipped
-    (_sector_cache_get returns None on expiry, bad JSON, or read errors)."""
+    (_disk_cache_get returns None on expiry, bad JSON, or read errors)."""
     boards = []
-    for path in _SECTOR_CACHE_DIR.glob("*.json"):
-        data = _sector_cache_get(path.stem)
+    for path in _DATA_CACHE_DIR.glob("*.json"):
+        data = _disk_cache_get(path.stem)
         if not isinstance(data, dict):
             continue
         sector = data.get("sector")
@@ -1944,6 +2184,8 @@ def cmd_market_stats(args):
         data = snapshot_a()
         if isinstance(data, dict) and "error" in data:
             return data
+        if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) and "error" in data[0]:
+            return data[0]
         if not data:
             return {"error": "No market data"}
         return compute_market_stats(data)
