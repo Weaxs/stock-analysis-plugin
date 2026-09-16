@@ -1,4 +1,12 @@
-from tools.market_regime import _compute_indicators, classify_regime
+from unittest.mock import patch
+
+from tools.market_regime import _compute_indicators, _get_index_kline, classify_regime
+
+
+def test_a_share_regime_requests_explicit_shanghai_index():
+    with patch("tools.market_regime._run_tool", return_value=[{"close": 1}]) as run_tool:
+        assert _get_index_kline("A") == [{"close": 1}]
+    run_tool.assert_called_once_with("stock_data.py", ["kline", "sh000001", "--period", "daily", "--count", "80"])
 
 
 class TestClassifyRegime:

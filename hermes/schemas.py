@@ -609,7 +609,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "diagnose_data_sources",
-        "description": "数据源诊断 — 检查当前环境可用的数据 provider（akshare/tushare/yfinance/finnhub/longbridge/alphavantage），输出每个市场的可用链路、缺失 env、warnings。工具拿不到数据或报错时调用排查",
+        "description": "数据源诊断 — 检查当前环境各数据 provider 的包与凭据就绪情况（不探测网络可达性），输出每个市场的可用链路、缺失 env、warnings。工具拿不到数据或报错时调用排查",
         "parameters": {
             "type": "object",
             "properties": {

@@ -3,6 +3,8 @@
 
 Checks: (1) python package importable, (2) required env vars present.
 Does NOT hit the network — this is a cheap capability probe, not a health check.
+`available` therefore means "package + credentials ready"; actual reachability
+is reported as `reachable: null` (unknown) rather than guessed (issue #25).
 """
 
 import argparse
@@ -22,8 +24,16 @@ PROVIDERS = {
     "akshare": ("akshare", [], ["A"], None),
     "tushare": ("tushare", ["TUSHARE_TOKEN"], ["A"], None),
     "efinance": ("efinance", [], ["A"], None),
+    "tencent": ("requests", [], ["A"], "qt.gtimg.cn quote/kline, no auth (issue #25)"),
+    "sina": (
+        "requests",
+        [],
+        ["A"],
+        "hq.sinajs.cn quote + daily kline, no auth; full-market snapshot via akshare (issue #25)",
+    ),
     "xueqiu": ("akshare", ["XUEQIU_TOKEN"], ["A"], "industry board fallback via akshare"),
     "pytdx": ("pytdx", [], ["A"], "connects to public Tencent servers"),
+    "baostock": ("baostock", [], ["A"], None),
     "yfinance": ("yfinance", [], ["HK", "US", "JP", "KR", "TW"], "quote may be delayed 15-20min"),
     "finnhub": ("finnhub", ["FINNHUB_API_KEY"], ["HK", "US"], None),
     "longbridge": (
@@ -61,6 +71,7 @@ def _check_provider(name: str) -> dict:
     entry = {
         "name": name,
         "available": available,
+        "reachable": None,  # not probed — available only means package + env ready
         "markets": markets,
         "reason": "; ".join(reasons) if reasons else None,
     }
@@ -92,10 +103,10 @@ def diagnose(market: str = "all") -> dict:
 
         warnings = []
         if not available:
-            warnings.append(f"no working data source for {m}")
+            warnings.append(f"no configured data source for {m} (package/credentials not ready)")
         # market-specific caveats
         if m == "A" and not any(p["name"] == "tushare" and p["available"] for p in providers):
-            warnings.append("TUSHARE_TOKEN not set — akshare-only, some deep data unavailable")
+            warnings.append("TUSHARE_TOKEN not set — Tushare unavailable; some deep A-share data may be limited")
         if (
             m in ("HK", "US")
             and not any(p["name"] == "longbridge" and p["available"] for p in providers)

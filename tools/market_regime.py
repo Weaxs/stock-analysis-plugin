@@ -38,7 +38,10 @@ SKILL_RECOMMEND = {
 
 def _get_index_kline(market: str) -> list:
     code, _ = INDEX_MAP[market]
-    data = _run_tool("stock_data.py", ["kline", code, "--period", "daily", "--count", "80"])
+    # A 股指数走显式交易所前缀（sh000001），避免与深市个股 000001（平安银行）撞代码
+    data = _run_tool(
+        "stock_data.py", ["kline", f"sh{code}" if market == "A" else code, "--period", "daily", "--count", "80"]
+    )
     if isinstance(data, list) and len(data) > 0:
         return data
     return []

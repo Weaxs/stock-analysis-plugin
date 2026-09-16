@@ -34,7 +34,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 - **41 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
-- **多数据源 Failover** — 9 个数据源自动容灾切换（akshare / tushare / efinance / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage）
+- **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
 - **社交舆情增强** — A 股（东财股吧 + 雪球）/ 美港股（Reddit / X / Polymarket），市场自动路由
 - **四平台适配** — 同一套工具同时支持 Pi Agent、Hermes Agent、OpenClaw 和 dsh
 
@@ -125,6 +125,8 @@ pip install -r tools/requirements.txt
 | pypinyin | 股票名称拼音搜索 |
 | pytdx | A 股 TDX 行情（免费兜底源） |
 | longport | 港股 / 美股 Longbridge SDK |
+
+> A 股行情另有**腾讯（qt.gtimg.cn）/ 新浪（hq.sinajs.cn）**两个免鉴权兜底源，不依赖任何 Python 包（直接 HTTP 调用），用于东财域名不可达的网络环境（境外主机、企业出网限制等）。
 
 ### 环境变量
 
@@ -343,8 +345,9 @@ position:
 
 | 代码格式 | 示例 | 市场 | 数据源 Failover 链 |
 |----------|------|------|---------------------|
-| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare → tushare → efinance → pytdx → baostock |
-| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | akshare（基金接口）→ tushare → efinance → pytdx → baostock |
+| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare → tushare → efinance → 腾讯 → 新浪 → pytdx → baostock |
+| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | akshare（基金接口）→ tushare → efinance → 腾讯 → 新浪 → pytdx → baostock |
+| 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪（K 线另有 baostock） |
 | `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
 | `.T` 结尾 | `7203.T` | 日股 | yfinance |
@@ -352,6 +355,8 @@ position:
 | `.TW` / `.TWO` 结尾 | `2330.TW`, `6510.TWO` | 台股 | yfinance |
 
 > 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
+> 裸 6 位代码一律按**个股**处理（`000001` 是平安银行）；指数需带交易所前缀（`sh000001` = 上证指数），显式前缀代码直接走腾讯/新浪（东财源只认裸代码）。
+> **粘性优选**：A 股链路（K 线 / 行情 / 市场快照 / 板块成分）会记住最近一次成功的数据源（缓存在系统临时目录，24h 有效），下次调用优先从它开始；若它已失效则自动顺延并更新记录。港美股链路不做粘性——一次 yfinance 瞬时失败不应让后续全天的 quote 降质。
 > 日/韩/台股仅 yfinance 一个数据源（免费数据延迟约 15 分钟）；港股 / 美股 / 日股 / 韩股 / 台股的 ETF 与其所在市场股票走相同链路。
 
 ## 独立 CLI 使用
@@ -481,7 +486,7 @@ pip install -r tools/requirements.txt
 
 ### Q: A 股数据获取失败？
 
-系统会自动按 akshare → tushare → efinance → pytdx → baostock 顺序尝试。如果所有源都失败，检查：网络问题、akshare 版本过低（`pip install --upgrade akshare`）、或非交易时间。配置 `TUSHARE_TOKEN` 可增加一个可靠数据源。
+系统会自动按 akshare → tushare → efinance → 腾讯 → 新浪 → pytdx → baostock 顺序尝试（A 股链路含粘性优选：最近成功的源 24h 内优先）。腾讯 / 新浪源不依赖东财域名，在境外或受限网络下通常仍可用。如果所有源都失败，检查：网络问题、akshare 版本过低（`pip install --upgrade akshare`）、或非交易时间。配置 `TUSHARE_TOKEN` 可增加一个可靠数据源。
 
 ### Q: 港股 / 美股数据有延迟？
 
