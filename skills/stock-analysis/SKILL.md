@@ -1,23 +1,22 @@
 ---
 name: stock-analysis
-description: 综合股票分析 — 技术面+基本面+资金面+消息面+风险筛查多维研判。用于个股综合研判类问题：走势判断、买卖时机、风险排雷、持仓处理。拿不准用哪个 skill 时，默认用本 skill。
-allowed-tools: Bash(python3:*) Read
+description: 综合股票分析：联合技术、基本面、资金、消息和风险数据研判单只股票。用于多维分析、持仓处理或买卖计划；单一策略问题用对应策略 skill。
 ---
 
 # 综合股票分析
-
-你是一位专业的股票分析师。用户提供股票代码后，你需要进行全面的多维度分析并输出结构化研报。
 
 ## 意图路由表
 
 快速问答先判断意图，按下表走最短调用链；完整综合研判走下方执行流程（gather 采集管线），不受此表限制。单工具可答的问题按各工具描述中的适用场景选择，本表不再重复。
 
+用户要求短线、波段、交易计划或买卖时机时，读取[短线交易决策框架](references/short-term-trading.md)；普通基本面或长期价值分析不加载该参考。
+
 | 意图 | 调用序列 |
 |------|---------|
-| 个股买卖时机 | `get_technical_analysis` → `get_capital_flow`(summary, 仅A股) → `screen_risk` → `detect_market_regime`。合成规则：screen_risk 有一票否决则不入场（无视评分）；BUY/STRONG_BUY + 主力净流入 + 大盘非下跌 → 可入场；大盘下跌趋势中个股 BUY 降级为轻仓试错或等待；HOLD/WAIT 则给出具体触发条件（如回踩 MA10 不破、放量突破 20 日高点） |
+| 个股买卖时机 | `get_technical_analysis` → `get_market_capabilities` → 当前市场支持的资金/风险工具 → `detect_market_regime`。A股可加 `get_capital_flow`(summary) 和 `screen_risk`；其他市场不得用缺失的资金或风险数据。veto_buy=true 则不入场；大盘下跌时个股看多信号降级为轻仓试错或等待；HOLD/WAIT 给出可观察触发条件 |
 | 个股状态速览 | `get_quote` + `get_technical_analysis` |
 | 异动归因 | `detect_anomaly` + `get_news` |
-| 大盘择时 | `detect_market_regime` + `get_market_stats` |
+| 大盘择时 | `detect_market_regime`；A 股可补充 `get_market_stats` |
 
 ## 执行流程
 
@@ -62,80 +61,12 @@ python3 scripts/gather.py <symbol>
 - 风险评级（low/medium/high）和一票否决（veto_buy）
 - 如果 veto_buy=true，必须在报告中醒目提示
 
-### 第三步：输出研报
+### 第三步：渲染研报
 
-先输出结构化 JSON 数据块（用于程序化消费），再输出可读的 Markdown 报告。
-
-#### JSON 结构化数据
-
-用 `<analysis_json>` 标签包裹，格式参照 [报告 schema](references/report_schema.json)：
-
-```
-<analysis_json>
-{
-  "stock_name": "贵州茅台",
-  "stock_code": "600519",
-  "analysis_date": "2025-05-15",
-  "sentiment_score": 65,
-  "decision_type": "hold",
-  "confidence": "medium",
-  "core_conclusion": {
-    "one_sentence": "...",
-    "signal_type": "...",
-    "time_sensitivity": "本周",
-    "position_advice": { "no_position": "...", "has_position": "..." }
-  },
-  "market_environment": { "regime": "...", "regime_cn": "..." },
-  "risk_screening": { "risk_level": "...", "risk_score": 0, "veto_buy": false, "flags": [] },
-  "data_perspective": { ... },
-  "intelligence": { ... },
-  "battle_plan": { ... },
-  "risk_warning": ["..."]
-}
-</analysis_json>
-```
-
-#### Markdown 可读报告
-
-```
-## [股票名称]（[代码]）分析报告
-
-### 市场环境
-当前市场状态、推荐策略方向
-
-### 行情概览
-当前价格、涨跌幅、成交量等关键数据
-
-### 技术分析
-- 趋势：...
-- 关键信号：...
-- 支撑位：... | 压力位：...
-
-### 基本面分析
-- 估值：...
-- 盈利：...
-
-### 资金面分析
-- 主力资金：...
-
-### 消息面
-- 要点：...
-
-### 风险筛查
-- 风险等级：[low/medium/high]
-- 风险标记：...
-- ⚠️ 一票否决：[如有]
-
-### 综合研判
-- 短期观点：...
-- 中期观点：...
-- 风险提示：...
-
-### 操作建议
-- 建议仓位：...
-- 关注价位：...
-- 作战计划：理想买点 / 止损位 / 止盈位
-```
+1. 按 [报告 schema](references/report_schema.json) 构建结构化报告。
+2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。
+3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
+4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
 
 ## 注意事项
 - 始终提供风险提示
@@ -143,3 +74,5 @@ python3 scripts/gather.py <symbol>
 - 建议用户结合自身风险偏好做决策
 - 如果某些数据获取失败，说明情况并基于可用数据分析
 - 如果风险筛查返回 veto_buy=true，必须醒目标注并建议谨慎
+
+完成标准：每个买卖建议都对应可观察的触发条件和失效条件，且所有缺失数据及其影响已说明。

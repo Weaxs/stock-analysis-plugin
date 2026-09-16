@@ -39,10 +39,9 @@ TOOL_MATRIX = {
     "get_market_stats": {"markets": ["A"], "reason": "A-share only"},
     "get_fundamental_context": {"markets": ["A"], "reason": "A-share only"},
     "resolve_stock_name": {"markets": ["A"], "reason": "A-share name/pinyin index only"},
-    # US-leaning
     "get_social_sentiment": {
-        "markets": ["US"],
-        "reason": "sentiment providers are US-centric; requires SENTIMENT_API_KEY",
+        "markets": ["A", "HK", "US"],
+        "reason": "A-share uses Eastmoney/Xueqiu; HK/US require SENTIMENT_API_KEY",
     },
     "get_trending_sentiment": {
         "markets": ALL_MARKETS,
@@ -52,7 +51,7 @@ TOOL_MATRIX = {
     "search_stock_news": {"markets": ALL_MARKETS, "reason": None},
     "search_comprehensive_intel": {"markets": ALL_MARKETS, "reason": None},
     "extract_article": {"markets": ALL_MARKETS, "reason": None},
-    "screen_risk": {"markets": ALL_MARKETS, "reason": None},
+    "screen_risk": {"markets": ["A"], "reason": "A-share only"},
 }
 
 

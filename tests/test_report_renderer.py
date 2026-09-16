@@ -8,6 +8,7 @@ from tools import report_renderer
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RENDERER_SCRIPT = PROJECT_ROOT / "tools" / "report_renderer.py"
+MARKET_SCHEMA = PROJECT_ROOT / "schemas" / "market_review_schema.json"
 
 
 class TestRender:
@@ -53,6 +54,19 @@ class TestRender:
         result = report_renderer.render("stock", "full", report)
         assert "error" not in result
         assert "AAPL" in result["content"]
+
+    def test_market_full_accepts_documented_minimum(self):
+        schema = json.loads(MARKET_SCHEMA.read_text(encoding="utf-8"))
+        report = {
+            "market": "A",
+            "review_date": "2026-09-16",
+            "temperature": {"score": 50, "signal": "yellow"},
+            "strategy_stance": "balanced",
+        }
+        assert set(schema["required"]) <= report.keys()
+        result = report_renderer.render("market", "full", report)
+        assert "error" not in result
+        assert "A 股大盘复盘" in result["content"]
 
     def test_unknown_kind(self):
         result = report_renderer.render("bogus", "full", {})

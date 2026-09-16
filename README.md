@@ -33,7 +33,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 - **41 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
-- **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断 + LLM 变异优化
+- **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
 - **社交舆情增强** — A 股（东财股吧 + 雪球）/ 美港股（Reddit / X / Polymarket），市场自动路由
 - **四平台适配** — 同一套工具同时支持 Pi Agent、Hermes Agent、OpenClaw 和 dsh
@@ -205,9 +205,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 |-------|----------|------|
 | 综合分析 | `/skill:stock-analysis` | 技术面 + 基本面 + 资金面 + 消息面多维研判，输出结构化研报 |
 | 全市场选股 | `/skill:stock-screener` | L1 多因子硬筛（市场情绪调节，可选 `--l2` 量化增强）→ L2 LLM 智能排序 → 输出推荐列表 |
-| 策略回测 | `/skill:strategy-backtest` | YAML 策略定义 → 回测 → 诊断 → LLM 变异优化 → 迭代 |
+| 策略回测 | `/skill:strategy-backtest` | YAML 策略定义 → 回测 → 诊断；按需进行最多 3 轮参数优化 |
 
-### 策略方法论（12 个）
+### 策略、复盘与研究（17 个）
 
 | Skill | 调用方式 | 方法论 |
 |-------|----------|--------|
@@ -222,7 +222,12 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | 箱体震荡 | `/skill:box-oscillation` | 箱体区间识别 + 支撑压力间波段操作 |
 | 情绪周期 | `/skill:emotion-cycle` | 市场情绪冰点 → 回暖 → 狂热 → 退潮周期判断 |
 | 一阳穿三阴 | `/skill:one-yang-three-yin` | K 线形态识别 + 反转信号质量评级 |
-| Wisburg 研报 | `/skill:wisburg-research` | 结构化投研报告生成 |
+| 事件驱动 | `/skill:event-driven` | 公告/政策/业绩事件的影响路径与失效条件 |
+| 预期重估 | `/skill:expectation-repricing` | 市场预期与实际数据的偏差 |
+| 成长质量 | `/skill:growth-quality` | 收入、利润、现金流与盈利能力的多期验证 |
+| 热点题材 | `/skill:hot-theme` | 板块强度、扩散度、关联度与节奏 |
+| 市场复盘 | `/skill:market-review` | 指数、宽度、板块、温度与次日策略 |
+| Wisburg 投研 | `/skill:wisburg-research` | 检索机构研报、公告、电话会纪要和市场日报 |
 
 ## 工具列表
 
@@ -253,6 +258,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `calculate_ma` | 多周期均线计算 |
 | `get_volume_analysis` | 量价分析 |
 | `evaluate_signal` | 历史信号胜率回测 |
+| `detect_anomaly` | 当日技术、量价与资金异动扫描 |
 
 ### 筛选与回测
 
@@ -262,6 +268,8 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `screen_risk` | 风险因子筛查 |
 | `run_backtest` | YAML 策略回测 |
 | `detect_market_regime` | 市场状态检测（牛/熊/震荡） |
+| `get_market_review` | 市场日度复盘数据 |
+| `run_watchlist_analysis` | 批量自选股分析 |
 
 ### 搜索与舆情
 
@@ -280,6 +288,19 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `resolve_stock_name` | 股票名称 / 拼音模糊匹配 |
 | `check_trading_day` | 查询是否交易日 |
 | `get_trading_days` | 获取前后 N 个交易日 |
+| `diagnose_data_sources` | 诊断数据源、环境变量和市场链路 |
+| `get_market_capabilities` | 查询各市场支持的工具边界 |
+| `parse_stock_list` | 从自然语言、CSV 或 Markdown 解析股票列表 |
+
+### 上下文与报告
+
+| 工具 | 说明 |
+|------|------|
+| `build_watchlist_context` | 构建自选股摘要与后续工具建议 |
+| `analyze_position_context` | 结合成本、仓位与止损止盈分析持仓 |
+| `check_alert_rules` | 无状态检查价格、涨跌幅、异动和风险规则 |
+| `render_stock_report` | 将结构化个股报告渲染为 Markdown |
+| `render_market_report` | 将结构化市场复盘渲染为 Markdown |
 
 ## 策略回测 DSL
 

@@ -1,12 +1,9 @@
 ---
 name: box-oscillation
-description: 箱体震荡策略 — 识别箱体区间并在支撑压力间做波段。当用户要求箱体分析时使用。典型话术："区间震荡""高抛低吸""支撑位压力位""横盘整理"。综合研判走 stock-analysis。
-allowed-tools: Bash(python3:*) Read
+description: 箱体震荡分析：识别横盘区间、支撑压力和突破失效条件。用于区间波段或高抛低吸问题。
 ---
 
 # 箱体震荡分析
-
-你是一位专注箱体交易的专家。
 
 ## 核心理念
 
