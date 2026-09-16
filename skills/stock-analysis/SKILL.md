@@ -9,6 +9,8 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 快速问答先判断意图，按下表走最短调用链；完整综合研判走下方执行流程（gather 采集管线），不受此表限制。单工具可答的问题按各工具描述中的适用场景选择，本表不再重复。
 
+用户要求短线、波段、交易计划或买卖时机时，读取[短线交易决策框架](references/short-term-trading.md)；普通基本面或长期价值分析不加载该参考。
+
 | 意图 | 调用序列 |
 |------|---------|
 | 个股买卖时机 | `get_technical_analysis` → `get_market_capabilities` → 当前市场支持的资金/风险工具 → `detect_market_regime`。A股可加 `get_capital_flow`(summary) 和 `screen_risk`；其他市场不得用缺失的资金或风险数据。veto_buy=true 则不入场；大盘下跌时个股看多信号降级为轻仓试错或等待；HOLD/WAIT 给出可观察触发条件 |
