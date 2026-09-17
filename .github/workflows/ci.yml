@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 jobs:
   lint:
@@ -52,52 +53,6 @@ jobs:
 
       - name: Run tests
         run: pytest --cov=tools --cov-report=term-missing
-
-  integration:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Python dependencies
-        run: |
-          pip install -r tools/requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: Test Hermes plugin registration
-        run: pytest tests/test_hermes_integration.py -v
-
-      - name: Test Pi extension registration
-        run: npx tsx tests/test_pi_integration.ts
-
-      - name: Test OpenClaw plugin registration
-        run: npx tsx tests/test_openclaw_integration.ts
-
-      - name: Test dsh plugin registration
-        run: npx tsx tests/test_dsh_integration.ts
-
-      - name: E2E — host↔python round-trip (pytest)
-        run: pytest tests/e2e/test_host_to_python.py -v
-
-      - name: E2E — Pi host real subprocess
-        run: npx tsx tests/e2e/test_pi_e2e.ts
-
-      - name: E2E — OpenClaw host real subprocess
-        run: npx tsx tests/e2e/test_openclaw_e2e.ts
-
-      - name: E2E — dsh host real subprocess
-        run: npx tsx tests/e2e/test_dsh_e2e.ts
 
   network:
     # Real provider calls (akshare/yfinance) — flaky upstreams by nature, so
@@ -166,6 +121,9 @@ jobs:
 
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
+
+      - name: Run host↔python round-trip tests
+        run: pytest tests/e2e/test_host_to_python.py -v
 
       - name: Pi host real subprocess round-trip
         run: npx tsx tests/e2e/test_pi_e2e.ts
@@ -276,7 +234,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: [lint, test, integration]
+    needs: [lint, test, compat]
     steps:
       - uses: actions/checkout@v4
 

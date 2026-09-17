@@ -18,15 +18,6 @@ from stock_data import detect_market  # noqa: E402
 from watchlist import analyze_watchlist  # noqa: E402
 
 
-def _trend_label(overall: str) -> str:
-    return {
-        "bullish": "bullish",
-        "bearish": "bearish",
-        "neutral": "neutral",
-        "mixed": "mixed",
-    }.get(overall, overall or "unknown")
-
-
 def _suggest_next_tools(market: str, trend: str, anomalies: list, risk_level: str) -> list:
     tools = []
     high_anoms = [a for a in anomalies if a.get("severity") == "high"]
@@ -58,7 +49,7 @@ def _build_item(symbol: str, data: dict | None) -> dict:
     anomalies = anom_result.get("anomalies", []) if isinstance(anom_result, dict) else []
 
     score = tech.get("signal_score")
-    trend = _trend_label((tech.get("trend") or {}).get("overall", ""))
+    trend = (tech.get("trend") or {}).get("overall") or "unknown"
     risk_level = risk.get("risk_level", "unknown")
     veto = bool(risk.get("veto_buy", False))
     buy_signal = tech.get("buy_signal")

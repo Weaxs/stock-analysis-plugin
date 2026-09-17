@@ -15,14 +15,12 @@
  *   1. the host actually invoked our get_quote tool (tool-call trace)
  *   2. the final answer contains a number (real data reached the reply)
  */
-import { execFileSync, execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const host = process.argv[2];

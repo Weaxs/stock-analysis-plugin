@@ -3,8 +3,6 @@
 from unittest.mock import MagicMock, patch
 
 from tools.search_intel import (
-    _cache_get,
-    _cache_set,
     _eastmoney_guba_heat,
     _xueqiu_heat,
     get_social_sentiment,
@@ -138,54 +136,13 @@ class TestTrendingSentiment:
         assert mock_get.call_count == 3  # reddit, twitter, polymarket
 
     @patch("requests.get")
-    def test_caching_prevents_repeated_calls(self, mock_get):
-        mock_get.return_value = MagicMock(ok=True, json=lambda: [{"ticker": "TSLA"}])
-        # Clear any existing cache
-        from tools.search_intel import _CACHE
-
-        _CACHE.clear()
-
-        result1 = get_trending_sentiment()
-        result2 = get_trending_sentiment()
-        assert result1 == result2
-        assert mock_get.call_count == 3  # Only called once (3 sources in first call)
-
-    @patch("requests.get")
     def test_api_failure_returns_note(self, mock_get):
         mock_get.side_effect = Exception("network error")
-        from tools.search_intel import _CACHE
-
-        _CACHE.clear()
         result = get_trending_sentiment()
         assert "note" in result
 
     def test_wisburg_context_present(self):
         with patch("requests.get", return_value=MagicMock(ok=True, json=lambda: [])):
-            from tools.search_intel import _CACHE
-
-            _CACHE.clear()
             result = get_trending_sentiment()
         assert "additional_context" in result
         assert "wisburg_mcp" in result["additional_context"]
-
-
-class TestTTLCache:
-    def test_cache_set_and_get(self):
-        _cache_set("test_key", {"value": 42})
-        assert _cache_get("test_key") == {"value": 42}
-
-    def test_cache_miss_returns_none(self):
-        assert _cache_get("nonexistent_key") is None
-
-    @patch("tools.search_intel._time")
-    def test_cache_expired_returns_none(self, mock_time):
-        mock_time.time.return_value = 1000.0
-        _cache_set("expire_test", {"value": 1})
-
-        mock_time.time.return_value = 1000.0 + 601  # > 600s TTL
-        from tools.search_intel import _CACHE, _CACHE_TTL
-
-        entry = _CACHE.get("expire_test")
-        # Manually verify expiry logic
-        assert entry is not None
-        assert (1601.0 - entry["ts"]) > _CACHE_TTL

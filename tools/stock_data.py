@@ -12,6 +12,9 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import run_tool  # noqa: E402
+
 # Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
 # Bare 6-digit codes are always stocks; the prefix is the disambiguation escape
 # hatch for index codes (sh000001 = 上证指数, not 平安银行).
@@ -59,15 +62,6 @@ def normalize_stock_code(symbol: str) -> dict:
         info["board"] = "ETF"
         info["limit_pct"] = None
 
-    return info
-
-
-def mark_st(info: dict, name: str) -> dict:
-    """Mark ST status from stock name; adjusts limit_pct to 5%."""
-    if name and "ST" in name.upper():
-        info["is_st"] = True
-        if info["board"] == "main":
-            info["limit_pct"] = 0.05
     return info
 
 
@@ -1226,31 +1220,10 @@ def cmd_capital_flow(args):
 
 def _news_search_intel_fallback(symbol: str) -> list:
     """Fallback: use search_intel to find news when primary sources fail."""
-    import subprocess
-    from pathlib import Path
-
-    tools_dir = Path(__file__).parent
-    try:
-        result = subprocess.run(
-            [sys.executable, str(tools_dir / "search_intel.py"), "search", f"{symbol} 最新消息"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=30,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return []
-    if result.returncode != 0 or not result.stdout.strip():
-        return []
-    try:
-        data = json.loads(result.stdout.strip())
-        if isinstance(data, list):
-            return [
-                {"title": item.get("title", ""), "url": item.get("url", ""), "source": "search"} for item in data[:10]
-            ]
-        return []
-    except (json.JSONDecodeError, TypeError):
-        return []
+    data = run_tool("search_intel.py", ["search", f"{symbol} 最新消息"], timeout=30)
+    if isinstance(data, list):
+        return [{"title": item.get("title", ""), "url": item.get("url", ""), "source": "search"} for item in data[:10]]
+    return []
 
 
 def cmd_news(args):
@@ -2312,8 +2285,7 @@ def main():
     p_chip = sub.add_parser("chip_distribution")
     p_chip.add_argument("symbol")
 
-    p_stats = sub.add_parser("market_stats")
-    p_stats.add_argument("--market", default="A", choices=["A"])
+    sub.add_parser("market_stats")
 
     p_fund = sub.add_parser("fundamental_context")
     p_fund.add_argument("symbol")

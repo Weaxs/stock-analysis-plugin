@@ -63,7 +63,7 @@ python3 scripts/gather.py <symbol>
 
 ### 第三步：渲染研报
 
-1. 按 [报告 schema](references/report_schema.json) 构建结构化报告。
+1. 按 [报告 schema](../../schemas/report_schema.json) 构建结构化报告。
 2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。
 3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。

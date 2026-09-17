@@ -4,16 +4,15 @@
 import argparse
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import run_tool  # noqa: E402
 
 
-# gather fans out the heavier CLIs, so the default timeout stays 60s; JSON parsing
-# is _parse_json's job, so raw stdout is wanted here. A def wrapper (not
-# functools.partial) keeps timeout passable both positionally and by keyword.
+# gather fans out the heavier CLIs, so the default timeout stays 60s; raw stdout
+# wanted here (parsing is _parse_json's job); def keeps timeout kw-passable.
 def _run(script, args, timeout=60):
     return run_tool(script, args, timeout=timeout, parse_json=False)
 
@@ -27,6 +26,12 @@ def _parse_json(raw: str | None):
         return raw
 
 
+def _run_all(tasks: dict) -> dict:
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        futures = {pool.submit(_run, script, args): key for key, (script, args) in tasks.items()}
+        return {key: _parse_json(f.result()) for f, key in futures.items()}
+
+
 def gather_analysis(symbol: str) -> dict:
     tasks = {
         "quote": ("stock_data.py", ["quote", symbol]),
@@ -38,15 +43,7 @@ def gather_analysis(symbol: str) -> dict:
         "risk": ("risk_screening.py", ["screen", symbol]),
         "regime": ("market_regime.py", ["detect"]),
     }
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_run, script, args): key for key, (script, args) in tasks.items()}
-        for future in as_completed(futures):
-            key = futures[future]
-            results[key] = _parse_json(future.result())
-
-    return results
+    return _run_all(tasks)
 
 
 def gather_technical(symbol: str, kline_count: int = 120, with_quote: bool = False) -> dict:
@@ -56,15 +53,7 @@ def gather_technical(symbol: str, kline_count: int = 120, with_quote: bool = Fal
     }
     if with_quote:
         tasks["quote"] = ("stock_data.py", ["quote", symbol])
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(_run, script, args): key for key, (script, args) in tasks.items()}
-        for future in as_completed(futures):
-            key = futures[future]
-            results[key] = _parse_json(future.result())
-
-    return results
+    return _run_all(tasks)
 
 
 def gather_screen(market: str = "A", top: int = 20, config: str | None = None) -> dict:
@@ -85,15 +74,7 @@ def gather_fundamental(symbol: str) -> dict:
         "stock_info": ("stock_data.py", ["stock_info", symbol]),
         "sector_rankings": ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"]),
     }
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=7) as pool:
-        futures = {pool.submit(_run, script, args): key for key, (script, args) in tasks.items()}
-        for future in as_completed(futures):
-            key = futures[future]
-            results[key] = _parse_json(future.result())
-
-    return results
+    return _run_all(tasks)
 
 
 def main():

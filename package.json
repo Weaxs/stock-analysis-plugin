@@ -39,7 +39,8 @@
     "schemas/",
     "templates/",
     "strategies/",
-    "scripts/"
+    "scripts/",
+    "!scripts/sync-version.sh"
   ],
   "scripts": {
     "postinstall": "node scripts/setup-python.mjs",

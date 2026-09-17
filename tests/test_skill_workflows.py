@@ -28,8 +28,14 @@ def test_skill_gather_cli_reaches_existing_tool(script, monkeypatch):
     assert Path(called[0][1]).parent == PROJECT_ROOT / "tools"
 
 
-def test_market_review_skill_links_canonical_schema():
-    skill = PROJECT_ROOT / "skills" / "market-review" / "SKILL.md"
-    schema = (skill.parent / "../../schemas/market_review_schema.json").resolve()
-    assert schema == PROJECT_ROOT / "schemas" / "market_review_schema.json"
-    assert "../../schemas/market_review_schema.json" in skill.read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("skill_name", "schema_name"),
+    [("market-review", "market_review_schema.json"), ("stock-analysis", "report_schema.json")],
+)
+def test_skill_links_canonical_schema(skill_name, schema_name):
+    skill = PROJECT_ROOT / "skills" / skill_name / "SKILL.md"
+    rel = f"../../schemas/{schema_name}"
+    schema = (skill.parent / rel).resolve()
+    assert schema == PROJECT_ROOT / "schemas" / schema_name
+    assert schema.is_file()
+    assert rel in skill.read_text(encoding="utf-8")

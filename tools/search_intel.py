@@ -8,23 +8,6 @@ import re
 import sys
 import time as _time
 
-# --------------- TTL Cache ---------------
-
-_CACHE = {}
-_CACHE_TTL = 600  # 10 minutes
-
-
-def _cache_get(key: str):
-    entry = _CACHE.get(key)
-    if entry and (_time.time() - entry["ts"]) < _CACHE_TTL:
-        return entry["data"]
-    return None
-
-
-def _cache_set(key: str, data):
-    _CACHE[key] = {"data": data, "ts": _time.time()}
-
-
 # --------------- Web Search ---------------
 
 _SECRET_PARAM_RE = re.compile(r"(?i)((?:api[_-]?key|token|secret|access[_-]?token)=)[^&\s]+")
@@ -398,12 +381,7 @@ def get_social_sentiment(symbol: str) -> dict:
 
 
 def get_trending_sentiment() -> dict:
-    """Fetch trending sentiment from Reddit/X/Polymarket. Results cached for 10 min."""
-    cache_key = "trending_sentiment"
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
-
+    """Fetch trending sentiment from Reddit/X/Polymarket."""
     api_url = os.environ.get("SENTIMENT_API_URL", "https://api.adanos.org")
     api_key = os.environ.get("SENTIMENT_API_KEY")
 
@@ -432,7 +410,6 @@ def get_trending_sentiment() -> dict:
         "wisburg_mcp": "Use 'list-feed' for latest research feed and 'list-market-daily' for market daily digest.",
     }
 
-    _cache_set(cache_key, result)
     return result
 
 

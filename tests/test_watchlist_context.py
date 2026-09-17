@@ -61,13 +61,6 @@ class TestBuildItem:
         assert "get_capital_flow" in item["next_tools"]
 
 
-class TestTrendLabel:
-    def test_known_trends(self):
-        assert watchlist_context._trend_label("bullish") == "bullish"
-        assert watchlist_context._trend_label("bearish") == "bearish"
-        assert watchlist_context._trend_label("") == "unknown"
-
-
 if __name__ == "__main__":
     import os
     import subprocess

@@ -8,8 +8,6 @@ L2 (opt-in via --l2 / config l2: true): per-candidate quality/growth/momentum/vo
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -20,6 +18,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _subproc import run_tool
 from market_review import calc_temperature
 from stock_data import compute_market_stats
 
@@ -51,20 +50,7 @@ _INDEX_REGION = {"A": "cn", "HK": "hk", "US": "us"}
 
 def _fetch_json(args: list[str], timeout: int = 30) -> dict | list | None:
     """Run a stock_data.py CLI command and parse its JSON stdout; None on any failure."""
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
-    try:
-        r = subprocess.run(
-            [sys.executable, script, *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout)
-    except Exception:
-        pass
-    return None
+    return run_tool("stock_data.py", args, timeout=timeout)
 
 
 def fetch_snapshot(market: str) -> list:
