@@ -17,6 +17,9 @@ const EXPECTED_TOOLS = [
   "get_stock_info",
   "get_chip_distribution",
   "get_market_stats",
+  "get_limit_up_pool",
+  "get_dragon_tiger",
+  "get_hot_stocks",
   "get_fundamental_context",
   "screen_stocks",
   "run_backtest",
@@ -24,6 +27,7 @@ const EXPECTED_TOOLS = [
   "resolve_stock_name",
   "check_trading_day",
   "get_trading_days",
+  "get_trading_phase",
   "calculate_ma",
   "get_volume_analysis",
   "search_stock_news",
@@ -43,6 +47,9 @@ const EXPECTED_TOOLS = [
   "build_watchlist_context",
   "analyze_position_context",
   "check_alert_rules",
+  "record_signal",
+  "evaluate_signals",
+  "get_signal_summary",
   "parse_stock_list",
 ].sort();
 

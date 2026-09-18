@@ -254,7 +254,7 @@ export default (pi: ExtensionAPI) => {
 
   pi.registerTool({
     name: "get_sector_rankings",
-    description: "获取A股行业板块涨跌幅排行（含领涨股、涨跌家数等）。支持查看涨幅榜/跌幅榜/双向",
+    description: "获取A股板块涨跌幅排行（含领涨股、涨跌家数等）。board_type=industry（默认）为行业板块，board_type=concept 时为概念板块排行。支持查看涨幅榜/跌幅榜/双向",
     parameters: {
       type: "object",
       properties: {
@@ -267,15 +267,22 @@ export default (pi: ExtensionAPI) => {
           enum: ["top", "bottom", "both"],
           description: "top=涨幅榜（默认），bottom=跌幅榜，both=双向",
         },
+        board_type: {
+          type: "string",
+          enum: ["industry", "concept"],
+          description: "板块类型：industry=行业（默认），concept=概念",
+        },
       },
     },
-    async execute(_id, { top = 10, direction = "top" }) {
+    async execute(_id, { top = 10, direction = "top", board_type = "industry" }) {
       const result = await py("stock_data.py", [
         "sector_rankings",
         "--top",
         String(top),
         "--direction",
         direction,
+        "--board-type",
+        board_type,
       ]);
       return asText(result.stdout);
     },
@@ -381,6 +388,79 @@ export default (pi: ExtensionAPI) => {
     },
     async execute() {
       const result = await py("stock_data.py", ["market_stats"]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_limit_up_pool",
+    description:
+      "获取A股涨停池/涨停板复盘——当日涨停个股，含连板数、封板资金、炸板次数、首末次封板时间、所属行业。短线情绪与龙头战法核心数据",
+    parameters: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description: "日期（YYYYMMDD），默认当日",
+        },
+      },
+    },
+    async execute(_id, { date }) {
+      const result = await py("stock_data.py", [
+        "limit_up_pool",
+        ...(date ? ["--date", date] : []),
+      ]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_dragon_tiger",
+    description:
+      "获取A股龙虎榜——上榜个股净买额/买入额/卖出额/上榜原因/解读，可按个股过滤",
+    parameters: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description: "日期（YYYY-MM-DD），默认当日",
+        },
+        symbol: {
+          type: "string",
+          description: "A股股票代码（可选，按个股过滤），如 600519",
+        },
+        top: {
+          type: "number",
+          description: "返回前N条，默认 20",
+        },
+      },
+    },
+    async execute(_id, { date, symbol, top = 20 }) {
+      const result = await py("stock_data.py", [
+        "dragon_tiger",
+        ...(date ? ["--date", date] : []),
+        ...(symbol ? ["--symbol", symbol] : []),
+        "--top",
+        String(top),
+      ]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_hot_stocks",
+    description: "获取A股全市场人气热搜榜（东方财富人气榜）",
+    parameters: {
+      type: "object",
+      properties: {
+        top: {
+          type: "number",
+          description: "返回前N只，默认 20",
+        },
+      },
+    },
+    async execute(_id, { top = 20 }) {
+      const result = await py("stock_data.py", ["hot_stocks", "--top", String(top)]);
       return asText(result.stdout);
     },
   });
@@ -640,6 +720,27 @@ export default (pi: ExtensionAPI) => {
         String(count),
         ...(date ? ["--date", date] : []),
       ]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_trading_phase",
+    description:
+      "查询某市场当前交易时段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），用于正确解读实时行情的盘中语义。支持CN/HK/US/JP/KR/TW",
+    parameters: {
+      type: "object",
+      properties: {
+        market: {
+          type: "string",
+          enum: ["CN", "HK", "US", "JP", "KR", "TW"],
+          description: "市场",
+        },
+      },
+      required: ["market"],
+    },
+    async execute(_id, { market }) {
+      const result = await py("trading_calendar.py", ["phase", market]);
       return asText(result.stdout);
     },
   });
@@ -1133,6 +1234,93 @@ export default (pi: ExtensionAPI) => {
     async execute(_id, { symbol, rules }) {
       const b64 = Buffer.from(JSON.stringify(rules), "utf-8").toString("base64");
       const result = await py("alert_rules.py", ["check", symbol, "--rules-b64", b64]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "record_signal",
+    description:
+      "记录一条 AI 分析建议信号（方向/入场价/目标价/止损价/持有期限），供后续胜率评估。信号持久化在本地 JSONL（$STOCK_SIGNAL_STORE 或 ~/.stock-analysis/signals.jsonl），宿主 Agent 自行决定何时 record/evaluate",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
+        direction: {
+          type: "string",
+          enum: ["buy", "sell"],
+          description: "建议方向",
+        },
+        entry_price: { type: "number", description: "入场价（可选）" },
+        target_price: { type: "number", description: "目标价（可选）" },
+        stop_price: { type: "number", description: "止损价（可选）" },
+        horizon_days: { type: "number", description: "持有期限（交易日），默认 10" },
+        source: { type: "string", description: "信号来源（如触发该建议的 skill 名）" },
+        note: { type: "string", description: "备注（可选）" },
+      },
+      required: ["symbol", "direction"],
+    },
+    async execute(_id, { symbol, direction, entry_price, target_price, stop_price, horizon_days = 10, source, note }) {
+      const result = await py("signal_tracker.py", [
+        "record",
+        symbol,
+        "--direction",
+        direction,
+        ...(entry_price !== undefined ? ["--entry-price", String(entry_price)] : []),
+        ...(target_price !== undefined ? ["--target-price", String(target_price)] : []),
+        ...(stop_price !== undefined ? ["--stop-price", String(stop_price)] : []),
+        "--horizon-days",
+        String(horizon_days),
+        ...(source ? ["--source", source] : []),
+        ...(note ? ["--note", note] : []),
+      ]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "evaluate_signals",
+    description:
+      "评估到期信号：拉取记录日之后的日K，判定 target_hit/stop_hit/timeout 并计算收益，回写存储。记录建议用 record_signal，胜率复盘用 get_signal_summary",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string", description: "股票代码（可选，只评估该股的信号）" },
+      },
+    },
+    async execute(_id, { symbol }) {
+      const result = await py("signal_tracker.py", [
+        "evaluate",
+        ...(symbol ? ["--symbol", symbol] : []),
+      ]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_signal_summary",
+    description:
+      "信号胜率汇总（可按 source/symbol/status 过滤）：胜率、平均收益、结果分布与明细",
+    parameters: {
+      type: "object",
+      properties: {
+        source: { type: "string", description: "按信号来源过滤（可选）" },
+        symbol: { type: "string", description: "按股票代码过滤（可选）" },
+        status: {
+          type: "string",
+          enum: ["open", "closed", "all"],
+          description: "open=未结算，closed=已结算，all=全部（默认）",
+        },
+      },
+    },
+    async execute(_id, { source, symbol, status = "all" }) {
+      const result = await py("signal_tracker.py", [
+        "summary",
+        ...(source ? ["--source", source] : []),
+        ...(symbol ? ["--symbol", symbol] : []),
+        "--status",
+        status,
+      ]);
       return asText(result.stdout);
     },
   });

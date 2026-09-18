@@ -88,7 +88,7 @@ Pi Agent 使用 [jiti](https://github.com/nicolo-ribaudo/jiti) 加载 TypeScript
 
 ### 工具注册
 
-`pi/index.ts` 导出一个函数，接收 `ExtensionAPI` 对象，通过 `pi.registerTool()` 注册 31 个工具：
+`pi/index.ts` 导出一个函数，接收 `ExtensionAPI` 对象，通过 `pi.registerTool()` 注册 48 个工具：
 
 ```typescript
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -107,7 +107,7 @@ export default (pi: ExtensionAPI) => {
       return { content: [{ type: "text", text: result.stdout }], details: {} };
     },
   });
-  // ... 其余 38 个工具
+  // ... 其余 47 个工具
 };
 ```
 

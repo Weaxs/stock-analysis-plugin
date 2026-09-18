@@ -284,13 +284,18 @@ export function apply(ctx: Context) {
     pyTool({
       name: "get_sector_rankings",
       description:
-        "获取A股行业板块涨跌幅排行（含领涨股、涨跌家数等）。支持查看涨幅榜/跌幅榜/双向",
+        "获取A股板块涨跌幅排行（含领涨股、涨跌家数等）。board_type=industry（默认）为行业板块，board_type=concept 时为概念板块排行。支持查看涨幅榜/跌幅榜/双向",
       parameters: {
         top: { type: "number", description: "返回排名前N的板块，默认 10" },
         direction: {
           type: "string",
           enum: ["top", "bottom", "both"],
           description: "top=涨幅榜（默认），bottom=跌幅榜，both=双向",
+        },
+        board_type: {
+          type: "string",
+          enum: ["industry", "concept"],
+          description: "板块类型：industry=行业（默认），concept=概念",
         },
       },
       script: "stock_data.py",
@@ -300,6 +305,8 @@ export function apply(ctx: Context) {
         String(p.top ?? 10),
         "--direction",
         p.direction ?? "top",
+        "--board-type",
+        p.board_type ?? "industry",
       ],
     })
   );
@@ -386,6 +393,56 @@ export function apply(ctx: Context) {
       parameters: {},
       script: "stock_data.py",
       argv: () => ["market_stats"],
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "get_limit_up_pool",
+      description:
+        "获取A股涨停池/涨停板复盘——当日涨停个股，含连板数、封板资金、炸板次数、首末次封板时间、所属行业。短线情绪与龙头战法核心数据",
+      parameters: {
+        date: { type: "string", description: "日期（YYYYMMDD），默认当日" },
+      },
+      script: "stock_data.py",
+      argv: (p) => {
+        const args = ["limit_up_pool"];
+        if (p.date) args.push("--date", p.date);
+        return args;
+      },
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "get_dragon_tiger",
+      description:
+        "获取A股龙虎榜——上榜个股净买额/买入额/卖出额/上榜原因/解读，可按个股过滤",
+      parameters: {
+        date: { type: "string", description: "日期（YYYY-MM-DD），默认当日" },
+        symbol: { type: "string", description: "A股股票代码（可选，按个股过滤），如 600519" },
+        top: { type: "number", description: "返回前N条，默认 20" },
+      },
+      script: "stock_data.py",
+      argv: (p) => {
+        const args = ["dragon_tiger"];
+        if (p.date) args.push("--date", p.date);
+        if (p.symbol) args.push("--symbol", p.symbol);
+        args.push("--top", String(p.top ?? 20));
+        return args;
+      },
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "get_hot_stocks",
+      description: "获取A股全市场人气热搜榜（东方财富人气榜）",
+      parameters: {
+        top: { type: "number", description: "返回前N只，默认 20" },
+      },
+      script: "stock_data.py",
+      argv: (p) => ["hot_stocks", "--top", String(p.top ?? 20)],
     })
   );
 
@@ -568,6 +625,24 @@ export function apply(ctx: Context) {
         if (p.date) args.push("--date", p.date);
         return args;
       },
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "get_trading_phase",
+      description:
+        "查询某市场当前交易时段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），用于正确解读实时行情的盘中语义。支持CN/HK/US/JP/KR/TW",
+      parameters: {
+        market: {
+          type: "string",
+          required: true,
+          enum: ["CN", "HK", "US", "JP", "KR", "TW"],
+          description: "市场",
+        },
+      },
+      script: "trading_calendar.py",
+      argv: (p) => ["phase", p.market],
     })
   );
 
@@ -957,6 +1032,88 @@ export function apply(ctx: Context) {
       argv: (p) => {
         const b64 = Buffer.from(JSON.stringify(p.rules), "utf-8").toString("base64");
         return ["check", p.symbol, "--rules-b64", b64];
+      },
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "record_signal",
+      description:
+        "记录一条 AI 分析建议信号（方向/入场价/目标价/止损价/持有期限），供后续胜率评估。信号持久化在本地 JSONL（$STOCK_SIGNAL_STORE 或 ~/.stock-analysis/signals.jsonl），宿主 Agent 自行决定何时 record/evaluate",
+      parameters: {
+        symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
+        direction: {
+          type: "string",
+          required: true,
+          enum: ["buy", "sell"],
+          description: "建议方向",
+        },
+        entry_price: { type: "number", description: "入场价（可选）" },
+        target_price: { type: "number", description: "目标价（可选）" },
+        stop_price: { type: "number", description: "止损价（可选）" },
+        horizon_days: { type: "number", description: "持有期限（交易日），默认 10" },
+        source: { type: "string", description: "信号来源（如触发该建议的 skill 名）" },
+        note: { type: "string", description: "备注（可选）" },
+      },
+      script: "signal_tracker.py",
+      argv: (p) => {
+        const args = [
+          "record",
+          p.symbol,
+          "--direction",
+          p.direction,
+          "--horizon-days",
+          String(p.horizon_days ?? 10),
+        ];
+        if (p.entry_price !== undefined) args.push("--entry-price", String(p.entry_price));
+        if (p.target_price !== undefined) args.push("--target-price", String(p.target_price));
+        if (p.stop_price !== undefined) args.push("--stop-price", String(p.stop_price));
+        if (p.source) args.push("--source", p.source);
+        if (p.note) args.push("--note", p.note);
+        return args;
+      },
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "evaluate_signals",
+      description:
+        "评估到期信号：拉取记录日之后的日K，判定 target_hit/stop_hit/timeout 并计算收益，回写存储。记录建议用 record_signal，胜率复盘用 get_signal_summary",
+      parameters: {
+        symbol: { type: "string", description: "股票代码（可选，只评估该股的信号）" },
+      },
+      script: "signal_tracker.py",
+      argv: (p) => {
+        const args = ["evaluate"];
+        if (p.symbol) args.push("--symbol", p.symbol);
+        return args;
+      },
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "get_signal_summary",
+      description:
+        "信号胜率汇总（可按 source/symbol/status 过滤）：胜率、平均收益、结果分布与明细",
+      parameters: {
+        source: { type: "string", description: "按信号来源过滤（可选）" },
+        symbol: { type: "string", description: "按股票代码过滤（可选）" },
+        status: {
+          type: "string",
+          enum: ["open", "closed", "all"],
+          description: "open=未结算，closed=已结算，all=全部（默认）",
+        },
+      },
+      script: "signal_tracker.py",
+      argv: (p) => {
+        const args = ["summary"];
+        if (p.source) args.push("--source", p.source);
+        if (p.symbol) args.push("--symbol", p.symbol);
+        args.push("--status", p.status ?? "all");
+        return args;
       },
     })
   );

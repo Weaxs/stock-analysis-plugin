@@ -74,11 +74,22 @@ def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> f
 
 
 # Chains that get sticky ordering: the CN free-source chains, where failures are
-# typically chronic (regional blocking). The yf chains (`kline:`/`quote:`) are
+# typically chronic (regional blocking / rate-limiting — eastmoney is the primary
+# leg of most of them). The yf chains (`kline:`/`quote:`) are
 # excluded on purpose — their failures are usually transient yfinance blips, and
 # stickiness would let one blip degrade HK/US quote richness (finnhub has no
 # name/market_cap/pe/pb) for the whole TTL.
-_STICKY_CHAINS = {"kline_a", "quote_a", "quote_a_etf", "snapshot_a", "sector_constituents", "sina"}
+_STICKY_CHAINS = {
+    "kline_a",
+    "quote_a",
+    "quote_a_etf",
+    "snapshot_a",
+    "sector_constituents",
+    "sina",
+    "sector_rankings",
+    "dragon_tiger",
+    "hot_stocks",
+}
 
 
 def _failover(sources: list, label: str):
@@ -1585,8 +1596,9 @@ def cmd_market_indices(args):
 # --------------- sector_rankings ---------------
 
 
-def _sector_rankings_efinance(top: int, direction: str):
-    """Fallback: fetch sector rankings via efinance."""
+def _sector_rankings_efinance() -> list:
+    """Fallback: fetch industry board rankings via efinance (raw rows; sorting and
+    top/direction are applied uniformly by cmd_sector_rankings after the failover)."""
     import efinance as ef
     import pandas as pd
 
@@ -1605,67 +1617,141 @@ def _sector_rankings_efinance(top: int, direction: str):
     df = df[keep]
     if "change_pct" in df.columns:
         df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce")
-    if direction == "bottom":
-        df = df.sort_values("change_pct", ascending=True).head(top)
-    elif direction == "both":
-        top_df = df.sort_values("change_pct", ascending=False).head(top)
-        bottom_df = df.sort_values("change_pct", ascending=True).head(top)
-        return {
-            "top": [_clean_row(r) for r in top_df.to_dict("records")],
-            "bottom": [_clean_row(r) for r in bottom_df.to_dict("records")],
-        }
-    else:
-        df = df.sort_values("change_pct", ascending=False).head(top)
     return [_clean_row(r) for r in df.to_dict("records")]
 
 
+def _sourced(name: str, fn):
+    """Failover leg wrapper: tag each returned row with the provider name, so the
+    caller can tell which source won (_failover returns only the result)."""
+
+    def run():
+        rows = fn()
+        for r in rows:
+            r["source"] = name
+        return rows
+
+    return name, run
+
+
+def _sector_rankings_em(board_type: str) -> list:
+    """Eastmoney board rankings (industry or concept) via akshare."""
+    import akshare as ak
+    import pandas as pd
+
+    fetch = ak.stock_board_industry_name_em if board_type == "industry" else ak.stock_board_concept_name_em
+    df = _akshare_retry(fetch)
+    if df is None or df.empty:
+        raise ValueError("eastmoney sector data unavailable")
+    col_map = {
+        "板块名称": "name",
+        "板块代码": "code",
+        "最新价": "price",
+        "涨跌幅": "change_pct",
+        "成交量": "volume",
+        "成交额": "turnover",
+        "换手率": "turnover_rate",
+        "总市值": "market_cap",
+        "上涨家数": "up_count",
+        "下跌家数": "down_count",
+        "领涨股票": "leading_stock",
+        # industry boards name the column 领涨涨跌幅, concept boards 领涨股票-涨跌幅
+        "领涨涨跌幅": "leading_change_pct",
+        "领涨股票-涨跌幅": "leading_change_pct",
+    }
+    df = df.rename(columns=col_map)
+    keep = list(dict.fromkeys(c for c in col_map.values() if c in df.columns))
+    df = df[keep]
+    if "change_pct" in df.columns:
+        df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce")
+    return [_clean_row(r) for r in df.to_dict("records")]
+
+
+def _sector_rankings_ths() -> list:
+    """THS industry board rankings via akshare stock_board_industry_summary_ths.
+
+    There is no THS *concept* rankings table in this akshare version:
+    stock_board_concept_name_ths returns only name/code columns and
+    stock_board_concept_summary_ths is a concept timeline (日期/驱动事件), so the
+    concept chain falls back to sina instead."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_board_industry_summary_ths)
+    if df is None or df.empty:
+        raise ValueError("ths sector data unavailable")
+    col_map = {
+        "板块": "name",
+        "涨跌幅": "change_pct",
+        "总成交量": "volume",
+        "总成交额": "turnover",
+        "净流入": "net_inflow",
+        "上涨家数": "up_count",
+        "下跌家数": "down_count",
+        "领涨股": "leading_stock",
+        "领涨股-最新价": "leading_price",
+        "领涨股-涨跌幅": "leading_change_pct",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [_clean_row(r) for r in df[keep].to_dict("records")]
+
+
+def _sector_rankings_sina(indicator: str) -> list:
+    """Sina board rankings via akshare stock_sector_spot (概念/行业/...).
+
+    Sina has no 上涨家数/下跌家数 — only 公司家数 (stock_count); the leading stock
+    rides along in the same row (股票名称/个股-涨跌幅/个股-当前价)."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_sector_spot, indicator=indicator)
+    if df is None or df.empty:
+        raise ValueError(f"sina sector data unavailable (indicator={indicator})")
+    col_map = {
+        "板块": "name",
+        "公司家数": "stock_count",
+        "涨跌额": "change",
+        "涨跌幅": "change_pct",
+        "总成交量": "volume",
+        "总成交额": "turnover",
+        "股票名称": "leading_stock",
+        "个股-涨跌幅": "leading_change_pct",
+        "个股-当前价": "leading_price",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [_clean_row(r) for r in df[keep].to_dict("records")]
+
+
 def cmd_sector_rankings(args):
+    board_type = getattr(args, "board_type", "industry")
+    direction = getattr(args, "direction", "top")
+    sources = [_sourced("eastmoney", lambda: _sector_rankings_em(board_type))]
+    if board_type == "industry":
+        # efinance has no concept boards — it stays an industry-only leg
+        sources.append(_sourced("ths", _sector_rankings_ths))
+        sources.append(_sourced("efinance", _sector_rankings_efinance))
+    else:
+        sources.append(_sourced("sina", lambda: _sector_rankings_sina("概念")))
     try:
-        import akshare as ak
-        import pandas as pd
+        rows = _failover(sources, label=f"sector_rankings:{board_type}")
+        if not rows:
+            raise ValueError(f"no {board_type} board rankings data")
+    except Exception as e:
+        return {"error": str(e)}
+    for r in rows:
+        r["board_type"] = board_type
 
-        df = _akshare_retry(ak.stock_board_industry_name_em)
-        if df is None or df.empty:
-            raise ValueError("akshare sector data unavailable")
-        col_map = {
-            "板块名称": "name",
-            "板块代码": "code",
-            "最新价": "price",
-            "涨跌幅": "change_pct",
-            "成交量": "volume",
-            "成交额": "turnover",
-            "换手率": "turnover_rate",
-            "总市值": "market_cap",
-            "上涨家数": "up_count",
-            "下跌家数": "down_count",
-            "领涨股票": "leading_stock",
-            "领涨涨跌幅": "leading_change_pct",
+    def _pct(row, default):
+        v = row.get("change_pct")
+        return v if isinstance(v, (int, float)) else default
+
+    if direction == "bottom":
+        return sorted(rows, key=lambda r: _pct(r, float("inf")))[: args.top]
+    if direction == "both":
+        return {
+            "top": sorted(rows, key=lambda r: _pct(r, float("-inf")), reverse=True)[: args.top],
+            "bottom": sorted(rows, key=lambda r: _pct(r, float("inf")))[: args.top],
         }
-        df = df.rename(columns=col_map)
-        keep = [c for c in col_map.values() if c in df.columns]
-        df = df[keep]
-        if "change_pct" in df.columns:
-            df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce")
-
-        direction = getattr(args, "direction", "top")
-        if direction == "bottom":
-            df = df.sort_values("change_pct", ascending=True).head(args.top)
-        elif direction == "both":
-            top_df = df.sort_values("change_pct", ascending=False).head(args.top)
-            bottom_df = df.sort_values("change_pct", ascending=True).head(args.top)
-            return {
-                "top": [_clean_row(r) for r in top_df.to_dict("records")],
-                "bottom": [_clean_row(r) for r in bottom_df.to_dict("records")],
-            }
-        else:
-            df = df.head(args.top)
-        return [_clean_row(r) for r in df.to_dict("records")]
-    except Exception:
-        try:
-            direction = getattr(args, "direction", "top")
-            return _sector_rankings_efinance(args.top, direction)
-        except Exception as e2:
-            return {"error": str(e2)}
+    return sorted(rows, key=lambda r: _pct(r, float("-inf")), reverse=True)[: args.top]
 
 
 # --------------- sector constituents / stock sectors (issue #18) ---------------
@@ -2232,6 +2318,228 @@ def cmd_fundamental_context(args):
         return {"error": str(e)}
 
 
+# --------------- short-term sentiment: limit_up_pool / dragon_tiger / hot_stocks (A-share only) ---------------
+
+
+def cmd_limit_up_pool(args):
+    """A-share limit-up pool (涨停池) for one trading day via eastmoney."""
+    date = (args.date or datetime.now().strftime("%Y%m%d")).replace("-", "")
+    try:
+        import akshare as ak
+
+        df = _akshare_retry(ak.stock_zt_pool_em, date=date)
+        if df is None or df.empty:
+            return {
+                "date": date,
+                "count": 0,
+                "max_consecutive_boards": 0,
+                "pool": [],
+                "note": "no limit-up pool data (non-trading day or no limit-ups)",
+            }
+        col_map = {
+            "代码": "code",
+            "名称": "name",
+            "涨跌幅": "change_pct",
+            "最新价": "price",
+            "成交额": "turnover",
+            "流通市值": "float_market_cap",
+            "总市值": "total_market_cap",
+            "换手率": "turnover_rate",
+            "封板资金": "seal_amount",
+            "首次封板时间": "first_seal_time",
+            "最后封板时间": "last_seal_time",
+            "炸板次数": "break_count",
+            "涨停统计": "limit_up_stat",
+            "连板数": "consecutive_boards",
+            "所属行业": "industry",
+        }
+        df = df.rename(columns=col_map)
+        keep = [c for c in col_map.values() if c in df.columns]
+        pool = [_clean_row(r) for r in df[keep].to_dict("records")]
+        boards = [r["consecutive_boards"] for r in pool if isinstance(r.get("consecutive_boards"), (int, float))]
+        return {
+            "date": date,
+            "count": len(pool),
+            "max_consecutive_boards": max(boards) if boards else 0,
+            "pool": pool,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _dragon_tiger_em(raw: str) -> list:
+    """Eastmoney 龙虎榜 via akshare stock_lhb_detail_em."""
+    import akshare as ak
+    import pandas as pd
+
+    df = _akshare_retry(ak.stock_lhb_detail_em, start_date=raw, end_date=raw)
+    if df is None or df.empty:
+        return []
+    col_map = {
+        "代码": "code",
+        "名称": "name",
+        "上榜日": "list_date",
+        "收盘价": "close",
+        "涨跌幅": "change_pct",
+        "龙虎榜净买额": "net_buy",
+        "龙虎榜买入额": "buy_amount",
+        "龙虎榜卖出额": "sell_amount",
+        "龙虎榜成交额": "lhb_turnover",
+        "上榜原因": "reason",
+        "解读": "interpretation",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    df = df[keep]
+    if "net_buy" in df.columns:
+        df["net_buy"] = pd.to_numeric(df["net_buy"], errors="coerce")
+    return [_clean_row(r) for r in df.to_dict("records")]
+
+
+def _dragon_tiger_sina(raw: str) -> list:
+    """Sina 龙虎榜每日详情 via akshare stock_lhb_detail_daily_sina.
+
+    Sina has no 涨跌幅/净买额/买入额/卖出额/上榜日/解读 — its 指标 column is the
+    listing reason and list_date is filled from the query date. A stock listed for
+    several reasons appears once per reason (sina's page layout)."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_lhb_detail_daily_sina, date=raw)
+    if df is None or df.empty:
+        return []
+    col_map = {
+        "股票代码": "code",
+        "股票名称": "name",
+        "收盘价": "close",
+        "指标": "reason",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    rows = [_clean_row(r) for r in df[keep].to_dict("records")]
+    date_iso = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    for r in rows:
+        r["list_date"] = date_iso
+    return rows
+
+
+def cmd_dragon_tiger(args):
+    """A-share dragon-tiger list (龙虎榜) for one trading day: eastmoney → sina."""
+    raw = (args.date or datetime.now().strftime("%Y-%m-%d")).replace("-", "")
+    date = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}" if len(raw) == 8 and raw.isdigit() else args.date
+    sources = [
+        _sourced("eastmoney", lambda: _dragon_tiger_em(raw)),
+        _sourced("sina", lambda: _dragon_tiger_sina(raw)),
+    ]
+    try:
+        rows = _failover(sources, label=f"dragon_tiger:{raw}")
+    except Exception as e:
+        return {"error": str(e)}
+    if not rows:
+        return {
+            "date": date,
+            "count": 0,
+            "items": [],
+            "note": "no dragon-tiger data (non-trading day or no listings)",
+        }
+    source = rows[0]["source"]
+    if args.symbol:
+        m = re.fullmatch(r"(?:sh|sz|bj)(\d{6})", str(args.symbol), re.IGNORECASE)
+        want = m.group(1) if m else str(args.symbol)
+        rows = [r for r in rows if str(r.get("code")) == want]
+    if any(isinstance(r.get("net_buy"), (int, float)) for r in rows):
+        rows = sorted(
+            rows,
+            key=lambda r: abs(r["net_buy"]) if isinstance(r.get("net_buy"), (int, float)) else 0,
+            reverse=True,
+        )
+    items = [{k: v for k, v in r.items() if k != "source"} for r in rows[: args.top]]
+    return {"date": date, "count": len(items), "items": items, "source": source}
+
+
+def _strip_exchange_prefix(row: dict) -> dict:
+    """Bare the exchange prefix on row["code"] ("SZ000001" → "000001", original kept in
+    code_full). Bare 6-digit codes pass through unchanged."""
+    m = re.fullmatch(r"(sh|sz|bj)(\d{6})", str(row.get("code") or ""), re.IGNORECASE)
+    if m:
+        row["code_full"] = row["code"]
+        row["code"] = m.group(2)
+    return row
+
+
+def _hot_stocks_em() -> list:
+    """Eastmoney 人气榜 via akshare stock_hot_rank_em."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_hot_rank_em)
+    if df is None or df.empty:
+        return []
+    col_map = {
+        "当前排名": "rank",
+        "代码": "code",
+        "股票名称": "name",
+        "最新价": "price",
+        "涨跌幅": "change_pct",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [_strip_exchange_prefix(_clean_row(r)) for r in df[keep].to_dict("records")]
+
+
+def _hot_stocks_xq() -> list:
+    """Xueqiu follow ranking via akshare stock_hot_follow_xq. No 涨跌幅 column;
+    rank is the row position. Codes arrive SH/SZ-prefixed like eastmoney's."""
+    import akshare as ak
+
+    df = _akshare_retry(ak.stock_hot_follow_xq, symbol="最热门")
+    if df is None or df.empty:
+        return []
+    col_map = {
+        "股票代码": "code",
+        "股票简称": "name",
+        "最新价": "price",
+    }
+    df = df.rename(columns=col_map)
+    keep = [c for c in col_map.values() if c in df.columns]
+    return [{"rank": i, **_strip_exchange_prefix(_clean_row(r))} for i, r in enumerate(df[keep].to_dict("records"), 1)]
+
+
+def _hot_stocks_baidu() -> list:
+    """Baidu 股市通热搜 via akshare stock_hot_search_baidu. No code/price columns —
+    only the stock name — and 涨跌幅 strings carry a % suffix."""
+    import akshare as ak
+
+    df = _akshare_retry(
+        ak.stock_hot_search_baidu,
+        symbol="A股",
+        date=datetime.now().strftime("%Y%m%d"),
+        time="今日",
+    )
+    if df is None or df.empty:
+        return []
+    rows = []
+    for i, r in enumerate(df.to_dict("records"), 1):
+        pct = str(r.get("涨跌幅") or "").replace("%", "")
+        rows.append(_clean_row({"rank": i, "name": r.get("名称/代码"), "change_pct": _parse_float(pct)}))
+    return rows
+
+
+def cmd_hot_stocks(args):
+    """A-share popularity ranking (人气榜): eastmoney → xueqiu → baidu."""
+    sources = [
+        _sourced("eastmoney", _hot_stocks_em),
+        _sourced("xueqiu", _hot_stocks_xq),
+        _sourced("baidu", _hot_stocks_baidu),
+    ]
+    try:
+        rows = _failover(sources, label="hot_stocks")
+    except Exception as e:
+        return {"error": str(e)}
+    if not rows:
+        return {"count": 0, "items": [], "note": "no hot-rank data available"}
+    items = [{k: v for k, v in r.items() if k != "source"} for r in rows[: args.top]]
+    return {"count": len(items), "items": items, "source": rows[0]["source"]}
+
+
 # --------------- CLI ---------------
 
 
@@ -2271,6 +2579,7 @@ def main():
     p_sec = sub.add_parser("sector_rankings")
     p_sec.add_argument("--top", type=int, default=10)
     p_sec.add_argument("--direction", default="top", choices=["top", "bottom", "both"])
+    p_sec.add_argument("--board-type", default="industry", choices=["industry", "concept"])
 
     p_cons = sub.add_parser("sector_constituents")
     p_cons.add_argument("sector")
@@ -2289,6 +2598,17 @@ def main():
 
     p_fund = sub.add_parser("fundamental_context")
     p_fund.add_argument("symbol")
+
+    p_zt = sub.add_parser("limit_up_pool")
+    p_zt.add_argument("--date", default=None, help="Trading date in YYYYMMDD format (default: today)")
+
+    p_lhb = sub.add_parser("dragon_tiger")
+    p_lhb.add_argument("--date", default=None, help="Trading date in YYYY-MM-DD format (default: today)")
+    p_lhb.add_argument("--symbol", default=None, help="Filter to a single stock code")
+    p_lhb.add_argument("--top", type=int, default=20)
+
+    p_hot = sub.add_parser("hot_stocks")
+    p_hot.add_argument("--top", type=int, default=20)
 
     args = parser.parse_args()
     if not args.command:
@@ -2310,6 +2630,9 @@ def main():
         "chip_distribution": cmd_chip_distribution,
         "market_stats": cmd_market_stats,
         "fundamental_context": cmd_fundamental_context,
+        "limit_up_pool": cmd_limit_up_pool,
+        "dragon_tiger": cmd_dragon_tiger,
+        "hot_stocks": cmd_hot_stocks,
     }
     # Provider libraries (baostock etc.) print prose to stdout on failure,
     # which would corrupt the JSON-only contract — divert that noise to stderr.
