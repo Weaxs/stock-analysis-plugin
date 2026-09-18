@@ -28,11 +28,8 @@ export function __setExecutor(fn: Executor) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-// Published form: tools/ ships next to the package root (dist/../tools).
-// Dev form: tools/ is at the repo root.
-const toolsDir = existsSync(join(here, "tools"))
-  ? join(here, "tools")
-  : join(here, "..", "tools");
+// tools/ lives one level up: <pkg>/tools when published (here = dist/), repo tools/ in dev.
+const toolsDir = join(here, "..", "tools");
 const pkgRoot = dirname(toolsDir);
 const isWin = process.platform === "win32";
 
@@ -76,10 +73,8 @@ function pyTool<const S extends ParameterSchemaSpec>(opts: {
 
 // --- Skills ---------------------------------------------------------------
 
-// Published form: skills/ at the package root. Dev form: skills/ at repo root.
-const skillsDir = existsSync(join(here, "skills"))
-  ? join(here, "skills")
-  : join(here, "..", "skills");
+// skills/ lives one level up: <pkg>/skills when published, repo skills/ in dev.
+const skillsDir = join(here, "..", "skills");
 
 // Minimal single-line `key: value` read from the leading YAML frontmatter.
 function frontmatterValue(raw: string, key: string): string | undefined {
@@ -388,15 +383,9 @@ export function apply(ctx: Context) {
       name: "get_market_stats",
       description:
         "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）。用于衡量市场整体情绪与温度",
-      parameters: {
-        market: {
-          type: "string",
-          enum: ["A"],
-          description: "市场，目前仅支持 A",
-        },
-      },
+      parameters: {},
       script: "stock_data.py",
-      argv: (p) => ["market_stats", "--market", p.market ?? "A"],
+      argv: () => ["market_stats"],
     })
   );
 
@@ -694,7 +683,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "get_trending_sentiment",
       description:
-        "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点；查个股情绪用 get_social_sentiment",
+        "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。适用于发现市场热点；查个股情绪用 get_social_sentiment",
       parameters: {},
       script: "search_intel.py",
       argv: () => ["trending"],
@@ -888,16 +877,11 @@ export function apply(ctx: Context) {
           required: true,
           description: "结构化市场复盘",
         },
-        template: {
-          type: "string",
-          enum: ["full"],
-          description: "模板类型，默认 full",
-        },
       },
       script: "report_renderer.py",
       argv: (p) => {
         const b64 = Buffer.from(JSON.stringify(p.report), "utf-8").toString("base64");
-        return ["market", "--template", p.template ?? "full", "--input-b64", b64];
+        return ["market", "--input-b64", b64];
       },
     })
   );

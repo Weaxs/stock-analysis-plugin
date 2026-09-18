@@ -6,68 +6,13 @@ on:
       - "v*"
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Python lint tools
-        run: pip install ruff>=0.4.0
-
-      - name: Ruff check
-        run: ruff check tools/ skills/ tests/ hermes/
-
-      - name: Ruff format check
-        run: ruff format --check tools/ skills/ tests/ hermes/
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: TypeScript type check
-        run: npx tsc --noEmit
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          pip install -r tools/requirements.txt
-          pip install -r requirements-dev.txt
-
-      - name: Run tests
-        run: pytest --cov=tools --cov-report=term-missing
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: Test Pi extension registration
-        run: npx tsx tests/test_pi_integration.ts
-
-      - name: Test OpenClaw plugin registration
-        run: npx tsx tests/test_openclaw_integration.ts
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
 
   publish-npm:
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: ci
     permissions:
       contents: write
       id-token: write
@@ -105,7 +50,7 @@ jobs:
 
   publish-pypi:
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: ci
     permissions:
       id-token: write
     steps:
@@ -135,7 +80,7 @@ jobs:
 
   publish-openclaw:
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: ci
     permissions:
       contents: read
       id-token: write
@@ -165,6 +110,7 @@ jobs:
               cp -R "$d" "openclaw/$d"
             fi
           done
+          rm -f openclaw/scripts/sync-version.sh
 
       # Guard against regression of the issue behind
       # https://github.com/Weaxs/stock-analysis-plugin/issues/3 — a TS entry
@@ -213,7 +159,7 @@ jobs:
 
   publish-dsh:
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: ci
     permissions:
       contents: read
       id-token: write
@@ -243,6 +189,7 @@ jobs:
               cp -R "$d" "dsh/$d"
             fi
           done
+          rm -f dsh/scripts/sync-version.sh
 
       # Same regression guard as the OpenClaw job: the dsh profile loader
       # imports built JS, so dist must survive the `files` whitelist, and the

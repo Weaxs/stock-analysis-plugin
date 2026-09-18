@@ -26,19 +26,6 @@ RULE_TYPES = {
 }
 
 
-def _severity_for(rule_type: str) -> str:
-    return {
-        "risk_veto": "high",
-        "risk_level_at_least": "high",
-        "anomaly": "medium",
-        "price_below": "medium",
-        "price_above": "medium",
-        "change_pct_above": "medium",
-        "change_pct_below": "medium",
-        "volume_ratio_above": "medium",
-    }.get(rule_type, "low")
-
-
 def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> dict | None:
     rtype = rule.get("type")
     value = rule.get("value")
@@ -55,7 +42,7 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
                 "triggered": True,
                 "value": value,
                 "actual": price,
-                "severity": _severity_for(rtype),
+                "severity": "medium",
                 "message": f"现价 {price} 跌破 {value}",
             }
     elif rtype == "price_above":
@@ -65,7 +52,7 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
                 "triggered": True,
                 "value": value,
                 "actual": price,
-                "severity": _severity_for(rtype),
+                "severity": "medium",
                 "message": f"现价 {price} 突破 {value}",
             }
     elif rtype == "change_pct_above":
@@ -75,7 +62,7 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
                 "triggered": True,
                 "value": value,
                 "actual": change_pct,
-                "severity": _severity_for(rtype),
+                "severity": "medium",
                 "message": f"涨幅 {change_pct}% 超过 {value}%",
             }
     elif rtype == "change_pct_below":
@@ -85,7 +72,7 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
                 "triggered": True,
                 "value": value,
                 "actual": change_pct,
-                "severity": _severity_for(rtype),
+                "severity": "medium",
                 "message": f"跌幅 {change_pct}% 低于 {value}%",
             }
     elif rtype == "volume_ratio_above":
@@ -97,7 +84,7 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
                 "triggered": True,
                 "value": value,
                 "actual": ratio,
-                "severity": _severity_for(rtype),
+                "severity": "medium",
                 "message": f"量比 {ratio} 超过 {value}",
             }
     elif rtype == "anomaly":

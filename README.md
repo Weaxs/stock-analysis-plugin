@@ -278,7 +278,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `search_stock_news` | 关键词搜索新闻 |
 | `search_comprehensive_intel` | 综合情报搜索 |
 | `get_social_sentiment` | 社交媒体情绪（A 股：东财股吧 + 雪球；美港股：Reddit / X / Polymarket） |
-| `get_trending_sentiment` | 社交媒体热门趋势聚合（Reddit / X / Polymarket，10 分钟缓存） |
+| `get_trending_sentiment` | 社交媒体热门趋势聚合（Reddit / X / Polymarket） |
 | `extract_article` | 网页正文提取 |
 
 ### 辅助

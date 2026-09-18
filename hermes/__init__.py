@@ -5,55 +5,11 @@ from . import schemas, tools
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
-_HANDLER_MAP = {
-    "get_kline": tools.get_kline,
-    "get_quote": tools.get_quote,
-    "get_capital_flow": tools.get_capital_flow,
-    "get_news": tools.get_news,
-    "get_financials": tools.get_financials,
-    "get_technical_analysis": tools.get_technical_analysis,
-    "analyze_pattern": tools.analyze_pattern,
-    "get_market_indices": tools.get_market_indices,
-    "get_sector_rankings": tools.get_sector_rankings,
-    "get_sector_constituents": tools.get_sector_constituents,
-    "resolve_stock_sectors": tools.resolve_stock_sectors,
-    "get_stock_info": tools.get_stock_info,
-    "get_chip_distribution": tools.get_chip_distribution,
-    "get_market_stats": tools.get_market_stats,
-    "get_fundamental_context": tools.get_fundamental_context,
-    "screen_stocks": tools.screen_stocks,
-    "run_backtest": tools.run_backtest,
-    "evaluate_signal": tools.evaluate_signal,
-    "resolve_stock_name": tools.resolve_stock_name,
-    "check_trading_day": tools.check_trading_day,
-    "get_trading_days": tools.get_trading_days,
-    "calculate_ma": tools.calculate_ma,
-    "get_volume_analysis": tools.get_volume_analysis,
-    "search_stock_news": tools.search_stock_news,
-    "search_comprehensive_intel": tools.search_comprehensive_intel,
-    "get_social_sentiment": tools.get_social_sentiment,
-    "get_trending_sentiment": tools.get_trending_sentiment,
-    "extract_article": tools.extract_article,
-    "screen_risk": tools.screen_risk,
-    "detect_market_regime": tools.detect_market_regime,
-    "get_market_review": tools.get_market_review,
-    "run_watchlist_analysis": tools.run_watchlist_analysis,
-    "detect_anomaly": tools.detect_anomaly,
-    "diagnose_data_sources": tools.diagnose_data_sources,
-    "get_market_capabilities": tools.get_market_capabilities,
-    "render_stock_report": tools.render_stock_report,
-    "render_market_report": tools.render_market_report,
-    "build_watchlist_context": tools.build_watchlist_context,
-    "analyze_position_context": tools.analyze_position_context,
-    "check_alert_rules": tools.check_alert_rules,
-    "parse_stock_list": tools.parse_stock_list,
-}
-
 
 def register(ctx):
     for schema in schemas.TOOL_SCHEMAS:
         name = schema["name"]
-        handler = _HANDLER_MAP[name]
+        handler = getattr(tools, name)
         ctx.register_tool(
             name=name,
             toolset="stock-analysis",

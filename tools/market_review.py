@@ -71,7 +71,7 @@ def review_market(market: str = "A") -> dict:
 
     if market == "A":
         tasks["indices"] = ("stock_data.py", ["market_indices", "--region", "cn"])
-        tasks["stats"] = ("stock_data.py", ["market_stats", "--market", "A"])
+        tasks["stats"] = ("stock_data.py", ["market_stats"])
         tasks["sectors"] = ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"])
         # query 含空格，必须保持单个 argv 元素
         tasks["news"] = ("search_intel.py", ["search", "A股 今日 市场"])

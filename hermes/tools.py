@@ -120,8 +120,7 @@ def get_chip_distribution(args: dict, **kwargs) -> str:
 
 
 def get_market_stats(args: dict, **kwargs) -> str:
-    market = args.get("market", "A")
-    return _run("stock_data.py", ["market_stats", "--market", market])
+    return _run("stock_data.py", ["market_stats"])
 
 
 def get_fundamental_context(args: dict, **kwargs) -> str:
@@ -290,9 +289,8 @@ def render_stock_report(args: dict, **kwargs) -> str:
 
 def render_market_report(args: dict, **kwargs) -> str:
     report = args["report"]
-    template = args.get("template", "full")
     payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return _run("report_renderer.py", ["market", "--template", template, "--input-b64", payload])
+    return _run("report_renderer.py", ["market", "--input-b64", payload])
 
 
 def build_watchlist_context(args: dict, **kwargs) -> str:

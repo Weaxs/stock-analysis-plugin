@@ -92,7 +92,6 @@ def main():
     p.add_argument("--input-b64", help="Base64-encoded JSON (avoids shell escaping)")
 
     p2 = sub.add_parser("market", help="Render a market review report")
-    p2.add_argument("--template", default="full", choices=["full"])
     p2.add_argument("--input", "-i", default="-", help="JSON file path or '-' for stdin")
     p2.add_argument("--input-b64", help="Base64-encoded JSON (avoids shell escaping)")
 
@@ -102,7 +101,7 @@ def main():
         sys.exit(1)
 
     report = _load_input(args.input, getattr(args, "input_b64", None))
-    result = render(args.command, args.template, report)
+    result = render(args.command, getattr(args, "template", "full"), report)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
 

@@ -171,9 +171,6 @@ class TestKlineFinnhub:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_api_key_raises(self):
-        import os
-
-        os.environ.pop("FINNHUB_API_KEY", None)
         with pytest.raises(ValueError, match="FINNHUB_API_KEY not set"):
             _kline_finnhub("AAPL", "daily", 10)
 
@@ -253,9 +250,6 @@ class TestQuoteFinnhub:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_api_key_raises(self):
-        import os
-
-        os.environ.pop("FINNHUB_API_KEY", None)
         with pytest.raises(ValueError, match="FINNHUB_API_KEY not set"):
             _quote_finnhub("AAPL")
 
@@ -552,9 +546,6 @@ class TestKlineTushare:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_token_raises(self):
-        import os
-
-        os.environ.pop("TUSHARE_TOKEN", None)
         with pytest.raises(ValueError, match="TUSHARE_TOKEN not set"):
             _kline_tushare("600519", "daily", 10)
 
@@ -596,9 +587,6 @@ class TestQuoteTushare:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_token_raises(self):
-        import os
-
-        os.environ.pop("TUSHARE_TOKEN", None)
         with pytest.raises(ValueError, match="TUSHARE_TOKEN not set"):
             _quote_tushare("600519")
 
@@ -744,11 +732,6 @@ class TestKlineLongbridge:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_credentials_raises(self):
-        import os
-
-        os.environ.pop("LONGBRIDGE_APP_KEY", None)
-        os.environ.pop("LONGBRIDGE_APP_SECRET", None)
-        os.environ.pop("LONGBRIDGE_ACCESS_TOKEN", None)
         with pytest.raises(ValueError, match="LONGBRIDGE credentials not set"):
             _kline_longbridge("AAPL", "daily", 10)
 
@@ -756,11 +739,6 @@ class TestKlineLongbridge:
 class TestQuoteLongbridge:
     @patch.dict("os.environ", {}, clear=True)
     def test_no_credentials_raises(self):
-        import os
-
-        os.environ.pop("LONGBRIDGE_APP_KEY", None)
-        os.environ.pop("LONGBRIDGE_APP_SECRET", None)
-        os.environ.pop("LONGBRIDGE_ACCESS_TOKEN", None)
         with pytest.raises(ValueError, match="LONGBRIDGE credentials not set"):
             _quote_longbridge("AAPL")
 
@@ -795,9 +773,6 @@ class TestKlineAlphavantage:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_api_key_raises(self):
-        import os
-
-        os.environ.pop("ALPHAVANTAGE_API_KEY", None)
         with pytest.raises(ValueError, match="ALPHAVANTAGE_API_KEY not set"):
             _kline_alphavantage("AAPL", "daily", 10)
 
@@ -833,9 +808,6 @@ class TestQuoteAlphavantage:
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_api_key_raises(self):
-        import os
-
-        os.environ.pop("ALPHAVANTAGE_API_KEY", None)
         with pytest.raises(ValueError, match="ALPHAVANTAGE_API_KEY not set"):
             _quote_alphavantage("AAPL")
 

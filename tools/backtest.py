@@ -482,7 +482,7 @@ def diagnose_advanced(metrics: dict, trades: list, equity_curve: list, strategy:
         trade_count_quality = "sufficient"
 
     # main_failure_reason — pick the most impactful weakness
-    sell_trades = [t for t in trades if t.get("action") == "sell"]
+    sell_trades = [t for t in trades if t.get("type") == "sell"]
     stop_hits = sum(
         1
         for t in sell_trades
@@ -509,9 +509,9 @@ def diagnose_advanced(metrics: dict, trades: list, equity_curve: list, strategy:
     if len(equity_curve) >= 3:
         # split into halves, compare
         mid = len(equity_curve) // 2
-        first = equity_curve[mid][1] if isinstance(equity_curve[mid], list) else equity_curve[mid]
-        last = equity_curve[-1][1] if isinstance(equity_curve[-1], list) else equity_curve[-1]
-        start_v = equity_curve[0][1] if isinstance(equity_curve[0], list) else equity_curve[0]
+        first = equity_curve[mid]["equity"]
+        last = equity_curve[-1]["equity"]
+        start_v = equity_curve[0]["equity"]
         first_half = (first - start_v) / start_v if start_v else 0
         second_half = (last - first) / first if first else 0
         if first_half > 0.05 and second_half > 0.05:

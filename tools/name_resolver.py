@@ -4,20 +4,14 @@
 import argparse
 import json
 import sys
-import time
 from difflib import SequenceMatcher
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from stock_data import _akshare_retry  # noqa: E402
 
 _STOCK_MAP_CACHE = None
-
-
-def _akshare_retry(fn, *args, retries=2, delay=1):
-    for attempt in range(retries + 1):
-        try:
-            return fn(*args)
-        except Exception:
-            if attempt == retries:
-                raise
-            time.sleep(delay)
 
 
 def _load_stock_map() -> list[dict]:

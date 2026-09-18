@@ -1,5 +1,6 @@
 import pandas as pd
 
+from tools import backtest
 from tools.backtest import (
     _substitute,
     check_condition,
@@ -179,3 +180,32 @@ class TestDiagnose:
         result = diagnose(metrics)
         assert len(result["weaknesses"]) > 0
         assert len(result["suggestions"]) > 0
+
+
+_MA_CROSS_STRATEGY = {
+    "name": "ma_cross",
+    "entry": {
+        "conditions": [{"indicator": "ma_diff", "period": 520, "operator": "cross_above", "value": 0}],
+        "logic": "all",
+    },
+    "exit": {
+        "conditions": [{"indicator": "ma_diff", "period": 520, "operator": "cross_below", "value": 0}],
+        "logic": "any",
+        "stop_loss": -0.08,
+        "take_profit": 0.20,
+    },
+    "position": {"size": 1.0},
+}
+
+
+class TestRunBacktest:
+    def test_end_to_end(self, monkeypatch, make_kline_data):
+        df = pd.DataFrame(make_kline_data(120, "volatile"))
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a, **kw: df)
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: _MA_CROSS_STRATEGY)
+
+        result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
+
+        assert "metrics" in result
+        assert "diagnosis" in result
+        assert "diagnostics" in result

@@ -342,17 +342,9 @@ export default definePluginEntry({
       name: "get_market_stats",
       description:
         "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）。用于衡量市场整体情绪与温度",
-      parameters: Type.Object({
-        market: Type.Optional(
-          Type.Union([Type.Literal("A")], { description: "市场，目前仅支持 A" })
-        ),
-      }),
-      async execute(_id, params) {
-        const out = await runPy("stock_data.py", [
-          "market_stats",
-          "--market",
-          params.market ?? "A",
-        ]);
+      parameters: Type.Object({}),
+      async execute() {
+        const out = await runPy("stock_data.py", ["market_stats"]);
         return asText(out);
       },
     });
@@ -683,7 +675,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "get_trending_sentiment",
       description:
-        "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点；查个股情绪用 get_social_sentiment",
+        "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。适用于发现市场热点；查个股情绪用 get_social_sentiment",
       parameters: Type.Object({}),
       async execute() {
         const out = await runPy("search_intel.py", ["trending"]);
@@ -899,19 +891,10 @@ export default definePluginEntry({
       "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。仅渲染，不保存不推送",
       parameters: Type.Object({
         report: Type.Object({}, { additionalProperties: true, description: "结构化市场复盘" }),
-        template: Type.Optional(
-          Type.Union([Type.Literal("full")], { description: "模板类型，默认 full" })
-        ),
       }),
       async execute(_id, params) {
         const b64 = Buffer.from(JSON.stringify(params.report), "utf-8").toString("base64");
-        const out = await runPy("report_renderer.py", [
-          "market",
-          "--template",
-          params.template ?? "full",
-          "--input-b64",
-          b64,
-        ]);
+        const out = await runPy("report_renderer.py", ["market", "--input-b64", b64]);
         return asText(out);
       },
     });

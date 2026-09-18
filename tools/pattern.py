@@ -3,34 +3,15 @@
 
 import argparse
 import json
-import os
-import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-def fetch_kline(symbol: str, period: str = "daily", count: int = 60) -> list:
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
-    r = subprocess.run(
-        [sys.executable, script, "kline", symbol, "--period", period, "--count", str(count)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return json.loads(r.stdout)
-
-
-def to_dataframe(records: list) -> pd.DataFrame:
-    df = pd.DataFrame(records)
-    for c in ["open", "high", "low", "close", "volume"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df.sort_values("date").reset_index(drop=True)
-    return df
+from technical import fetch_kline, to_dataframe  # noqa: E402
 
 
 def _body(row):
@@ -403,8 +384,6 @@ PATTERN_STRENGTH = {
     "hammer": "中",
     "hanging_man": "中",
     "shooting_star": "中",
-    "big_candle_up": "中",
-    "big_candle_down": "中",
     "double_bottom": "中",
     "box_oscillation": "中",
     "morning_star": "强",

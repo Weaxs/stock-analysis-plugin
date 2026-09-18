@@ -377,16 +377,10 @@ export default (pi: ExtensionAPI) => {
       "获取A股市场整体统计（涨跌家数、涨停跌停数、平均涨幅、涨跌Top5、总成交额）。用于衡量市场整体情绪与温度",
     parameters: {
       type: "object",
-      properties: {
-        market: {
-          type: "string",
-          enum: ["A"],
-          description: "市场，目前仅支持 A",
-        },
-      },
+      properties: {},
     },
-    async execute(_id, { market = "A" }) {
-      const result = await py("stock_data.py", ["market_stats", "--market", market]);
+    async execute() {
+      const result = await py("stock_data.py", ["market_stats"]);
       return asText(result.stdout);
     },
   });
@@ -810,7 +804,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_trending_sentiment",
     description:
-      "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。数据缓存10分钟。适用于发现市场热点；查个股情绪用 get_social_sentiment",
+      "获取社交媒体热门趋势（Reddit/X/Polymarket热门股票讨论）。适用于发现市场热点；查个股情绪用 get_social_sentiment",
     parameters: {
       type: "object",
       properties: {},
@@ -1044,19 +1038,12 @@ export default (pi: ExtensionAPI) => {
       type: "object",
       properties: {
         report: { type: "object", description: "结构化市场复盘" },
-        template: { type: "string", enum: ["full"], description: "模板类型，默认 full" },
       },
       required: ["report"],
     },
-    async execute(_id, { report, template = "full" }) {
+    async execute(_id, { report }) {
       const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
-      const result = await py("report_renderer.py", [
-        "market",
-        "--template",
-        template,
-        "--input-b64",
-        b64,
-      ]);
+      const result = await py("report_renderer.py", ["market", "--input-b64", b64]);
       return asText(result.stdout);
     },
   });

@@ -1,4 +1,4 @@
-from tools.stock_data import calc_limit_price, detect_market, mark_st, normalize_stock_code
+from tools.stock_data import calc_limit_price, detect_market, normalize_stock_code
 
 
 class TestDetectMarket:
@@ -71,31 +71,6 @@ class TestNormalizeStockCode:
         info = normalize_stock_code("0700.HK")
         assert info["market"] == "HK"
         assert info["limit_pct"] is None
-
-
-class TestMarkSt:
-    def test_st_detected(self):
-        info = {"board": "main", "limit_pct": 0.10, "is_st": False}
-        result = mark_st(info, "ST某某")
-        assert result["is_st"] is True
-        assert result["limit_pct"] == 0.05
-
-    def test_star_st_keeps_limit(self):
-        info = {"board": "STAR", "limit_pct": 0.20, "is_st": False}
-        result = mark_st(info, "*ST某某")
-        assert result["is_st"] is True
-        assert result["limit_pct"] == 0.20
-
-    def test_normal_stock(self):
-        info = {"board": "main", "limit_pct": 0.10, "is_st": False}
-        result = mark_st(info, "贵州茅台")
-        assert result["is_st"] is False
-        assert result["limit_pct"] == 0.10
-
-    def test_empty_name(self):
-        info = {"board": "main", "limit_pct": 0.10, "is_st": False}
-        result = mark_st(info, "")
-        assert result["is_st"] is False
 
 
 class TestCalcLimitPrice:

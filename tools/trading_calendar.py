@@ -39,10 +39,6 @@ def _is_exchange_trading_day(exchange_code: str, date_str: str) -> bool:
     return cal.is_session(d)
 
 
-def _get_cn_trading_dates(year: int) -> set[str]:
-    return _cn_holidays(year)
-
-
 def is_trading_day(market: str, date_str: str = None) -> dict:
     if date_str:
         d = datetime.strptime(date_str, "%Y-%m-%d")
@@ -56,7 +52,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
         return {"date": date_str, "market": market, "is_trading_day": False, "reason": "weekend"}
 
     if market == "CN":
-        trading_dates = _get_cn_trading_dates(d.year)
+        trading_dates = _cn_holidays(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
             return {
@@ -84,7 +80,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
             }
         except Exception:
             pass
-        trading_dates = _get_cn_trading_dates(d.year)
+        trading_dates = _cn_holidays(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
             return {
