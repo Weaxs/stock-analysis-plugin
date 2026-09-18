@@ -95,7 +95,11 @@ def get_market_indices(args: dict, **kwargs) -> str:
 def get_sector_rankings(args: dict, **kwargs) -> str:
     top = args.get("top", 10)
     direction = args.get("direction", "top")
-    return _run("stock_data.py", ["sector_rankings", "--top", top, "--direction", direction])
+    board_type = args.get("board_type", "industry")
+    return _run(
+        "stock_data.py",
+        ["sector_rankings", "--top", top, "--direction", direction, "--board-type", board_type],
+    )
 
 
 def get_sector_constituents(args: dict, **kwargs) -> str:
@@ -121,6 +125,32 @@ def get_chip_distribution(args: dict, **kwargs) -> str:
 
 def get_market_stats(args: dict, **kwargs) -> str:
     return _run("stock_data.py", ["market_stats"])
+
+
+def get_limit_up_pool(args: dict, **kwargs) -> str:
+    date = args.get("date", "")
+    argv = ["limit_up_pool"]
+    if date:
+        argv += ["--date", date]
+    return _run("stock_data.py", argv)
+
+
+def get_dragon_tiger(args: dict, **kwargs) -> str:
+    date = args.get("date", "")
+    symbol = args.get("symbol", "")
+    top = args.get("top", 20)
+    argv = ["dragon_tiger"]
+    if date:
+        argv += ["--date", date]
+    if symbol:
+        argv += ["--symbol", symbol]
+    argv += ["--top", top]
+    return _run("stock_data.py", argv)
+
+
+def get_hot_stocks(args: dict, **kwargs) -> str:
+    top = args.get("top", 20)
+    return _run("stock_data.py", ["hot_stocks", "--top", top])
 
 
 def get_fundamental_context(args: dict, **kwargs) -> str:
@@ -190,6 +220,11 @@ def get_trading_days(args: dict, **kwargs) -> str:
     if date:
         argv += ["--date", date]
     return _run("trading_calendar.py", argv)
+
+
+def get_trading_phase(args: dict, **kwargs) -> str:
+    market = args["market"]
+    return _run("trading_calendar.py", ["phase", market])
 
 
 def calculate_ma(args: dict, **kwargs) -> str:
@@ -321,6 +356,46 @@ def check_alert_rules(args: dict, **kwargs) -> str:
     rules = args["rules"]
     payload = base64.b64encode(json.dumps(rules, ensure_ascii=False).encode("utf-8")).decode("ascii")
     return _run("alert_rules.py", ["check", symbol, "--rules-b64", payload])
+
+
+def record_signal(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    direction = args["direction"]
+    horizon_days = args.get("horizon_days", 10)
+    argv = ["record", symbol, "--direction", direction, "--horizon-days", horizon_days]
+    for key, flag in (
+        ("entry_price", "--entry-price"),
+        ("target_price", "--target-price"),
+        ("stop_price", "--stop-price"),
+    ):
+        if args.get(key) is not None:
+            argv += [flag, args[key]]
+    if args.get("source"):
+        argv += ["--source", args["source"]]
+    if args.get("note"):
+        argv += ["--note", args["note"]]
+    return _run("signal_tracker.py", argv)
+
+
+def evaluate_signals(args: dict, **kwargs) -> str:
+    symbol = args.get("symbol", "")
+    argv = ["evaluate"]
+    if symbol:
+        argv += ["--symbol", symbol]
+    return _run("signal_tracker.py", argv)
+
+
+def get_signal_summary(args: dict, **kwargs) -> str:
+    source = args.get("source", "")
+    symbol = args.get("symbol", "")
+    status = args.get("status", "all")
+    argv = ["summary"]
+    if source:
+        argv += ["--source", source]
+    if symbol:
+        argv += ["--symbol", symbol]
+    argv += ["--status", status]
+    return _run("signal_tracker.py", argv)
 
 
 def parse_stock_list(args: dict, **kwargs) -> str:

@@ -1,6 +1,6 @@
 # Stock Analysis — OpenClaw Plugin
 
-A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。OpenClaw Gateway 加载后即可在对话中调用 41 个工具。
+A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。OpenClaw Gateway 加载后即可在对话中调用 48 个工具。
 
 ## 安装
 

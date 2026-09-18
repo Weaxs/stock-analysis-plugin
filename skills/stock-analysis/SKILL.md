@@ -30,6 +30,8 @@ python3 scripts/gather.py <symbol>
 
 解析返回的 JSON 数据。如果某个字段为 `null`，表示该数据获取失败，基于可用数据继续分析。
 
+解读实时行情前先调 `get_trading_phase` 确认该市场当前盘中阶段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），避免把休市时的静态快照当作盘中信号解读。
+
 ### 第二步：综合研判
 
 根据获取的数据进行多维度分析：
@@ -67,6 +69,12 @@ python3 scripts/gather.py <symbol>
 2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。
 3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
+
+## 信号跟踪闭环
+
+- 给出明确买卖建议（方向 + 入场价/目标价/止损价）时，调 `record_signal` 存档，`source` 填触发该建议的 skill 名（如 `stock-analysis`、`dragon-head`）。
+- 后续会话用 `evaluate_signals` 结算到期信号（target_hit/stop_hit/timeout 并回写收益），用 `get_signal_summary` 复盘胜率（可按 source/symbol/status 过滤）。
+- 信号持久化在本地 JSONL（`$STOCK_SIGNAL_STORE` 或 `~/.stock-analysis/signals.jsonl`）；是否记录由宿主 Agent 决定，不阻塞报告输出。
 
 ## 注意事项
 - 始终提供风险提示

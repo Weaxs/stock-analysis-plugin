@@ -39,6 +39,9 @@ TOOL_MATRIX = {
     "get_market_stats": {"markets": ["A"], "reason": "A-share only"},
     "get_fundamental_context": {"markets": ["A"], "reason": "A-share only"},
     "resolve_stock_name": {"markets": ["A"], "reason": "A-share name/pinyin index only"},
+    "get_limit_up_pool": {"markets": ["A"], "reason": "A-share only"},
+    "get_dragon_tiger": {"markets": ["A"], "reason": "A-share only"},
+    "get_hot_stocks": {"markets": ["A"], "reason": "A-share only"},
     "get_social_sentiment": {
         "markets": ["A", "HK", "US"],
         "reason": "A-share uses Eastmoney/Xueqiu; HK/US require SENTIMENT_API_KEY",
@@ -52,6 +55,11 @@ TOOL_MATRIX = {
     "search_comprehensive_intel": {"markets": ALL_MARKETS, "reason": None},
     "extract_article": {"markets": ALL_MARKETS, "reason": None},
     "screen_risk": {"markets": ["A"], "reason": "A-share only"},
+    # trading phase (session tables) + signal tracking (local JSONL store)
+    "get_trading_phase": {"markets": ALL_MARKETS, "reason": None},
+    "record_signal": {"markets": ALL_MARKETS, "reason": None},
+    "evaluate_signals": {"markets": ALL_MARKETS, "reason": None},
+    "get_signal_summary": {"markets": ALL_MARKETS, "reason": None},
 }
 
 

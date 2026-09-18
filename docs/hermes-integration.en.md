@@ -79,7 +79,7 @@ class MockCtx:
 
 ctx = MockCtx()
 register(ctx)
-print(f"Tools: {len(ctx.tools)}")   # Should print 31
+print(f"Tools: {len(ctx.tools)}")   # Should print 48
 print(f"Skills: {len(ctx.skills)}") # Should print 20
 ```
 
@@ -130,7 +130,7 @@ def register(ctx):
 
 ### Tool Definitions (Schema)
 
-`hermes/schemas.py` defines the JSON Schema for all 31 tools, each containing `name`, `description`, and `parameters`:
+`hermes/schemas.py` defines the JSON Schema for all 48 tools, each containing `name`, `description`, and `parameters`:
 
 ```python
 TOOL_SCHEMAS = [
@@ -153,7 +153,7 @@ TOOL_SCHEMAS = [
 
 ### Tool Handlers
 
-`hermes/tools.py` implements 31 handler functions, each calling the corresponding Python CLI script via `subprocess`:
+`hermes/tools.py` implements 48 handler functions, each calling the corresponding Python CLI script via `subprocess`:
 
 ```python
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -298,8 +298,8 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # Plugin manifest
-│   ├── schemas.py        # JSON Schema definitions for 31 tools
-│   └── tools.py          # 31 handlers calling CLI via subprocess
+│   ├── schemas.py        # JSON Schema definitions for 48 tools
+│   └── tools.py          # 48 handlers calling CLI via subprocess
 └── tools/                # Python CLI tools
 ```
 

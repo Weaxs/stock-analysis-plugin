@@ -390,7 +390,7 @@ class TestCmdCapitalFlowFailover:
 class TestSectorRankingsEfinance:
     @patch("efinance.stock.get_belong_board")
     @patch("efinance.stock.get_realtime_quotes")
-    def test_top_direction(self, mock_quotes, mock_boards):
+    def test_returns_raw_rows(self, mock_quotes, mock_boards):
         import pandas as pd
 
         mock_boards.return_value = ["板块1", "板块2"]
@@ -404,31 +404,11 @@ class TestSectorRankingsEfinance:
             }
         )
         mock_quotes.return_value = df
-        result = _sector_rankings_efinance(2, "top")
-        assert len(result) == 2
-        assert result[0]["change_pct"] == 3.5
-
-    @patch("efinance.stock.get_belong_board")
-    @patch("efinance.stock.get_realtime_quotes")
-    def test_both_direction(self, mock_quotes, mock_boards):
-        import pandas as pd
-
-        mock_boards.return_value = ["板块1"]
-        df = pd.DataFrame(
-            {
-                "股票名称": ["A", "B", "C", "D"],
-                "股票代码": ["1", "2", "3", "4"],
-                "涨跌幅": ["5.0", "3.0", "-2.0", "-4.0"],
-                "成交量": ["100", "200", "150", "80"],
-                "成交额": ["1000", "2000", "1500", "800"],
-            }
-        )
-        mock_quotes.return_value = df
-        result = _sector_rankings_efinance(2, "both")
-        assert "top" in result
-        assert "bottom" in result
-        assert len(result["top"]) == 2
-        assert len(result["bottom"]) == 2
+        result = _sector_rankings_efinance()
+        # raw unsorted rows (volume/turnover stay provider strings) — sort/head is
+        # applied uniformly in cmd_sector_rankings
+        assert len(result) == 4
+        assert result[0] == {"name": "半导体", "code": "BK001", "change_pct": 3.5, "volume": "100", "turnover": "1000"}
 
     @patch("efinance.stock.get_belong_board")
     @patch("efinance.stock.get_realtime_quotes")
@@ -438,7 +418,7 @@ class TestSectorRankingsEfinance:
         mock_boards.return_value = []
         mock_quotes.return_value = pd.DataFrame()
         with pytest.raises(ValueError, match="unavailable"):
-            _sector_rankings_efinance(5, "top")
+            _sector_rankings_efinance()
 
 
 class TestCmdSectorRankingsFailover:
@@ -449,7 +429,8 @@ class TestCmdSectorRankingsFailover:
         mock_ef.return_value = [{"name": "半导体", "change_pct": 3.5}]
         args = Namespace(top=5, direction="top")
         result = cmd_sector_rankings(args)
-        assert result == [{"name": "半导体", "change_pct": 3.5}]
+        # efinance is a regular failover leg — rows get the same source/board_type tags
+        assert result == [{"name": "半导体", "change_pct": 3.5, "source": "efinance", "board_type": "industry"}]
 
     @patch("tools.stock_data._sector_rankings_efinance")
     @patch("tools.stock_data._akshare_retry")
@@ -2258,6 +2239,20 @@ class TestStickyFailover:
         sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
         assert _failover(sources, label="quote:AAPL") == {"src": "a"}
         assert calls == ["a"]
+
+    def test_short_term_data_chains_are_sticky(self):
+        """sector_rankings/dragon_tiger/hot_stocks lead with eastmoney, whose
+        rate-limiting is chronic — the winner must jump the queue on the next call."""
+        for label in ("hot_stocks", "dragon_tiger:2026-09-17", "sector_rankings:concept"):
+            calls = []
+            sources = [("em", self._make_fn(calls, "em", False)), ("alt", self._make_fn(calls, "alt", True))]
+            assert _failover(sources, label=label) == {"src": "alt"}
+            assert calls == ["em", "alt"]
+
+            calls.clear()
+            sources = [("em", self._make_fn(calls, "em", True)), ("alt", self._make_fn(calls, "alt", True))]
+            assert _failover(sources, label=label) == {"src": "alt"}
+            assert calls == ["alt"], label
 
 
 class TestCnCode:

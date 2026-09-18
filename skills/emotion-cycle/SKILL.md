@@ -17,6 +17,8 @@ description: 市场情绪周期：用市场宽度、涨跌停、成交额和热�
 python3 scripts/gather.py [A|HK|US]
 ```
 
+A 股情绪另有两个直接数据源：`get_limit_up_pool`（涨停池：连板梯队高度、炸板率、封板资金）与 `get_hot_stocks`（全市场人气热搜榜）。
+
 ### 2. 情绪指标
 
 - 市场温度和策略姿态

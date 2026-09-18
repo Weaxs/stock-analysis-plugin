@@ -49,3 +49,87 @@ class TestNewMarkets:
     def test_unknown_market_error(self):
         r = is_trading_day("XX", "2024-07-10")
         assert "error" in r
+
+
+from tools import trading_calendar as tc  # noqa: E402
+
+
+@pytest.fixture
+def trading_day_on(monkeypatch):
+    """Deterministic calendar: every weekday is a trading day."""
+    monkeypatch.setattr(tc, "is_trading_day", lambda market, date_str=None: {"is_trading_day": True})
+
+
+@pytest.fixture
+def trading_day_off(monkeypatch):
+    monkeypatch.setattr(tc, "is_trading_day", lambda market, date_str=None: {"is_trading_day": False})
+
+
+class TestMarketPhase:
+    def test_cn_pre_market(self, trading_day_on):
+        r = tc.market_phase("CN", "2026-09-18T09:00:00")
+        assert r["phase"] == "pre_market"
+        assert r["phase_label"] == "盘前"
+
+    def test_cn_morning(self, trading_day_on):
+        r = tc.market_phase("CN", "2026-09-18T10:30:00")
+        assert r["phase"] == "morning"
+        assert r["phase_label"] == "早盘"
+        assert r["timezone"] == "Asia/Shanghai"
+        assert r["date"] == "2026-09-18"
+        assert r["local_time"] == "2026-09-18T10:30:00"
+        assert r["is_trading_day"] is True
+        assert r["sessions"] == [("09:30", "11:30"), ("13:00", "15:00")]
+
+    def test_cn_lunch_break(self, trading_day_on):
+        assert tc.market_phase("CN", "2026-09-18T12:00:00")["phase"] == "lunch_break"
+
+    def test_cn_afternoon(self, trading_day_on):
+        assert tc.market_phase("CN", "2026-09-18T14:00:00")["phase"] == "afternoon"
+
+    def test_cn_post_market(self, trading_day_on):
+        assert tc.market_phase("CN", "2026-09-18T15:30:00")["phase"] == "post_market"
+
+    def test_hk_lunch_break(self, trading_day_on):
+        r = tc.market_phase("HK", "2026-09-18T12:30:00")
+        assert r["phase"] == "lunch_break"
+        assert r["timezone"] == "Asia/Hong_Kong"
+
+    def test_us_intraday_no_lunch(self, trading_day_on):
+        # noon is still trading — US sessions have no lunch break
+        assert tc.market_phase("US", "2026-09-18T12:00:00")["phase"] == "intraday"
+        assert tc.market_phase("US", "2026-09-18T09:00:00")["phase"] == "pre_market"
+        assert tc.market_phase("US", "2026-09-18T17:00:00")["phase"] == "post_market"
+        r = tc.market_phase("US", "2026-09-18T10:30:00")
+        assert r["sessions"] == [("09:30", "16:00")]
+        assert r["timezone"] == "America/New_York"
+
+    def test_jp_lunch_break(self, trading_day_on):
+        assert tc.market_phase("JP", "2026-09-18T12:00:00")["phase"] == "lunch_break"
+        # XTKS closes at 15:30 (TSE extended its close from 15:00 in 2024-11)
+        assert tc.market_phase("JP", "2026-09-18T15:30:00")["phase"] == "afternoon"
+        assert tc.market_phase("JP", "2026-09-18T15:31:00")["phase"] == "post_market"
+
+    def test_kr_intraday_no_lunch(self, trading_day_on):
+        assert tc.market_phase("KR", "2026-09-18T12:00:00")["phase"] == "intraday"
+        assert tc.market_phase("KR", "2026-09-18T16:00:00")["phase"] == "post_market"
+
+    def test_tw_single_session_intraday(self, trading_day_on):
+        r = tc.market_phase("TW", "2026-09-18T10:00:00")
+        assert r["phase"] == "intraday"
+        assert r["sessions"] == [("09:00", "13:30")]
+
+    def test_non_trading_day_is_closed(self, trading_day_off):
+        r = tc.market_phase("CN", "2026-09-18T10:30:00")
+        assert r["phase"] == "closed"
+        assert r["phase_label"] == "休市"
+        assert r["is_trading_day"] is False
+
+    def test_lowercase_market(self, trading_day_on):
+        assert tc.market_phase("cn", "2026-09-18T10:30:00")["market"] == "CN"
+
+    def test_unknown_market(self):
+        assert "error" in tc.market_phase("XX", "2026-09-18T10:30:00")
+
+    def test_invalid_at(self):
+        assert "error" in tc.market_phase("CN", "not-a-time")

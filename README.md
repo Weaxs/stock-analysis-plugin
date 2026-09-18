@@ -31,7 +31,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **41 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
+- **48 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
@@ -92,7 +92,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 41 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
+OpenClaw Gateway 启动后自动加载并注册 48 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -103,7 +103,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 41 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 48 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 详见 [`dsh/README.md`](dsh/README.md)。
 
@@ -243,10 +243,13 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_stock_info` | 股票基本信息 |
 | `get_chip_distribution` | 筹码分布 |
 | `get_market_indices` | 主要指数行情 |
-| `get_sector_rankings` | 板块涨跌排行 |
+| `get_sector_rankings` | 板块涨跌排行（行业/概念） |
 | `get_sector_constituents` | 板块成分股查询（仅 A 股，板块名模糊匹配） |
 | `resolve_stock_sectors` | 个股所属板块查询（A 股行业+概念 / 港股 GICS） |
 | `get_market_stats` | 市场统计（涨跌家数、涨停等） |
+| `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股） |
+| `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股） |
+| `get_hot_stocks` | 全市场人气热搜榜（东财→雪球→百度，仅 A 股） |
 | `get_fundamental_context` | 基本面综合上下文 |
 
 ### 分析计算
@@ -288,6 +291,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `resolve_stock_name` | 股票名称 / 拼音模糊匹配 |
 | `check_trading_day` | 查询是否交易日 |
 | `get_trading_days` | 获取前后 N 个交易日 |
+| `get_trading_phase` | 查询市场当前交易时段（盘前/盘中/盘后/休市） |
 | `diagnose_data_sources` | 诊断数据源、环境变量和市场链路 |
 | `get_market_capabilities` | 查询各市场支持的工具边界 |
 | `parse_stock_list` | 从自然语言、CSV 或 Markdown 解析股票列表 |
@@ -299,6 +303,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `build_watchlist_context` | 构建自选股摘要与后续工具建议 |
 | `analyze_position_context` | 结合成本、仓位与止损止盈分析持仓 |
 | `check_alert_rules` | 无状态检查价格、涨跌幅、异动和风险规则 |
+| `record_signal` | 记录 AI 分析建议信号（本地 JSONL 持久化） |
+| `evaluate_signals` | 评估到期信号（target_hit/stop_hit/timeout 结算） |
+| `get_signal_summary` | 信号胜率汇总（按 source/symbol/status 过滤） |
 | `render_stock_report` | 将结构化个股报告渲染为 Markdown |
 | `render_market_report` | 将结构化市场复盘渲染为 Markdown |
 
@@ -425,23 +432,24 @@ python tools/market_regime.py detect A
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 41 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 48 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   41 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   48 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×41
+│   └── index.ts                     #   definePluginEntry + registerTool ×48
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×41
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×48
 │
-├── tools/                           # 共享 Python CLI 工具（12 个脚本）
-│   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务
+├── tools/                           # 共享 Python CLI 工具（23 个脚本）
+│   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
+│   ├── signal_tracker.py            #   AI 买卖建议回测闭环（本地 JSONL 存储）
 │   ├── technical.py                 #   技术指标分析
 │   ├── pattern.py                   #   K 线形态识别
 │   ├── screener.py                  #   全市场多因子筛选（含市场情绪调节，--l2 量化增强）

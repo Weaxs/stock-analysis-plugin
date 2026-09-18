@@ -20,7 +20,8 @@ gather 工具返回：
 - `financials` — 基本面数据（实质受益判断）
 - `news` — 近期新闻（题材催化来源）
 - `stock_info` — 公司基本信息（行业、业务）
-- `sector_rankings` — 板块排名（核心数据源）
+- `sector_rankings` — 板块排名（核心数据源）；`get_sector_rankings` 传 `board_type=concept` 时为概念板块排行，热点题材以概念口径为主
+- `hot_stocks` — 全市场人气热搜榜（`get_hot_stocks`，东方财富人气榜），辅助判断题材热度
 
 评估扩散度前，必须获取板块成分股及其当日表现；只有板块排名时，仅可判断当日相对强弱，不判断扩散度或持续性。
 

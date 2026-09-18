@@ -175,6 +175,9 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_stock_info: { symbol: "600519" },
   get_chip_distribution: { symbol: "600519" },
   get_market_stats: {},
+  get_limit_up_pool: {},
+  get_dragon_tiger: {},
+  get_hot_stocks: {},
   get_fundamental_context: { symbol: "600519" },
   screen_stocks: {},
   run_backtest: { strategy: "x.yaml", symbol: "600519" },
@@ -182,6 +185,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   resolve_stock_name: { query: "贵州茅台" },
   check_trading_day: { market: "CN" },
   get_trading_days: { market: "CN" },
+  get_trading_phase: { market: "CN" },
   calculate_ma: { symbol: "600519" },
   get_volume_analysis: { symbol: "600519" },
   search_stock_news: { query: "茅台" },
@@ -219,6 +223,9 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
     symbol: "600519",
     rules: [{ type: "price_below", value: 1450 }],
   },
+  record_signal: { symbol: "600519", direction: "buy", entry_price: 1500 },
+  evaluate_signals: {},
+  get_signal_summary: {},
   parse_stock_list: { text: "600519,AAPL" },
 };
 

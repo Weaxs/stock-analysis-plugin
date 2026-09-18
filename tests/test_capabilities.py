@@ -67,3 +67,25 @@ class TestNewMarkets:
             result = capabilities.get_capabilities(m)
             assert "get_kline" in result["supported"]
             assert "get_quote" in result["supported"]
+
+
+class TestShortTermAndSignalTools:
+    A_ONLY = ("get_limit_up_pool", "get_dragon_tiger", "get_hot_stocks")
+    SIGNAL = ("record_signal", "evaluate_signals", "get_signal_summary")
+
+    def test_a_share_supports_new_tools(self):
+        result = capabilities.get_capabilities("A")
+        for tool in self.A_ONLY + self.SIGNAL + ("get_trading_phase",):
+            assert tool in result["supported"]
+
+    def test_non_a_markets_reject_a_share_only(self):
+        for m in ("HK", "US", "JP", "KR", "TW"):
+            unsupported = {u["tool"] for u in capabilities.get_capabilities(m)["unsupported"]}
+            for tool in self.A_ONLY:
+                assert tool in unsupported, f"{tool} should be unsupported in {m}"
+
+    def test_phase_and_signal_tools_all_markets(self):
+        for m in capabilities.ALL_MARKETS:
+            supported = capabilities.get_capabilities(m)["supported"]
+            for tool in self.SIGNAL + ("get_trading_phase",):
+                assert tool in supported, f"{tool} should be supported in {m}"

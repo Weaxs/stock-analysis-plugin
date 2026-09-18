@@ -88,7 +88,7 @@ Pi Agent loads TypeScript extensions using [jiti](https://github.com/nicolo-riba
 
 ### Tool Registration
 
-`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 31 tools via `pi.registerTool()`:
+`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 48 tools via `pi.registerTool()`:
 
 ```typescript
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -107,7 +107,7 @@ export default (pi: ExtensionAPI) => {
       return { content: [{ type: "text", text: result.stdout }], details: {} };
     },
   });
-  // ... 38 more tools
+  // ... 47 more tools
 };
 ```
 
