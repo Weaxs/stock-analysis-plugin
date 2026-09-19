@@ -1,0 +1,27 @@
+name: tdx-probe
+on:
+  push:
+    branches: [probe/snapshot-ci]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install akshare requests pandas
+      - run: |
+          python - <<'PY'
+          import sys, time
+          sys.path.insert(0, "tools")
+          from stock_data import _snapshot_tencent
+          t0 = time.time()
+          try:
+              rows = _snapshot_tencent()
+              print(f"LEG OK: {len(rows)} rows in {time.time()-t0:.1f}s")
+              print("sample:", rows[0])
+          except Exception as e:
+              print(f"LEG FAILED after {time.time()-t0:.1f}s: {type(e).__name__}: {e}")
+          PY
