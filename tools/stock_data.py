@@ -1120,12 +1120,48 @@ def quote_yf(symbol: str) -> dict:
     )
 
 
+# detect_market labels A-shares "A"; the trading calendar calls the same market "CN"
+_QUOTE_CAL_MARKET = {"A": "CN"}
+
+
+def _quote_stale_marker(market: str):
+    """Stale-data annotation for a quote fetched outside the market's live session.
+
+    Quotes carry no date of their own, so a weekend/holiday or pre-market call
+    would otherwise present the last trading day's close as if it were live
+    (issue #31 follow-up). Returns None — no annotation — during live sessions
+    and post-market (today's close), or when the calendar is unavailable."""
+    from trading_calendar import market_phase, prev_trading_days
+
+    cal_market = _QUOTE_CAL_MARKET.get(market, market)
+    try:
+        info = market_phase(cal_market)
+        if info.get("error") or info.get("phase") not in ("closed", "pre_market"):
+            return None
+        prev = prev_trading_days(cal_market, 1, from_date=info["date"])
+    except Exception:
+        return None  # calendar unavailable — don't guess
+    if not prev:
+        return None
+    as_of = prev[0]
+    return {
+        "as_of": as_of,
+        "stale": True,
+        "note": f"market is not in a live session; quote is the last completed trading day {as_of}'s close",
+    }
+
+
 def cmd_quote(args):
     market = detect_market(args.symbol)
     try:
-        return quote_a(args.symbol) if market == "A" else quote_yf(args.symbol)
+        result = quote_a(args.symbol) if market == "A" else quote_yf(args.symbol)
     except Exception as e:
         return {"error": str(e)}
+    if isinstance(result, dict) and "error" not in result:
+        marker = _quote_stale_marker(market)
+        if marker:
+            result.update(marker)
+    return result
 
 
 # --------------- capital_flow ---------------

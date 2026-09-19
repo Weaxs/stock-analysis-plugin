@@ -236,7 +236,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | 工具 | 说明 |
 |------|------|
 | `get_kline` | K 线数据（OHLCV），支持日/周/月线 |
-| `get_quote` | 实时行情快照 |
+| `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注） |
 | `get_capital_flow` | 资金流向（仅 A 股） |
 | `get_news` | 个股相关新闻 |
 | `get_financials` | 财务指标 |

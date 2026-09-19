@@ -46,6 +46,7 @@ from tools.stock_data import (
     cmd_capital_flow,
     cmd_market_stats,
     cmd_news,
+    cmd_quote,
     cmd_sector_constituents,
     cmd_sector_rankings,
     cmd_stock_info,
@@ -2268,3 +2269,71 @@ class TestCnCode:
     def test_explicit_index_prefix_is_preserved(self):
         assert _cn_code("sh000001") == "sh000001"
         assert _cn_code("sz399006") == "sz399006"
+
+
+class TestCmdQuoteStaleMarker:
+    """Quotes carry no date of their own — outside a live session cmd_quote annotates
+    the payload with as_of/stale so the last trading day's close can't pass as live."""
+
+    def _patch_calendar(self, monkeypatch, phase, date="2026-09-19", prev="2026-09-18"):
+        monkeypatch.setattr(
+            "trading_calendar.market_phase",
+            lambda market: {"market": market, "date": date, "phase": phase},
+        )
+        monkeypatch.setattr(
+            "trading_calendar.prev_trading_days", lambda market, count=1, from_date=None: [prev] if prev else []
+        )
+
+    def test_closed_market_annotates_as_of(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        self._patch_calendar(monkeypatch, "closed")
+        result = cmd_quote(Namespace(symbol="600519"))
+        assert result["stale"] is True
+        assert result["as_of"] == "2026-09-18"
+        assert result["price"] == 1257.12
+        assert "note" in result
+
+    def test_live_session_has_no_marker(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        self._patch_calendar(monkeypatch, "morning", date="2026-09-18")
+        result = cmd_quote(Namespace(symbol="600519"))
+        assert "stale" not in result
+        assert "as_of" not in result
+
+    def test_pre_market_annotates_previous_trading_day(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.quote_yf", lambda symbol: {"symbol": symbol, "price": 336.13})
+        self._patch_calendar(monkeypatch, "pre_market", date="2026-09-21", prev="2026-09-18")
+        result = cmd_quote(Namespace(symbol="AAPL"))
+        assert result["stale"] is True
+        assert result["as_of"] == "2026-09-18"
+
+    def test_post_market_is_todays_close_no_marker(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        self._patch_calendar(monkeypatch, "post_market", date="2026-09-18")
+        result = cmd_quote(Namespace(symbol="600519"))
+        assert "stale" not in result
+
+    def test_calendar_unavailable_keeps_quote_clean(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        monkeypatch.setattr("trading_calendar.market_phase", lambda market: {"market": market, "error": "no calendar"})
+        result = cmd_quote(Namespace(symbol="600519"))
+        assert "stale" not in result
+        assert result["price"] == 1257.12
+
+    def test_a_share_maps_to_cn_calendar(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1.0})
+
+        def fake_phase(market):
+            seen["market"] = market
+            return {"market": market, "date": "2026-09-18", "phase": "morning"}
+
+        monkeypatch.setattr("trading_calendar.market_phase", fake_phase)
+        cmd_quote(Namespace(symbol="600519"))
+        assert seen["market"] == "CN"
+
+    def test_error_result_not_annotated(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"error": "all sources down"})
+        self._patch_calendar(monkeypatch, "closed")
+        result = cmd_quote(Namespace(symbol="600519"))
+        assert result == {"error": "all sources down"}
