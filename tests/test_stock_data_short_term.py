@@ -3,6 +3,7 @@ limit_up_pool, dragon_tiger, hot_stocks, sector_rankings --board-type."""
 
 import sys
 from argparse import Namespace
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -74,6 +75,83 @@ class TestLimitUpPool:
         mock_ak.stock_zt_pool_em.side_effect = ConnectionError("boom")
         with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
             result = cmd_limit_up_pool(Namespace(date="20240102"))
+        assert "error" in result
+
+
+class TestLimitUpPoolDateResolution:
+    """Issue #31: stock_zt_pool_em silently serves the latest trading day's pool for
+    non-trading/future dates — the tool must resolve and label the real data date."""
+
+    def test_weekend_resolves_to_last_friday_with_stale_label(self, monkeypatch):
+        # 2024-01-06 was a Saturday; empty calendar set → weekday-only approximation
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_limit_up_pool(Namespace(date="20240106"))
+        mock_ak.stock_zt_pool_em.assert_called_once_with(date="20240105")
+        assert result["date"] == "20240105"
+        assert result["requested_date"] == "20240106"
+        assert result["stale"] is True
+        assert "note" in result
+        assert result["count"] == 2
+
+    def test_holiday_resolution_uses_calendar_across_year_boundary(self, monkeypatch):
+        # 2024-01-01 (Monday) was New Year's Day → last trading day is 2023-12-29 (Friday)
+        monkeypatch.setattr(
+            "trading_calendar.cn_trade_dates",
+            lambda year: {"2023-12-29"} if year == 2023 else {"2024-01-02", "2024-01-03"},
+        )
+        mock_ak = MagicMock()
+        mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_limit_up_pool(Namespace(date="20240101"))
+        mock_ak.stock_zt_pool_em.assert_called_once_with(date="20231229")
+        assert result["date"] == "20231229"
+        assert result["requested_date"] == "20240101"
+        assert result["stale"] is True
+
+    def test_future_date_clamps_to_today_then_resolves(self, monkeypatch):
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2024, 1, 6, 12, 0)  # Saturday noon
+
+        monkeypatch.setattr("tools.stock_data.datetime", _FixedDatetime)
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_limit_up_pool(Namespace(date="20240109"))  # next Tuesday, still in the future
+        mock_ak.stock_zt_pool_em.assert_called_once_with(date="20240105")
+        assert result["date"] == "20240105"
+        assert result["requested_date"] == "20240109"
+        assert result["stale"] is True
+
+    def test_trading_day_carries_no_stale_label(self, monkeypatch):
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_limit_up_pool(Namespace(date="20240102"))  # Tuesday
+        assert result["date"] == "20240102"
+        assert "requested_date" not in result
+        assert "stale" not in result
+
+    def test_stale_and_empty_pool_keeps_labeling(self, monkeypatch):
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_zt_pool_em.return_value = pd.DataFrame()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_limit_up_pool(Namespace(date="20240106"))
+        assert result["date"] == "20240105"
+        assert result["count"] == 0
+        assert result["pool"] == []
+        assert result["stale"] is True
+        assert "note" in result
+
+    def test_invalid_date_is_clean_error(self):
+        result = cmd_limit_up_pool(Namespace(date="2024-13-40"))
         assert "error" in result
 
 
@@ -200,6 +278,37 @@ class TestDragonTigerFailover:
         assert result["count"] == 0
         assert "note" in result
         assert "error" not in result
+
+
+class TestDragonTigerDateResolution:
+    """Issue #31: same non-trading/future date resolution and stale labeling as
+    limit_up_pool, keeping the two short-term tools aligned."""
+
+    def test_weekend_resolves_to_last_friday_with_stale_label(self, monkeypatch):
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_lhb_detail_em.return_value = _lhb_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_dragon_tiger(Namespace(date="2024-01-06", symbol=None, top=20))  # Saturday
+        mock_ak.stock_lhb_detail_em.assert_called_once_with(start_date="20240105", end_date="20240105")
+        assert result["date"] == "2024-01-05"
+        assert result["requested_date"] == "2024-01-06"
+        assert result["stale"] is True
+        assert result["count"] == 3
+
+    def test_trading_day_carries_no_stale_label(self, monkeypatch):
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_lhb_detail_em.return_value = _lhb_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_dragon_tiger(Namespace(date="2024-01-02", symbol=None, top=20))  # Tuesday
+        assert result["date"] == "2024-01-02"
+        assert "requested_date" not in result
+        assert "stale" not in result
+
+    def test_invalid_date_is_clean_error(self):
+        result = cmd_dragon_tiger(Namespace(date="not-a-date", symbol=None, top=20))
+        assert "error" in result
 
 
 class TestHotStocks:

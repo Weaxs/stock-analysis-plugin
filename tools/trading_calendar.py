@@ -14,7 +14,21 @@ def _is_weekend(d: datetime) -> bool:
     return d.weekday() >= 5
 
 
-def _cn_holidays(year: int) -> set[str]:
+# Process-local memo: one CLI call = one process, and the CN path
+# (is_trading_day / the prev|next_trading_days walk-back) would otherwise
+# re-fetch the sina calendar per step — up to ~5 fetches for one stale check.
+_CN_TRADE_DATES: dict[int, set[str]] = {}
+
+
+def cn_trade_dates(year: int) -> set[str]:
+    """CN trading dates (YYYY-MM-DD) for `year` from the sina trade-date history.
+
+    Empty set when the calendar can't be fetched (failures are not cached — the
+    next call retries); callers treat empty as "weekends are the only non-trading
+    days"."""
+    cached = _CN_TRADE_DATES.get(year)
+    if cached is not None:
+        return cached
     try:
         import akshare as ak
 
@@ -25,9 +39,11 @@ def _cn_holidays(year: int) -> set[str]:
             d = str(val)[:10]
             if d.startswith(str(year)):
                 dates.add(d)
-        return dates
     except Exception:
         return set()
+    if dates:
+        _CN_TRADE_DATES[year] = dates
+    return dates
 
 
 def _is_exchange_trading_day(exchange_code: str, date_str: str) -> bool:
@@ -52,7 +68,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
         return {"date": date_str, "market": market, "is_trading_day": False, "reason": "weekend"}
 
     if market == "CN":
-        trading_dates = _cn_holidays(d.year)
+        trading_dates = cn_trade_dates(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
             return {
@@ -80,7 +96,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
             }
         except Exception:
             pass
-        trading_dates = _cn_holidays(d.year)
+        trading_dates = cn_trade_dates(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
             return {

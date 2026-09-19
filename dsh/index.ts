@@ -147,7 +147,7 @@ export function apply(ctx: Context) {
   ctx.tools.register(
     pyTool({
       name: "get_quote",
-      description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股",
+      description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注",
       parameters: {
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
       },
@@ -402,7 +402,7 @@ export function apply(ctx: Context) {
       description:
         "获取A股涨停池/涨停板复盘——当日涨停个股，含连板数、封板资金、炸板次数、首末次封板时间、所属行业。短线情绪与龙头战法核心数据",
       parameters: {
-        date: { type: "string", description: "日期（YYYYMMDD），默认当日" },
+        date: { type: "string", description: "日期（YYYYMMDD），默认当日；非交易日或未来日期自动回退到最近交易日（返回含 requested_date 与 stale 标注）" },
       },
       script: "stock_data.py",
       argv: (p) => {
@@ -419,7 +419,7 @@ export function apply(ctx: Context) {
       description:
         "获取A股龙虎榜——上榜个股净买额/买入额/卖出额/上榜原因/解读，可按个股过滤",
       parameters: {
-        date: { type: "string", description: "日期（YYYY-MM-DD），默认当日" },
+        date: { type: "string", description: "日期（YYYY-MM-DD），默认当日；非交易日或未来日期自动回退到最近交易日（返回含 requested_date 与 stale 标注）" },
         symbol: { type: "string", description: "A股股票代码（可选，按个股过滤），如 600519" },
         top: { type: "number", description: "返回前N条，默认 20" },
       },

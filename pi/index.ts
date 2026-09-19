@@ -63,7 +63,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_quote",
     description:
-      "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股",
+      "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注",
     parameters: {
       type: "object",
       properties: {
@@ -401,7 +401,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         date: {
           type: "string",
-          description: "日期（YYYYMMDD），默认当日",
+          description: "日期（YYYYMMDD），默认当日；非交易日或未来日期自动回退到最近交易日（返回含 requested_date 与 stale 标注）",
         },
       },
     },
@@ -423,7 +423,7 @@ export default (pi: ExtensionAPI) => {
       properties: {
         date: {
           type: "string",
-          description: "日期（YYYY-MM-DD），默认当日",
+          description: "日期（YYYY-MM-DD），默认当日；非交易日或未来日期自动回退到最近交易日（返回含 requested_date 与 stale 标注）",
         },
         symbol: {
           type: "string",
