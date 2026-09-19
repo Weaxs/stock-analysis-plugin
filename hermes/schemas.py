@@ -246,7 +246,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "date": {
                     "type": "string",
-                    "description": "日期（YYYYMMDD），默认当日",
+                    "description": "日期（YYYYMMDD），默认当日；非交易日或未来日期自动回退到最近交易日（返回含 requested_date 与 stale 标注）",
                 },
             },
         },
@@ -259,7 +259,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "date": {
                     "type": "string",
-                    "description": "日期（YYYY-MM-DD），默认当日",
+                    "description": "日期（YYYY-MM-DD），默认当日；非交易日或未来日期自动回退到最近交易日（返回含 requested_date 与 stale 标注）",
                 },
                 "symbol": {
                     "type": "string",

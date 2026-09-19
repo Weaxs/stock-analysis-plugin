@@ -14,7 +14,11 @@ def _is_weekend(d: datetime) -> bool:
     return d.weekday() >= 5
 
 
-def _cn_holidays(year: int) -> set[str]:
+def cn_trade_dates(year: int) -> set[str]:
+    """CN trading dates (YYYY-MM-DD) for `year` from the sina trade-date history.
+
+    Empty set when the calendar can't be fetched — callers treat that as
+    "weekends are the only non-trading days"."""
     try:
         import akshare as ak
 
@@ -52,7 +56,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
         return {"date": date_str, "market": market, "is_trading_day": False, "reason": "weekend"}
 
     if market == "CN":
-        trading_dates = _cn_holidays(d.year)
+        trading_dates = cn_trade_dates(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
             return {
@@ -80,7 +84,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
             }
         except Exception:
             pass
-        trading_dates = _cn_holidays(d.year)
+        trading_dates = cn_trade_dates(d.year)
         if trading_dates:
             is_td = date_str in trading_dates
             return {

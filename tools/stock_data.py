@@ -2321,21 +2321,66 @@ def cmd_fundamental_context(args):
 # --------------- short-term sentiment: limit_up_pool / dragon_tiger / hot_stocks (A-share only) ---------------
 
 
+def _resolve_cn_data_date(raw: str) -> tuple[datetime, datetime]:
+    """Resolve a requested date (YYYYMMDD) to the CN trading day its data belongs to.
+
+    eastmoney's zt-pool/LHB endpoints silently clamp any date later than the latest
+    trading day to that day and answer EMPTY for past non-trading days, so the
+    requested date never proves the data's date (issue #31). Returns
+    (requested, data_date) as datetimes — data_date is the last trading day at or
+    before min(requested, today): weekends, holidays and future dates all resolve
+    backward. Raises ValueError on malformed input."""
+    from trading_calendar import cn_trade_dates  # flat sibling import
+
+    req = datetime.strptime(raw, "%Y%m%d")
+    d = min(req, datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    trade_dates = cn_trade_dates(d.year)
+    if d.month == 1:  # the walk-back can cross into December of the previous year
+        trade_dates |= cn_trade_dates(d.year - 1)
+    for _ in range(20):  # 春节/国庆 plus adjoining weekends fit well within 20 days
+        # empty trade-date set (calendar fetch failed) → weekday-only approximation
+        if d.weekday() < 5 and (not trade_dates or d.strftime("%Y-%m-%d") in trade_dates):
+            break
+        d -= timedelta(days=1)
+    return req, d
+
+
 def cmd_limit_up_pool(args):
-    """A-share limit-up pool (涨停池) for one trading day via eastmoney."""
-    date = (args.date or datetime.now().strftime("%Y%m%d")).replace("-", "")
+    """A-share limit-up pool (涨停池) for one trading day via eastmoney.
+
+    The requested date is first resolved to the trading day the data belongs to
+    (_resolve_cn_data_date); when they differ the payload carries requested_date
+    and stale=True so a weekend/future request can't be misread as that day's pool.
+    Known limitation: on a trading day before that day's pool is published, the
+    request resolves to itself and no stale label is emitted (the zt-pool payload
+    carries no date column to cross-check against)."""
+    try:
+        req, data_day = _resolve_cn_data_date((args.date or datetime.now().strftime("%Y%m%d")).replace("-", ""))
+    except ValueError:
+        return {"error": f"limit_up_pool: invalid --date {args.date!r} (want YYYYMMDD)"}
+    date = data_day.strftime("%Y%m%d")
+    requested = req.strftime("%Y%m%d")
+    result = {"date": date}
+    if req != data_day:
+        result["requested_date"] = requested
+        result["stale"] = True
+        result["note"] = f"{requested} is not a trading day or has no data yet; showing the last trading day {date}"
     try:
         import akshare as ak
 
         df = _akshare_retry(ak.stock_zt_pool_em, date=date)
         if df is None or df.empty:
-            return {
-                "date": date,
-                "count": 0,
-                "max_consecutive_boards": 0,
-                "pool": [],
-                "note": "no limit-up pool data (non-trading day or no limit-ups)",
-            }
+            result["count"] = 0
+            result["max_consecutive_boards"] = 0
+            result["pool"] = []
+            if date != requested:
+                result["note"] = (
+                    f"{requested} is not a trading day or has no data yet; "
+                    f"last trading day {date} has no limit-up pool data"
+                )
+            else:
+                result["note"] = f"no limit-up pool data for {date}"
+            return result
         col_map = {
             "代码": "code",
             "名称": "name",
@@ -2357,14 +2402,12 @@ def cmd_limit_up_pool(args):
         keep = [c for c in col_map.values() if c in df.columns]
         pool = [_clean_row(r) for r in df[keep].to_dict("records")]
         boards = [r["consecutive_boards"] for r in pool if isinstance(r.get("consecutive_boards"), (int, float))]
-        return {
-            "date": date,
-            "count": len(pool),
-            "max_consecutive_boards": max(boards) if boards else 0,
-            "pool": pool,
-        }
+        result["count"] = len(pool)
+        result["max_consecutive_boards"] = max(boards) if boards else 0
+        result["pool"] = pool
+        return result
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"limit_up_pool date={requested}: {e}"}
 
 
 def _dragon_tiger_em(raw: str) -> list:
@@ -2423,9 +2466,18 @@ def _dragon_tiger_sina(raw: str) -> list:
 
 
 def cmd_dragon_tiger(args):
-    """A-share dragon-tiger list (龙虎榜) for one trading day: eastmoney → sina."""
-    raw = (args.date or datetime.now().strftime("%Y-%m-%d")).replace("-", "")
-    date = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}" if len(raw) == 8 and raw.isdigit() else args.date
+    """A-share dragon-tiger list (龙虎榜) for one trading day: eastmoney → sina.
+
+    Same date resolution as cmd_limit_up_pool (issue #31): a non-trading or future
+    date is served the last trading day's list, labeled with requested_date and
+    stale=True."""
+    try:
+        req, data_day = _resolve_cn_data_date((args.date or datetime.now().strftime("%Y-%m-%d")).replace("-", ""))
+    except ValueError:
+        return {"error": f"dragon_tiger: invalid --date {args.date!r} (want YYYY-MM-DD)"}
+    raw = data_day.strftime("%Y%m%d")
+    date = data_day.strftime("%Y-%m-%d")
+    requested_iso = req.strftime("%Y-%m-%d")
     sources = [
         _sourced("eastmoney", lambda: _dragon_tiger_em(raw)),
         _sourced("sina", lambda: _dragon_tiger_sina(raw)),
@@ -2434,13 +2486,19 @@ def cmd_dragon_tiger(args):
         rows = _failover(sources, label=f"dragon_tiger:{raw}")
     except Exception as e:
         return {"error": str(e)}
+    stale = req != data_day
     if not rows:
-        return {
-            "date": date,
-            "count": 0,
-            "items": [],
-            "note": "no dragon-tiger data (non-trading day or no listings)",
-        }
+        result = {"date": date, "count": 0, "items": []}
+        if stale:
+            result["requested_date"] = requested_iso
+            result["stale"] = True
+            result["note"] = (
+                f"{requested_iso} is not a trading day or has no data yet; "
+                f"last trading day {date} has no dragon-tiger data"
+            )
+        else:
+            result["note"] = f"no dragon-tiger data for {date}"
+        return result
     source = rows[0]["source"]
     if args.symbol:
         m = re.fullmatch(r"(?:sh|sz|bj)(\d{6})", str(args.symbol), re.IGNORECASE)
@@ -2453,7 +2511,12 @@ def cmd_dragon_tiger(args):
             reverse=True,
         )
     items = [{k: v for k, v in r.items() if k != "source"} for r in rows[: args.top]]
-    return {"date": date, "count": len(items), "items": items, "source": source}
+    result = {"date": date, "count": len(items), "items": items, "source": source}
+    if stale:
+        result["requested_date"] = requested_iso
+        result["stale"] = True
+        result["note"] = f"{requested_iso} is not a trading day or has no data yet; showing the last trading day {date}"
+    return result
 
 
 def _strip_exchange_prefix(row: dict) -> dict:

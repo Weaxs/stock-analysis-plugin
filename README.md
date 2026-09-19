@@ -247,8 +247,8 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_sector_constituents` | 板块成分股查询（仅 A 股，板块名模糊匹配） |
 | `resolve_stock_sectors` | 个股所属板块查询（A 股行业+概念 / 港股 GICS） |
 | `get_market_stats` | 市场统计（涨跌家数、涨停等） |
-| `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股） |
-| `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股） |
+| `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
+| `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_hot_stocks` | 全市场人气热搜榜（东财→雪球→百度，仅 A 股） |
 | `get_fundamental_context` | 基本面综合上下文 |
 
