@@ -2293,9 +2293,10 @@ class TestCmdQuoteStaleMarker:
         assert result["price"] == 1257.12
         assert "note" in result
 
-    def test_live_session_has_no_marker(self, monkeypatch):
+    @pytest.mark.parametrize("phase", ["morning", "lunch_break", "afternoon", "intraday", "post_market"])
+    def test_live_or_same_day_phases_have_no_marker(self, monkeypatch, phase):
         monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
-        self._patch_calendar(monkeypatch, "morning", date="2026-09-18")
+        self._patch_calendar(monkeypatch, phase, date="2026-09-18")
         result = cmd_quote(Namespace(symbol="600519"))
         assert "stale" not in result
         assert "as_of" not in result
@@ -2307,11 +2308,12 @@ class TestCmdQuoteStaleMarker:
         assert result["stale"] is True
         assert result["as_of"] == "2026-09-18"
 
-    def test_post_market_is_todays_close_no_marker(self, monkeypatch):
+    def test_no_previous_trading_day_no_marker(self, monkeypatch):
         monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
-        self._patch_calendar(monkeypatch, "post_market", date="2026-09-18")
+        self._patch_calendar(monkeypatch, "closed", prev=None)
         result = cmd_quote(Namespace(symbol="600519"))
         assert "stale" not in result
+        assert "as_of" not in result
 
     def test_calendar_unavailable_keeps_quote_clean(self, monkeypatch):
         monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})

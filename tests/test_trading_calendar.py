@@ -133,3 +133,29 @@ class TestMarketPhase:
 
     def test_invalid_at(self):
         assert "error" in tc.market_phase("CN", "not-a-time")
+
+
+import sys  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+import pandas as pd  # noqa: E402
+
+
+class TestCnTradeDatesMemo:
+    """cn_trade_dates is memoized per process (the stale-date walk-back would
+    otherwise re-fetch the sina calendar per step); failures are never cached."""
+
+    def test_memoized_and_failures_retry(self, monkeypatch):
+        monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+        mock_ak = MagicMock()
+        mock_ak.tool_trade_date_hist_sina.return_value = pd.DataFrame(
+            {"trade_date": ["2026-09-18", "2026-09-17", "2025-12-31"]}
+        )
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            assert tc.cn_trade_dates(2026) == {"2026-09-18", "2026-09-17"}
+            assert tc.cn_trade_dates(2026) == {"2026-09-18", "2026-09-17"}
+            mock_ak.tool_trade_date_hist_sina.assert_called_once()
+            mock_ak.tool_trade_date_hist_sina.side_effect = ConnectionError("boom")
+            assert tc.cn_trade_dates(2027) == set()
+            assert tc.cn_trade_dates(2027) == set()
+            assert mock_ak.tool_trade_date_hist_sina.call_count == 3

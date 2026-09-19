@@ -1120,20 +1120,20 @@ def quote_yf(symbol: str) -> dict:
     )
 
 
-# detect_market labels A-shares "A"; the trading calendar calls the same market "CN"
-_QUOTE_CAL_MARKET = {"A": "CN"}
-
-
 def _quote_stale_marker(market: str):
     """Stale-data annotation for a quote fetched outside the market's live session.
 
     Quotes carry no date of their own, so a weekend/holiday or pre-market call
     would otherwise present the last trading day's close as if it were live
     (issue #31 follow-up). Returns None — no annotation — during live sessions
-    and post-market (today's close), or when the calendar is unavailable."""
+    and post-market (today's close), or when the calendar is unavailable.
+    pre_market covers the call-auction window (e.g. CN 09:15-09:29), where the
+    quote is actually auction-indicative — an accepted approximation rather than
+    hand-maintaining per-market auction start times."""
     from trading_calendar import market_phase, prev_trading_days
 
-    cal_market = _QUOTE_CAL_MARKET.get(market, market)
+    # detect_market labels A-shares "A"; the trading calendar calls the same market "CN"
+    cal_market = "CN" if market == "A" else market
     try:
         info = market_phase(cal_market)
         if info.get("error") or info.get("phase") not in ("closed", "pre_market"):
