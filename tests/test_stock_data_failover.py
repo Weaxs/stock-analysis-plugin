@@ -35,11 +35,13 @@ from tools.stock_data import (
     _quote_tushare,
     _quote_yfinance,
     _sector_rankings_efinance,
+    _snapshot_tencent,
     _stock_boards_efinance,
     _stock_boards_em,
     _stock_boards_from_cache,
     _stock_boards_xueqiu,
     _stock_sectors_hk,
+    _tencent_batch_quotes,
     _to_baostock_code,
     _xq_symbol,
     _yf_hk_symbol,
@@ -989,6 +991,95 @@ class TestSnapshotAFailover:
     def test_market_stats_returns_snapshot_error(self):
         with patch("tools.stock_data.snapshot_a", return_value=[{"error": "all sources down"}]):
             assert cmd_market_stats(Namespace(market="A")) == {"error": "all sources down"}
+
+
+def _tencent_batch_body(code_fields: dict) -> bytes:
+    """Build a gtimg batch body: {vname: fields-dict} → b'v_sz000001="...";v_sh600519="...";'."""
+    return b"".join(_tencent_quote_payload(fields, vname) for vname, fields in code_fields.items())
+
+
+class TestSnapshotTencent:
+    """The tencent snapshot leg: SSE list for SH + enumerated SZ ranges, validated
+    through Tencent batch quotes (the plain-HTTPS channel that survives eastmoney
+    blocking on datacenter IPs)."""
+
+    @patch("requests.get")
+    def test_batch_quotes_parse_filter_and_normalize(self, mock_get):
+        body = _tencent_batch_body(
+            {
+                "sh600519": {**TestQuoteTencent._FIELDS, 49: "1.14"},
+                # frozen payload (delisted/suspended): volume 0 → dropped
+                "sz000003": {**TestQuoteTencent._FIELDS, 1: "PT金田A", 6: "0", 37: "0"},
+                # sz003999 is absent from the body entirely — unknown codes are skipped
+            }
+        )
+        mock_get.return_value = MagicMock(content=body)
+        rows = _tencent_batch_quotes(["sh600519", "sz000003", "sz003999"])
+        assert [r["symbol"] for r in rows] == ["600519"]  # bare code
+        row = rows[0]
+        assert row["name"] == "贵州茅台"
+        assert row["price"] == 1258.75
+        assert row["turnover"] == 295576e4  # 万元 → 元
+        assert row["market_cap"] == 15735.40e8  # 亿元 → 元
+        assert row["pe"] == 19.32
+        assert row["turnover_rate"] == 0.19
+        assert row["volume_ratio"] == 1.14
+
+    @patch("requests.get")
+    def test_batch_failure_is_skipped_not_fatal(self, mock_get):
+        mock_get.side_effect = [
+            ConnectionError("reset"),
+            MagicMock(content=_tencent_batch_body({"sz000001": TestQuoteTencent._FIELDS})),
+        ]
+        rows = _tencent_batch_quotes(["sz000003"] * 60 + ["sz000001"])  # 61 codes → 2 batches
+        assert [r["symbol"] for r in rows] == ["000001"]
+
+    @patch("requests.get")
+    def test_snapshot_leg_combines_sse_list_and_enumerated_sz(self, mock_get):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_info_sh_name_code.side_effect = lambda symbol: pd.DataFrame(
+            {"证券代码": ["600519"] if symbol == "主板A股" else ["688981"]}
+        )
+        alive = {
+            "sh600519": TestQuoteTencent._FIELDS,
+            "sh688981": {**TestQuoteTencent._FIELDS, 1: "中芯国际", 2: "688981"},
+            "sz000001": {**TestQuoteTencent._FIELDS, 1: "平安银行", 2: "000001"},
+            "sz300001": {**TestQuoteTencent._FIELDS, 1: "特锐德", 2: "300001"},
+        }
+
+        def fake_get(url, timeout=10):
+            q = url.split("q=", 1)[1].split(",")
+            return MagicMock(content=_tencent_batch_body({c: alive[c] for c in q if c in alive}))
+
+        mock_get.side_effect = fake_get
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            rows = _snapshot_tencent()
+        # SH codes from the SSE list; SZ codes proven alive by the enumeration
+        assert {r["symbol"] for r in rows} == {"600519", "688981", "000001", "300001"}
+        assert mock_ak.stock_info_sh_name_code.call_count == 2
+
+    def test_snapshot_leg_raises_when_sse_list_unavailable(self):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_info_sh_name_code.return_value = pd.DataFrame()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data.time.sleep"),
+            pytest.raises(ValueError, match="SSE stock list unavailable"),
+        ):
+            _snapshot_tencent()
+
+    def test_snapshot_a_falls_back_to_tencent(self):
+        with (
+            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
+            patch("tools.stock_data._snapshot_efinance", side_effect=OSError("eastmoney down")),
+            patch("tools.stock_data._snapshot_sina", side_effect=OSError("sina down")),
+            patch("tools.stock_data._snapshot_tencent", return_value=[{"symbol": "600519"}]),
+        ):
+            assert snapshot_a() == [{"symbol": "600519"}]
 
 
 class TestKlineYfFailoverExtended:
@@ -1955,13 +2046,13 @@ class TestCmdStockInfoBoards:
 # --------------- tencent / sina providers + sticky ordering (issue #25) ---------------
 
 
-def _tencent_quote_payload(fields: dict) -> bytes:
-    """Build a gtimg `v_sh600519="..."` body with the given field indices set."""
+def _tencent_quote_payload(fields: dict, vname: str = "sh600519") -> bytes:
+    """Build a gtimg `v_<vname>="..."` body with the given field indices set."""
     f = [""] * 50
     f[0] = "1"
     for idx, val in fields.items():
         f[idx] = val
-    return f'v_sh600519="{"~".join(f)}";'.encode("gbk")
+    return f'v_{vname}="{"~".join(f)}";'.encode("gbk")
 
 
 class TestQuoteTencent:

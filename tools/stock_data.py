@@ -272,21 +272,13 @@ def _gbk_var_payload(content: bytes) -> str:
     return content.decode("gbk", errors="replace").split('="', 1)[-1].rsplit('"', 1)[0]
 
 
-def _quote_tencent(symbol: str) -> dict:
-    """Tencent quote via qt.gtimg.cn. GBK-encoded `v_sh600519="1~name~code~..."` fields.
-
-    Units differ from akshare: turnover arrives in 万元 and market_cap in 亿元 —
-    both are normalized to 元 to match the rest of the chain."""
-    import requests
-
-    resp = requests.get(f"https://qt.gtimg.cn/q={_cn_code(symbol)}", timeout=10)
-    f = _gbk_var_payload(resp.content).split("~")
-    if len(f) < 35 or not f[1]:
-        raise ValueError(f"tencent returned no quote for {symbol}")
-    f += [""] * (47 - len(f))  # pad optional tail fields (pe/pb/market_cap…) on short payloads
+def _tencent_payload_row(f: list, symbol: str) -> dict:
+    """Build the quote row from one Tencent `~`-separated payload (already split).
+    Shared by _quote_tencent (single) and _tencent_batch_quotes (snapshot leg)."""
+    f += [""] * (50 - len(f))  # pad optional tail fields (pe/pb/market_cap/volume_ratio…) on short payloads
     turnover = _parse_float(f[37])
     market_cap = _parse_float(f[45])
-    row = {
+    return {
         "symbol": symbol,
         "name": f[1],
         "price": _parse_float(f[3]),
@@ -302,8 +294,23 @@ def _quote_tencent(symbol: str) -> dict:
         "pe": _parse_float(f[39]),
         "pb": _parse_float(f[46]),
         "turnover_rate": _parse_float(f[38]),
+        "volume_ratio": _parse_float(f[49]),
         "amplitude": _parse_float(f[43]),
     }
+
+
+def _quote_tencent(symbol: str) -> dict:
+    """Tencent quote via qt.gtimg.cn. GBK-encoded `v_sh600519="1~name~code~..."` fields.
+
+    Units differ from akshare: turnover arrives in 万元 and market_cap in 亿元 —
+    both are normalized to 元 to match the rest of the chain."""
+    import requests
+
+    resp = requests.get(f"https://qt.gtimg.cn/q={_cn_code(symbol)}", timeout=10)
+    f = _gbk_var_payload(resp.content).split("~")
+    if len(f) < 35 or not f[1]:
+        raise ValueError(f"tencent returned no quote for {symbol}")
+    row = _tencent_payload_row(f, symbol)
     if normalize_stock_code(symbol)["is_etf"]:
         row["is_etf"] = True
     return _clean_row(row)
@@ -1389,6 +1396,7 @@ def snapshot_a() -> list:
                 ("akshare", _snapshot_akshare),
                 ("efinance", _snapshot_efinance),
                 ("sina", _snapshot_sina),
+                ("tencent", _snapshot_tencent),
             ],
             label="snapshot_a",
         )
@@ -1447,6 +1455,60 @@ def _snapshot_sina() -> list:
     df = df.rename(columns=col_map)
     keep = [c for c in col_map.values() if c in df.columns]
     return [_clean_row(r) for r in df[keep].to_dict("records")]
+
+
+# qt.gtimg.cn accepts comma-joined multi-code batches; 60 keeps URLs well short
+_TENCENT_BATCH = 60
+
+
+def _tencent_batch_quotes(codes: list) -> list:
+    """Batch quotes from qt.gtimg.cn for exchange-prefixed codes. Unknown codes are
+    simply absent from the response; delisted/suspended ones come back frozen with
+    volume=0 and are dropped here."""
+    import requests
+
+    rows = []
+    for i in range(0, len(codes), _TENCENT_BATCH):
+        try:
+            resp = requests.get(f"https://qt.gtimg.cn/q={','.join(codes[i : i + _TENCENT_BATCH])}", timeout=10)
+        except Exception:
+            continue  # a lost batch loses 60 codes — a partial snapshot still beats none
+        body = resp.content.decode("gbk", errors="replace")
+        for part in body.split(";"):
+            vname, _, payload = part.strip().partition('="')
+            f = payload.rstrip('"').split("~")
+            if len(f) < 35 or not f[1]:
+                continue
+            if not _parse_float(f[6]):  # volume 0/empty → frozen payload (delisted/suspended)
+                continue
+            prefixed = vname[2:]  # strip the leading "v_"
+            bare = prefixed[2:] if prefixed[:2] in ("sh", "sz", "bj") else prefixed
+            rows.append(_clean_row(_tencent_payload_row(f, bare)))
+    return rows
+
+
+def _snapshot_tencent() -> list:
+    """Tencent full-market snapshot — the plain-HTTPS last-resort leg for when the
+    eastmoney/sina legs are all blocked (datacenter IPs, issue #25).
+
+    SH codes come from the SSE official list API (authoritative current listings).
+    SZ has no reliably reachable list API (www.szse.cn resets datacenter
+    connections), so the known 000-003 / 300-302 ranges are enumerated and
+    validated by the batch quotes themselves. BSE and suspended stocks stay
+    uncovered by this leg."""
+    import akshare as ak
+
+    codes = []
+    for board in ("主板A股", "科创板"):
+        df = _akshare_retry(ak.stock_info_sh_name_code, symbol=board)
+        if df is None or df.empty:
+            raise ValueError("SSE stock list unavailable")
+        codes += [f"sh{c}" for c in df["证券代码"].astype(str)]
+    codes += [f"sz{i:06d}" for lo, hi in ((1, 3999), (300000, 302999)) for i in range(lo, hi + 1)]
+    rows = _tencent_batch_quotes(codes)
+    if not rows:
+        raise ValueError("tencent snapshot returned empty data")
+    return rows
 
 
 def _snapshot_akshare() -> list:
