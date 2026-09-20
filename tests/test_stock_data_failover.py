@@ -992,6 +992,17 @@ class TestSnapshotAFailover:
         with patch("tools.stock_data.snapshot_a", return_value=[{"error": "all sources down"}]):
             assert cmd_market_stats(Namespace(market="A")) == {"error": "all sources down"}
 
+    def test_all_sources_down_error_carries_leg_detail(self):
+        with (
+            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
+            patch("tools.stock_data._snapshot_efinance", side_effect=OSError("efinance down")),
+            patch("tools.stock_data._snapshot_sina", side_effect=OSError("sina down")),
+            patch("tools.stock_data._snapshot_tencent", side_effect=OSError("tencent down")),
+        ):
+            result = snapshot_a()
+        assert "error" in result[0]
+        assert "sina down" in result[0]["error"] and "tencent down" in result[0]["error"]
+
 
 def _tencent_batch_body(code_fields: dict) -> bytes:
     """Build a gtimg batch body: {vname: fields-dict} → b'v_sz000001="...";v_sh600519="...";'."""
@@ -1027,21 +1038,17 @@ class TestSnapshotTencent:
 
     @patch("requests.get")
     def test_batch_failure_is_skipped_not_fatal(self, mock_get):
-        mock_get.side_effect = [
-            ConnectionError("reset"),
-            MagicMock(content=_tencent_batch_body({"sz000001": TestQuoteTencent._FIELDS})),
-        ]
+        def fake_get(url, timeout=10):
+            if "sz000003" in url:  # deterministic failure regardless of thread scheduling
+                raise ConnectionError("reset")
+            return MagicMock(content=_tencent_batch_body({"sz000001": TestQuoteTencent._FIELDS}))
+
+        mock_get.side_effect = fake_get
         rows = _tencent_batch_quotes(["sz000003"] * 60 + ["sz000001"])  # 61 codes → 2 batches
         assert [r["symbol"] for r in rows] == ["000001"]
 
     @patch("requests.get")
-    def test_snapshot_leg_combines_sse_list_and_enumerated_sz(self, mock_get):
-        import pandas as pd
-
-        mock_ak = MagicMock()
-        mock_ak.stock_info_sh_name_code.side_effect = lambda symbol: pd.DataFrame(
-            {"证券代码": ["600519"] if symbol == "主板A股" else ["688981"]}
-        )
+    def test_snapshot_leg_enumerates_and_validates(self, mock_get):
         alive = {
             "sh600519": TestQuoteTencent._FIELDS,
             "sh688981": {**TestQuoteTencent._FIELDS, 1: "中芯国际", 2: "688981"},
@@ -1054,21 +1061,14 @@ class TestSnapshotTencent:
             return MagicMock(content=_tencent_batch_body({c: alive[c] for c in q if c in alive}))
 
         mock_get.side_effect = fake_get
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            rows = _snapshot_tencent()
-        # SH codes from the SSE list; SZ codes proven alive by the enumeration
+        rows = _snapshot_tencent()
+        # codes validated alive by the enumeration, across the SH/SZ ranges
         assert {r["symbol"] for r in rows} == {"600519", "688981", "000001", "300001"}
-        assert mock_ak.stock_info_sh_name_code.call_count == 2
 
-    def test_snapshot_leg_raises_when_sse_list_unavailable(self):
-        import pandas as pd
-
-        mock_ak = MagicMock()
-        mock_ak.stock_info_sh_name_code.return_value = pd.DataFrame()
+    def test_snapshot_leg_raises_when_nothing_alive(self):
         with (
-            patch.dict(sys.modules, {"akshare": mock_ak}),
-            patch("tools.stock_data.time.sleep"),
-            pytest.raises(ValueError, match="SSE stock list unavailable"),
+            patch("requests.get", return_value=MagicMock(content=b"")),
+            pytest.raises(ValueError, match="tencent snapshot returned empty data"),
         ):
             _snapshot_tencent()
 

@@ -1390,6 +1390,15 @@ def cmd_financials(args):
 
 
 def snapshot_a() -> list:
+    import socket
+
+    # akshare/efinance leave requests timeout-less — on a blackholed network a leg
+    # hangs until the kernel TCP timeout (~2min), and the chain would overrun the
+    # caller's subprocess budget before ever reaching the tencent leg. Bound each
+    # blocking socket op for the chain's duration (explicit per-request timeouts,
+    # like the tencent leg's, still win).
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(25)
     try:
         return _failover(
             [
@@ -1400,8 +1409,10 @@ def snapshot_a() -> list:
             ],
             label="snapshot_a",
         )
-    except Exception:
-        return [{"error": "A-share snapshot unavailable from all sources"}]
+    except Exception as e:
+        return [{"error": f"A-share snapshot unavailable from all sources: {e}"}]
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def _snapshot_efinance() -> list:
@@ -1462,19 +1473,22 @@ _TENCENT_BATCH = 60
 
 
 def _tencent_batch_quotes(codes: list) -> list:
-    """Batch quotes from qt.gtimg.cn for exchange-prefixed codes. Unknown codes are
-    simply absent from the response; delisted/suspended ones come back frozen with
-    volume=0 and are dropped here."""
+    """Batch quotes from qt.gtimg.cn for exchange-prefixed codes, a few requests in
+    flight (this leg fires only when the eastmoney/sina legs are all dead, and ~15k
+    enumerated codes serialized would take minutes). Unknown codes are simply absent
+    from the response; delisted/suspended ones come back frozen with volume=0 and
+    are dropped here."""
+    import concurrent.futures
+
     import requests
 
-    rows = []
-    for i in range(0, len(codes), _TENCENT_BATCH):
+    def fetch(batch):
         try:
-            resp = requests.get(f"https://qt.gtimg.cn/q={','.join(codes[i : i + _TENCENT_BATCH])}", timeout=10)
+            resp = requests.get(f"https://qt.gtimg.cn/q={','.join(batch)}", timeout=10)
         except Exception:
-            continue  # a lost batch loses 60 codes — a partial snapshot still beats none
-        body = resp.content.decode("gbk", errors="replace")
-        for part in body.split(";"):
+            return []  # a lost batch loses 60 codes — a partial snapshot still beats none
+        rows = []
+        for part in resp.content.decode("gbk", errors="replace").split(";"):
             vname, _, payload = part.strip().partition('="')
             f = payload.rstrip('"').split("~")
             if len(f) < 35 or not f[1]:
@@ -1484,6 +1498,13 @@ def _tencent_batch_quotes(codes: list) -> list:
             prefixed = vname[2:]  # strip the leading "v_"
             bare = prefixed[2:] if prefixed[:2] in ("sh", "sz", "bj") else prefixed
             rows.append(_clean_row(_tencent_payload_row(f, bare)))
+        return rows
+
+    batches = [codes[i : i + _TENCENT_BATCH] for i in range(0, len(codes), _TENCENT_BATCH)]
+    rows = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        for batch_rows in pool.map(fetch, batches):
+            rows.extend(batch_rows)
     return rows
 
 
@@ -1491,19 +1512,12 @@ def _snapshot_tencent() -> list:
     """Tencent full-market snapshot — the plain-HTTPS last-resort leg for when the
     eastmoney/sina legs are all blocked (datacenter IPs, issue #25).
 
-    SH codes come from the SSE official list API (authoritative current listings).
-    SZ has no reliably reachable list API (www.szse.cn resets datacenter
-    connections), so the known 000-003 / 300-302 ranges are enumerated and
-    validated by the batch quotes themselves. BSE and suspended stocks stay
-    uncovered by this leg."""
-    import akshare as ak
-
-    codes = []
-    for board in ("主板A股", "科创板"):
-        df = _akshare_retry(ak.stock_info_sh_name_code, symbol=board)
-        if df is None or df.empty:
-            raise ValueError("SSE stock list unavailable")
-        codes += [f"sh{c}" for c in df["证券代码"].astype(str)]
+    Codes are enumerated over the known SH (600-605, 688-689) and SZ (000-003,
+    300-302) ranges and validated by the batch quotes themselves — no list API is
+    reliable from blocked networks (www.szse.cn resets datacenter connections,
+    query.sse.com.cn flaps, akshare's wrapper has no timeout). BSE and suspended
+    stocks stay uncovered by this leg."""
+    codes = [f"sh{i:06d}" for lo, hi in ((600000, 605999), (688000, 689999)) for i in range(lo, hi + 1)]
     codes += [f"sz{i:06d}" for lo, hi in ((1, 3999), (300000, 302999)) for i in range(lo, hi + 1)]
     rows = _tencent_batch_quotes(codes)
     if not rows:
