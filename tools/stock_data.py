@@ -2029,6 +2029,20 @@ def _board_entry(name, source: str, board_type: str) -> dict:
     return {"name": str(name), "source": source, "board_type": board_type}
 
 
+class _DataMiss(ValueError):
+    """Per-symbol data miss: the provider answered but doesn't cover this code
+    (empty DataFrame / no industry field for an ETF/BSE/uncovered symbol). Never an
+    outage — resolve_stock_sectors' negative cache must not mark the leg down."""
+
+
+def _require_industry(value, source: str) -> str:
+    """Unwrap a provider's industry field into a real name. pandas NaN is truthy —
+    only a non-empty string counts; a missing one is a _DataMiss, not an outage."""
+    if not (isinstance(value, str) and value):
+        raise _DataMiss(f"{source} has no industry")
+    return value
+
+
 def _stock_boards_em(symbol: str, info_map=None) -> list:
     """A-share industry board from eastmoney individual info. Pass an already-fetched
     info_map (item → value) to reuse it instead of hitting the network again."""
@@ -2037,12 +2051,9 @@ def _stock_boards_em(symbol: str, info_map=None) -> list:
 
         df = _akshare_retry(ak.stock_individual_info_em, symbol=symbol)
         if df is None or df.empty:
-            raise ValueError("eastmoney individual info unavailable")
+            raise _DataMiss("eastmoney individual info unavailable")
         info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
-    industry = info_map.get("行业")
-    # pandas NaN is truthy — only a real string counts as an industry name
-    if not (isinstance(industry, str) and industry):
-        raise ValueError("eastmoney individual info has no industry")
+    industry = _require_industry(info_map.get("行业"), "eastmoney individual info")
     return [_board_entry(industry, "eastmoney", "industry")]
 
 
@@ -2052,7 +2063,7 @@ def _stock_boards_efinance(symbol: str) -> list:
 
     df = ef.stock.get_belong_board(symbol)
     if df is None or df.empty or "板块名称" not in df.columns:
-        raise ValueError("efinance belong-board unavailable")
+        raise _DataMiss("efinance belong-board unavailable")
     # pandas NaN is truthy and str(nan) == "nan" — drop non-string names or they
     # would pollute the dedup in resolve_stock_sectors as a bogus "nan" board
     return [
@@ -2080,15 +2091,28 @@ def _stock_boards_xueqiu(symbol: str) -> list:
 
     df = _akshare_retry(ak.stock_individual_basic_info_xq, symbol=_xq_symbol(symbol), token=token)
     if df is None or df.empty:
-        raise ValueError("xueqiu basic info unavailable")
+        raise _DataMiss("xueqiu basic info unavailable")
     info_map = {row.iloc[0]: row.iloc[1] for _, row in df.iterrows()}
     # affiliate_industry is a nested dict: {'ind_code': 'BK0025', 'ind_name': '汽车整车'}
     industry = info_map.get("affiliate_industry")
-    name = industry.get("ind_name") if isinstance(industry, dict) else None
-    # pandas NaN is truthy — only a real string counts as an industry name
-    if not (isinstance(name, str) and name):
-        raise ValueError("xueqiu basic info has no industry")
+    name = _require_industry(industry.get("ind_name") if isinstance(industry, dict) else None, "xueqiu basic info")
     return [_board_entry(name, "xueqiu", "industry")]
+
+
+def _stock_boards_cninfo(symbol: str) -> list:
+    """A-share industry from cninfo (官方披露站) via akshare stock_profile_cninfo —
+    the token-free, non-eastmoney active leg (issue #35). Runs only as the
+    last-resort fallback: its industry naming follows the CSRC classification
+    (酒、饮料和精制茶制造业), not eastmoney board names (酿酒行业), so its entries
+    don't resolve against eastmoney/sina board lists downstream."""
+    import akshare as ak
+
+    bare = symbol[2:] if _A_PREFIXED_RE.fullmatch(symbol) else symbol
+    df = _akshare_retry(ak.stock_profile_cninfo, symbol=bare)
+    if df is None or df.empty or "所属行业" not in df.columns:
+        raise _DataMiss("cninfo profile unavailable")
+    industry = _require_industry(df.iloc[0].get("所属行业"), "cninfo profile")
+    return [_board_entry(industry, "cninfo", "industry")]
 
 
 def _stock_boards_from_cache(symbol: str) -> list:
@@ -2137,10 +2161,34 @@ def _stock_sectors_hk(symbol: str) -> list:
     return sectors
 
 
+# A failed A-share resolve leg is skipped for this long on subsequent calls
+# (issue #35): the motivating failure mode — regional blocking of eastmoney — is
+# chronic, while a 1h TTL keeps a transient blip from degrading the merged result
+# for the whole day. An expired marker costs one retried attempt (self-healing).
+_RESOLVE_DOWN_TTL = 3600
+
+
+def _resolve_leg_down(name: str) -> bool:
+    """True while leg `name`'s failure marker is fresh. The marker stores a plain
+    timestamp — the effective TTL above is shorter than the 24h file lifetime that
+    _disk_cache_get enforces on the shared cache dir."""
+    ts = _disk_cache_get(f"resolve-down-{name}")
+    return isinstance(ts, (int, float)) and time.time() - ts < _RESOLVE_DOWN_TTL
+
+
 def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
-    """Reverse map: stock → boards it belongs to (A/HK). A single source failing
-    is not fatal — the other source's boards are still returned. An already-fetched
-    eastmoney info_map is reused for the em source instead of re-fetching."""
+    """Reverse map: stock → boards it belongs to (A/HK). Sources are merged (a single
+    source failing is not fatal — the others' boards are still returned) rather than
+    first-hit failover: each source covers a different flavor (industry vs concept).
+    An already-fetched eastmoney info_map is reused for the em source instead of
+    re-fetching; that leg then needs no network and bypasses the failure cache.
+
+    A-share legs are socket-timeout-bounded and negative-cached per leg (issue #35):
+    on an eastmoney-blackholed host the first call pays each dead leg's bounded
+    timeout once, later calls skip them until the marker expires. The cninfo leg
+    runs only when every other active leg came up empty — its CSRC industry names
+    don't resolve against eastmoney/sina board lists, so it is a fallback, not an
+    always-on flavor."""
     market = detect_market(symbol)
     result = {"symbol": symbol, "market": market}
     if market == "A":
@@ -2156,11 +2204,47 @@ def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
         result["error"] = f"resolve_stock_sectors only supports A-share and HK stocks, got market {market}"
         return result
     sectors, errors = [], []
-    for name, fn in sources:
+
+    def run_legs(legs, negative_cache: bool):
+        for name, fn in legs:
+            # em with an info_map in hand is a pure dict lookup — never skip it, and
+            # a lookup miss must not mark a network leg down
+            offline_em = name == "eastmoney" and info_map is not None
+            if negative_cache and not offline_em and _resolve_leg_down(name):
+                errors.append(f"{name}: skipped (failed within {_RESOLVE_DOWN_TTL}s)")
+                continue
+            try:
+                sectors.extend(fn() or [])
+                if negative_cache and not offline_em:
+                    _disk_cache_set(f"resolve-down-{name}", 0)  # success clears the marker
+            except _DataMiss as e:
+                # per-symbol miss (provider answered but doesn't cover this code) —
+                # not an outage: never poison the leg for every other symbol
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+            except Exception as e:
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+                if negative_cache and not offline_em:
+                    _disk_cache_set(f"resolve-down-{name}", time.time())
+
+    if market == "A":
+        # akshare/efinance leave requests timeout-less — on a blackholed network a leg
+        # hangs until the kernel TCP timeout (snapshot_a has the same guard). Bound
+        # each blocking socket op so every leg gets its turn within the caller's
+        # subprocess budget.
+        import socket
+
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(25)
         try:
-            sectors.extend(fn() or [])
-        except Exception as e:
-            errors.append(f"{name}: {type(e).__name__}: {e}")
+            run_legs(sources, negative_cache=True)
+            # cninfo last: the token-free non-eastmoney active fallback (issue #35),
+            # tried only when everything above yielded nothing
+            if not sectors:
+                run_legs([("cninfo", lambda: _stock_boards_cninfo(symbol))], negative_cache=True)
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+    else:
+        run_legs(sources, negative_cache=False)
     seen = set()
     deduped = []
     for s in sectors:
@@ -2172,7 +2256,7 @@ def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
         if market == "A":
             # em/efinance are both eastmoney-flavored and xueqiu is usually untokened,
             # so an all-empty A-share result almost always means eastmoney blocked us.
-            error += "; 东财不可用且缓存为空，可先跑 get_sector_constituents 预热或设置 XUEQIU_TOKEN"
+            error += "; 东财/cninfo 均不可用且缓存为空，可先跑 get_sector_constituents 预热或设置 XUEQIU_TOKEN"
         result["error"] = error
         return result
     result["sectors"] = deduped
