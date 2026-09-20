@@ -54,8 +54,9 @@ def _fetch_json(args: list[str], timeout: int = 30) -> dict | list | None:
 
 
 def fetch_snapshot(market: str) -> list:
-    # a cold full-market snapshot can exceed 30s (CI runners) — allow longer
-    return _fetch_json(["market_snapshot", "--market", market], timeout=120)
+    # a cold full-market snapshot can exceed 30s (CI runners) — allow longer; with
+    # all eastmoney/sina legs timing out, the tencent fallback leg needs ~2min more
+    return _fetch_json(["market_snapshot", "--market", market], timeout=240)
 
 
 def load_config(path: str) -> dict:

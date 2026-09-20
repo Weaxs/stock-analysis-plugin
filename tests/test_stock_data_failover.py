@@ -992,6 +992,17 @@ class TestSnapshotAFailover:
         with patch("tools.stock_data.snapshot_a", return_value=[{"error": "all sources down"}]):
             assert cmd_market_stats(Namespace(market="A")) == {"error": "all sources down"}
 
+    def test_all_sources_down_error_carries_leg_detail(self):
+        with (
+            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
+            patch("tools.stock_data._snapshot_efinance", side_effect=OSError("efinance down")),
+            patch("tools.stock_data._snapshot_sina", side_effect=OSError("sina down")),
+            patch("tools.stock_data._snapshot_tencent", side_effect=OSError("tencent down")),
+        ):
+            result = snapshot_a()
+        assert "error" in result[0]
+        assert "sina down" in result[0]["error"] and "tencent down" in result[0]["error"]
+
 
 def _tencent_batch_body(code_fields: dict) -> bytes:
     """Build a gtimg batch body: {vname: fields-dict} → b'v_sz000001="...";v_sh600519="...";'."""

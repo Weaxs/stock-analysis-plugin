@@ -107,7 +107,7 @@ class TestScreenerNetwork:
             assert 0 <= sent["score"] <= 100, f"sentiment score out of range: {sent}"
 
     def test_screen_a_with_sentiment(self):
-        out = _run_cli("screener.py", ["screen", "--market", "A", "--top", "3"], timeout=180)
+        out = _run_cli("screener.py", ["screen", "--market", "A", "--top", "3"], timeout=300)
         assert isinstance(out, dict) and "candidates" in out, f"unexpected shape: {list(out)}"
         assert out["l2_enabled"] is False
         self._assert_sentiment(out)

@@ -1390,6 +1390,15 @@ def cmd_financials(args):
 
 
 def snapshot_a() -> list:
+    import socket
+
+    # akshare/efinance leave requests timeout-less — on a blackholed network a leg
+    # hangs until the kernel TCP timeout (~2min), and the chain would overrun the
+    # caller's subprocess budget before ever reaching the tencent leg. Bound each
+    # blocking socket op for the chain's duration (explicit per-request timeouts,
+    # like the tencent leg's, still win).
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(25)
     try:
         return _failover(
             [
@@ -1400,8 +1409,10 @@ def snapshot_a() -> list:
             ],
             label="snapshot_a",
         )
-    except Exception:
-        return [{"error": "A-share snapshot unavailable from all sources"}]
+    except Exception as e:
+        return [{"error": f"A-share snapshot unavailable from all sources: {e}"}]
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def _snapshot_efinance() -> list:
