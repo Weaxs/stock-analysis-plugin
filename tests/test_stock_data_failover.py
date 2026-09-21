@@ -9,10 +9,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tools.stock_data import (
+    _RESOLVE_DOWN_TTL,
     _capital_flow_efinance,
     _cn_code,
     _constituents_em,
     _constituents_sina,
+    _DataMiss,
+    _disk_cache_get,
     _disk_cache_set,
     _failover,
     _fuzzy_match_sector,
@@ -34,8 +37,10 @@ from tools.stock_data import (
     _quote_tencent,
     _quote_tushare,
     _quote_yfinance,
+    _resolve_leg_down,
     _sector_rankings_efinance,
     _snapshot_tencent,
+    _stock_boards_cninfo,
     _stock_boards_efinance,
     _stock_boards_em,
     _stock_boards_from_cache,
@@ -1730,6 +1735,47 @@ class TestStockBoardsXueqiu:
             _stock_boards_xueqiu("002594")
 
 
+class TestStockBoardsCninfo:
+    """cninfo (官方披露站) — the token-free, non-eastmoney fallback leg (issue #35)."""
+
+    def _mock_ak(self, rows):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_profile_cninfo.return_value = pd.DataFrame(rows)
+        return mock_ak
+
+    def test_returns_industry(self):
+        mock_ak = self._mock_ak({"所属行业": ["酒、饮料和精制茶制造业"]})
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _stock_boards_cninfo("600519")
+        assert result == [{"name": "酒、饮料和精制茶制造业", "source": "cninfo", "board_type": "industry"}]
+
+    def test_prefixed_symbol_stripped(self):
+        """cninfo takes bare 6-digit codes — sh600519 must arrive as 600519."""
+        mock_ak = self._mock_ak({"所属行业": ["酒、饮料和精制茶制造业"]})
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            _stock_boards_cninfo("sh600519")
+        mock_ak.stock_profile_cninfo.assert_called_once_with(symbol="600519")
+
+    def test_empty_raises(self):
+        mock_ak = self._mock_ak({})
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="unavailable"),
+        ):
+            _stock_boards_cninfo("600519")
+
+    def test_nan_industry_raises(self):
+        """pandas NaN is truthy — a missing 所属行业 must not become a "nan" board."""
+        mock_ak = self._mock_ak({"所属行业": [float("nan")]})
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no industry"),
+        ):
+            _stock_boards_cninfo("600519")
+
+
 class TestStockBoardsFromCache:
     """The cache reverse lookup scans the sector_constituents disk cache — the last
     fallback when eastmoney blocks the caller's IP and xueqiu has no token."""
@@ -1778,14 +1824,17 @@ class TestStockBoardsFromCache:
 
 
 class TestResolveStockSectors:
-    # _stock_boards_xueqiu is patched to [] in every A-share test so a dev machine
-    # with XUEQIU_TOKEN set doesn't silently make a real network call; same for
-    # _stock_boards_from_cache vs a warm sector cache in the real tempdir.
+    # _stock_boards_xueqiu/_stock_boards_cninfo are patched to [] in every A-share
+    # test so a dev machine with XUEQIU_TOKEN set doesn't silently make a real
+    # network call; same for _stock_boards_from_cache vs a warm sector cache in the
+    # real tempdir. The failure-marker disk cache is isolated per test by the
+    # autouse _sticky_isolation fixture.
     @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
     @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
     @patch("tools.stock_data._stock_boards_efinance")
     @patch("tools.stock_data._stock_boards_em")
-    def test_a_share_merges_and_dedupes(self, mock_em, mock_ef, _mock_xq, _mock_cache):
+    def test_a_share_merges_and_dedupes(self, mock_em, mock_ef, _mock_xq, _mock_cn, _mock_cache):
         mock_em.return_value = [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
         mock_ef.return_value = [
             {"name": "酿酒行业", "source": "efinance", "board_type": "concept"},
@@ -1799,10 +1848,11 @@ class TestResolveStockSectors:
         assert result["sectors"][0]["source"] == "eastmoney"
 
     @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
     @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
     @patch("tools.stock_data._stock_boards_efinance")
     @patch("tools.stock_data._stock_boards_em")
-    def test_a_share_em_down_efinance_degrades(self, mock_em, mock_ef, _mock_xq, _mock_cache):
+    def test_a_share_em_down_efinance_degrades(self, mock_em, mock_ef, _mock_xq, _mock_cn, _mock_cache):
         mock_em.side_effect = ValueError("em down")
         mock_ef.return_value = [{"name": "白酒", "source": "efinance", "board_type": "concept"}]
         result = resolve_stock_sectors("600519")
@@ -1810,10 +1860,11 @@ class TestResolveStockSectors:
         assert [s["name"] for s in result["sectors"]] == ["白酒"]
 
     @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
     @patch("tools.stock_data._stock_boards_xueqiu")
     @patch("tools.stock_data._stock_boards_efinance")
     @patch("tools.stock_data._stock_boards_em")
-    def test_a_share_eastmoney_sources_down_xueqiu_degrades(self, mock_em, mock_ef, mock_xq, _mock_cache):
+    def test_a_share_eastmoney_sources_down_xueqiu_degrades(self, mock_em, mock_ef, mock_xq, _mock_cn, _mock_cache):
         """xueqiu is the non-eastmoney fallback: em + efinance both down still yields boards."""
         mock_em.side_effect = ValueError("em down")
         mock_ef.side_effect = ValueError("ef down")
@@ -1823,10 +1874,11 @@ class TestResolveStockSectors:
         assert result["sectors"] == [{"name": "汽车整车", "source": "xueqiu", "board_type": "industry"}]
 
     @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
     @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
     @patch("tools.stock_data._stock_boards_efinance")
     @patch("tools.stock_data._stock_boards_em")
-    def test_a_share_both_down_returns_error(self, mock_em, mock_ef, _mock_xq, _mock_cache):
+    def test_a_share_both_down_returns_error(self, mock_em, mock_ef, _mock_xq, _mock_cn, _mock_cache):
         mock_em.side_effect = ValueError("em down")
         mock_ef.side_effect = ValueError("ef down")
         result = resolve_stock_sectors("600519")
@@ -1837,10 +1889,11 @@ class TestResolveStockSectors:
         assert "XUEQIU_TOKEN" in result["error"]
 
     @patch("tools.stock_data._stock_boards_from_cache")
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
     @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
     @patch("tools.stock_data._stock_boards_efinance")
     @patch("tools.stock_data._stock_boards_em")
-    def test_a_share_live_sources_down_cache_degrades(self, mock_em, mock_ef, _mock_xq, mock_cache):
+    def test_a_share_live_sources_down_cache_degrades(self, mock_em, mock_ef, _mock_xq, _mock_cn, mock_cache):
         """The cache reverse lookup is the last resort when eastmoney blocks the IP."""
         mock_em.side_effect = ValueError("em down")
         mock_ef.side_effect = ValueError("ef down")
@@ -1848,6 +1901,116 @@ class TestResolveStockSectors:
         result = resolve_stock_sectors("600519")
         assert "error" not in result
         assert result["sectors"] == [{"name": "酿酒行业", "source": "cache", "board_type": "industry"}]
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo")
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_a_share_eastmoney_sources_down_cninfo_degrades(self, mock_em, mock_ef, _mock_xq, mock_cn, _mock_cache):
+        """cninfo is the token-free non-eastmoney leg (issue #35): em + efinance both
+        down (and no XUEQIU_TOKEN) still yields an industry board."""
+        mock_em.side_effect = ValueError("em down")
+        mock_ef.side_effect = ValueError("ef down")
+        mock_cn.return_value = [{"name": "酒、饮料和精制茶制造业", "source": "cninfo", "board_type": "industry"}]
+        result = resolve_stock_sectors("600519")
+        assert "error" not in result
+        assert result["sectors"] == [{"name": "酒、饮料和精制茶制造业", "source": "cninfo", "board_type": "industry"}]
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance")
+    @patch("tools.stock_data._stock_boards_em")
+    def test_failed_leg_skipped_within_ttl(self, mock_em, mock_ef, _mock_xq, _mock_cn, _mock_cache):
+        """A leg that failed is skipped on the next call (negative cache, issue #35)
+        instead of burning another eastmoney timeout; merge semantics are unchanged."""
+        mock_em.side_effect = ValueError("em down")
+        mock_ef.return_value = [{"name": "白酒", "source": "efinance", "board_type": "concept"}]
+        first = resolve_stock_sectors("600519")
+        second = resolve_stock_sectors("600519")
+        assert mock_em.call_count == 1  # second call skipped the marked-down leg
+        assert mock_ef.call_count == 2  # healthy legs still run every call
+        for result in (first, second):
+            assert "error" not in result
+            assert [s["name"] for s in result["sectors"]] == ["白酒"]
+        assert _resolve_leg_down("eastmoney")
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance", return_value=[])
+    @patch("tools.stock_data._stock_boards_em")
+    def test_expired_marker_reruns_leg_and_success_clears_it(self, mock_em, _mock_ef, _mock_xq, _mock_cn, _mock_cache):
+        """A stale marker costs one retried attempt (self-healing); a success clears
+        it so the network having recovered is picked up immediately."""
+        import time
+
+        _disk_cache_set("resolve-down-eastmoney", time.time() - _RESOLVE_DOWN_TTL - 1)
+        mock_em.return_value = [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        result = resolve_stock_sectors("600519")
+        assert mock_em.call_count == 1
+        assert [s["name"] for s in result["sectors"]] == ["酿酒行业"]
+        assert _disk_cache_get("resolve-down-eastmoney") == 0  # marker cleared
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance", return_value=[])
+    @patch("tools.stock_data._stock_boards_em")
+    def test_em_leg_with_info_map_bypasses_negative_cache(self, mock_em, _mock_ef, _mock_xq, _mock_cn, _mock_cache):
+        """cmd_stock_info passes an already-fetched info_map: the em leg then needs no
+        network, so a fresh failure marker must not skip it, and a lookup miss in the
+        map must not re-mark a leg whose failure wasn't a network problem."""
+        import time
+
+        _disk_cache_set("resolve-down-eastmoney", time.time())
+        mock_em.return_value = [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        result = resolve_stock_sectors("600519", info_map={"行业": "酿酒行业"})
+        mock_em.assert_called_once_with("600519", {"行业": "酿酒行业"})
+        assert [s["name"] for s in result["sectors"]] == ["酿酒行业"]
+
+        mock_em.reset_mock()
+        mock_em.side_effect = ValueError("no industry")
+        ts_before = _disk_cache_get("resolve-down-eastmoney")
+        result = resolve_stock_sectors("600519", info_map={"行业": float("nan")})
+        assert "error" in result
+        assert _disk_cache_get("resolve-down-eastmoney") == ts_before  # not refreshed by an offline-data failure
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance", return_value=[])
+    @patch("tools.stock_data._stock_boards_em")
+    def test_data_miss_does_not_mark_leg_down(self, mock_em, _mock_ef, _mock_xq, _mock_cn, _mock_cache):
+        """A per-symbol miss (an ETF/BSE code the provider doesn't cover) is not an
+        outage — neither the "no industry" nor the empty-frame "unavailable" branch
+        may poison the leg for other symbols."""
+        mock_em.side_effect = _DataMiss("eastmoney individual info has no industry")
+        resolve_stock_sectors("600519")
+        resolve_stock_sectors("000858")
+        assert mock_em.call_count == 2  # not skipped on the second symbol
+        assert not _resolve_leg_down("eastmoney")
+
+        mock_em.reset_mock()
+        mock_em.side_effect = _DataMiss("eastmoney individual info unavailable")
+        resolve_stock_sectors("600519")
+        resolve_stock_sectors("000858")
+        assert mock_em.call_count == 2
+        assert not _resolve_leg_down("eastmoney")
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo")
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance", return_value=[])
+    @patch("tools.stock_data._stock_boards_em")
+    def test_cninfo_skipped_when_other_legs_deliver(self, mock_em, _mock_ef, _mock_xq, mock_cn, _mock_cache):
+        """cninfo's CSRC industry naming can't resolve against eastmoney/sina board
+        lists, so it runs only when every other active leg came up empty."""
+        mock_em.return_value = [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        result = resolve_stock_sectors("600519")
+        mock_cn.assert_not_called()
+        assert [s["name"] for s in result["sectors"]] == ["酿酒行业"]
 
     def test_hk_returns_gics(self, mock_yfinance):
         mock_ticker = MagicMock()
@@ -1882,6 +2045,30 @@ class TestResolveStockSectors:
         assert result["symbol"] == "01801.HK"
         assert result["market"] == "HK"
         assert {s["name"] for s in result["sectors"]} == {"Health Care", "Biotechnology"}
+
+
+class TestResolveLegDown:
+    """The per-leg negative cache (issue #35): fresh marker skips, expired or
+    malformed markers don't."""
+
+    def test_no_marker_is_up(self):
+        assert _resolve_leg_down("eastmoney") is False
+
+    def test_fresh_marker_is_down(self):
+        import time
+
+        _disk_cache_set("resolve-down-eastmoney", time.time())
+        assert _resolve_leg_down("eastmoney") is True
+
+    def test_expired_marker_is_up(self):
+        import time
+
+        _disk_cache_set("resolve-down-eastmoney", time.time() - _RESOLVE_DOWN_TTL - 1)
+        assert _resolve_leg_down("eastmoney") is False
+
+    def test_malformed_marker_is_up(self):
+        _disk_cache_set("resolve-down-eastmoney", "not-a-timestamp")
+        assert _resolve_leg_down("eastmoney") is False
 
 
 class TestYfHkSymbol:
