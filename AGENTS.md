@@ -132,7 +132,7 @@ This is the #1 regression surface (issues #2 / #7; the `compat` CI job exists sp
 - **Output is JSON on stdout, always.** Host adapters parse `result.stdout`. Human-readable prose goes to stderr, never stdout.
 - **Errors are data**: print a JSON object with an `error` key (and exit non-zero) rather than an uncaught traceback, so adapters can surface a clean message.
 - **argparse CLI per script**, subcommands per capability (`stock_data.py kline|quote|news|...`). See the README "独立 CLI 使用" section for the established shape.
-- **Keep `tools/` py3.9-compatible** (`ruff.toml` targets `py39`; OpenClaw hosts only guarantee Python ≥ 3.9) even though the Hermes wheel declares `requires-python >= 3.10`. No 3.10+-only syntax in `tools/`.
+- **Keep `tools/` py3.10-compatible** (`ruff.toml` targets `py310`; the Python floor is 3.10 everywhere — Hermes wheel `requires-python >= 3.10`, OpenClaw hosts). PEP 604 annotations (`X | None`) and other 3.10 syntax are allowed; nothing 3.11+-only.
 - **Line length 120**, ruff rules `E,F,W,I,UP,B,SIM` (E501 ignored).
 - Adding a runtime dependency means adding it to `tools/requirements.txt` (the postinstall-built `.venv`) **and** considering the Hermes wheel's `dependencies` in `pyproject.toml`. Follow ponytail rung 5 — don't add a dependency for a one-call problem.
 
@@ -222,7 +222,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 
 ## Adding a New Tool
 
-1. Implement the CLI in the appropriate `tools/*.py` (argparse subcommand, JSON stdout, py3.9-compatible).
+1. Implement the CLI in the appropriate `tools/*.py` (argparse subcommand, JSON stdout, py3.10-compatible).
 2. Add a failing pytest first (`tests/test_<module>.py`), then make it pass (see `tdd`).
 3. Register it in all four adapters: `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params.
 4. Wire it into the relevant `skills/*/SKILL.md` workflow if an agent should call it.

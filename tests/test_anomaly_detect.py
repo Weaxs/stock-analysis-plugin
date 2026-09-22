@@ -291,6 +291,31 @@ class TestDetectLimitHit:
         assert len(result) == 1
         assert result[0]["type"] == "limit_up"
 
+    def test_wired_to_stock_data_calc_limit_price(self):
+        # The limit price must come from stock_data.calc_limit_price (exchange
+        # rounding), not a locally re-implemented formula.
+        with patch(
+            "tools.anomaly_detect.calc_limit_price",
+            side_effect=lambda prev, pct, direction="up": 11.0 if direction == "up" else 9.0,
+        ) as mock_calc:
+            quote = {"price": 11.0, "prev_close": 10.0, "change_pct": 10.0, "name": "测试"}
+            result = detect_limit_hit("600519", quote)
+        assert mock_calc.call_count == 2
+        assert result[0]["type"] == "limit_up"
+
+    def test_exchange_rounding_boundary(self):
+        # prev_close 1.45, 10%: naive round(1.45*1.1, 2) = 1.59, but the exchange
+        # rounding (floor(x*100+0.5)/100) gives 1.60. A quote at 1.61 is within the
+        # 0.02 tolerance of the exchange price but outside the naive one's — the
+        # exchange price must win.
+        from tools.stock_data import calc_limit_price
+
+        assert calc_limit_price(1.45, 0.10, "up") == 1.60
+        quote = {"price": 1.61, "prev_close": 1.45, "change_pct": 11.03, "name": "测试"}
+        result = detect_limit_hit("600010", quote)
+        assert len(result) == 1
+        assert result[0]["type"] == "limit_up"
+
 
 class TestDetectCapitalFlowAnomaly:
     @patch("tools.anomaly_detect._run_tool")

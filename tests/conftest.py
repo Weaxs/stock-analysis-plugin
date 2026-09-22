@@ -1,3 +1,5 @@
+import socket
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -95,3 +97,16 @@ def sideways_indicators():
         "macd_trend": "bullish",
         "ma_spread_pct": 0.5,
     }
+
+
+@pytest.fixture
+def record_socket_timeout(monkeypatch):
+    """Record socket.setdefaulttimeout calls; returns a recorder fn(old) -> seen list."""
+
+    def _record(old=None):
+        seen = []
+        monkeypatch.setattr(socket, "getdefaulttimeout", lambda: old)
+        monkeypatch.setattr(socket, "setdefaulttimeout", lambda v: seen.append(v))
+        return seen
+
+    return _record

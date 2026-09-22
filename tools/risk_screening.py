@@ -5,11 +5,13 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
+from _subproc import utf8_stdio
 
 
 def _safe_float(val) -> float | None:
@@ -194,24 +196,32 @@ def check_news_risks(symbol: str, name: str = "") -> dict:
         "industry": f"{search_name} 行业政策 监管 限制",
     }
     result = {"flags": []}
-    for cat, query in categories.items():
-        data = _run_tool("search_intel.py", ["search", query, "--count", "3"])
-        items = []
-        if isinstance(data, list):
-            items = data
-        elif isinstance(data, dict) and "results" in data:
-            items = data["results"]
+    # four independent search_intel subprocesses — fan out concurrently (same
+    # ThreadPoolExecutor pattern as gather._run_all); iterating `futures` in
+    # declaration order keeps result keys and flags stably ordered
+    with ThreadPoolExecutor(max_workers=len(categories)) as pool:
+        futures = {
+            cat: pool.submit(_run_tool, "search_intel.py", ["search", query, "--count", "3"])
+            for cat, query in categories.items()
+        }
+        for cat, future in futures.items():
+            data = future.result()
+            items = []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict) and "results" in data:
+                items = data["results"]
 
-        result[cat] = items
-        if items:
-            result["flags"].append(
-                {
-                    "category": cat,
-                    "severity": "medium",
-                    "description": f"发现{len(items)}条相关{_cat_cn(cat)}信息",
-                    "source": "news",
-                }
-            )
+            result[cat] = items
+            if items:
+                result["flags"].append(
+                    {
+                        "category": cat,
+                        "severity": "medium",
+                        "description": f"发现{len(items)}条相关{_cat_cn(cat)}信息",
+                        "source": "news",
+                    }
+                )
     return result
 
 
@@ -305,9 +315,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

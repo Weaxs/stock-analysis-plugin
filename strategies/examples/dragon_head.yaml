@@ -18,7 +18,8 @@ entry:
       operator: ">"
       value: "{volume_threshold}"
     - indicator: "ma_diff"
-      period: 510
+      fast_period: 5
+      slow_period: 10
       operator: ">"
       value: 0
   logic: "all"

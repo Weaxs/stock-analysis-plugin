@@ -104,3 +104,35 @@ class TestCheckNewsRisksArgv:
             query = argv[1]
             assert " " in query  # e.g. "贵州茅台 减持 股东减持" — one argv element, not split
             assert query.startswith("贵州茅台 ")
+
+    @patch("tools.risk_screening._run_tool")
+    def test_categories_run_concurrently_in_stable_order(self, mock_run):
+        """The four search_intel subprocesses fan out in parallel (barrier releases
+        only when all four are in flight), while result keys/flags keep the declared
+        category order regardless of completion order."""
+        import threading
+
+        barrier = threading.Barrier(4, timeout=10)
+
+        def fake_run(script, args, **kw):
+            barrier.wait()
+            return []
+
+        mock_run.side_effect = fake_run
+        result = check_news_risks("600519", "贵州茅台")
+        assert [k for k in result if k != "flags"] == ["insider", "earnings", "regulatory", "industry"]
+        assert result["flags"] == []
+
+    @patch("tools.risk_screening._run_tool")
+    def test_flags_order_stable_with_hits(self, mock_run):
+        # insider + regulatory hit (positions 1 and 3) — flag order follows the
+        # declared category order, not arrival order
+        def fake_run(script, args, **kw):
+            query = args[1]
+            if "减持" in query or "处罚" in query:
+                return [{"title": "t"}]
+            return []
+
+        mock_run.side_effect = fake_run
+        result = check_news_risks("600519", "贵州茅台")
+        assert [f["category"] for f in result["flags"]] == ["insider", "regulatory"]

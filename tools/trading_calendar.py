@@ -5,6 +5,10 @@ import argparse
 import json
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import socket_timeout, utf8_stdio
 
 # Supported markets. argparse uses type=str.upper so lowercase input is accepted too.
 MARKETS = ["CN", "HK", "US", "JP", "KR", "TW"]
@@ -32,7 +36,8 @@ def cn_trade_dates(year: int) -> set[str]:
     try:
         import akshare as ak
 
-        df = ak.tool_trade_date_hist_sina()
+        with socket_timeout(25):
+            df = ak.tool_trade_date_hist_sina()
         dates = set()
         for _, row in df.iterrows():
             val = row.iloc[0]
@@ -53,6 +58,76 @@ def _is_exchange_trading_day(exchange_code: str, date_str: str) -> bool:
     cal = xcals.get_calendar(exchange_code)
     d = pd.Timestamp(date_str)
     return cal.is_session(d)
+
+
+# --------------- US holiday rules (fallback when exchange-calendars is unavailable) ---------------
+
+
+def _easter_sunday(year: int) -> datetime:
+    """Easter Sunday via the Anonymous Gregorian algorithm (valid for any year ≥ 1583)."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7  # noqa: E741
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return datetime(year, month, day + 1)
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> datetime:
+    """The n-th `weekday` (Mon=0) of the month, e.g. MLK = _nth_weekday(y, 1, 0, 3)."""
+    d = datetime(year, month, 1)
+    d += timedelta(days=(weekday - d.weekday()) % 7)
+    return d + timedelta(weeks=n - 1)
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> datetime:
+    """The last `weekday` of the month, e.g. Memorial Day = _last_weekday(y, 5, 0)."""
+    d = datetime(year, month + 1, 1) - timedelta(days=1) if month < 12 else datetime(year, 12, 31)
+    return d - timedelta(days=(d.weekday() - weekday) % 7)
+
+
+def _observed(d: datetime) -> datetime:
+    """NYSE observed-date rule: a Saturday holiday is observed the Friday before,
+    a Sunday holiday the Monday after."""
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+def _us_holidays(year: int) -> set[tuple[int, int]]:
+    """US (XNYS) full-day closure dates for `year` as observed (month, day) pairs —
+    rule-computed so every year is correct, not just one hardcoded calendar.
+
+    Fixed-date holidays shift per _observed, except New Year's Day: NYSE stays open
+    on Dec 31 when Jan 1 falls on a Saturday (a Sunday New Year is observed Monday).
+    Good Friday comes from the Easter algorithm. NYSE closes for Juneteenth from 2022."""
+    holidays = set()
+
+    def add(d: datetime):
+        if d.year == year:
+            holidays.add((d.month, d.day))
+
+    new_year = datetime(year, 1, 1)
+    if new_year.weekday() != 5:  # Saturday New Year: no closure, not even Dec 31 prior
+        add(_observed(new_year))  # New Year's Day
+    add(_nth_weekday(year, 1, 0, 3))  # Martin Luther King Jr. Day — 3rd Monday of January
+    add(_nth_weekday(year, 2, 0, 3))  # Washington's Birthday — 3rd Monday of February
+    add(_easter_sunday(year) - timedelta(days=2))  # Good Friday
+    add(_last_weekday(year, 5, 0))  # Memorial Day — last Monday of May
+    if year >= 2022:
+        add(_observed(datetime(year, 6, 19)))  # Juneteenth (NYSE closes from 2022)
+    add(_observed(datetime(year, 7, 4)))  # Independence Day
+    add(_nth_weekday(year, 9, 0, 1))  # Labor Day — 1st Monday of September
+    add(_nth_weekday(year, 11, 3, 4))  # Thanksgiving — 4th Thursday of November
+    add(_observed(datetime(year, 12, 25)))  # Christmas Day
+    return holidays
 
 
 def is_trading_day(market: str, date_str: str = None) -> dict:
@@ -119,18 +194,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
             }
         except Exception:
             pass
-        us_holidays = {
-            (1, 1),
-            (1, 20),
-            (2, 17),
-            (5, 26),
-            (6, 19),
-            (7, 4),
-            (9, 1),
-            (11, 27),
-            (12, 25),
-        }
-        if (d.month, d.day) in us_holidays:
+        if (d.month, d.day) in _us_holidays(d.year):
             return {"date": date_str, "market": market, "is_trading_day": False, "reason": "US_holiday"}
         return {"date": date_str, "market": market, "is_trading_day": True, "reason": "trading_day"}
 
@@ -319,9 +383,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

@@ -97,6 +97,31 @@ class TestDiagnose:
         assert result["markets"][0]["available"] is False
         assert any("package/credentials not ready" in w for w in result["markets"][0]["warnings"])
 
+    def test_tushare_probed_by_token_not_package(self, monkeypatch):
+        """tushare is consumed as a pure-HTTP API (stock_data._kline_tushare posts to
+        api.tushare.pro) and the tushare package is not in requirements.txt — so a
+        configured TUSHARE_TOKEN alone must report available even with no package."""
+        monkeypatch.setenv("TUSHARE_TOKEN", "tok")
+        import importlib.util
+
+        real_find_spec = importlib.util.find_spec
+
+        def fake_find_spec(name, *a, **kw):
+            if name == "tushare":
+                return None  # simulate the (normal) case: tushare package not installed
+            return real_find_spec(name, *a, **kw)
+
+        monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+        result = diagnostics._check_provider("tushare")
+        assert result["available"] is True
+        assert result["reason"] is None
+
+    def test_tushare_unavailable_without_token(self, monkeypatch):
+        monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+        result = diagnostics._check_provider("tushare")
+        assert result["available"] is False
+        assert "TUSHARE_TOKEN" in result["reason"]
+
     def test_warns_when_no_tushare(self, monkeypatch):
         monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
         result = diagnostics.diagnose("A")

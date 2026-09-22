@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
+from _subproc import utf8_stdio
 
 
 def calc_temperature(stats: dict, indices: list) -> dict:
@@ -89,10 +90,16 @@ def review_market(market: str = "A") -> dict:
 
     results = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {key: executor.submit(_run_tool, script, args) for key, (script, args) in tasks.items()}
+        futures = {
+            # stats fans out to a full-market snapshot — screener gives the same path 240s
+            # (screener.fetch_snapshot); the default 30s would silently degrade the
+            # temperature to the neutral 50 fallback on a weak network.
+            key: executor.submit(_run_tool, script, args, 240 if key == "stats" else 30)
+            for key, (script, args) in tasks.items()
+        }
         for key, future in futures.items():
             try:
-                results[key] = future.result(timeout=60)
+                results[key] = future.result(timeout=300)
             except Exception:
                 results[key] = None
 
@@ -138,9 +145,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

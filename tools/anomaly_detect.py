@@ -12,8 +12,17 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _subproc import run_tool as _run_tool
-from stock_data import detect_market, normalize_stock_code
-from technical import fetch_kline, to_dataframe
+from _subproc import utf8_stdio
+from stock_data import calc_limit_price, detect_market, normalize_stock_code
+from technical import (
+    bollinger_series,
+    fetch_kline,
+    kdj_series,
+    ma_series,
+    macd_series,
+    rsi_series,
+    to_dataframe,
+)
 
 
 def _anomaly(type_: str, severity: str, direction: str, description: str, **extra) -> dict:
@@ -33,10 +42,7 @@ def _anomaly(type_: str, severity: str, direction: str, description: str, **extr
 def detect_macd_cross(close: pd.Series) -> list:
     if len(close) < 30:
         return []
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    dif = ema12 - ema26
-    dea = dif.ewm(span=9, adjust=False).mean()
+    dif, dea, _ = macd_series(close)
 
     prev_diff = float(dif.iloc[-2] - dea.iloc[-2])
     curr_diff = float(dif.iloc[-1] - dea.iloc[-1])
@@ -58,11 +64,7 @@ def detect_macd_cross(close: pd.Series) -> list:
 def detect_rsi_extreme(close: pd.Series) -> list:
     if len(close) < 10:
         return []
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0.0).rolling(6).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(6).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - 100 / (1 + rs)
+    rsi = rsi_series(close, 6)
 
     if len(rsi.dropna()) < 2:
         return []
@@ -166,10 +168,7 @@ def detect_volume_spike(volume: pd.Series) -> list:
 def detect_bollinger_breakout(close: pd.Series) -> list:
     if len(close) < 21:
         return []
-    mid = close.rolling(20).mean()
-    std = close.rolling(20).std()
-    upper = mid + 2 * std
-    lower = mid - 2 * std
+    upper, _, lower = bollinger_series(close)
 
     curr_price = float(close.iloc[-1])
     prev_price = float(close.iloc[-2])
@@ -205,13 +204,7 @@ def detect_bollinger_breakout(close: pd.Series) -> list:
 def detect_kdj_extreme(high: pd.Series, low: pd.Series, close: pd.Series) -> list:
     if len(close) < 10:
         return []
-    low_n = low.rolling(9).min()
-    high_n = high.rolling(9).max()
-    rsv = (close - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-    rsv = rsv.fillna(50)
-    k = rsv.ewm(com=2, adjust=False).mean()
-    d = k.ewm(com=2, adjust=False).mean()
-    j = 3 * k - 2 * d
+    _, _, j = kdj_series(high, low, close)
 
     if len(j.dropna()) < 2:
         return []
@@ -315,8 +308,10 @@ def detect_limit_hit(symbol: str, quote: dict) -> list:
 
     prev_close = float(prev_close)
     price = float(price)
-    limit_up_price = round(prev_close * (1 + limit_pct), 2)
-    limit_down_price = round(prev_close * (1 - limit_pct), 2)
+    # Exchange rounding (floor(x*100+0.5)/100), same as stock_data's market_stats,
+    # so both tools reach the same limit-up/down conclusion for a given quote.
+    limit_up_price = calc_limit_price(prev_close, limit_pct, "up")
+    limit_down_price = calc_limit_price(prev_close, limit_pct, "down")
 
     anomalies = []
     if abs(price - limit_up_price) < 0.02:
@@ -383,9 +378,7 @@ def detect_divergence(df: pd.DataFrame) -> list:
     if len(df) < 30:
         return []
     close = df["close"]
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    dif = ema12 - ema26
+    dif, _, _ = macd_series(close)
 
     window = min(20, len(df) - 10)
     recent_close = close.iloc[-window:]
@@ -421,9 +414,9 @@ def detect_divergence(df: pd.DataFrame) -> list:
 def detect_ma_cross(close: pd.Series) -> list:
     if len(close) < 21:
         return []
-    ma5 = close.rolling(5).mean()
-    ma10 = close.rolling(10).mean()
-    ma20 = close.rolling(20).mean()
+    ma5 = ma_series(close, 5)
+    ma10 = ma_series(close, 10)
+    ma20 = ma_series(close, 20)
 
     anomalies = []
 
@@ -553,9 +546,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

@@ -5,7 +5,7 @@
 ## 前置条件
 
 - Node.js >= 22.19（OpenClaw 官方要求）
-- Python >= 3.9
+- Python >= 3.10
 - OpenClaw Gateway 已安装并可正常运行
 - 如需通过 ClawHub 安装：`npm i -g clawhub` 并完成 `clawhub login`
 
@@ -19,7 +19,7 @@ openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 
 `clawhub:` 前缀强制走 ClawHub registry。安装时 npm 的 `postinstall` 会自动执行 `scripts/setup-python.mjs`：
 
-1. 查找系统中的 `python3`（需 >= 3.9）
+1. 查找系统中的 `python3`（需 >= 3.10）
 2. 在插件目录下创建 `.venv` 虚拟环境
 3. 安装 `tools/requirements.txt` 中的 Python 依赖
 

@@ -277,7 +277,7 @@ for (const skill of skills) {
   assert(skill.content.length > 0, `skill ${skill.name}: content empty`);
   assert(!skill.content.startsWith("---"), `skill ${skill.name}: frontmatter not stripped`);
   assert(
-    skill.path?.replace(/\\/g, "/").endsWith(`${skill.name}/SKILL.md`),
+    !!skill.path?.replace(/\\/g, "/").endsWith(`${skill.name}/SKILL.md`),
     `skill ${skill.name}: path should point at its SKILL.md`
   );
 }

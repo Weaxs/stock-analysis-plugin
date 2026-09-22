@@ -77,6 +77,34 @@ class TestGatherAnalysis:
         assert kline_call[0][0] == ("stock_data.py", ["kline", "600519", "--period", "daily", "--count", "120"])
 
     @patch("tools.gather._run")
+    def test_news_query_is_chinese(self, mock_run):
+        """A-share news queries use Chinese keywords (consistent with market_review's
+        「A股 今日 市场」 and stock_data's 「{symbol} 最新消息」 fallback) — an English
+        'stock news' query ranks poorly for CN sources."""
+        mock_run.return_value = None
+        gather_analysis("600519")
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        assert len(news_call) == 1
+        assert news_call[0][0][1] == ["search", "600519 最新消息"]
+
+    @patch("tools.gather._run")
+    def test_fundamental_news_query_is_chinese(self, mock_run):
+        mock_run.return_value = None
+        gather_fundamental("600519")
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        assert len(news_call) == 1
+        assert news_call[0][0][1] == ["search", "600519 最新消息"]
+
+    @patch("tools.gather._run")
+    def test_non_a_share_news_query_stays_english(self, mock_run):
+        # CN sources rank poorly for an English query; US/HK sources for a Chinese
+        # one — the query language follows the detected market.
+        mock_run.return_value = None
+        gather_analysis("AAPL")
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        assert news_call[0][0][1] == ["search", "AAPL stock news"]
+
+    @patch("tools.gather._run")
     def test_handles_partial_failure(self, mock_run):
         def side_effect(script, args, **kwargs):
             if "quote" in args:
