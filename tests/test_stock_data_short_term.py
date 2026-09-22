@@ -355,7 +355,6 @@ class TestHotStocks:
     def test_failure_is_error(self):
         mock_ak = MagicMock()
         mock_ak.stock_hot_rank_em.side_effect = ConnectionError("boom")
-        mock_ak.stock_hot_follow_xq.side_effect = ConnectionError("boom")
         mock_ak.stock_hot_search_baidu.side_effect = ConnectionError("boom")
         with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
             result = cmd_hot_stocks(Namespace(top=20))
@@ -363,35 +362,9 @@ class TestHotStocks:
 
 
 class TestHotStocksFailover:
-    def test_em_down_xq_mapped(self):
+    def test_em_down_baidu_mapped(self):
         mock_ak = MagicMock()
         mock_ak.stock_hot_rank_em.side_effect = ConnectionError("em down")
-        mock_ak.stock_hot_follow_xq.return_value = pd.DataFrame(
-            {
-                "股票代码": ["SH600519", "SZ000001"],
-                "股票简称": ["贵州茅台", "平安银行"],
-                "关注": [3721227, 1000000],
-                "最新价": [1800.0, 11.5],
-            }
-        )
-        mock_ak.stock_hot_search_baidu.side_effect = AssertionError("baidu must not be called")
-        with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
-            result = cmd_hot_stocks(Namespace(top=20))
-        assert result["source"] == "xueqiu"
-        # xq: rank from row position, code prefix stripped, no change_pct column
-        assert result["items"][0] == {
-            "rank": 1,
-            "code": "600519",
-            "code_full": "SH600519",
-            "name": "贵州茅台",
-            "price": 1800.0,
-        }
-        assert "change_pct" not in result["items"][0]
-
-    def test_em_xq_down_baidu_mapped(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_hot_rank_em.side_effect = ConnectionError("em down")
-        mock_ak.stock_hot_follow_xq.side_effect = ConnectionError("xq down")
         mock_ak.stock_hot_search_baidu.return_value = pd.DataFrame(
             {
                 "名称/代码": ["中天科技", "金健米业"],
@@ -408,7 +381,7 @@ class TestHotStocksFailover:
             {"rank": 2, "name": "金健米业", "change_pct": 9.98},
         ]
 
-    def test_em_success_fallbacks_not_called(self):
+    def test_em_success_baidu_not_called(self):
         mock_ak = MagicMock()
         mock_ak.stock_hot_rank_em.return_value = pd.DataFrame(
             {
@@ -419,12 +392,23 @@ class TestHotStocksFailover:
                 "涨跌幅": [1.2],
             }
         )
-        mock_ak.stock_hot_follow_xq.side_effect = AssertionError("xq must not be called")
         mock_ak.stock_hot_search_baidu.side_effect = AssertionError("baidu must not be called")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             result = cmd_hot_stocks(Namespace(top=20))
         assert result["source"] == "eastmoney"
         assert result["count"] == 1
+
+    def test_all_fail_error_names_only_live_legs(self):
+        """The dead xueqiu leg is gone (akshare's stock_hot_follow_xq takes no user
+        token and its anonymous calls fail) — the aggregated error names only the
+        sources that actually ran."""
+        mock_ak = MagicMock()
+        mock_ak.stock_hot_rank_em.side_effect = ConnectionError("em down")
+        mock_ak.stock_hot_search_baidu.side_effect = ConnectionError("baidu down")
+        with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
+            result = cmd_hot_stocks(Namespace(top=20))
+        assert "eastmoney" in result["error"] and "baidu" in result["error"]
+        assert "xueqiu" not in result["error"]
 
 
 def _industry_board_df():

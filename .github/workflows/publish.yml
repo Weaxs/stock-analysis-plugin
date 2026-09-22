@@ -6,6 +6,9 @@ on:
       - "v*"
 
 jobs:
+  # ci is a whole-workflow reusable call — a caller cannot `needs` individual
+  # jobs inside it, so the flaky jobs (network, e2e-llm) carry job-level
+  # `continue-on-error: true` in ci.yml to keep them off the release path.
   ci:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
@@ -29,8 +32,9 @@ jobs:
       - name: Sync version from tag
         run: bash scripts/sync-version.sh
 
+      # --ignore-scripts: publishing only packs and uploads — no Python venv.
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
       - name: Build and verify
         run: npm pack --dry-run
@@ -74,9 +78,12 @@ jobs:
         run: python -m build
 
       - name: Publish to PyPI
+        # PyPI Trusted Publishing (OIDC): id-token: write above + no password
+        # input makes the action mint a short-lived token. Requires the
+        # project to have this workflow registered as a trusted publisher on
+        # PyPI (owner/repo/workflow filename); the long-lived PYPI_TOKEN
+        # secret is no longer used.
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_TOKEN }}
 
   publish-openclaw:
     runs-on: ubuntu-latest
@@ -95,8 +102,9 @@ jobs:
       - name: Sync version from tag
         run: bash scripts/sync-version.sh
 
+      # --ignore-scripts: publishing only packs and uploads — no Python venv.
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
       - name: Build compiled plugin entry (dist/index.js)
         run: npm run build:openclaw
@@ -128,7 +136,8 @@ jobs:
             || { echo "::error::openclaw/dist/index.js missing on disk — clawhub publish would ship no compiled entry"; exit 1; }
 
       - name: Install clawhub CLI
-        run: npm i -g clawhub
+        # Pinned — an unpinned clawhub@latest broke a release before; bump deliberately.
+        run: npm i -g clawhub@0.23.3
 
       - name: npm publish
         working-directory: openclaw
@@ -174,8 +183,9 @@ jobs:
       - name: Sync version from tag
         run: bash scripts/sync-version.sh
 
+      # --ignore-scripts: publishing only packs and uploads — no Python venv.
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
       - name: Build compiled plugin entry (dist/index.js)
         run: npm run build:dsh

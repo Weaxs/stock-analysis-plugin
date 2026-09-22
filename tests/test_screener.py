@@ -1,3 +1,6 @@
+import json
+
+import numpy as np
 import pandas as pd
 
 import tools.screener as screener
@@ -383,3 +386,66 @@ class TestScreenL2:
     def test_sort_by_config_ignored_with_l2(self, monkeypatch):
         result = self._run(monkeypatch, config={"l2": True, "sort_by": "value_score", "sort_order": "asc"})
         assert [c["symbol"] for c in result["candidates"]] == ["AAA", "BBB", "CCC"]
+
+
+class TestScreenErrorList:
+    """snapshot_a/hk/us wrap a total failure as a one-row [{"error": ...}] list —
+    screen() must surface it, not run the error row through the scoring pipeline
+    as a ghost candidate."""
+
+    def test_error_list_passthrough(self, monkeypatch):
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"error": "A-share snapshot unavailable"}])
+        result = screen("A", 20, None)
+        # same error shape as the raw-None branch: error message + market key
+        assert result == {"error": "A-share snapshot unavailable", "market": "A"}
+
+    def test_error_list_no_ghost_candidate(self, monkeypatch):
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"error": "all sources down"}])
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        result = screen("US", 20, None)
+        assert "candidates" not in result
+        assert result["error"] == "all sources down"
+
+
+class TestNonFiniteSanitization:
+    """An all-empty factor column min-maxes to NaN; NaN/±inf must become None —
+    json.dumps would otherwise emit bare NaN/Infinity tokens that strict JSON
+    parsers in the host adapters reject."""
+
+    def test_all_empty_factor_column_yields_none_scores(self, monkeypatch):
+        snapshot = _snapshot()
+        for row in snapshot:
+            row["volume"] = None  # all-empty unfiltered factor column (liquidity leg)
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        result = screen("A", 20, None)
+        assert result["returned_count"] == 3
+        for c in result["candidates"]:
+            for value in c["scores"].values():
+                assert value is None or (isinstance(value, (int, float)) and np.isfinite(value))
+            # liquidity is NaN-driven here (all-empty volume) → sanitized away,
+            # and it poisons composite/final downstream
+            assert c["scores"]["liquidity"] is None
+            assert c["scores"]["composite"] is None
+            assert c["scores"]["final"] is None
+        # the whole payload must be strict-JSON serializable (allow_nan=False)
+        json.dumps(result, allow_nan=False)
+
+    def test_finite_scores_unchanged(self, monkeypatch):
+        _patch_screen(monkeypatch)
+        result = screen("A", 20, None)
+        assert result["candidates"][0]["scores"]["composite"] == 100.0
+        assert all(v is not None for c in result["candidates"] for v in c["scores"].values())
+
+    def test_l2_path_with_sanitized_scores(self, monkeypatch):
+        snapshot = _snapshot()
+        for row in snapshot:
+            row["volume"] = None
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+        result = screen("A", 20, None, l2=True)
+        # L2 rewrites final from the (coerced) numeric components — no NaN, no crash
+        for c in result["candidates"]:
+            assert isinstance(c["scores"]["final"], (int, float))
+        json.dumps(result, allow_nan=False)

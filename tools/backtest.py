@@ -6,13 +6,17 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from _subproc import json_safe, run_tool, utf8_stdio
+from technical import bollinger_series, ema_series, ma_series, macd_series, rsi_series
 
 # --------------- Strategy Loading ---------------
 
@@ -57,20 +61,17 @@ def _substitute(s: str, params: dict):
 
 
 def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame:
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
     count = 500
     if start and end:
         d0 = datetime.strptime(start, "%Y-%m-%d")
         d1 = datetime.strptime(end, "%Y-%m-%d")
         count = max((d1 - d0).days + 60, 300)
 
-    r = subprocess.run(
-        [sys.executable, script, "kline", symbol, "--period", "daily", "--count", str(count)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    data = json.loads(r.stdout)
+    # run_tool gives venv-python + a bounded timeout + None on any failure
+    # (non-zero exit, empty/invalid stdout); callers turn that into clean JSON.
+    data = run_tool("stock_data.py", ["kline", symbol, "--period", "daily", "--count", str(count)])
+    if data is None:
+        raise RuntimeError(f"Failed to fetch kline for {symbol}")
     if isinstance(data, dict) and "error" in data:
         raise RuntimeError(data["error"])
 
@@ -88,39 +89,37 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
     return df.reset_index(drop=True)
 
 
-# --------------- Indicators (inline) ---------------
+# --------------- Indicators ---------------
+#
+# Series math lives in technical.py (ma_series/ema_series/macd_series/rsi_series/
+# bollinger_series); the wrappers below only add backtest-specific NaN defaults
+# (rsi → 50, bollinger position → 0.5) so strategy evaluation never sees NaN.
 
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0.0).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    return (100 - 100 / (1 + rs)).fillna(50)
+    return rsi_series(close, period).fillna(50)
 
 
-def compute_ma(close: pd.Series, period: int) -> pd.Series:
-    return close.rolling(period).mean()
-
-
-def compute_ema(close: pd.Series, period: int) -> pd.Series:
-    return close.ewm(span=period, adjust=False).mean()
+# Pure aliases (identical signatures); the other wrappers below add
+# backtest-specific NaN defaults or pick one leg of the MACD tuple.
+compute_ma = ma_series
+compute_ema = ema_series
 
 
 def compute_macd_dif(close: pd.Series) -> pd.Series:
-    return compute_ema(close, 12) - compute_ema(close, 26)
+    return macd_series(close)[0]
 
 
 def compute_macd_dea(close: pd.Series) -> pd.Series:
-    return compute_macd_dif(close).ewm(span=9, adjust=False).mean()
+    return macd_series(close)[1]
 
 
 def compute_macd_hist(close: pd.Series) -> pd.Series:
-    return 2 * (compute_macd_dif(close) - compute_macd_dea(close))
+    return macd_series(close)[2]
 
 
 def compute_volume_ratio(volume: pd.Series, period: int = 5) -> pd.Series:
-    ma = volume.rolling(period).mean()
+    ma = ma_series(volume, period)
     return (volume / ma.replace(0, np.nan)).fillna(1)
 
 
@@ -129,40 +128,40 @@ def compute_price_change(close: pd.Series) -> pd.Series:
 
 
 def compute_bollinger_position(close: pd.Series, period: int = 20) -> pd.Series:
-    mid = close.rolling(period).mean()
-    std = close.rolling(period).std()
-    upper = mid + 2 * std
-    lower = mid - 2 * std
+    upper, mid, lower = bollinger_series(close, period)
     width = (upper - lower).replace(0, np.nan)
     return ((close - lower) / width).fillna(0.5)
 
 
-def compute_ma_diff(close: pd.Series, period: int | None = None) -> pd.Series:
-    """Difference between two MAs. Period encodes both: e.g. 510 = MA5 - MA10, 1020 = MA10 - MA20."""
-    if period and period >= 100:
-        fast = period // 100
-        slow = period % 100
+def _resolve_ma_pair(fast: int | None, slow: int | None, period: int | None, default: tuple) -> tuple:
+    """Explicit fast/slow periods win; a legacy encoded `period` (510 = MA5-MA10,
+    500 = MA5-MA20 via the slow==0 → fast*4 fallback) still decodes for old YAMLs."""
+    if fast is None and slow is None and period and period >= 100:
+        fast, slow = period // 100, period % 100
         if slow == 0:
             slow = fast * 4
-    else:
-        fast = 5
-        slow = 20
+        return fast, slow
+    return fast or default[0], slow or default[1]
+
+
+def compute_ma_diff(
+    close: pd.Series, period: int | None = None, fast: int | None = None, slow: int | None = None
+) -> pd.Series:
+    """Difference between two MAs. Prefer explicit fast/slow; `period` keeps the legacy encoding."""
+    fast, slow = _resolve_ma_pair(fast, slow, period, (5, 20))
     return compute_ma(close, fast) - compute_ma(close, slow)
 
 
-def compute_ema_diff(close: pd.Series, period: int | None = None) -> pd.Series:
-    if period and period >= 100:
-        fast = period // 100
-        slow = period % 100
-        if slow == 0:
-            slow = fast * 4
-    else:
-        fast = 12
-        slow = 26
+def compute_ema_diff(
+    close: pd.Series, period: int | None = None, fast: int | None = None, slow: int | None = None
+) -> pd.Series:
+    fast, slow = _resolve_ma_pair(fast, slow, period, (12, 26))
     return compute_ema(close, fast) - compute_ema(close, slow)
 
 
-def get_indicator(df: pd.DataFrame, name: str, period: int | None = None) -> pd.Series:
+def get_indicator(
+    df: pd.DataFrame, name: str, period: int | None = None, fast: int | None = None, slow: int | None = None
+) -> pd.Series:
     close = df["close"]
     dispatch = {
         "rsi": lambda: compute_rsi(close, period or 14),
@@ -171,8 +170,8 @@ def get_indicator(df: pd.DataFrame, name: str, period: int | None = None) -> pd.
         "macd_dif": lambda: compute_macd_dif(close),
         "macd_dea": lambda: compute_macd_dea(close),
         "macd": lambda: compute_macd_hist(close),
-        "ma_diff": lambda: compute_ma_diff(close, period),
-        "ema_diff": lambda: compute_ema_diff(close, period),
+        "ma_diff": lambda: compute_ma_diff(close, period, fast, slow),
+        "ema_diff": lambda: compute_ema_diff(close, period, fast, slow),
         "volume_ratio": lambda: compute_volume_ratio(df["volume"], period or 5),
         "price_change": lambda: compute_price_change(close),
         "bollinger_position": lambda: compute_bollinger_position(close, period or 20),
@@ -209,21 +208,27 @@ def check_condition(series: pd.Series, operator: str, value: float, idx: int) ->
     return False
 
 
+def _coerce_int(v):
+    if isinstance(v, str):
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return None
+    return v
+
+
 def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int, cache: dict) -> tuple[bool, str]:
     results = []
     reasons = []
     for cond in conditions:
         ind_name = cond["indicator"]
-        period = cond.get("period")
-        if isinstance(period, str):
-            try:
-                period = int(float(period))
-            except (ValueError, TypeError):
-                period = None
+        period = _coerce_int(cond.get("period"))
+        fast = _coerce_int(cond.get("fast_period"))
+        slow = _coerce_int(cond.get("slow_period"))
 
-        cache_key = f"{ind_name}_{period}"
+        cache_key = f"{ind_name}_{period}_{fast}_{slow}"
         if cache_key not in cache:
-            cache[cache_key] = get_indicator(df, ind_name, period)
+            cache[cache_key] = get_indicator(df, ind_name, period, fast, slow)
         series = cache[cache_key]
 
         op = cond["operator"]
@@ -232,7 +237,7 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
         results.append(hit)
         if hit:
             cur_val = round(float(series.iloc[idx]), 2)
-            label = f"{ind_name}({period})" if period else ind_name
+            label = f"{ind_name}({fast},{slow})" if fast or slow else f"{ind_name}({period})" if period else ind_name
             reasons.append(f"{label} = {cur_val} {op} {val}")
 
     if logic == "all":
@@ -633,41 +638,59 @@ def evaluate_result(path: str) -> dict:
 
 # --------------- Signal Evaluation ---------------
 
+
+def _signal_context(df: pd.DataFrame) -> dict:
+    """Precompute every indicator series the signal checkers need, once per
+    evaluate_signal call (the old lambdas recomputed them per bar — O(n²))."""
+    close = df["close"]
+    return {
+        "dif": compute_macd_dif(close),
+        "dea": compute_macd_dea(close),
+        "rsi14": compute_rsi(close, 14),
+        "ma5": compute_ma(close, 5),
+        "ma20": compute_ma(close, 20),
+        "close": close,
+        "high": df["high"],
+        "low": df["low"],
+        "volume": df["volume"],
+    }
+
+
 SIGNAL_DEFINITIONS = {
-    "macd_golden_cross": lambda df, i: (
+    "macd_golden_cross": lambda c, i: (
         i >= 1
-        and float(compute_macd_dif(df["close"]).iloc[i]) > float(compute_macd_dea(df["close"]).iloc[i])
-        and float(compute_macd_dif(df["close"]).iloc[i - 1]) <= float(compute_macd_dea(df["close"]).iloc[i - 1])
+        and float(c["dif"].iloc[i]) > float(c["dea"].iloc[i])
+        and float(c["dif"].iloc[i - 1]) <= float(c["dea"].iloc[i - 1])
     ),
-    "macd_death_cross": lambda df, i: (
+    "macd_death_cross": lambda c, i: (
         i >= 1
-        and float(compute_macd_dif(df["close"]).iloc[i]) < float(compute_macd_dea(df["close"]).iloc[i])
-        and float(compute_macd_dif(df["close"]).iloc[i - 1]) >= float(compute_macd_dea(df["close"]).iloc[i - 1])
+        and float(c["dif"].iloc[i]) < float(c["dea"].iloc[i])
+        and float(c["dif"].iloc[i - 1]) >= float(c["dea"].iloc[i - 1])
     ),
-    "rsi_oversold": lambda df, i: float(compute_rsi(df["close"], 14).iloc[i]) < 30,
-    "rsi_overbought": lambda df, i: float(compute_rsi(df["close"], 14).iloc[i]) > 70,
-    "breakout_20d": lambda df, i: (
+    "rsi_oversold": lambda c, i: float(c["rsi14"].iloc[i]) < 30,
+    "rsi_overbought": lambda c, i: float(c["rsi14"].iloc[i]) > 70,
+    "breakout_20d": lambda c, i: (
         i >= 20
-        and float(df["close"].iloc[i]) > float(df["high"].iloc[i - 20 : i].max())
-        and float(df["close"].iloc[i - 1]) <= float(df["high"].iloc[i - 20 : i].max())
+        and float(c["close"].iloc[i]) > float(c["high"].iloc[i - 20 : i].max())
+        and float(c["close"].iloc[i - 1]) <= float(c["high"].iloc[i - 20 : i].max())
     ),
-    "breakdown_20d": lambda df, i: (
+    "breakdown_20d": lambda c, i: (
         i >= 20
-        and float(df["close"].iloc[i]) < float(df["low"].iloc[i - 20 : i].min())
-        and float(df["close"].iloc[i - 1]) >= float(df["low"].iloc[i - 20 : i].min())
+        and float(c["close"].iloc[i]) < float(c["low"].iloc[i - 20 : i].min())
+        and float(c["close"].iloc[i - 1]) >= float(c["low"].iloc[i - 20 : i].min())
     ),
-    "volume_surge": lambda df, i: (
-        i >= 20 and float(df["volume"].iloc[i]) > 2.0 * float(df["volume"].iloc[i - 20 : i].mean())
+    "volume_surge": lambda c, i: (
+        i >= 20 and float(c["volume"].iloc[i]) > 2.0 * float(c["volume"].iloc[i - 20 : i].mean())
     ),
-    "ma_golden_cross": lambda df, i: (
+    "ma_golden_cross": lambda c, i: (
         i >= 20
-        and float(compute_ma(df["close"], 5).iloc[i]) > float(compute_ma(df["close"], 20).iloc[i])
-        and float(compute_ma(df["close"], 5).iloc[i - 1]) <= float(compute_ma(df["close"], 20).iloc[i - 1])
+        and float(c["ma5"].iloc[i]) > float(c["ma20"].iloc[i])
+        and float(c["ma5"].iloc[i - 1]) <= float(c["ma20"].iloc[i - 1])
     ),
-    "ma_death_cross": lambda df, i: (
+    "ma_death_cross": lambda c, i: (
         i >= 20
-        and float(compute_ma(df["close"], 5).iloc[i]) < float(compute_ma(df["close"], 20).iloc[i])
-        and float(compute_ma(df["close"], 5).iloc[i - 1]) >= float(compute_ma(df["close"], 20).iloc[i - 1])
+        and float(c["ma5"].iloc[i]) < float(c["ma20"].iloc[i])
+        and float(c["ma5"].iloc[i - 1]) >= float(c["ma20"].iloc[i - 1])
     ),
 }
 
@@ -686,10 +709,11 @@ def evaluate_signal(symbol: str, signal_name: str, forward_days: list[int] = Non
         return {"error": f"Insufficient data: {len(df)} rows"}
 
     max_fwd = max(forward_days)
+    ctx = _signal_context(df)
     occurrences = []
     for i in range(20, len(df) - max_fwd):
         try:
-            if checker(df, i):
+            if checker(ctx, i):
                 entry_price = float(df["close"].iloc[i])
                 date_str = (
                     str(df["date"].iloc[i].date()) if hasattr(df["date"].iloc[i], "date") else str(df["date"].iloc[i])
@@ -742,23 +766,24 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    if args.command == "run":
-        result = run_backtest(args.strategy, args.symbol, args.start, args.end, args.capital)
-    elif args.command == "evaluate":
-        result = evaluate_result(args.result)
-    elif args.command == "evaluate_signal":
-        fwd = [int(x) for x in args.forward.split(",")]
-        result = evaluate_signal(args.symbol, args.signal, fwd, args.lookback)
-    else:
-        result = {"error": f"Unknown command: {args.command}"}
+    try:
+        if args.command == "run":
+            result = run_backtest(args.strategy, args.symbol, args.start, args.end, args.capital)
+        elif args.command == "evaluate":
+            result = evaluate_result(args.result)
+        elif args.command == "evaluate_signal":
+            fwd = [int(x) for x in args.forward.split(",")]
+            result = evaluate_signal(args.symbol, args.signal, fwd, args.lookback)
+        else:
+            result = {"error": f"Unknown command: {args.command}"}
+    except Exception as e:
+        # A traceback would leave stdout empty; hosts need valid JSON even on failure.
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        sys.exit(1)
 
-    print(json.dumps(result, ensure_ascii=False, default=str))
+    print(json.dumps(json_safe(result), ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

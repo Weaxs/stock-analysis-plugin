@@ -4,22 +4,20 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from _subproc import run_tool, utf8_stdio
+
 
 def fetch_kline(symbol: str, period: str = "daily", count: int = 120) -> list:
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_data.py")
-    r = subprocess.run(
-        [sys.executable, script, "kline", symbol, "--period", period, "--count", str(count)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return json.loads(r.stdout)
+    # 30s default matches the sibling kline callers (market_regime, signal_tracker);
+    # failure returns None, which callers surface as a clean {"error": ...} result.
+    return run_tool("stock_data.py", ["kline", symbol, "--period", period, "--count", str(count)])
 
 
 def to_dataframe(records: list) -> pd.DataFrame:
@@ -34,12 +32,59 @@ def to_dataframe(records: list) -> pd.DataFrame:
 
 
 # --------------- Indicators ---------------
+#
+# The *_series functions are the single authoritative implementations of
+# MA/EMA/MACD/RSI/BOLL/KDJ; anomaly_detect.py, backtest.py and market_regime.py
+# import them instead of keeping local copies. The calc_* wrappers below reduce
+# a series to the latest-value dict shape the analyze CLI emits.
+
+
+def ma_series(close: pd.Series, period: int) -> pd.Series:
+    return close.rolling(period).mean()
+
+
+def ema_series(close: pd.Series, period: int) -> pd.Series:
+    return close.ewm(span=period, adjust=False).mean()
+
+
+def macd_series(close: pd.Series) -> tuple:
+    """Full (dif, dea, macd) series: dif = EMA12-EMA26, dea = EMA9(dif), macd = 2*(dif-dea)."""
+    dif = ema_series(close, 12) - ema_series(close, 26)
+    dea = ema_series(dif, 9)
+    return dif, dea, 2 * (dif - dea)
+
+
+def rsi_series(close: pd.Series, period: int) -> pd.Series:
+    """Full RSI series (SMA of gains/losses over `period`). NaN where there were no losses."""
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
+
+
+def bollinger_series(close: pd.Series, period: int = 20) -> tuple:
+    """Full (upper, mid, lower) Bollinger series; pandas sample std (ddof=1)."""
+    mid = ma_series(close, period)
+    std = close.rolling(period).std()
+    return mid + 2 * std, mid, mid - 2 * std
+
+
+def kdj_series(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple:
+    """Full (k, d, j) KDJ series; RSV gaps (flat 9-bar windows) are filled with 50."""
+    low_n = low.rolling(9).min()
+    high_n = high.rolling(9).max()
+    rsv = (close - low_n) / (high_n - low_n).replace(0, np.nan) * 100
+    rsv = rsv.fillna(50)
+    k = rsv.ewm(com=2, adjust=False).mean()
+    d = k.ewm(com=2, adjust=False).mean()
+    return k, d, 3 * k - 2 * d
 
 
 def calc_ma(close: pd.Series) -> dict:
     mas = {}
     for n in [5, 10, 20, 60]:
-        ma = close.rolling(n).mean()
+        ma = ma_series(close, n)
         mas[f"ma{n}"] = round(float(ma.iloc[-1]), 2) if len(ma.dropna()) > 0 else None
     vals = [mas.get(f"ma{n}") for n in [5, 10, 20, 60]]
     valid = [v for v in vals if v is not None]
@@ -56,11 +101,7 @@ def calc_ma(close: pd.Series) -> dict:
 
 
 def calc_macd(close: pd.Series) -> dict:
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    dif = ema12 - ema26
-    dea = dif.ewm(span=9, adjust=False).mean()
-    macd = 2 * (dif - dea)
+    dif, dea, macd = macd_series(close)
     d, de, m = float(dif.iloc[-1]), float(dea.iloc[-1]), float(macd.iloc[-1])
     signal = "bullish" if d > de else "bearish"
     prev_cross = (
@@ -79,11 +120,7 @@ def calc_macd(close: pd.Series) -> dict:
 def calc_rsi(close: pd.Series) -> dict:
     result = {}
     for n in [6, 12, 24]:
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0.0).rolling(n).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(n).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = 100 - 100 / (1 + rs)
+        rsi = rsi_series(close, n)
         val = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else None
         result[f"rsi{n}"] = round(val, 2) if val is not None else None
 
@@ -105,10 +142,7 @@ def calc_rsi(close: pd.Series) -> dict:
 
 
 def calc_bollinger(close: pd.Series) -> dict:
-    mid = close.rolling(20).mean()
-    std = close.rolling(20).std()
-    upper = mid + 2 * std
-    lower = mid - 2 * std
+    upper, mid, lower = bollinger_series(close)
     u, m, l_ = float(upper.iloc[-1]), float(mid.iloc[-1]), float(lower.iloc[-1])
     price = float(close.iloc[-1])
     bw = (u - l_) / m * 100 if m != 0 else 0
@@ -131,13 +165,7 @@ def calc_bollinger(close: pd.Series) -> dict:
 
 
 def calc_kdj(high: pd.Series, low: pd.Series, close: pd.Series) -> dict:
-    low_n = low.rolling(9).min()
-    high_n = high.rolling(9).max()
-    rsv = (close - low_n) / (high_n - low_n).replace(0, np.nan) * 100
-    rsv = rsv.fillna(50)
-    k = rsv.ewm(com=2, adjust=False).mean()
-    d = k.ewm(com=2, adjust=False).mean()
-    j = 3 * k - 2 * d
+    k, d, j = kdj_series(high, low, close)
     kv, dv, jv = float(k.iloc[-1]), float(d.iloc[-1]), float(j.iloc[-1])
     if jv > 80:
         signal = "overbought"
@@ -497,7 +525,7 @@ def calculate_ma_standalone(
         if len(close) < n:
             mas[f"ma{n}"] = None
             continue
-        val = float(close.rolling(n).mean().iloc[-1])
+        val = float(ma_series(close, n).iloc[-1])
         mas[f"ma{n}"] = round(val, 2)
 
     bias = {}
@@ -526,8 +554,8 @@ def calculate_ma_standalone(
             continue
         if len(close) < max(fast, slow) + 1:
             continue
-        ma_fast = close.rolling(fast).mean()
-        ma_slow = close.rolling(slow).mean()
+        ma_fast = ma_series(close, fast)
+        ma_slow = ma_series(close, slow)
         if len(ma_fast.dropna()) >= 2 and len(ma_slow.dropna()) >= 2:
             prev_diff = float(ma_fast.iloc[-2]) - float(ma_slow.iloc[-2])
             curr_diff = float(ma_fast.iloc[-1]) - float(ma_slow.iloc[-1])
@@ -634,9 +662,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

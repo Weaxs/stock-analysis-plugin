@@ -7,11 +7,13 @@ Does NOT store history, does NOT push, does NOT schedule. Host agent decides whe
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import run_tool as _run_json  # noqa: E402
+from _subproc import utf8_stdio
 from stock_data import detect_market  # noqa: E402
 
 RULE_TYPES = {
@@ -127,10 +129,22 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     needs_anom = any(r.get("type") == "anomaly" for r in rules)
     needs_risk = any(r.get("type") in ("risk_veto", "risk_level_at_least") for r in rules)
 
-    quote = _run_json("stock_data.py", ["quote", symbol]) or {}
-    tech = _run_json("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"]) if needs_tech else None
-    anom = _run_json("anomaly_detect.py", ["detect", symbol]) if needs_anom else None
-    risk = _run_json("risk_screening.py", ["screen", symbol]) if needs_risk else None
+    # the fetches are independent subprocesses — fan out concurrently (same
+    # ThreadPoolExecutor pattern as gather._run_all), then read back in fixed order
+    jobs = {"quote": ("stock_data.py", ["quote", symbol])}
+    if needs_tech:
+        jobs["tech"] = ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"])
+    if needs_anom:
+        jobs["anom"] = ("anomaly_detect.py", ["detect", symbol])
+    if needs_risk:
+        jobs["risk"] = ("risk_screening.py", ["screen", symbol])
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {key: pool.submit(_run_json, script, args) for key, (script, args) in jobs.items()}
+        fetched = {key: future.result() for key, future in futures.items()}
+    quote = fetched["quote"] or {}
+    tech = fetched.get("tech")
+    anom = fetched.get("anom")
+    risk = fetched.get("risk")
 
     warnings = []
     if not quote or quote.get("price") is None:
@@ -203,9 +217,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

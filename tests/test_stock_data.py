@@ -90,6 +90,58 @@ class TestCalcLimitPrice:
         result = calc_limit_price(10.0, 0.20, "down")
         assert abs(result - 8.0) < 0.01
 
-    def test_banker_rounding(self):
+    def test_exchange_rounding(self):
         result = calc_limit_price(13.57, 0.10, "up")
         assert abs(result - 14.93) < 0.01
+
+
+class TestDetectMarketEdgeCases:
+    def test_empty_string_falls_back_to_us(self):
+        assert detect_market("") == "US"
+
+    def test_bse_codes_are_a_share(self):
+        assert detect_market("830799") == "A"
+        assert detect_market("430047") == "A"
+        assert detect_market("920001") == "A"
+
+    def test_prefixed_codes(self):
+        assert detect_market("sh600519") == "A"
+        assert detect_market("bj920001") == "A"
+
+
+class TestNormalizeStockCodeEdgeCases:
+    def test_empty_string(self):
+        info = normalize_stock_code("")
+        assert info["market"] == "US"  # detect_market fallback for unrecognized input
+        assert info["limit_pct"] is None
+
+    def test_bse_8_prefix(self):
+        info = normalize_stock_code("830799")
+        assert info["board"] == "BSE"
+        assert info["limit_pct"] == 0.30
+
+    def test_bse_92_prefix(self):
+        info = normalize_stock_code("920001")
+        assert info["board"] == "BSE"
+        assert info["limit_pct"] == 0.30
+
+    def test_sh_prefixed_code(self):
+        info = normalize_stock_code("sh600519")
+        assert info["market"] == "A"
+        assert info["board"] == "main"
+        assert info["limit_pct"] == 0.10
+
+
+class TestCalcLimitPriceEdgeCases:
+    def test_unknown_direction_treated_as_down(self):
+        result = calc_limit_price(10.0, 0.10, "sideways")
+        assert abs(result - 9.0) < 0.01
+
+    def test_zero_price(self):
+        assert calc_limit_price(0.0, 0.10, "up") == 0.0
+
+    def test_negative_price(self):
+        assert calc_limit_price(-10.0, 0.10, "up") == -11.0
+
+    def test_zero_ratio_keeps_price(self):
+        assert calc_limit_price(10.0, 0.0, "up") == 10.0

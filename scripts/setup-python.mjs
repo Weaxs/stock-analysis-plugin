@@ -23,7 +23,7 @@ function findPython() {
     try {
       const ver = execSync(`${name} --version`, { stdio: "pipe" }).toString().trim();
       const match = ver.match(/(\d+)\.(\d+)/);
-      if (match && (parseInt(match[1]) > 3 || (parseInt(match[1]) === 3 && parseInt(match[2]) >= 9))) {
+      if (match && (parseInt(match[1]) > 3 || (parseInt(match[1]) === 3 && parseInt(match[2]) >= 10))) {
         return name;
       }
     } catch {}
@@ -35,8 +35,8 @@ try {
   const python = findPython();
   if (!python) {
     console.warn(
-      "\n[pi-stock-analysis] python3 >= 3.9 not found.\n" +
-      "Install Python 3.9+ and re-run: npm rebuild pi-stock-analysis\n"
+      "\n[stock-analysis-plugin] python3 >= 3.10 not found.\n" +
+      "Install Python 3.10+, then re-run: npm install\n"
     );
     process.exit(0);
   }

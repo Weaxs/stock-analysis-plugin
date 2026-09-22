@@ -2617,3 +2617,159 @@ class TestCmdQuoteStaleMarker:
         self._patch_calendar(monkeypatch, "closed")
         result = cmd_quote(Namespace(symbol="600519"))
         assert result == {"error": "all sources down"}
+
+
+class TestChainSocketTimeout:
+    """kline_a/quote_a wrap their failover chains in socket_timeout(25) — akshare's
+    spot/hist calls carry no per-request timeout, so without the guard a blackholed
+    eastmoney leg hangs until the kernel TCP timeout and eats the whole budget."""
+
+    def test_socket_timeout_restores_on_exception(self, record_socket_timeout):
+        from tools._subproc import socket_timeout
+
+        seen = record_socket_timeout()
+        with pytest.raises(ValueError, match="boom"), socket_timeout(25):
+            raise ValueError("boom")
+        assert seen == [25, None]
+
+    def test_kline_a_bounds_and_restores(self, record_socket_timeout):
+        seen = record_socket_timeout()
+        with patch("tools.stock_data._failover", return_value=[{"close": 1}]):
+            assert kline_a("600519", "daily", 5) == [{"close": 1}]
+        assert seen == [25, None]
+
+    def test_kline_a_restores_when_all_legs_fail(self, record_socket_timeout):
+        seen = record_socket_timeout()
+        with (
+            patch("tools.stock_data._failover", side_effect=RuntimeError("all down")),
+            pytest.raises(RuntimeError, match="all down"),
+        ):
+            kline_a("600519", "daily", 5)
+        assert seen == [25, None]
+
+    def test_quote_a_bounds_and_restores(self, record_socket_timeout):
+        seen = record_socket_timeout()
+        with patch("tools.stock_data._failover", return_value={"price": 100}):
+            assert quote_a("600519") == {"price": 100}
+        assert seen == [25, None]
+
+    def test_quote_a_restores_when_all_legs_fail(self, record_socket_timeout):
+        seen = record_socket_timeout()
+        with (
+            patch("tools.stock_data._failover", side_effect=RuntimeError("all down")),
+            pytest.raises(RuntimeError, match="all down"),
+        ):
+            quote_a("600519")
+        assert seen == [25, None]
+
+    def test_prefixed_quote_chain_also_bounded(self, record_socket_timeout):
+        seen = record_socket_timeout()
+        with patch("tools.stock_data._failover", return_value={"price": 3891.6}):
+            assert quote_a("sh000001") == {"price": 3891.6}
+        assert seen == [25, None]
+
+    def test_snapshot_a_uses_shared_guard(self, record_socket_timeout):
+        seen = record_socket_timeout()
+        with patch("tools.stock_data._failover", return_value=[{"symbol": "600519"}]):
+            assert snapshot_a() == [{"symbol": "600519"}]
+        assert seen == [25, None]
+
+
+class TestCapitalFlowMarketDetection:
+    """cmd_capital_flow must route through _cn_code: bare 9/5-prefix SH codes, BSE
+    (43/81-83/87/88/92) and prefixed input (sh600519) all resolve; akshare wants the
+    bare 6-digit stock plus market ∈ {sh, sz, bj}."""
+
+    def _capture(self, monkeypatch):
+        import pandas as pd
+
+        captured = {}
+
+        def fake_retry(fn, **kw):
+            captured.update(kw)
+            return pd.DataFrame({"日期": ["2026-09-18"], "主力净流入-净额": [1.0e6]})
+
+        monkeypatch.setattr("tools.stock_data._akshare_retry", fake_retry)
+        return captured
+
+    @pytest.mark.parametrize(
+        ("symbol", "market", "stock"),
+        [
+            ("600519", "sh", "600519"),
+            ("900901", "sh", "900901"),  # 9-prefix Shanghai
+            ("510300", "sh", "510300"),  # 5-prefix Shanghai fund
+            ("000858", "sz", "000858"),
+            ("430047", "bj", "430047"),  # BSE
+            ("920001", "bj", "920001"),
+            ("sh600519", "sh", "600519"),  # prefixed input
+            ("SZ000858", "sz", "000858"),
+        ],
+    )
+    def test_market_and_bare_stock(self, monkeypatch, symbol, market, stock):
+        captured = self._capture(monkeypatch)
+        result = cmd_capital_flow(Namespace(symbol=symbol, mode="detail"))
+        assert captured == {"stock": stock, "market": market}
+        assert result[0]["main_net_inflow"] == 1.0e6
+
+
+class TestSnapshotHkUsErrorDetail:
+    """snapshot_hk/snapshot_us must surface the exception summary (type + message,
+    truncated) instead of a bare fixed string — same shape as snapshot_a's error."""
+
+    def test_hk_error_carries_summary(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        mock_ak = MagicMock()
+        mock_ak.stock_hk_spot_em.side_effect = ConnectionError("reset by peer")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            from tools.stock_data import snapshot_hk
+
+            result = snapshot_hk()
+        assert result == [{"error": "HK snapshot unavailable: ConnectionError: reset by peer"}]
+
+    def test_us_error_carries_summary(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        mock_ak = MagicMock()
+        mock_ak.stock_us_spot_em.side_effect = ValueError("bad payload")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            from tools.stock_data import snapshot_us
+
+            result = snapshot_us()
+        assert result == [{"error": "US snapshot unavailable: ValueError: bad payload"}]
+
+    def test_long_error_truncated(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        mock_ak = MagicMock()
+        mock_ak.stock_hk_spot_em.side_effect = ConnectionError("x" * 500)
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            from tools.stock_data import snapshot_hk
+
+            result = snapshot_hk()
+        assert len(result[0]["error"]) == 200
+
+
+class TestFinancialsAKeys:
+    """financials_a's empty-data and exception branches used different keys
+    (error vs note) — both branches now carry both keys so either consumer works."""
+
+    def test_empty_data_has_error_and_note(self, monkeypatch):
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_financial_analysis_indicator.return_value = pd.DataFrame()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            from tools.stock_data import financials_a
+
+            result = financials_a("600519")
+        assert result["error"] == "No financial data"
+        assert result["note"] == "No financial data"
+
+    def test_exception_has_error_and_note(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        mock_ak = MagicMock()
+        mock_ak.stock_financial_analysis_indicator.side_effect = ConnectionError("blocked")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            from tools.stock_data import financials_a
+
+            result = financials_a("600519")
+        assert result["error"] == "Financial data unavailable"
+        assert result["note"] == "Financial data unavailable"

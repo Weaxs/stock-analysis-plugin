@@ -18,7 +18,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _subproc import run_tool
+from _subproc import run_tool, utf8_stdio
 from market_review import calc_temperature
 from stock_data import compute_market_stats
 
@@ -103,6 +103,15 @@ def _minmax(s: pd.Series) -> pd.Series:
     if mx == mn:
         return pd.Series(50.0, index=s.index)
     return ((s - mn) / (mx - mn) * 100).clip(0, 100)
+
+
+def _finite(v):
+    """NaN/±inf → None. An all-empty factor column min-maxes to NaN, and json.dumps
+    would emit bare NaN/Infinity tokens that strict parsers in the host adapters
+    reject — so non-finite values never reach the output contract."""
+    if isinstance(v, (int, float, np.floating)) and not np.isfinite(v):
+        return None
+    return v
 
 
 def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
@@ -277,9 +286,10 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
         groups = factor_scores.get(sym, {})
         c["enriched"] = bool(enrichments.get(sym))
         scores = c["scores"]
+        # scores are sanitized to None when non-finite; L2 math needs numbers
         components = {
-            "value": scores["value"],
-            "liquidity": scores["liquidity"],
+            "value": scores["value"] or 0,
+            "liquidity": scores["liquidity"] or 0,
         }
         # momentum is L2-only: candidates without kline factors drop the group and renormalize weights.
         components.update(
@@ -297,6 +307,10 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     raw = fetch_snapshot(market)
     if isinstance(raw, dict) and "error" in raw:
         return raw
+    # snapshot legs wrap a total failure as a one-row [{"error": ...}] list — surface it
+    # instead of letting the error row walk the scoring pipeline as a ghost candidate
+    if isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict) and "error" in raw[0]:
+        return {**raw[0], "market": market}
     if raw is None:
         return {"error": "failed to fetch market snapshot", "market": market}
 
@@ -361,16 +375,16 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "market_cap",
             "volume_ratio",
         ]:
-            v = row.get(field)
-            if v is not None and not (isinstance(v, float) and np.isnan(v)):
+            v = _finite(row.get(field))
+            if v is not None:
                 entry[field] = round(float(v), 2) if isinstance(v, (float, np.floating)) else v
-        composite = float(row.get("composite_score", 0))
+        composite = _finite(float(row.get("composite_score", 0)))
         entry["scores"] = {
-            "value": round(float(row.get("value_score", 0)), 1),
-            "momentum": round(float(row.get("momentum_score", 0)), 1),
-            "liquidity": round(float(row.get("liquidity_score", 0)), 1),
-            "composite": round(composite, 1),
-            "final": round(composite * multiplier, 1),
+            "value": _finite(round(float(row.get("value_score", 0)), 1)),
+            "momentum": _finite(round(float(row.get("momentum_score", 0)), 1)),
+            "liquidity": _finite(round(float(row.get("liquidity_score", 0)), 1)),
+            "composite": None if composite is None else round(composite, 1),
+            "final": None if composite is None else round(composite * multiplier, 1),
         }
         candidates.append(entry)
 
@@ -415,9 +429,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

@@ -1,6 +1,8 @@
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# B905 (zip without strict=) only fires at py310+; tools/ pre-dates strict= and
+# changing zip semantics there is the tools/ owner's call, not this config bump.
+ignore = ["E501", "B905"]

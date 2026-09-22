@@ -6,8 +6,12 @@ so this resolves both when a tool runs as a script (sys.path[0] = tools/) and wh
 pytest imports it as tools.*.
 """
 
+import contextlib
 import json
+import math
 import os
+import re
+import socket
 import subprocess
 import sys
 
@@ -44,3 +48,48 @@ def run_tool(script: str, args: list, timeout: int = 30, parse_json: bool = True
     except Exception:
         pass
     return None
+
+
+def utf8_stdio() -> None:
+    """Force UTF-8 stdio. Windows defaults stdio to a legacy code page (cp1252)
+    that cannot encode the Chinese text these tools emit — call at CLI entry."""
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            s.reconfigure(encoding="utf-8")
+
+
+@contextlib.contextmanager
+def socket_timeout(seconds: float):
+    """Bound every blocking socket op for the wrapped chain's duration: akshare/efinance
+    leave requests timeout-less, so on a blackholed network a leg hangs until the kernel
+    TCP timeout (~2min) and the chain would overrun the caller's subprocess budget before
+    ever reaching the plain-HTTPS legs. try/finally always restores the previous default
+    (no global-state leak); explicit per-request timeouts (tencent/sina legs) still win."""
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(seconds)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+
+
+_SECRET_PARAM_RE = re.compile(r"(?i)((?:api[_-]?key|token|secret|access[_-]?token)=)[^&\s]+")
+
+
+def scrub_secrets(msg: str) -> str:
+    """Error text may embed request URLs (requests connection errors) — never leak keys
+    into stdout JSON."""
+    return _SECRET_PARAM_RE.sub(r"\1***", msg)
+
+
+def json_safe(obj):
+    """Replace non-finite floats (inf/-inf/nan, e.g. an all-flat P&L profit_loss_ratio)
+    with None so json.dumps never emits the non-standard Infinity/NaN tokens that
+    break strict JSON.parse hosts."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [json_safe(v) for v in obj]
+    return obj

@@ -17,12 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import utf8_stdio  # noqa: E402
 from capabilities import ALL_MARKETS  # noqa: E402
 
 # provider -> (import_name, required_env_vars, markets, note)
 PROVIDERS = {
     "akshare": ("akshare", [], ["A"], None),
-    "tushare": ("tushare", ["TUSHARE_TOKEN"], ["A"], None),
+    # tushare is consumed as a pure-HTTP API (requests.post to api.tushare.pro,
+    # see stock_data._kline_tushare) — the tushare package is not in requirements,
+    # so availability is the token, not a package probe
+    "tushare": ("requests", ["TUSHARE_TOKEN"], ["A"], "pure-HTTP API (api.tushare.pro); no tushare package needed"),
     "efinance": ("efinance", [], ["A"], None),
     "tencent": ("requests", [], ["A"], "qt.gtimg.cn quote/kline, no auth (issue #25)"),
     "sina": (
@@ -150,9 +154,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

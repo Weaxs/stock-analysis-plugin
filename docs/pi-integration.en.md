@@ -5,7 +5,7 @@ This guide explains how to use `stock-analysis-plugin` as a [Pi Agent](https://p
 ## Prerequisites
 
 - Node.js >= 18
-- Python >= 3.9
+- Python >= 3.10
 - Pi Agent installed and running
 
 ## Installation
@@ -18,7 +18,7 @@ pi install npm:@weaxs/stock-analysis-plugin
 
 The installation automatically runs the `postinstall` script which:
 
-1. Locates `python3` on your system (requires >= 3.9)
+1. Locates `python3` on your system (requires >= 3.10)
 2. Creates a `.venv` virtual environment in the plugin directory
 3. Installs Python dependencies from `tools/requirements.txt`
 

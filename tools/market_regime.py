@@ -6,13 +6,17 @@ import json
 import os
 import sys
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
+from _subproc import utf8_stdio
+from technical import bollinger_series, ma_series, macd_series, rsi_series
 
 INDEX_MAP = {
     "A": ("000001", "上证综指"),
-    "HK": ("HSI", "恒生指数"),
+    "HK": ("^HSI", "恒生指数"),
     "US": ("^GSPC", "标普500"),
 }
 
@@ -54,14 +58,12 @@ def _compute_indicators(klines: list) -> dict:
     if len(closes) < 20:
         return {}
 
-    def ma(n):
-        return np.mean(closes[-n:]) if len(closes) >= n else np.mean(closes)
-
-    ma5 = ma(5)
-    ma10 = ma(10)
-    ma20 = ma(20)
-    ma60 = ma(60) if len(closes) >= 60 else ma(len(closes))
-    close = closes[-1]
+    close_s = pd.Series(closes)
+    ma5 = float(ma_series(close_s, 5).iloc[-1])
+    ma10 = float(ma_series(close_s, 10).iloc[-1])
+    ma20 = float(ma_series(close_s, 20).iloc[-1])
+    ma60 = float(ma_series(close_s, 60).iloc[-1]) if len(closes) >= 60 else float(np.mean(closes))
+    close = float(closes[-1])
 
     highs = np.array([float(k["high"]) for k in klines if k.get("high") is not None])
     lows = np.array([float(k["low"]) for k in klines if k.get("low") is not None])
@@ -73,30 +75,24 @@ def _compute_indicators(klines: list) -> dict:
     atr = np.mean(tr_values) if tr_values else 0
     atr_ratio = atr / close if close > 0 else 0
 
-    upper = ma20 + 2 * np.std(closes[-20:])
-    lower = ma20 - 2 * np.std(closes[-20:])
-    boll_width = (upper - lower) / ma20 if ma20 > 0 else 0
+    upper, mid, lower = bollinger_series(close_s)
+    boll_width = float((upper.iloc[-1] - lower.iloc[-1]) / mid.iloc[-1]) if mid.iloc[-1] > 0 else 0
 
-    gains, losses = [], []
-    for i in range(1, min(15, len(closes))):
-        diff = closes[-i] - closes[-i - 1]
-        if diff > 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
-    avg_gain = np.mean(gains) if gains else 0
-    avg_loss = np.mean(losses) if losses else 1
-    rs = avg_gain / avg_loss if avg_loss > 0 else 100
-    rsi14 = 100 - (100 / (1 + rs))
+    # rsi_series leaves NaN when the window has zero losses: 14 straight up bars
+    # is RSI 100, but 14 flat bars (no gains either) is undefined — call it neutral.
+    rsi_val = rsi_series(close_s, 14).iloc[-1]
+    if pd.isna(rsi_val):
+        rsi14 = 100.0 if float(close_s.diff().clip(lower=0).iloc[-14:].sum()) > 0 else 50.0
+    else:
+        rsi14 = float(rsi_val)
 
-    ema12 = np.mean(closes[-12:])
-    ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else np.mean(closes)
-    macd_diff = ema12 - ema26
-    macd_trend = "bullish" if macd_diff > 0 else "bearish"
+    # Real EMA12-EMA26 (the old code mislabeled an np.mean simple average as EMA).
+    dif, _, _ = macd_series(close_s)
+    macd_trend = "bullish" if float(dif.iloc[-1]) > 0 else "bearish"
 
     ma_spread = abs(ma5 - ma20) / ma20 if ma20 > 0 else 0
 
-    prev_close = closes[-2] if len(closes) >= 2 else close
+    prev_close = float(closes[-2]) if len(closes) >= 2 else close
     change_pct = (close - prev_close) / prev_close * 100 if prev_close > 0 else 0
 
     return {
@@ -233,9 +229,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

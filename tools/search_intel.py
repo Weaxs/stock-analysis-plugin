@@ -8,14 +8,10 @@ import re
 import sys
 import time as _time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _subproc import scrub_secrets, utf8_stdio
+
 # --------------- Web Search ---------------
-
-_SECRET_PARAM_RE = re.compile(r"(?i)((?:api[_-]?key|token|secret|access[_-]?token)=)[^&\s]+")
-
-
-def _scrub_secrets(msg: str) -> str:
-    """Error text may embed request URLs (requests connection errors) — never leak keys to stdout JSON."""
-    return _SECRET_PARAM_RE.sub(r"\1***", msg)
 
 
 def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
@@ -197,7 +193,7 @@ def search_news(query: str, max_results: int = 10) -> dict:
         try:
             items = fn(query, max_results)
         except Exception as e:
-            engines_errors[name] = _scrub_secrets(str(e))
+            engines_errors[name] = scrub_secrets(str(e))
             continue
         if items:
             engines_available.append(name)
@@ -497,9 +493,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

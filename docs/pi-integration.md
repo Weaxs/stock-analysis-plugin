@@ -5,7 +5,7 @@
 ## 前置条件
 
 - Node.js >= 18
-- Python >= 3.9
+- Python >= 3.10
 - Pi Agent 已安装并可正常运行
 
 ## 安装方式
@@ -18,7 +18,7 @@ pi install npm:@weaxs/stock-analysis-plugin
 
 安装后 Pi Agent 会自动执行 `postinstall` 脚本：
 
-1. 查找系统中的 `python3`（需 >= 3.9）
+1. 查找系统中的 `python3`（需 >= 3.10）
 2. 在插件目录下创建 `.venv` 虚拟环境
 3. 安装 `tools/requirements.txt` 中的 Python 依赖
 

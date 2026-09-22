@@ -1,6 +1,6 @@
 name: "MA Golden Cross"
 version: "1.0"
-description: "均线金叉策略 — MA5上穿MA20时买入，MA5下穿MA20时卖出。使用 ma_diff 指标（编码: fast*100+slow，如520=MA5-MA20）检测交叉"
+description: "均线金叉策略 — MA5上穿MA20时买入，MA5下穿MA20时卖出。使用 ma_diff 指标（fast_period/slow_period 显式指定快慢均线）检测交叉"
 
 parameters:
   fast_period: 5
@@ -11,7 +11,8 @@ parameters:
 entry:
   conditions:
     - indicator: "ma_diff"
-      period: 520
+      fast_period: "{fast_period}"
+      slow_period: "{slow_period}"
       operator: "cross_above"
       value: 0
     - indicator: "volume_ratio"
@@ -22,7 +23,8 @@ entry:
 exit:
   conditions:
     - indicator: "ma_diff"
-      period: 520
+      fast_period: "{fast_period}"
+      slow_period: "{slow_period}"
       operator: "cross_below"
       value: 0
   logic: "any"

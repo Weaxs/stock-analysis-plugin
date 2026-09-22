@@ -18,7 +18,8 @@ jobs:
           cache: pip
 
       - name: Install ruff
-        run: pip install "ruff>=0.4.0"
+        # Pinned — must match ci.yml and requirements-dev.txt.
+        run: pip install "ruff==0.15.20"
 
       - name: Ruff auto-fix (lint)
         run: ruff check --fix tools/ skills/ tests/ hermes/

@@ -92,7 +92,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 48 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.9`）。
+OpenClaw Gateway 启动后自动加载并注册 48 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -249,7 +249,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_market_stats` | 市场统计（涨跌家数、涨停等） |
 | `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
-| `get_hot_stocks` | 全市场人气热搜榜（东财→雪球→百度，仅 A 股） |
+| `get_hot_stocks` | 全市场人气热搜榜（东财→百度，仅 A 股） |
 | `get_fundamental_context` | 基本面综合上下文 |
 
 ### 分析计算

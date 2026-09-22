@@ -99,6 +99,49 @@ class TestCheckRules:
         result = alert_rules.check_rules("600519", [])
         assert "error" in result
 
+    def test_fetches_run_concurrently(self, monkeypatch):
+        """quote/tech/anom/risk are independent subprocesses — they must fan out in
+        parallel (the barrier only releases when all four are in flight at once;
+        a serial chain would time it out)."""
+        import threading
+
+        barrier = threading.Barrier(4, timeout=10)
+
+        def fake_run(script, args, **kw):
+            barrier.wait()
+            return {"price": 100}
+
+        monkeypatch.setattr(alert_rules, "_run_json", fake_run)
+        result = alert_rules.check_rules(
+            "600519",
+            [
+                {"type": "price_below", "value": 200},
+                {"type": "volume_ratio_above", "value": 1},
+                {"type": "anomaly", "value": "macd_golden_cross"},
+                {"type": "risk_veto"},
+            ],
+        )
+        assert result["symbol"] == "600519"
+        assert result["triggered"] is True  # price_below fired
+        assert len(result["evaluated"]) == 4
+
+    def test_evaluated_order_matches_rule_order(self, monkeypatch):
+        """Parallel fetch must not change output structure: evaluated/hits follow
+        the input rules' order."""
+        monkeypatch.setattr(
+            alert_rules,
+            "_run_json",
+            lambda script, args, **kw: {"price": 100, "change_pct": 5} if script == "stock_data.py" else None,
+        )
+        result = alert_rules.check_rules(
+            "600519",
+            [
+                {"type": "change_pct_above", "value": 3},
+                {"type": "price_below", "value": 200},
+            ],
+        )
+        assert [e["rule"] for e in result["evaluated"]] == ["change_pct_above", "price_below"]
+
 
 if __name__ == "__main__":
     import os

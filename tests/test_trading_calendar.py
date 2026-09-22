@@ -159,3 +159,142 @@ class TestCnTradeDatesMemo:
             assert tc.cn_trade_dates(2027) == set()
             assert tc.cn_trade_dates(2027) == set()
             assert mock_ak.tool_trade_date_hist_sina.call_count == 3
+
+
+class TestCnTradeDatesTimeout:
+    """cn_trade_dates' akshare fetch is timeout-less by default — the quote stale-marker
+    path calls it on every quote, so the fetch must run under a bounded socket timeout
+    that is always restored."""
+
+    def test_fetch_bounded_and_restored(self, monkeypatch, record_socket_timeout):
+        seen = record_socket_timeout()
+        monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+        mock_ak = MagicMock()
+        mock_ak.tool_trade_date_hist_sina.return_value = pd.DataFrame({"trade_date": ["2026-09-18"]})
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            assert tc.cn_trade_dates(2026) == {"2026-09-18"}
+        assert seen == [25, None]
+
+    def test_timeout_restored_on_failure(self, monkeypatch, record_socket_timeout):
+        seen = record_socket_timeout()
+        monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+        mock_ak = MagicMock()
+        mock_ak.tool_trade_date_hist_sina.side_effect = ConnectionError("boom")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            assert tc.cn_trade_dates(2026) == set()
+        assert seen == [25, None]
+
+
+class TestUsHolidays:
+    """Rule-based US holiday set — the old hardcoded 2025 dates were silently wrong
+    for every other year (and missed Good Friday entirely)."""
+
+    def test_good_friday_from_easter_algorithm(self):
+        # Easter Sundays: 2024-03-31, 2025-04-20, 2026-04-05
+        assert tc._easter_sunday(2024).strftime("%Y-%m-%d") == "2024-03-31"
+        assert tc._easter_sunday(2025).strftime("%Y-%m-%d") == "2025-04-20"
+        assert tc._easter_sunday(2026).strftime("%Y-%m-%d") == "2026-04-05"
+
+    def test_2025_dates(self):
+        holidays = tc._us_holidays(2025)
+        assert (1, 1) in holidays  # New Year
+        assert (1, 20) in holidays  # MLK
+        assert (2, 17) in holidays  # Presidents Day
+        assert (4, 18) in holidays  # Good Friday
+        assert (5, 26) in holidays  # Memorial Day
+        assert (6, 19) in holidays  # Juneteenth (Thursday, unshifted)
+        assert (7, 4) in holidays  # Independence Day (Friday, unshifted)
+        assert (9, 1) in holidays  # Labor Day
+        assert (11, 27) in holidays  # Thanksgiving
+        assert (12, 25) in holidays  # Christmas
+
+    def test_2024_dates(self):
+        holidays = tc._us_holidays(2024)
+        assert (1, 15) in holidays  # MLK
+        assert (2, 19) in holidays  # Presidents Day
+        assert (3, 29) in holidays  # Good Friday
+        assert (5, 27) in holidays  # Memorial Day
+        assert (9, 2) in holidays  # Labor Day
+        assert (11, 28) in holidays  # Thanksgiving
+
+    def test_2026_dates(self):
+        holidays = tc._us_holidays(2026)
+        assert (1, 19) in holidays  # MLK
+        assert (2, 16) in holidays  # Presidents Day
+        assert (4, 3) in holidays  # Good Friday
+        assert (5, 25) in holidays  # Memorial Day
+        assert (9, 7) in holidays  # Labor Day
+        assert (11, 26) in holidays  # Thanksgiving
+        assert (7, 4) not in holidays  # Jul 4 2026 is a Saturday
+        assert (7, 3) in holidays  # observed Friday before
+
+    def test_weekend_shift_rules(self):
+        # 2021: Jul 4 Sunday → observed Mon 07-05; Christmas Saturday → Fri 12-24
+        holidays_2021 = tc._us_holidays(2021)
+        assert (7, 5) in holidays_2021
+        assert (7, 4) not in holidays_2021
+        assert (12, 24) in holidays_2021
+        assert (12, 25) not in holidays_2021
+        # 2022-01-01 Saturday → NYSE special case: NOT observed, 2021-12-31 stays open
+        assert (12, 31) not in holidays_2021
+        # 2022-06-19 Juneteenth Sunday → observed Mon 06-20 (NYSE closes from 2022)
+        holidays_2022 = tc._us_holidays(2022)
+        assert (6, 20) in holidays_2022
+        assert (6, 19) not in holidays_2022
+
+    def test_juneteenth_not_a_holiday_before_2022(self):
+        assert (6, 19) not in tc._us_holidays(2020)
+        # NYSE first closed for Juneteenth in 2022; 2021-06-18 (observed federal
+        # date) was a full trading day.
+        assert (6, 18) not in tc._us_holidays(2021)
+        assert (6, 19) not in tc._us_holidays(2021)
+
+    def test_new_year_sunday_observed_monday(self):
+        # 2023-01-01 Sunday → observed Monday 2023-01-02
+        assert (1, 2) in tc._us_holidays(2023)
+        assert (1, 1) not in tc._us_holidays(2023)
+
+
+@pytest.fixture
+def us_fallback(monkeypatch):
+    """Force the rule-based path: exchange-calendars is the primary US source, so
+    simulate its absence (ImportError) for every is_trading_day call."""
+
+    def _raise(*a, **kw):
+        raise ImportError("no xcals")
+
+    monkeypatch.setattr(tc, "_is_exchange_trading_day", _raise)
+
+
+class TestUsTradingDayFallback:
+    def test_holiday_not_trading(self, us_fallback):
+        r = is_trading_day("US", "2026-11-26")  # Thanksgiving 2026 (Thursday)
+        assert r["is_trading_day"] is False
+        assert r["reason"] == "US_holiday"
+
+    def test_good_friday_not_trading(self, us_fallback):
+        assert is_trading_day("US", "2026-04-03")["is_trading_day"] is False
+        assert is_trading_day("US", "2024-03-29")["is_trading_day"] is False
+
+    def test_observed_shift_not_trading(self, us_fallback):
+        # Jul 4 2026 is a Saturday; the observed closure is Friday 07-03
+        assert is_trading_day("US", "2026-07-03")["is_trading_day"] is False
+        assert is_trading_day("US", "2026-07-03")["reason"] == "US_holiday"
+
+    def test_adjacent_weekday_is_trading(self, us_fallback):
+        assert is_trading_day("US", "2026-07-06")["is_trading_day"] is True  # Monday after
+        assert is_trading_day("US", "2026-11-27")["is_trading_day"] is True  # Friday after Thanksgiving
+
+    def test_new_year_saturday_keeps_dec31_open(self, us_fallback):
+        # 2022-01-01 was a Saturday → NYSE special case: no observed closure,
+        # 2021-12-31 was a full trading day.
+        assert is_trading_day("US", "2021-12-31")["is_trading_day"] is True
+
+    def test_new_year_sunday_observed_monday_closed(self, us_fallback):
+        assert is_trading_day("US", "2023-01-02")["is_trading_day"] is False
+        assert is_trading_day("US", "2023-01-02")["reason"] == "US_holiday"
+
+    def test_other_years_no_longer_silent(self, us_fallback):
+        # the hardcoded set answered these wrong: 2024 MLK and 2026 Memorial Day
+        assert is_trading_day("US", "2024-01-15")["is_trading_day"] is False
+        assert is_trading_day("US", "2026-05-25")["is_trading_day"] is False

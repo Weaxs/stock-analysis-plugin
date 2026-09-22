@@ -11,5 +11,12 @@
     "types": ["node"],
     "typeRoots": ["./typings", "./node_modules/@types"]
   },
-  "include": ["pi/index.ts", "openclaw/index.ts", "dsh/index.ts", "typings/**/*.d.ts"]
+  "include": [
+    "pi/index.ts",
+    "openclaw/index.ts",
+    "dsh/index.ts",
+    "typings/**/*.d.ts",
+    "tests/*.ts",
+    "tests/e2e/*.ts"
+  ]
 }

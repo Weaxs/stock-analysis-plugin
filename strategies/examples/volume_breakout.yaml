@@ -26,7 +26,8 @@ entry:
 exit:
   conditions:
     - indicator: "ma_diff"
-      period: 510
+      fast_period: 5
+      slow_period: 10
       operator: "cross_below"
       value: 0
     - indicator: "rsi"

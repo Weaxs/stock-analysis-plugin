@@ -9,7 +9,8 @@ parameters:
 entry:
   conditions:
     - indicator: "ma_diff"
-      period: 1020
+      fast_period: 10
+      slow_period: 20
       operator: ">"
       value: 0
     - indicator: "bollinger_position"

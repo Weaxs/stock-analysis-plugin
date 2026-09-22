@@ -113,3 +113,17 @@ class TestReviewMarket:
         result = review_market("A")
         assert result["temperature"]["signal"] == "green"
         assert result["strategy_stance"] == "offensive"
+
+    @patch("tools.market_review._run_tool")
+    def test_market_stats_gets_snapshot_budget(self, mock_run):
+        """market_stats fans out to a full-market snapshot — it must run with the
+        same 240s budget screener.fetch_snapshot gives that path, or a weak network
+        silently degrades the temperature to the neutral-50 fallback."""
+        mock_run.return_value = None
+        review_market("A")
+        stats_call = [c for c in mock_run.call_args_list if c[0][1] == ["market_stats"]]
+        assert len(stats_call) == 1
+        assert stats_call[0][0][2] == 240  # positional timeout arg
+        # the other legs keep the run_tool default
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        assert news_call[0][0][2] == 30

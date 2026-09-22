@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import run_tool  # noqa: E402
+from _subproc import run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
 
 # Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
 # Bare 6-digit codes are always stocks; the prefix is the disambiguation escape
@@ -40,7 +40,7 @@ def detect_market(symbol: str) -> str:
 
 def normalize_stock_code(symbol: str) -> dict:
     """Classify A-share stock code into board/type with limit-up/down ratio."""
-    info = {"market": detect_market(symbol), "board": "main", "is_st": False, "is_etf": False, "limit_pct": 0.10}
+    info = {"market": detect_market(symbol), "board": "main", "is_etf": False, "limit_pct": 0.10}
     if info["market"] != "A":
         info["limit_pct"] = None
         return info
@@ -66,7 +66,7 @@ def normalize_stock_code(symbol: str) -> dict:
 
 
 def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> float:
-    """Calculate limit-up or limit-down price with banker's rounding."""
+    """Calculate limit-up or limit-down price with exchange rounding (round-half-up: floor(x*100+0.5)/100)."""
     import numpy as np
 
     sign = 1 if direction == "up" else -1
@@ -115,7 +115,7 @@ def _failover(sources: list, label: str):
                     _disk_cache_set(f"sticky-{chain}", name)
                 return result
         except Exception as e:
-            errors.append(f"{name}: {type(e).__name__}: {e}")
+            errors.append(f"{name}: {type(e).__name__}: {scrub_secrets(str(e))}")
     if errors:
         raise RuntimeError(f"{label}: {'; '.join(errors)}")
     return None
@@ -434,11 +434,11 @@ def _sanitize(obj):
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
-        return None if np.isnan(obj) else round(float(obj), 4)
+        return round(float(obj), 4) if np.isfinite(obj) else None
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
     if isinstance(obj, float):
-        return None if obj != obj else round(obj, 4)
+        return round(obj, 4) if np.isfinite(obj) else None
     return obj
 
 
@@ -470,7 +470,8 @@ def kline_a(symbol: str, period: str, count: int) -> list:
             ("pytdx", lambda: _kline_pytdx(symbol, period, count)),
             ("baostock", lambda: _kline_baostock(symbol, period, count)),
         ]
-    return _failover(sources, label=f"kline_a:{symbol}")
+    with socket_timeout(25):
+        return _failover(sources, label=f"kline_a:{symbol}")
 
 
 def _kline_akshare(symbol: str, period: str, count: int) -> list:
@@ -984,7 +985,8 @@ def quote_a(symbol: str) -> dict:
     (quote_a_etf) so a stock-side winner never demotes the fund-spot source."""
     if _A_PREFIXED_RE.fullmatch(symbol):
         sources = [("tencent", lambda: _quote_tencent(symbol)), ("sina", lambda: _quote_sina(symbol))]
-        return _failover(sources, label=f"quote_a:{symbol}")
+        with socket_timeout(25):
+            return _failover(sources, label=f"quote_a:{symbol}")
     is_etf = normalize_stock_code(symbol)["is_etf"]
     sources = []
     if is_etf:
@@ -998,7 +1000,8 @@ def quote_a(symbol: str) -> dict:
         ("pytdx", lambda: _quote_pytdx(symbol)),
     ]
     chain = "quote_a_etf" if is_etf else "quote_a"
-    return _failover(sources, label=f"{chain}:{symbol}")
+    with socket_timeout(25):
+        return _failover(sources, label=f"{chain}:{symbol}")
 
 
 def _quote_akshare_etf(symbol: str) -> dict:
@@ -1228,8 +1231,12 @@ def cmd_capital_flow(args):
     try:
         import akshare as ak
 
-        market = "sh" if args.symbol.startswith("6") else "sz"
-        df = _akshare_retry(ak.stock_individual_fund_flow, stock=args.symbol, market=market)
+        # Exchange via the shared prefix helper: bare 9/5-prefix SH codes, BSE
+        # (43/81-83/87/88/92) and explicitly-prefixed input (sh600519) all resolve;
+        # akshare wants the bare 6-digit stock plus market ∈ {sh, sz, bj}.
+        code = _cn_code(args.symbol)
+        market, stock = code[:2], code[2:]
+        df = _akshare_retry(ak.stock_individual_fund_flow, stock=stock, market=market)
         col_map = {
             "日期": "date",
             "主力净流入-净额": "main_net_inflow",
@@ -1338,7 +1345,8 @@ def financials_a(symbol: str) -> dict:
     try:
         df = _akshare_retry(ak.stock_financial_analysis_indicator, symbol=symbol)
         if df is None or df.empty:
-            return {"symbol": symbol, "error": "No financial data"}
+            # error + note coexist (additive): consumers check either key
+            return {"symbol": symbol, "error": "No financial data", "note": "No financial data"}
         r = df.iloc[0]
         return _clean_row(
             {
@@ -1352,7 +1360,7 @@ def financials_a(symbol: str) -> dict:
             }
         )
     except Exception:
-        return {"symbol": symbol, "note": "Financial data unavailable"}
+        return {"symbol": symbol, "error": "Financial data unavailable", "note": "Financial data unavailable"}
 
 
 def financials_yf(symbol: str) -> dict:
@@ -1390,29 +1398,21 @@ def cmd_financials(args):
 
 
 def snapshot_a() -> list:
-    import socket
-
-    # akshare/efinance leave requests timeout-less — on a blackholed network a leg
-    # hangs until the kernel TCP timeout (~2min), and the chain would overrun the
-    # caller's subprocess budget before ever reaching the tencent leg. Bound each
-    # blocking socket op for the chain's duration (explicit per-request timeouts,
-    # like the tencent leg's, still win).
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(25)
+    # akshare/efinance leave requests timeout-less — the chain-wide socket bound
+    # (socket_timeout) is what lets the tencent leg get its turn on a dead network.
     try:
-        return _failover(
-            [
-                ("akshare", _snapshot_akshare),
-                ("efinance", _snapshot_efinance),
-                ("sina", _snapshot_sina),
-                ("tencent", _snapshot_tencent),
-            ],
-            label="snapshot_a",
-        )
+        with socket_timeout(25):
+            return _failover(
+                [
+                    ("akshare", _snapshot_akshare),
+                    ("efinance", _snapshot_efinance),
+                    ("sina", _snapshot_sina),
+                    ("tencent", _snapshot_tencent),
+                ],
+                label="snapshot_a",
+            )
     except Exception as e:
         return [{"error": f"A-share snapshot unavailable from all sources: {e}"}]
-    finally:
-        socket.setdefaulttimeout(old_timeout)
 
 
 def _snapshot_efinance() -> list:
@@ -1573,8 +1573,9 @@ def snapshot_hk() -> list:
         df = df.rename(columns=col_map)
         keep = [c for c in col_map.values() if c in df.columns]
         return [_clean_row(r) for r in df[keep].to_dict("records")]
-    except Exception:
-        return [{"error": "HK snapshot unavailable"}]
+    except Exception as e:
+        # summary only (type + short message) — never a stack trace or response body
+        return [{"error": f"HK snapshot unavailable: {type(e).__name__}: {scrub_secrets(str(e))}"[:200]}]
 
 
 def snapshot_us() -> list:
@@ -1595,8 +1596,8 @@ def snapshot_us() -> list:
         df = df.rename(columns=col_map)
         keep = [c for c in col_map.values() if c in df.columns]
         return [_clean_row(r) for r in df[keep].to_dict("records")]
-    except Exception:
-        return [{"error": "US snapshot unavailable"}]
+    except Exception as e:
+        return [{"error": f"US snapshot unavailable: {type(e).__name__}: {scrub_secrets(str(e))}"[:200]}]
 
 
 def cmd_market_snapshot(args):
@@ -2220,29 +2221,22 @@ def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
             except _DataMiss as e:
                 # per-symbol miss (provider answered but doesn't cover this code) —
                 # not an outage: never poison the leg for every other symbol
-                errors.append(f"{name}: {type(e).__name__}: {e}")
+                errors.append(f"{name}: {type(e).__name__}: {scrub_secrets(str(e))}")
             except Exception as e:
-                errors.append(f"{name}: {type(e).__name__}: {e}")
+                errors.append(f"{name}: {type(e).__name__}: {scrub_secrets(str(e))}")
                 if negative_cache and not offline_em:
                     _disk_cache_set(f"resolve-down-{name}", time.time())
 
     if market == "A":
         # akshare/efinance leave requests timeout-less — on a blackholed network a leg
-        # hangs until the kernel TCP timeout (snapshot_a has the same guard). Bound
-        # each blocking socket op so every leg gets its turn within the caller's
-        # subprocess budget.
-        import socket
-
-        old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(25)
-        try:
+        # hangs until the kernel TCP timeout; the chain-wide socket bound
+        # (socket_timeout) gives every leg its turn within the caller's budget.
+        with socket_timeout(25):
             run_legs(sources, negative_cache=True)
             # cninfo last: the token-free non-eastmoney active fallback (issue #35),
             # tried only when everything above yielded nothing
             if not sectors:
                 run_legs([("cninfo", lambda: _stock_boards_cninfo(symbol))], negative_cache=True)
-        finally:
-            socket.setdefaulttimeout(old_timeout)
     else:
         run_legs(sources, negative_cache=False)
     seen = set()
@@ -2744,24 +2738,6 @@ def _hot_stocks_em() -> list:
     return [_strip_exchange_prefix(_clean_row(r)) for r in df[keep].to_dict("records")]
 
 
-def _hot_stocks_xq() -> list:
-    """Xueqiu follow ranking via akshare stock_hot_follow_xq. No 涨跌幅 column;
-    rank is the row position. Codes arrive SH/SZ-prefixed like eastmoney's."""
-    import akshare as ak
-
-    df = _akshare_retry(ak.stock_hot_follow_xq, symbol="最热门")
-    if df is None or df.empty:
-        return []
-    col_map = {
-        "股票代码": "code",
-        "股票简称": "name",
-        "最新价": "price",
-    }
-    df = df.rename(columns=col_map)
-    keep = [c for c in col_map.values() if c in df.columns]
-    return [{"rank": i, **_strip_exchange_prefix(_clean_row(r))} for i, r in enumerate(df[keep].to_dict("records"), 1)]
-
-
 def _hot_stocks_baidu() -> list:
     """Baidu 股市通热搜 via akshare stock_hot_search_baidu. No code/price columns —
     only the stock name — and 涨跌幅 strings carry a % suffix."""
@@ -2783,10 +2759,13 @@ def _hot_stocks_baidu() -> list:
 
 
 def cmd_hot_stocks(args):
-    """A-share popularity ranking (人气榜): eastmoney → xueqiu → baidu."""
+    """A-share popularity ranking (人气榜): eastmoney → baidu.
+
+    The xueqiu leg was dropped: akshare's stock_hot_follow_xq accepts no user token
+    and its built-in xq_a_token is stale (xueqiu answers 400016), so the leg could
+    never win — failover errors now name only the sources that actually ran."""
     sources = [
         _sourced("eastmoney", _hot_stocks_em),
-        _sourced("xueqiu", _hot_stocks_xq),
         _sourced("baidu", _hot_stocks_baidu),
     ]
     try:
@@ -2901,9 +2880,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

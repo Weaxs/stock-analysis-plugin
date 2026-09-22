@@ -8,13 +8,19 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import run_tool  # noqa: E402
+from _subproc import json_safe, run_tool, utf8_stdio  # noqa: E402
+from stock_data import detect_market  # noqa: E402
 
 
 # gather fans out the heavier CLIs, so the default timeout stays 60s; raw stdout
 # wanted here (parsing is _parse_json's job); def keeps timeout kw-passable.
 def _run(script, args, timeout=60):
     return run_tool(script, args, timeout=timeout, parse_json=False)
+
+
+def _news_query(symbol: str) -> str:
+    # CN sources rank poorly for an English query; US/HK sources for a Chinese one.
+    return f"{symbol} 最新消息" if detect_market(symbol) == "A" else f"{symbol} stock news"
 
 
 def _parse_json(raw: str | None):
@@ -39,7 +45,7 @@ def gather_analysis(symbol: str) -> dict:
         "technical": ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "120"]),
         "financials": ("stock_data.py", ["financials", symbol]),
         "capital_flow": ("stock_data.py", ["capital_flow", symbol]),
-        "news": ("search_intel.py", ["search", f"{symbol} stock news"]),
+        "news": ("search_intel.py", ["search", _news_query(symbol)]),
         "risk": ("risk_screening.py", ["screen", symbol]),
         "regime": ("market_regime.py", ["detect"]),
     }
@@ -70,7 +76,7 @@ def gather_fundamental(symbol: str) -> dict:
         "kline": ("stock_data.py", ["kline", symbol, "--period", "daily", "--count", "60"]),
         "technical": ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"]),
         "financials": ("stock_data.py", ["financials", symbol]),
-        "news": ("search_intel.py", ["search", f"{symbol} stock news"]),
+        "news": ("search_intel.py", ["search", _news_query(symbol)]),
         "stock_info": ("stock_data.py", ["stock_info", symbol]),
         "sector_rankings": ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"]),
     }
@@ -111,14 +117,10 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
+    json.dump(json_safe(result), sys.stdout, ensure_ascii=False, indent=2)
     print()
 
 
 if __name__ == "__main__":
-    # Windows defaults stdio to a legacy code page (cp1252) that cannot encode the
-    # Chinese text these tools emit — force UTF-8 so stdout never crashes there.
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8")
+    utf8_stdio()
     main()

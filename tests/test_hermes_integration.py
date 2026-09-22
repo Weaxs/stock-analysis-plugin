@@ -3,11 +3,14 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
+import yaml
 
 import hermes.tools as hermes_tools
 from hermes import register
+from hermes.schemas import TOOL_SCHEMAS
 
 EXPECTED_TOOLS = sorted(
     [
@@ -110,6 +113,18 @@ def test_tools_match_expected():
     ctx = _make_ctx()
     tool_names = sorted(t["name"] for t in ctx.tools)
     assert tool_names == EXPECTED_TOOLS
+
+
+def test_plugin_yaml_tools_match_schemas():
+    """hermes/plugin.yaml's provides_tools is what the Hermes host advertises; it must
+    list exactly the TOOL_SCHEMAS names or the manifest silently desyncs from the adapter."""
+    manifest_path = Path(__file__).resolve().parent.parent / "hermes" / "plugin.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    yaml_tools = set(manifest["provides_tools"])
+    schema_tools = {schema["name"] for schema in TOOL_SCHEMAS}
+    missing = sorted(schema_tools - yaml_tools)
+    extra = sorted(yaml_tools - schema_tools)
+    assert not missing and not extra, f"plugin.yaml provides_tools out of sync: missing={missing} extra={extra}"
 
 
 def test_tool_schemas_valid():

@@ -1,7 +1,7 @@
 {
   "name": "@weaxs/stock-analysis-plugin",
   "version": "0.1.4",
-  "description": "Pi Agent extension for stock analysis, screening, and strategy backtesting across A/HK/US markets",
+  "description": "Pi Agent extension for stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets",
   "type": "module",
   "main": "./pi/index.ts",
   "pi": {

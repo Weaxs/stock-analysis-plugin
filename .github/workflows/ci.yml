@@ -7,9 +7,15 @@ on:
     branches: [main]
   workflow_call:
 
+# One active run per branch/PR — new pushes cancel stale runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -18,7 +24,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python lint tools
-        run: pip install ruff>=0.4.0
+        # Pinned — must match requirements-dev.txt and autofix.yml.
+        run: pip install ruff==0.15.20
 
       - name: Ruff check
         run: ruff check tools/ skills/ tests/ hermes/
@@ -29,21 +36,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
+      # --ignore-scripts: tsc doesn't need the postinstall-built Python venv.
       - name: Install Node dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
       - name: TypeScript type check
         run: npx tsc --noEmit
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 leg guards the declared floor — verified: full dep set installs
+        # and the suite passes on cpython 3.10.19.
+        python-version: ["3.11", "3.10"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies
@@ -57,7 +73,11 @@ jobs:
   network:
     # Real provider calls (akshare/yfinance) — flaky upstreams by nature, so
     # gated to same-repo PRs and pushes (forks skip it, like e2e-llm).
+    # continue-on-error: see publish.yml — a flaky upstream must not block the
+    # release path; failures still surface as annotations on the run.
+    continue-on-error: true
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +102,7 @@ jobs:
     # structurally cannot see. Deterministic by design: no LLM, no secrets, and
     # the 4 round-trip tools are the non-network set (see tests/e2e/*.ts).
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -96,16 +117,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
       # tests/conftest.py imports numpy/pandas at module load, so any pytest run
-      # needs the tools' runtime deps in system python. npm install's postinstall
+      # needs the tools' runtime deps in system python. npm ci's postinstall
       # separately builds .venv (full requirements) — that's the python the
       # host↔python round-trips spawn.
       - name: Install dependencies
         run: |
           pip install -r tools/requirements.txt
           pip install -r requirements-dev.txt
-          npm install
+          npm ci
 
       - name: TypeScript type check
         run: npx tsc --noEmit
@@ -137,7 +159,11 @@ jobs:
   e2e-llm:
     # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
     # (skipped on forks to prevent secret exposure).
+    # continue-on-error: like `network` — non-deterministic output must not
+    # block the release path (see publish.yml).
+    continue-on-error: true
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v4
@@ -150,14 +176,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
       - name: Install Python dependencies
         run: |
           pip install -r tools/requirements.txt
           pip install -r requirements-dev.txt
 
+      # Full npm ci (postinstall builds .venv) — the Pi LLM flow spawns tools
+      # through it.
       - name: Install Node dependencies
-        run: npm install
+        run: npm ci
 
       - name: E2E — Hermes LLM flow
         env:
@@ -205,9 +234,10 @@ jobs:
         # (dsh also requires ^22.19 || >=24)
         with:
           node-version: "24"
+          cache: "npm"
 
       - name: Install Node dependencies (also builds repo .venv via postinstall)
-        run: npm install
+        run: npm ci
 
       - name: Install host CLIs
         # Pinned: pi latest and openclaw latest (slim repack) drifted from the
@@ -234,6 +264,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [lint, test, compat]
     steps:
       - uses: actions/checkout@v4
@@ -241,9 +272,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
+      # --ignore-scripts: packing/bundling doesn't need the Python venv
+      # (esbuild's binary arrives via optionalDependencies, not postinstall).
       - name: Install Node dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
+
+      # Bundle both compiled hosts here so esbuild breakage surfaces in CI
+      # instead of at tag-publish time.
+      - name: Build host bundles
+        run: |
+          npm run build:openclaw
+          npm run build:dsh
 
       - name: Verify pack contents
         run: npm pack --dry-run

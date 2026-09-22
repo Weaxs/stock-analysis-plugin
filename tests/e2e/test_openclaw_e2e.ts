@@ -53,13 +53,16 @@ const mod = (await jiti.import("../../openclaw/index.ts")) as {
   // Note: NOT calling __setExecutor — default spawns real python
 };
 
-if (!capturedRegister) {
+// TS flow analysis ignores the closure assignment in fakeSdk above and narrows
+// capturedRegister to null from its initializer — assert the declared type back.
+const register = capturedRegister as ((api: unknown) => void) | null;
+if (!register) {
   console.error("FAIL: definePluginEntry was not called");
   process.exit(1);
 }
 
 const tools: ToolDef[] = [];
-capturedRegister({
+register({
   registerTool(t: ToolDef) {
     tools.push(t);
   },

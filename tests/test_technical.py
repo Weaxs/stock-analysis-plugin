@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+import tools.technical as technical_mod
 from tools.technical import (
     calc_bias,
     calc_bollinger,
@@ -43,6 +44,30 @@ class TestToDataframe:
         ]
         df = to_dataframe(records)
         assert df.iloc[0]["close"] == 10
+
+
+class TestFetchKline:
+    def test_routes_through_run_tool(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            technical_mod, "run_tool", lambda script, args, **kw: calls.append((script, args)) or [{"close": 1}]
+        )
+        assert technical_mod.fetch_kline("600519", "weekly", 30) == [{"close": 1}]
+        assert calls == [("stock_data.py", ["kline", "600519", "--period", "weekly", "--count", "30"])]
+
+    def test_failure_returns_none_not_exception(self, monkeypatch):
+        # run_tool already swallows timeout/non-zero-exit/invalid-JSON into None;
+        # fetch_kline must surface that instead of crashing on empty stdout.
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: None)
+        assert technical_mod.fetch_kline("600519") is None
+
+    def test_analyze_failure_is_clean_error(self, monkeypatch):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: None)
+        assert technical_mod.analyze("600519") == {"error": "No kline data returned"}
+
+    def test_error_dict_from_child_propagates(self, monkeypatch):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: {"error": "no data for symbol"})
+        assert technical_mod.analyze("600519") == {"error": "no data for symbol"}
 
 
 class TestCalcMa:

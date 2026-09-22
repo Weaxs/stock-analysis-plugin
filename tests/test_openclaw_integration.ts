@@ -15,12 +15,14 @@ interface ToolDef {
   execute: (id: string, params: Record<string, unknown>) => Promise<unknown>;
 }
 
-let capturedConfig: {
+interface PluginConfig {
   id: string;
   name: string;
   description: string;
   register: (api: unknown) => void;
-} | null = null;
+}
+
+let capturedConfig: PluginConfig | null = null;
 
 const tools: ToolDef[] = [];
 
@@ -87,12 +89,15 @@ mod.__setExecutor(async (_bin, argv) => {
   return `mock:${scriptPath}`;
 });
 
-if (!capturedConfig) {
+// TS flow analysis ignores the closure assignment in fakeSdk above and narrows
+// capturedConfig to null from its initializer — assert the declared type back.
+const config = capturedConfig as PluginConfig | null;
+if (!config) {
   console.error("FAIL: definePluginEntry was never called");
   process.exit(1);
 }
 
-capturedConfig.register(fakeApi);
+config.register(fakeApi);
 
 // --- Assertions -----------------------------------------------------------
 
@@ -113,9 +118,9 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
 };
 
 console.log("Plugin entry:");
-assert(capturedConfig.id === manifest.id, `id mismatch: entry=${capturedConfig.id} manifest=${manifest.id}`);
-assert(!!capturedConfig.name, "entry name empty");
-assert(!!capturedConfig.description, "entry description empty");
+assert(config.id === manifest.id, `id mismatch: entry=${config.id} manifest=${manifest.id}`);
+assert(!!config.name, "entry name empty");
+assert(!!config.description, "entry description empty");
 
 console.log("Tools registered:");
 const registeredNames = tools.map((t) => t.name).sort();

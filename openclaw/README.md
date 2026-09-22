@@ -17,7 +17,7 @@ npm install
 
 ### Python 运行时
 
-工具实际逻辑在 `tools/*.py`，依赖 `akshare`、`pandas`、`numpy`、`requests`。仓库根 `package.json` 的 postinstall（`scripts/setup-python.mjs`）会自动建 `.venv` 并装好依赖，无需手工操作。前提：本机有 `python3 >= 3.9`。
+工具实际逻辑在 `tools/*.py`，依赖 `akshare`、`pandas`、`numpy`、`requests`。仓库根 `package.json` 的 postinstall（`scripts/setup-python.mjs`）会自动建 `.venv` 并装好依赖，无需手工操作。前提：本机有 `python3 >= 3.10`。
 
 如果 venv 没建起来（比如 Python 缺失），plugin 会回退到系统 `python3`，请自行 `pip install -r tools/requirements.txt`。
 
