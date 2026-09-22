@@ -55,8 +55,54 @@ class TestGatherAnalysis:
     def test_returns_all_keys(self, mock_run):
         mock_run.return_value = '{"data": "value"}'
         result = gather_analysis("600519")
-        expected_keys = {"quote", "kline", "technical", "financials", "capital_flow", "news", "risk", "regime"}
+        expected_keys = {
+            "quote",
+            "kline",
+            "technical",
+            "financials",
+            "capital_flow",
+            "news",
+            "risk",
+            "regime",
+            "chip_distribution",
+            "social_sentiment",
+        }
         assert set(result.keys()) == expected_keys
+
+    @patch("tools.gather._run")
+    def test_correct_args_for_chip_distribution(self, mock_run):
+        mock_run.return_value = None
+        gather_analysis("600519")
+        chip_call = [c for c in mock_run.call_args_list if "chip_distribution" in c[0][1]]
+        assert len(chip_call) == 1
+        assert chip_call[0][0] == ("stock_data.py", ["chip_distribution", "600519"])
+
+    @patch("tools.gather._run")
+    def test_correct_args_for_social_sentiment(self, mock_run):
+        # search_intel's per-symbol sentiment leg is the `sentiment <symbol>` subcommand
+        # (`trending` takes no symbol and is a market-wide feed, not this leg).
+        mock_run.return_value = None
+        gather_analysis("AAPL")
+        sentiment_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "sentiment" in c[0][1]]
+        assert len(sentiment_call) == 1
+        assert sentiment_call[0][0] == ("search_intel.py", ["sentiment", "AAPL"])
+
+    @patch("tools.gather._run")
+    def test_error_json_from_new_legs_passes_through(self, mock_run):
+        """chip_distribution is A-share-only and sentiment degrades without API keys —
+        their {"error": ...}/note payloads are normal data, relayed untouched."""
+
+        def side_effect(script, args, **kwargs):
+            if "chip_distribution" in args:
+                return '{"error": "chip_distribution only available for A-shares"}'
+            if "sentiment" in args:
+                return '{"symbol": "AAPL", "sources": {}, "note": "No sentiment data available."}'
+            return None
+
+        mock_run.side_effect = side_effect
+        result = gather_analysis("AAPL")
+        assert result["chip_distribution"] == {"error": "chip_distribution only available for A-shares"}
+        assert result["social_sentiment"]["sources"] == {}
 
     @patch("tools.gather._run")
     def test_correct_args_for_quote(self, mock_run):
@@ -83,7 +129,7 @@ class TestGatherAnalysis:
         'stock news' query ranks poorly for CN sources."""
         mock_run.return_value = None
         gather_analysis("600519")
-        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "search" in c[0][1]]
         assert len(news_call) == 1
         assert news_call[0][0][1] == ["search", "600519 最新消息"]
 
@@ -91,7 +137,7 @@ class TestGatherAnalysis:
     def test_fundamental_news_query_is_chinese(self, mock_run):
         mock_run.return_value = None
         gather_fundamental("600519")
-        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "search" in c[0][1]]
         assert len(news_call) == 1
         assert news_call[0][0][1] == ["search", "600519 最新消息"]
 
@@ -101,7 +147,7 @@ class TestGatherAnalysis:
         # one — the query language follows the detected market.
         mock_run.return_value = None
         gather_analysis("AAPL")
-        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
+        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "search" in c[0][1]]
         assert news_call[0][0][1] == ["search", "AAPL stock news"]
 
     @patch("tools.gather._run")

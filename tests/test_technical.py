@@ -1,3 +1,6 @@
+import json
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -284,3 +287,141 @@ class TestGenerateSignalScore:
         result = generate_signal_score(ma, macd, rsi, vol, trend, bias, close, volume)
         assert result["signal_score"] < 30
         assert result["buy_signal"] in ("SELL", "STRONG_SELL")
+
+
+class TestParsePeriodsArg:
+    def test_valid_csv(self):
+        assert technical_mod.parse_periods_arg("daily,weekly") == ["daily", "weekly"]
+
+    def test_strips_whitespace(self):
+        assert technical_mod.parse_periods_arg(" daily , monthly ") == ["daily", "monthly"]
+
+    def test_invalid_value(self):
+        result = technical_mod.parse_periods_arg("daily,hourly")
+        assert "error" in result
+        assert "hourly" in result["error"]
+
+    def test_duplicate(self):
+        assert "error" in technical_mod.parse_periods_arg("daily,daily")
+
+    def test_empty(self):
+        assert "error" in technical_mod.parse_periods_arg("")
+        assert "error" in technical_mod.parse_periods_arg(" , ")
+
+
+class TestMultiPeriodAnalysis:
+    def test_analyze_default_has_no_multi_period(self, monkeypatch, make_kline_data):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: make_kline_data(120))
+        result = technical_mod.analyze("600519")
+        assert "multi_period" not in result
+        assert result["period"] == "daily"
+
+    def test_summaries_and_resonance(self, monkeypatch, make_kline_data):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: make_kline_data(120, trend="up"))
+        result = technical_mod.analyze_multi("600519", "daily", 120, ["daily", "weekly"])
+        assert result["period"] == "daily"
+        mp = result["multi_period"]
+        assert [s["period"] for s in mp["periods"]] == ["daily", "weekly"]
+        daily = mp["periods"][0]
+        # compact summary picks scalars from the full result, no big nested objects
+        assert daily["trend_overall"] == result["trend"]["overall"]
+        assert daily["ma_arrangement"] == result["moving_averages"]["ma_arrangement"]
+        assert daily["macd_signal"] == result["macd"]["signal"]
+        assert daily["rsi_signal"] == result["rsi"]["signal"]
+        assert "moving_averages" not in daily
+        assert "signals" not in daily
+        res = mp["resonance"]
+        assert res["direction"] == "aligned_bullish"
+        assert res == {"direction": "aligned_bullish", "bullish": 2, "bearish": 0, "neutral": 0, "total": 2}
+
+    def test_divergent_periods(self, monkeypatch, make_kline_data):
+        def fake_run(script, args, **kw):
+            period = args[args.index("--period") + 1]
+            return make_kline_data(120, trend="down" if period == "weekly" else "up")
+
+        monkeypatch.setattr(technical_mod, "run_tool", fake_run)
+        result = technical_mod.analyze_multi("600519", "daily", 120, ["daily", "weekly"])
+        res = result["multi_period"]["resonance"]
+        assert res["direction"] == "divergent"
+        assert res["bullish"] == 1
+        assert res["bearish"] == 1
+
+    def test_reuses_primary_period_fetch(self, monkeypatch, make_kline_data):
+        calls = []
+
+        def fake_run(script, args, **kw):
+            calls.append(args)
+            return make_kline_data(120)
+
+        monkeypatch.setattr(technical_mod, "run_tool", fake_run)
+        technical_mod.analyze_multi("600519", "daily", 120, ["daily", "weekly"])
+        assert len(calls) == 2
+
+    def test_period_error_isolated(self, monkeypatch, make_kline_data):
+        def fake_run(script, args, **kw):
+            if args[args.index("--period") + 1] == "weekly":
+                return None
+            return make_kline_data(120, trend="up")
+
+        monkeypatch.setattr(technical_mod, "run_tool", fake_run)
+        result = technical_mod.analyze_multi("600519", "daily", 120, ["daily", "weekly"])
+        weekly = result["multi_period"]["periods"][1]
+        assert weekly["period"] == "weekly"
+        assert "error" in weekly
+        assert result["multi_period"]["resonance"]["total"] == 1
+
+    def test_primary_error_returns_plain_error(self, monkeypatch):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: None)
+        result = technical_mod.analyze_multi("600519", "daily", 120, ["daily", "weekly"])
+        assert result == {"error": "No kline data returned"}
+
+    def test_cli_default_output_unchanged(self, monkeypatch, capsys, make_kline_data):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: make_kline_data(120, trend="up"))
+        monkeypatch.setattr(sys, "argv", ["technical.py", "analyze", "600519"])
+        technical_mod.main()
+        out = json.loads(capsys.readouterr().out)
+        assert "multi_period" not in out
+
+    def test_cli_with_periods_adds_multi_period(self, monkeypatch, capsys, make_kline_data):
+        monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: make_kline_data(120, trend="up"))
+        monkeypatch.setattr(sys, "argv", ["technical.py", "analyze", "600519", "--periods", "daily,weekly"])
+        technical_mod.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["period"] == "daily"
+        assert out["multi_period"]["resonance"]["direction"] == "aligned_bullish"
+
+    def test_cli_invalid_periods_prints_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["technical.py", "analyze", "600519", "--periods", "hourly"])
+        technical_mod.main()
+        out = json.loads(capsys.readouterr().out)
+        assert "error" in out
+        assert "hourly" in out["error"]
+
+
+class TestCalcResonance:
+    """calc_resonance over hand-built summaries — aligned only on unanimous
+    bullish/bearish; neutral is counted but never aligns."""
+
+    def test_aligned_bearish(self):
+        summaries = [
+            {"period": "daily", "trend_overall": "bearish"},
+            {"period": "weekly", "trend_overall": "bearish"},
+        ]
+        res = technical_mod.calc_resonance(summaries)
+        assert res == {"direction": "aligned_bearish", "bullish": 0, "bearish": 2, "neutral": 0, "total": 2}
+
+    def test_neutral_breaks_alignment_but_is_counted(self):
+        summaries = [
+            {"period": "daily", "trend_overall": "bearish"},
+            {"period": "weekly", "trend_overall": "neutral"},
+        ]
+        res = technical_mod.calc_resonance(summaries)
+        assert res == {"direction": "divergent", "bullish": 0, "bearish": 1, "neutral": 1, "total": 2}
+
+    def test_all_neutral_is_divergent_not_aligned(self):
+        summaries = [
+            {"period": "daily", "trend_overall": "neutral"},
+            {"period": "weekly", "trend_overall": "neutral"},
+        ]
+        res = technical_mod.calc_resonance(summaries)
+        assert res == {"direction": "divergent", "bullish": 0, "bearish": 0, "neutral": 2, "total": 2}

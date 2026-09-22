@@ -31,6 +31,8 @@ EXPECTED_TOOLS = sorted(
         "get_limit_up_pool",
         "get_dragon_tiger",
         "get_hot_stocks",
+        "get_margin_trading",
+        "get_northbound_flow",
         "get_fundamental_context",
         "screen_stocks",
         "run_backtest",
@@ -61,6 +63,7 @@ EXPECTED_TOOLS = sorted(
         "record_signal",
         "evaluate_signals",
         "get_signal_summary",
+        "get_review_history",
         "parse_stock_list",
     ]
 )

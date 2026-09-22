@@ -1,6 +1,6 @@
 # Stock Analysis — DeepSeek Harness (dsh) Plugin
 
-A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。作为 dsh bundle 安装到 profile 后，对话中可调用 48 个工具，并自动注册 20 个工作流/策略方法论 skill。
+A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。作为 dsh bundle 安装到 profile 后，对话中可调用 51 个工具，并自动注册 20 个工作流/策略方法论 skill。
 
 ## 安装
 

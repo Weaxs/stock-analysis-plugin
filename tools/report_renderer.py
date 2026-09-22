@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Report renderer — turn structured stock/market JSON into markdown via existing j2 templates.
 
-No side effects: does not save, push, or upload. Just returns markdown.
+Side effects: none by default. `market --save` additionally appends the input
+report object to the review JSONL archive (see market_review.save_review).
 """
 
 import argparse
@@ -12,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import utf8_stdio
+from market_review import save_review
 
 try:
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -97,6 +99,7 @@ def main():
     p2 = sub.add_parser("market", help="Render a market review report")
     p2.add_argument("--input", "-i", default="-", help="JSON file path or '-' for stdin")
     p2.add_argument("--input-b64", help="Base64-encoded JSON (avoids shell escaping)")
+    p2.add_argument("--save", action="store_true", help="Append the report object to the review JSONL archive")
 
     args = parser.parse_args()
     if not args.command:
@@ -105,6 +108,8 @@ def main():
 
     report = _load_input(args.input, getattr(args, "input_b64", None))
     result = render(args.command, getattr(args, "template", "full"), report)
+    if args.command == "market" and args.save and "error" not in result:
+        result["archived"] = save_review(report)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
 

@@ -20,6 +20,8 @@ const EXPECTED_TOOLS = [
   "get_limit_up_pool",
   "get_dragon_tiger",
   "get_hot_stocks",
+  "get_margin_trading",
+  "get_northbound_flow",
   "get_fundamental_context",
   "screen_stocks",
   "run_backtest",
@@ -50,6 +52,7 @@ const EXPECTED_TOOLS = [
   "record_signal",
   "evaluate_signals",
   "get_signal_summary",
+  "get_review_history",
   "parse_stock_list",
 ].sort();
 

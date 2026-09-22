@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""Market review — daily market overview with temperature scoring."""
+"""Market review — daily market overview with temperature scoring.
+
+Review archive: `render_market_report --save` appends the report object to a
+JSONL store so `history` can answer longitudinal questions. Store path:
+$STOCK_REVIEW_STORE, else ~/.stock-analysis/reviews.jsonl (pathlib.Path.home(),
+cross-platform). `history` accepts --store PATH to override (tests point it at
+tmp_path).
+"""
 
 import argparse
 import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
 from _subproc import utf8_stdio
+from signal_tracker import _load_records
 
 
 def calc_temperature(stats: dict, indices: list) -> dict:
@@ -127,12 +136,45 @@ def review_all() -> list:
     return results
 
 
+def _default_store() -> Path:
+    env = os.environ.get("STOCK_REVIEW_STORE")
+    return Path(env) if env else Path.home() / ".stock-analysis" / "reviews.jsonl"
+
+
+def save_review(report: dict, store: Path | None = None) -> dict:
+    """Append one review report object to the JSONL archive (side effect of render --save)."""
+    store = store or _default_store()
+    try:
+        store.parent.mkdir(parents=True, exist_ok=True)
+        with store.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(report, ensure_ascii=False, default=str) + "\n")
+    except OSError as e:
+        return {"error": str(e)}
+    return {"saved": True, "date": report.get("review_date") or report.get("date")}
+
+
+def cmd_history(args) -> dict:
+    """Recent archived reviews, newest first. Empty store -> clean empty list."""
+    try:
+        records = _load_records(Path(args.store) if args.store else _default_store())
+    except (OSError, UnicodeDecodeError) as e:
+        # store is a directory / not UTF-8 — same clean-error contract as save_review
+        return {"error": str(e)}
+    limit = max(args.limit, 0)
+    recent = records[-limit:][::-1] if limit else []
+    return {"count": len(recent), "records": recent}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Market review tool")
     sub = parser.add_subparsers(dest="command")
 
     p_review = sub.add_parser("review")
     p_review.add_argument("--market", default="A", choices=["A", "HK", "US", "all"])
+
+    p_hist = sub.add_parser("history", help="Read archived market reviews (newest first)")
+    p_hist.add_argument("--limit", type=int, default=10, help="Max archived entries to return (default 10)")
+    p_hist.add_argument("--store", default=None, help="JSONL store path override")
 
     args = parser.parse_args()
     if not args.command:
@@ -141,7 +183,9 @@ def main():
 
     if args.command == "review":
         result = review_all() if args.market == "all" else review_market(args.market)
-        print(json.dumps(result, ensure_ascii=False, default=str))
+    else:  # history
+        result = cmd_history(args)
+    print(json.dumps(result, ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":

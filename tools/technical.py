@@ -575,6 +575,69 @@ def calculate_ma_standalone(
     }
 
 
+# --------------- Multi-period resonance ---------------
+
+
+def parse_periods_arg(raw: str) -> list | dict:
+    """Parse the analyze --periods CSV into period names, or an {"error": ...} dict."""
+    periods = [p.strip() for p in raw.split(",")]
+    if not any(periods):
+        return {"error": "Empty --periods (want CSV like daily,weekly)"}
+    for p in periods:
+        if not p:
+            return {"error": f"Empty period in --periods: {raw!r}"}
+        if p not in ("daily", "weekly", "monthly"):
+            return {"error": f"Unknown period in --periods: {p} (choose from daily, weekly, monthly)"}
+    if len(set(periods)) != len(periods):
+        dupes = sorted({p for p in periods if periods.count(p) > 1})
+        return {"error": f"Duplicate period in --periods: {', '.join(dupes)}"}
+    return periods
+
+
+def _period_summary(result: dict) -> dict:
+    """Compact per-period summary picked from a full analyze() result (no new computation)."""
+    return {
+        "period": result["period"],
+        "trend_overall": result["trend"]["overall"],
+        "ma_arrangement": result["moving_averages"]["ma_arrangement"],
+        "macd_signal": result["macd"]["signal"],
+        "rsi_signal": result["rsi"]["signal"],
+        "buy_signal": result["buy_signal"],
+        "signal_score": result["signal_score"],
+    }
+
+
+def calc_resonance(summaries: list) -> dict:
+    """Resonance over per-period trend direction: aligned only when every analyzed period agrees."""
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for s in summaries:
+        if s.get("trend_overall") in counts:
+            counts[s["trend_overall"]] += 1
+    total = sum(counts.values())
+    if total and counts["bullish"] == total:
+        direction = "aligned_bullish"
+    elif total and counts["bearish"] == total:
+        direction = "aligned_bearish"
+    else:
+        direction = "divergent"
+    return {"direction": direction, **counts, "total": total}
+
+
+def analyze_multi(symbol: str, period: str, count: int, periods: list) -> dict:
+    """analyze() across several periods: top level stays `period`, with a multi_period block added."""
+    result = analyze(symbol, period, count)
+    if "error" in result:
+        return result
+    # periods is dupe-free (parse_periods_arg rejects repeats); only the main
+    # period can collide, so reuse it directly instead of a results dict.
+    summaries = []
+    for p in periods:
+        r = result if p == period else analyze(symbol, p, count)
+        summaries.append({"period": p, "error": r["error"]} if "error" in r else _period_summary(r))
+    result["multi_period"] = {"periods": summaries, "resonance": calc_resonance(summaries)}
+    return result
+
+
 # --------------- Main ---------------
 
 
@@ -639,6 +702,9 @@ def main():
     p.add_argument("symbol")
     p.add_argument("--period", default="daily", choices=["daily", "weekly", "monthly"])
     p.add_argument("--count", type=int, default=120)
+    p.add_argument(
+        "--periods", default=None, help="Comma-separated periods for multi-period resonance, e.g. daily,weekly"
+    )
 
     p_ma = sub.add_parser("calculate_ma")
     p_ma.add_argument("symbol")
@@ -652,7 +718,13 @@ def main():
         sys.exit(1)
 
     if args.command == "analyze":
-        result = analyze(args.symbol, args.period, args.count)
+        periods = parse_periods_arg(args.periods) if args.periods is not None else None
+        if isinstance(periods, dict):
+            result = periods
+        elif periods:
+            result = analyze_multi(args.symbol, args.period, args.count, periods)
+        else:
+            result = analyze(args.symbol, args.period, args.count)
     elif args.command == "calculate_ma":
         periods = [int(x.strip()) for x in args.periods.split(",")]
         result = calculate_ma_standalone(args.symbol, periods, args.period, args.count)

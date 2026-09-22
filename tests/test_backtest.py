@@ -442,3 +442,174 @@ class TestRunBacktest:
 
         assert "error" not in result
         assert "metrics" in result
+
+
+def _df_from_closes(closes) -> pd.DataFrame:
+    n = len(closes)
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=n, freq="B"),
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [1e6] * n,
+        }
+    )
+
+
+_ALWAYS_ENTRY = {"conditions": [{"indicator": "close", "operator": ">", "value": 0}], "logic": "all"}
+
+
+class TestTrailingStop:
+    def test_trailing_stop_triggers_on_drawdown_from_peak(self):
+        # Peak close 14 at bar 5; trail level = 14 * (1 - 0.08) = 12.88, bar 6 close 12.6 triggers.
+        df = _df_from_closes([10, 10, 11, 12, 13, 14, 12.6])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 5.0, "trailing_stop": 0.08},
+            "position": {"size": 1.0},
+        }
+        sim = backtest.simulate(df, strategy, 100000, "600000")
+        sells = [t for t in sim["trades"] if t["type"] == "sell"]
+        assert len(sells) == 1
+        assert sells[0]["reason"].startswith("移动止损触发")
+        assert sells[0]["date"] == str(df["date"].iloc[6].date())
+        assert sells[0]["pnl"] > 0  # sold above the entry despite being a stop
+
+    def test_no_trailing_stop_key_holds_through_dip(self):
+        df = _df_from_closes([10, 10, 11, 12, 13, 14, 12.6, 12.0, 11.0])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 5.0},
+            "position": {"size": 1.0},
+        }
+        sim = backtest.simulate(df, strategy, 100000, "600000")
+        assert [t for t in sim["trades"] if t["type"] == "sell"] == []
+
+    def test_fixed_stop_loss_takes_precedence_when_both_trigger(self):
+        # Bar 3 close 8 is both below the fixed stop (-20% vs entry) and the 8% trail from peak 14.
+        df = _df_from_closes([10, 10, 14, 8, 9, 9])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.10, "take_profit": 5.0, "trailing_stop": 0.08},
+            "position": {"size": 1.0},
+        }
+        sim = backtest.simulate(df, strategy, 100000, "600000")
+        sells = [t for t in sim["trades"] if t["type"] == "sell"]
+        assert len(sells) == 1
+        assert sells[0]["reason"].startswith("止损触发")
+        assert not sells[0]["reason"].startswith("移动止损")
+
+    def test_take_profit_fires_on_fresh_high_when_trailing_configured(self):
+        # The trailing check sits ahead of take_profit in the elif chain but can
+        # never fire on a fresh-high bar (price > peak*(1-ts) by construction), so a
+        # bar crossing the tp threshold on a new high resolves to 止盈. (Trailing and
+        # tp can never co-trigger on one bar: peak can never exceed buy*(1+tp) while
+        # holding — any such close would have fired tp on that earlier bar.)
+        df = _df_from_closes([100, 100, 110, 130])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20, "trailing_stop": 0.08},
+            "position": {"size": 1.0},
+        }
+        sim = backtest.simulate(df, strategy, 100000, "600000")
+        sells = [t for t in sim["trades"] if t["type"] == "sell"]
+        assert len(sells) == 1
+        assert sells[0]["reason"].startswith("止盈触发")
+        assert sells[0]["date"] == str(df["date"].iloc[3].date())
+
+    def test_trailing_stop_peak_resets_after_rebuy(self):
+        # peak_close is per-position: after position 1 peaks at 150 and is stopped
+        # out, position 2 (re-entry at 100) must trail from its own peak. Bar 5
+        # (close 120) is the discriminator — a leaked 150 peak would trail-stop
+        # there (120 <= 150*0.9); a correctly reset peak (120) does not.
+        df = _df_from_closes([100, 100, 150, 95, 100, 120, 125, 110])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 5.0, "trailing_stop": 0.10},
+            "position": {"size": 1.0},
+        }
+        sim = backtest.simulate(df, strategy, 100000, "600000")
+        sells = [t for t in sim["trades"] if t["type"] == "sell"]
+        assert len(sells) == 2
+        assert sells[0]["date"] == str(df["date"].iloc[3].date())
+        assert sells[0]["reason"].startswith("移动止损触发")
+        # position 2 survives bar 5 (120) and bar 6 (125), stops out on bar 7
+        # (110 <= 125*0.9 = 112.5) — trailing from its own peak, not the old 150.
+        assert sells[1]["date"] == str(df["date"].iloc[7].date())
+        assert sells[1]["reason"].startswith("移动止损触发")
+
+
+class TestBenchmark:
+    def test_benchmark_block_added(self, monkeypatch, make_kline_data):
+        main_df = pd.DataFrame(make_kline_data(120, "volatile"))
+        bm_df = pd.DataFrame(make_kline_data(120, "up", base=4000.0))
+        dfs = {"600000": main_df, "000300.SH": bm_df}
+        monkeypatch.setattr(backtest, "fetch_kline", lambda symbol, *a, **kw: dfs[symbol])
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: dict(_MA_CROSS_STRATEGY, benchmark="000300.SH"))
+
+        result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
+
+        bm = result["benchmark"]
+        assert bm["symbol"] == "000300.SH"
+        first, last = float(bm_df["close"].iloc[0]), float(bm_df["close"].iloc[-1])
+        expected = (last - first) / first
+        assert bm["total_return"] == pytest.approx(expected, abs=1e-3)
+        assert bm["excess_return"] == pytest.approx(result["metrics"]["total_return"] - expected, abs=1e-3)
+
+    def test_no_benchmark_key_output_unchanged(self, monkeypatch, make_kline_data):
+        df = pd.DataFrame(make_kline_data(120, "volatile"))
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a, **kw: df)
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: _MA_CROSS_STRATEGY)
+
+        result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
+
+        assert "benchmark" not in result
+
+    def test_benchmark_fetch_failure_degrades_to_error_block(self, monkeypatch, make_kline_data):
+        main_df = pd.DataFrame(make_kline_data(120, "volatile"))
+
+        def fake_fetch(symbol, *a, **kw):
+            if symbol == "BENCH":
+                raise RuntimeError("Failed to fetch kline for BENCH")
+            return main_df
+
+        monkeypatch.setattr(backtest, "fetch_kline", fake_fetch)
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: dict(_MA_CROSS_STRATEGY, benchmark="BENCH"))
+
+        result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
+
+        assert result["benchmark"]["symbol"] == "BENCH"
+        assert "error" in result["benchmark"]
+        assert "metrics" in result
+
+    @pytest.mark.parametrize("n_rows", [0, 1])
+    def test_benchmark_insufficient_rows_degrades_to_error_block(self, monkeypatch, make_kline_data, n_rows):
+        # len(df) < 2 has no first/last pair to diff — degrade to a clean error note.
+        main_df = pd.DataFrame(make_kline_data(120, "volatile"))
+        bm_df = pd.DataFrame(make_kline_data(n_rows, "up", base=4000.0)) if n_rows else pd.DataFrame()
+
+        def fake_fetch(symbol, *a, **kw):
+            return bm_df if symbol == "BENCH" else main_df
+
+        monkeypatch.setattr(backtest, "fetch_kline", fake_fetch)
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: dict(_MA_CROSS_STRATEGY, benchmark="BENCH"))
+
+        result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
+
+        assert result["benchmark"]["symbol"] == "BENCH"
+        assert f"Insufficient benchmark data: {n_rows} rows" in result["benchmark"]["error"]
+        assert "metrics" in result  # the main result is unaffected
+
+    def test_benchmark_symbol_survives_parameter_substitution(self, tmp_path):
+        # _resolve_refs would otherwise turn the numeric-looking symbol "000300" into int 300.
+        yaml_path = tmp_path / "strat.yaml"
+        yaml_path.write_text(
+            'name: bm\nparameters:\n  thr: 0.5\nbenchmark: "000300"\n'
+            'entry:\n  conditions:\n    - indicator: rsi\n      operator: "<"\n      value: "{thr}"\n',
+            encoding="utf-8",
+        )
+        strat = backtest.load_strategy(str(yaml_path))
+        assert strat["benchmark"] == "000300"
+        assert strat["entry"]["conditions"][0]["value"] == 0.5

@@ -21,7 +21,7 @@ description: 全市场股票筛选：按市场、估值、成长、趋势或自�
 运行数据采集脚本进行 L1 量化筛选：
 
 ```bash
-python3 scripts/gather.py --market A --top 20
+python3 tools/screener.py screen --market A --top 20
 ```
 
 可选参数：`--market`（A/HK/US）、`--top`（返回数量）、`--config`（自定义 YAML 配置路径）、`--l2`（L2 量化增强开关，默认关闭）。

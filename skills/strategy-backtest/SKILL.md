@@ -53,14 +53,13 @@ position:
 运行回测脚本：
 
 ```bash
-python3 scripts/gather.py --strategy <path.yaml> --symbol <symbol> --start <date> --end <date>
+python3 tools/backtest.py run <path.yaml> <symbol> --start <date> --end <date>
 ```
 
 参数说明：
-- `--strategy`：策略 YAML 文件路径
-- `--symbol`：股票代码
+- 前两个为位置参数，依次为：策略 YAML 文件路径、股票代码
 - `--start` / `--end`：回测时间范围（可选，默认近一年）
-- 初始资金默认 100 万
+- 初始资金默认 100 万，可用 `--capital` 调整
 
 ### 第三步：分析结果
 

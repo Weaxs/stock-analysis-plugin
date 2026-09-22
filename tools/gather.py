@@ -45,7 +45,9 @@ def gather_analysis(symbol: str) -> dict:
         "technical": ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "120"]),
         "financials": ("stock_data.py", ["financials", symbol]),
         "capital_flow": ("stock_data.py", ["capital_flow", symbol]),
+        "chip_distribution": ("stock_data.py", ["chip_distribution", symbol]),
         "news": ("search_intel.py", ["search", _news_query(symbol)]),
+        "social_sentiment": ("search_intel.py", ["sentiment", symbol]),
         "risk": ("risk_screening.py", ["screen", symbol]),
         "regime": ("market_regime.py", ["detect"]),
     }
