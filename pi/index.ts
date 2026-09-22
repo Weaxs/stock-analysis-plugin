@@ -63,7 +63,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_quote",
     description:
-      "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注",
+      "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价",
     parameters: {
       type: "object",
       properties: {
@@ -143,11 +143,19 @@ export default (pi: ExtensionAPI) => {
           type: "string",
           description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
+        periods: {
+          type: "number",
+          description: "返回最近N个报告期的财务趋势，默认 1（仅最新一期）",
+        },
       },
       required: ["symbol"],
     },
-    async execute(_id, { symbol }) {
-      const result = await py("stock_data.py", ["financials", symbol]);
+    async execute(_id, { symbol, periods = 1 }) {
+      const result = await py("stock_data.py", [
+        "financials",
+        symbol,
+        ...(periods > 1 ? ["--periods", String(periods)] : []),
+      ]);
       return asText(result.stdout);
     },
   });
@@ -157,7 +165,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_technical_analysis",
     description:
-      "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
+      "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
     parameters: {
       type: "object",
       properties: {
@@ -174,10 +182,14 @@ export default (pi: ExtensionAPI) => {
           type: "number",
           description: "用于计算指标的K线条数，默认 120",
         },
+        periods: {
+          type: "string",
+          description: '多周期共振分析，逗号分隔的周期列表，如 "daily,weekly"；不传则只分析 period 指定的单周期',
+        },
       },
       required: ["symbol"],
     },
-    async execute(_id, { symbol, period = "daily", count = 120 }) {
+    async execute(_id, { symbol, period = "daily", count = 120, periods }) {
       const result = await py("technical.py", [
         "analyze",
         symbol,
@@ -185,6 +197,7 @@ export default (pi: ExtensionAPI) => {
         period,
         "--count",
         String(count),
+        ...(periods ? ["--periods", periods] : []),
       ]);
       return asText(result.stdout);
     },
@@ -461,6 +474,49 @@ export default (pi: ExtensionAPI) => {
     },
     async execute(_id, { top = 20 }) {
       const result = await py("stock_data.py", ["hot_stocks", "--top", String(top)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_margin_trading",
+    description:
+      "获取A股个股融资融券明细（融资余额/融资买入额/融券余量等，上交所/深交所官方数据按交易所分流），返回最近N个交易日序列（最新在前）。金额单位为元，short_*_shares 单位为股。仅两融标的有数据，非两融标的返回错误",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: {
+          type: "string",
+          description: "A股股票代码，如 600519",
+        },
+        days: {
+          type: "number",
+          description: "返回最近N个交易日，默认 10",
+        },
+      },
+      required: ["symbol"],
+    },
+    async execute(_id, { symbol, days = 10 }) {
+      const result = await py("stock_data.py", ["margin_trading", symbol, "--days", String(days)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_northbound_flow",
+    description:
+      "获取北向资金市场级净买入序列（最新在前，单位亿元）。数据口径：东方财富沪深港通历史数据；2024-08-16 起交易所停止披露日度净买额，仅 2024-08 之前历史数据可查（近期小 days 窗口会返回停披错误，加大 days 可取历史）",
+    parameters: {
+      type: "object",
+      properties: {
+        days: {
+          type: "number",
+          description: "返回最近N个交易日，默认 10",
+        },
+      },
+    },
+    async execute(_id, { days = 10 }) {
+      const result = await py("stock_data.py", ["northbound_flow", "--days", String(days)]);
       return asText(result.stdout);
     },
   });
@@ -1134,17 +1190,39 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "render_market_report",
     description:
-      "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。仅渲染，不保存不推送",
+      "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history",
     parameters: {
       type: "object",
       properties: {
         report: { type: "object", description: "结构化市场复盘" },
+        save: { type: "boolean", description: "是否归档到本地复盘 JSONL 存储，默认 false" },
       },
       required: ["report"],
     },
-    async execute(_id, { report }) {
+    async execute(_id, { report, save }) {
       const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
-      const result = await py("report_renderer.py", ["market", "--input-b64", b64]);
+      const result = await py("report_renderer.py", [
+        "market",
+        "--input-b64",
+        b64,
+        ...(save ? ["--save"] : []),
+      ]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_review_history",
+    description:
+      "复盘归档历史 — 读取本地 JSONL 归档的最近 N 条市场复盘（最新在前），用于纵向对比（温度/姿态/主线变化）。归档由 render_market_report 的 save=true 写入，空存档返回空列表",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "返回条数，默认 10" },
+      },
+    },
+    async execute(_id, { limit = 10 }) {
+      const result = await py("market_review.py", ["history", "--limit", String(limit)]);
       return asText(result.stdout);
     },
   });

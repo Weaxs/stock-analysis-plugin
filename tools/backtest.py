@@ -32,6 +32,8 @@ def load_strategy(path: str) -> dict:
 def _resolve_refs(obj, params: dict):
     if isinstance(obj, dict):
         for k, v in obj.items():
+            if k == "benchmark":
+                continue  # benchmark is a symbol string ("000300"), never a {param} reference
             if isinstance(v, str):
                 obj[k] = _substitute(v, params)
             else:
@@ -261,6 +263,8 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
     size_frac = float(position_cfg.get("size", 1.0))
     stop_loss = float(exit_.get("stop_loss", -0.10))
     take_profit = float(exit_.get("take_profit", 0.50))
+    ts_val = exit_.get("trailing_stop")
+    trailing_stop = float(ts_val) if ts_val is not None else None
 
     entry_conditions = entry.get("conditions", [])
     entry_logic = entry.get("logic", "all")
@@ -296,6 +300,7 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                     "buy_price": round(buy_price, 4),
                     "shares": shares,
                     "cost": cost,
+                    "peak_close": price,
                 }
                 trades.append(
                     {
@@ -310,11 +315,19 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                 )
         else:
             pnl_pct = (price - holding["buy_price"]) / holding["buy_price"]
+            peak_close = max(holding["peak_close"], price)
+            holding["peak_close"] = peak_close
             sell = False
             reason = ""
 
             if pnl_pct <= stop_loss:
                 sell, reason = True, f"止损触发 ({round(pnl_pct * 100, 1)}% <= {round(stop_loss * 100, 1)}%)"
+            elif trailing_stop is not None and price <= peak_close * (1 - trailing_stop):
+                drawdown = (peak_close - price) / peak_close
+                sell, reason = (
+                    True,
+                    f"移动止损触发 (较高点回撤 {round(drawdown * 100, 1)}% >= {round(trailing_stop * 100, 1)}%)",
+                )
             elif pnl_pct >= take_profit:
                 sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
             elif exit_conditions:
@@ -491,7 +504,7 @@ def diagnose_advanced(metrics: dict, trades: list, equity_curve: list, strategy:
     stop_hits = sum(
         1
         for t in sell_trades
-        if (t.get("reason") or "").startswith("stop_loss")
+        if (t.get("reason") or "").startswith(("stop_loss", "止损触发", "移动止损触发"))
         or (t.get("pnl_pct", 0) is not None and t.get("pnl_pct", 0) <= stop_loss * 100 + 0.5)
     )
     stop_ratio = stop_hits / max(1, len(sell_trades))
@@ -591,6 +604,23 @@ def sample_curve(curve: list, max_points: int = 200) -> list:
 # --------------- Entry Points ---------------
 
 
+def _benchmark_comparison(symbol: str, start: str, end: str, strategy_return: float) -> dict:
+    """Buy-and-hold benchmark over the same window; degrades to an error note on fetch failure."""
+    try:
+        df = fetch_kline(symbol, start, end)
+    except Exception as e:
+        return {"symbol": symbol, "error": str(e)}
+    if len(df) < 2:
+        return {"symbol": symbol, "error": f"Insufficient benchmark data: {len(df)} rows"}
+    first, last = float(df["close"].iloc[0]), float(df["close"].iloc[-1])
+    total_return = (last - first) / first if first else 0.0
+    return {
+        "symbol": symbol,
+        "total_return": round(total_return, 4),
+        "excess_return": round(strategy_return - total_return, 4),
+    }
+
+
 def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | None, capital: float) -> dict:
     strategy = load_strategy(strategy_path)
 
@@ -607,7 +637,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     final = sim["final_equity"]
     metrics = compute_metrics(sim["trades"], sim["equity_curve"], capital, final, start, end)
 
-    return {
+    result = {
         "strategy": strategy.get("name", "unnamed"),
         "symbol": symbol,
         "period": f"{start} to {end}",
@@ -619,6 +649,10 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         "diagnosis": diagnose(metrics),
         "diagnostics": diagnose_advanced(metrics, sim["trades"], sim["equity_curve"], strategy),
     }
+    benchmark_symbol = strategy.get("benchmark")
+    if benchmark_symbol:
+        result["benchmark"] = _benchmark_comparison(str(benchmark_symbol), start, end, metrics["total_return"])
+    return result
 
 
 def evaluate_result(path: str) -> dict:

@@ -130,7 +130,7 @@ def register(ctx):
 
 ### 工具定义（Schema）
 
-`hermes/schemas.py` 定义了 48 个工具的 JSON Schema，每个工具包含 `name`、`description` 和 `parameters`：
+`hermes/schemas.py` 定义了 51 个工具的 JSON Schema，每个工具包含 `name`、`description` 和 `parameters`：
 
 ```python
 TOOL_SCHEMAS = [
@@ -153,7 +153,7 @@ TOOL_SCHEMAS = [
 
 ### 工具实现（Handler）
 
-`hermes/tools.py` 实现了 48 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
+`hermes/tools.py` 实现了 51 个 handler 函数，每个函数通过 `subprocess` 调用对应的 Python CLI 脚本：
 
 ```python
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -298,8 +298,8 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) 入口
 │   ├── plugin.yaml       # 插件元数据清单
-│   ├── schemas.py        # 48 个工具的 JSON Schema
-│   └── tools.py          # 48 个 handler
+│   ├── schemas.py        # 51 个工具的 JSON Schema
+│   └── tools.py          # 51 个 handler
 └── tools/                # Python CLI 工具
 ```
 

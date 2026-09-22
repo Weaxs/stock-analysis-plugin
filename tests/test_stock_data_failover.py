@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from argparse import Namespace
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,6 +30,7 @@ from tools.stock_data import (
     _kline_tushare,
     _kline_yfinance,
     _news_search_intel_fallback,
+    _quote_akshare,
     _quote_alphavantage,
     _quote_finnhub,
     _quote_longbridge,
@@ -1256,6 +1258,102 @@ class TestAkshareETF:
         mock_etf.assert_called_once()  # fund spot still tried first despite the stock-side sticky
         assert result["is_etf"] is True
 
+    def _etf_spot_df(self, **overrides):
+        """One fund_etf_spot_em row (real akshare column names) for 510300; values are
+        the numeric form akshare yields after its own pd.to_numeric coercion."""
+        import pandas as pd
+
+        data = {
+            "代码": ["510300"],
+            "名称": ["沪深300ETF"],
+            "最新价": [4.2],
+            "IOPV实时估值": [4.1],
+            "基金折价率": [2.44],
+            "涨跌额": [0.2],
+            "涨跌幅": [1.25],
+            "成交量": [100000],
+            "成交额": [400000.0],
+            "开盘价": [4.0],
+            "最高价": [4.3],
+            "最低价": [3.9],
+            "昨收": [4.0],
+            "换手率": [3.0],
+            "量比": [1.2],
+            "最新份额": [20000000000],
+            "流通市值": [8.4e10],
+            "总市值": [8.4e10],
+        }
+        data.update(overrides)
+        return pd.DataFrame(data)
+
+    def test_etf_quote_has_fund_fields(self):
+        """The ETF spot row already carries fund-native columns — quote must surface
+        them: iopv, fund_shares and the derived premium_discount_rate (positive =
+        price above IOPV, i.e. 溢价)."""
+        mock_ak = MagicMock()
+        mock_ak.fund_etf_spot_em.return_value = self._etf_spot_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = quote_a("510300")
+        # stock-shaped fields intact
+        assert result["name"] == "沪深300ETF"
+        assert result["price"] == 4.2
+        assert result["is_etf"] is True
+        # ETF-only fields added
+        assert result["iopv"] == 4.1
+        assert result["fund_shares"] == 20000000000
+        assert result["premium_discount_rate"] == pytest.approx((4.2 - 4.1) / 4.1 * 100, abs=1e-4)
+
+    def test_etf_quote_discount_is_negative(self):
+        """Price below IOPV (折价) must come out negative."""
+        mock_ak = MagicMock()
+        mock_ak.fund_etf_spot_em.return_value = self._etf_spot_df(最新价=[3.92], IOPV实时估值=[4.0])
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = quote_a("510300")
+        assert result["premium_discount_rate"] == pytest.approx(-2.0, abs=1e-4)
+
+    def test_etf_quote_without_iopv_has_null_rate(self):
+        """Some ETFs (money/bond) publish no intraday IOPV — the keys stay but are None."""
+        mock_ak = MagicMock()
+        mock_ak.fund_etf_spot_em.return_value = self._etf_spot_df(IOPV实时估值=[float("nan")])
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = quote_a("510300")
+        assert result["is_etf"] is True
+        assert result["iopv"] is None
+        assert result["premium_discount_rate"] is None
+
+    def test_stock_quote_has_no_etf_fields(self):
+        """Plain A-share stock quote shape is unchanged: no ETF-only keys."""
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame(
+            {
+                "代码": ["600519"],
+                "名称": ["贵州茅台"],
+                "最新价": [1258.0],
+                "涨跌额": [-14.75],
+                "涨跌幅": [-1.16],
+                "成交量": [2623524],
+                "成交额": [3307926407.0],
+                "最高": [1274.98],
+                "最低": [1254.10],
+                "今开": [1273.93],
+                "昨收": [1272.75],
+                "总市值": [1580000000000.0],
+                "市盈率-动态": [19.32],
+                "市净率": [7.5],
+                "换手率": [0.19],
+                "量比": [1.14],
+                "振幅": [1.64],
+                "60日涨跌幅": [5.0],
+            }
+        )
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = _quote_akshare("600519")
+        assert result["name"] == "贵州茅台"
+        for key in ("is_etf", "iopv", "premium_discount_rate", "fund_shares"):
+            assert key not in result
+
 
 # --------------- sector constituents / stock sectors (issue #18) ---------------
 
@@ -2230,6 +2328,83 @@ class TestCmdStockInfoBoards:
         assert result["boards"] == ["酿酒行业"]
 
 
+class TestCmdStockInfoETF:
+    """A-share ETF stock_info: is_etf flag plus latest fund NAV fields; the nav leg is
+    best-effort (fund_etf_fund_info_em, narrow date window) and degrades silently."""
+
+    def _fund_info_df(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "净值日期": [date(2026, 9, 18), date(2026, 9, 21)],
+                "单位净值": [4.0, 4.05],
+                "累计净值": [4.1, 4.15],
+                "日增长率": [1.0, 1.25],
+                "申购状态": ["开放申购", "开放申购"],
+                "赎回状态": ["开放赎回", "开放赎回"],
+            }
+        )
+
+    def _etf_info_df(self):
+        import pandas as pd
+
+        return pd.DataFrame({"item": ["股票简称", "上市时间"], "value": ["沪深300ETF", "2012-05-28"]})
+
+    def test_etf_stock_info_has_nav_fields(self):
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = self._etf_info_df()
+        mock_ak.fund_etf_fund_info_em.return_value = self._fund_info_df()
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data.resolve_stock_sectors", return_value={"symbol": "510300", "market": "A"}),
+        ):
+            result = cmd_stock_info(Namespace(symbol="510300"))
+        assert result["name"] == "沪深300ETF"
+        assert result["is_etf"] is True
+        assert result["nav"] == 4.05  # latest row wins
+        assert result["accumulated_nav"] == 4.15
+        assert result["nav_date"] == "2026-09-21"
+        mock_ak.fund_etf_fund_info_em.assert_called_once()
+        assert mock_ak.fund_etf_fund_info_em.call_args.kwargs["fund"] == "510300"
+
+    def test_etf_stock_info_nav_failure_degrades(self):
+        """A failed nav fetch must not lose the rest of the info payload."""
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = self._etf_info_df()
+        mock_ak.fund_etf_fund_info_em.side_effect = ConnectionError("blocked")
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            # skip the retry sleeps — the failure path is what is under test
+            patch("tools.stock_data._akshare_retry", side_effect=lambda fn, **kw: fn(**kw)),
+            patch("tools.stock_data.resolve_stock_sectors", return_value={"symbol": "510300", "market": "A"}),
+        ):
+            result = cmd_stock_info(Namespace(symbol="510300"))
+        assert result["is_etf"] is True
+        assert result["name"] == "沪深300ETF"
+        assert "nav" not in result
+        assert "nav_date" not in result
+
+    def test_stock_stock_info_has_no_etf_fields(self):
+        """Plain A-share stock_info is unchanged: no fund nav call, no ETF-only keys."""
+        import pandas as pd
+
+        mock_ak = MagicMock()
+        mock_ak.stock_individual_info_em.return_value = pd.DataFrame(
+            {"item": ["股票简称", "行业"], "value": ["贵州茅台", "酿酒行业"]}
+        )
+        mock_ak.fund_etf_fund_info_em.side_effect = AssertionError("fund api must not be called for stock")
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            patch("tools.stock_data.resolve_stock_sectors", return_value={"symbol": "600519", "market": "A"}),
+        ):
+            result = cmd_stock_info(Namespace(symbol="600519"))
+        assert result["name"] == "贵州茅台"
+        for key in ("is_etf", "nav", "accumulated_nav", "nav_date"):
+            assert key not in result
+        mock_ak.fund_etf_fund_info_em.assert_not_called()
+
+
 # --------------- tencent / sina providers + sticky ordering (issue #25) ---------------
 
 
@@ -2773,3 +2948,133 @@ class TestFinancialsAKeys:
             result = financials_a("600519")
         assert result["error"] == "Financial data unavailable"
         assert result["note"] == "Financial data unavailable"
+
+
+def _financials_a_df():
+    import pandas as pd
+
+    return pd.DataFrame(
+        {
+            "日期": ["2025-03-31", "2024-12-31", "2024-09-30"],
+            "净资产收益率(%)": [10.0, 9.0, 8.0],
+            "销售净利率(%)": [50.0, 49.0, 48.0],
+            "销售毛利率(%)": [90.0, 89.0, 88.0],
+            "资产负债率(%)": [20.0, 21.0, 22.0],
+            "流动比率": [3.0, 2.9, 2.8],
+        }
+    )
+
+
+class TestFinancialsPeriodsA:
+    """--periods N>1 accumulates a `periods` list (latest first) from the
+    multi-period akshare DataFrame; the default single-period output must
+    stay byte-for-byte compatible (no `periods` key)."""
+
+    def _run(self, periods=1):
+        mock_ak = MagicMock()
+        mock_ak.stock_financial_analysis_indicator.return_value = _financials_a_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            from tools.stock_data import financials_a
+
+            return financials_a("600519", periods=periods)
+
+    def test_default_single_period_has_no_periods_key(self):
+        result = self._run()
+        assert "periods" not in result
+        assert result["symbol"] == "600519"
+        assert result["report_date"] == "2025-03-31"
+        assert result["roe"] == 10.0
+
+    def test_explicit_periods_1_has_no_periods_key(self):
+        result = self._run(periods=1)
+        assert "periods" not in result
+        assert result["report_date"] == "2025-03-31"
+
+    def test_multi_period_list_latest_first(self):
+        result = self._run(periods=3)
+        periods = result["periods"]
+        assert len(periods) == 3
+        assert [p["report_date"] for p in periods] == ["2025-03-31", "2024-12-31", "2024-09-30"]
+        assert [p["roe"] for p in periods] == [10.0, 9.0, 8.0]
+        assert periods[0]["net_profit_margin"] == 50.0
+        assert periods[0]["gross_margin"] == 90.0
+        assert periods[0]["debt_ratio"] == 20.0
+        assert periods[0]["current_ratio"] == 3.0
+        # per-period entries carry no symbol; the top-level single-period keys
+        # still describe the latest period
+        assert "symbol" not in periods[0]
+        assert result["report_date"] == "2025-03-31"
+        assert result["roe"] == 10.0
+
+    def test_periods_capped_at_available_rows(self):
+        result = self._run(periods=10)
+        assert len(result["periods"]) == 3
+
+
+class TestFinancialsPeriodsYf:
+    """yfinance has no multi-period `info`; best-effort annual periods come from
+    `t.financials` and degrade silently (no `periods` key) on failure."""
+
+    def _income_stmt(self):
+        import pandas as pd
+
+        return pd.DataFrame(
+            [[100.0, 90.0, 80.0], [10.0, 9.0, 8.0]],
+            index=["Total Revenue", "Net Income"],
+            columns=pd.to_datetime(["2024-12-31", "2023-12-31", "2022-12-31"]),
+        )
+
+    def test_default_single_period_unchanged(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.info = {"shortName": "Apple", "totalRevenue": 100.0}
+        result = financials_yf("AAPL")
+        assert "periods" not in result
+        assert result["name"] == "Apple"
+        assert result["total_revenue"] == 100.0
+
+    def test_multi_period_from_annual_income_statement(self, mock_yfinance):
+        ticker = mock_yfinance.Ticker.return_value
+        ticker.info = {"shortName": "Apple"}
+        ticker.financials = self._income_stmt()
+        result = financials_yf("AAPL", periods=2)
+        periods = result["periods"]
+        assert len(periods) == 2
+        assert periods[0] == {"period_end": "2024-12-31", "total_revenue": 100.0, "net_income": 10.0}
+        assert periods[1] == {"period_end": "2023-12-31", "total_revenue": 90.0, "net_income": 9.0}
+        assert result["name"] == "Apple"
+
+    def test_empty_financials_degrades_silently(self, mock_yfinance):
+        import pandas as pd
+
+        ticker = mock_yfinance.Ticker.return_value
+        ticker.info = {"shortName": "Apple"}
+        ticker.financials = pd.DataFrame()
+        result = financials_yf("AAPL", periods=3)
+        assert "periods" not in result
+        assert result["name"] == "Apple"
+
+    def test_financials_exception_degrades_silently(self, mock_yfinance):
+        class _BoomTicker:
+            info = {"shortName": "Apple"}
+
+            @property
+            def financials(self):
+                raise ConnectionError("yahoo blocked")
+
+        mock_yfinance.Ticker.return_value = _BoomTicker()
+        result = financials_yf("AAPL", periods=3)
+        assert "periods" not in result
+        assert result["name"] == "Apple"
+
+
+class TestFinancialsPeriodsCli:
+    def test_periods_zero_is_an_error(self):
+        from tools.stock_data import cmd_financials
+
+        result = cmd_financials(Namespace(symbol="600519", periods=0))
+        assert "error" in result
+
+    def test_periods_negative_is_an_error(self):
+        from tools.stock_data import cmd_financials
+
+        result = cmd_financials(Namespace(symbol="AAPL", periods=-2))
+        assert "error" in result

@@ -1005,7 +1005,13 @@ def quote_a(symbol: str) -> dict:
 
 
 def _quote_akshare_etf(symbol: str) -> dict:
-    """A-share ETF realtime quote via akshare fund_etf_spot_em."""
+    """A-share ETF realtime quote via akshare fund_etf_spot_em.
+
+    On top of the stock-shaped fields, the same spot row carries fund-native
+    columns: iopv (盘中实时估值) and fund_shares (最新份额). premium_discount_rate
+    is derived here as (price - iopv) / iopv * 100 — positive = 溢价 (price above
+    IOPV), negative = 折价; None when the fund publishes no intraday IOPV (money/
+    bond ETFs)."""
     import akshare as ak
 
     df = _akshare_retry(ak.fund_etf_spot_em)
@@ -1013,7 +1019,7 @@ def _quote_akshare_etf(symbol: str) -> dict:
     if row.empty:
         raise ValueError(f"ETF {symbol} not found in akshare fund spot")
     r = row.iloc[0]
-    return _clean_row(
+    result = _clean_row(
         {
             "symbol": symbol,
             "name": r.get("名称"),
@@ -1030,8 +1036,13 @@ def _quote_akshare_etf(symbol: str) -> dict:
             "turnover_rate": r.get("换手率"),
             "volume_ratio": r.get("量比"),
             "is_etf": True,
+            "iopv": r.get("IOPV实时估值"),
+            "fund_shares": r.get("最新份额"),
         }
     )
+    price, iopv = result.get("price"), result.get("iopv")
+    result["premium_discount_rate"] = round((price - iopv) / iopv * 100, 4) if price is not None and iopv else None
+    return result
 
 
 def _quote_akshare(symbol: str) -> dict:
@@ -1339,7 +1350,20 @@ def cmd_news(args):
 # --------------- financials ---------------
 
 
-def financials_a(symbol: str) -> dict:
+def _financials_a_row(r) -> dict:
+    return _clean_row(
+        {
+            "report_date": r.get("日期"),
+            "roe": r.get("净资产收益率(%)"),
+            "net_profit_margin": r.get("销售净利率(%)"),
+            "gross_margin": r.get("销售毛利率(%)"),
+            "debt_ratio": r.get("资产负债率(%)"),
+            "current_ratio": r.get("流动比率"),
+        }
+    )
+
+
+def financials_a(symbol: str, periods: int = 1) -> dict:
     import akshare as ak
 
     try:
@@ -1347,28 +1371,41 @@ def financials_a(symbol: str) -> dict:
         if df is None or df.empty:
             # error + note coexist (additive): consumers check either key
             return {"symbol": symbol, "error": "No financial data", "note": "No financial data"}
-        r = df.iloc[0]
-        return _clean_row(
-            {
-                "symbol": symbol,
-                "report_date": r.get("日期"),
-                "roe": r.get("净资产收益率(%)"),
-                "net_profit_margin": r.get("销售净利率(%)"),
-                "gross_margin": r.get("销售毛利率(%)"),
-                "debt_ratio": r.get("资产负债率(%)"),
-                "current_ratio": r.get("流动比率"),
-            }
-        )
+        result = {"symbol": symbol, **_financials_a_row(df.iloc[0])}
+        if periods > 1:
+            result["periods"] = [_financials_a_row(r) for r in df.head(periods).to_dict("records")]
+        return result
     except Exception:
         return {"symbol": symbol, "error": "Financial data unavailable", "note": "Financial data unavailable"}
 
 
-def financials_yf(symbol: str) -> dict:
+def _yf_financial_periods(t, periods: int) -> list:
+    """Best-effort annual history from yfinance's income statement (t.info is a
+    snapshot only). Silent [] on any failure — multi-period is a bonus, never a blocker."""
+    try:
+        fin = t.financials
+        if fin is None or fin.empty:
+            return []
+        return [
+            _clean_row(
+                {
+                    "period_end": col,
+                    "total_revenue": fin[col].get("Total Revenue"),
+                    "net_income": fin[col].get("Net Income"),
+                }
+            )
+            for col in list(fin.columns)[:periods]
+        ]
+    except Exception:
+        return []
+
+
+def financials_yf(symbol: str, periods: int = 1) -> dict:
     import yfinance as yf
 
     t = yf.Ticker(_yf_hk_symbol(symbol))
     info = t.info
-    return _clean_row(
+    result = _clean_row(
         {
             "symbol": symbol,
             "name": info.get("shortName"),
@@ -1384,12 +1421,20 @@ def financials_yf(symbol: str) -> dict:
             "dividend_yield": info.get("dividendYield"),
         }
     )
+    if periods > 1:
+        history = _yf_financial_periods(t, periods)
+        if history:
+            result["periods"] = history
+    return result
 
 
 def cmd_financials(args):
+    periods = getattr(args, "periods", 1)
+    if periods < 1:
+        return {"error": f"periods must be a positive integer, got {periods}"}
     market = detect_market(args.symbol)
     try:
-        return financials_a(args.symbol) if market == "A" else financials_yf(args.symbol)
+        return financials_a(args.symbol, periods) if market == "A" else financials_yf(args.symbol, periods)
     except Exception as e:
         return {"error": str(e)}
 
@@ -2267,6 +2312,9 @@ def cmd_stock_info(args):
             import akshare as ak
 
             result = {"symbol": args.symbol, "market": "A"}
+            is_etf = normalize_stock_code(args.symbol)["is_etf"]
+            if is_etf:
+                result["is_etf"] = True
             info_map = None
             try:
                 df = _akshare_retry(ak.stock_individual_info_em, symbol=args.symbol)
@@ -2291,6 +2339,26 @@ def cmd_stock_info(args):
                     result["boards"] = boards[:10]
             except Exception:
                 pass
+            if is_etf:
+                try:
+                    # ETF 最新净值（天天基金-场内基金历史净值明细）。窄日期窗口 → 单页返回
+                    end = datetime.now()
+                    start = end - timedelta(days=30)
+                    nav_df = _akshare_retry(
+                        ak.fund_etf_fund_info_em,
+                        fund=args.symbol,
+                        start_date=start.strftime("%Y%m%d"),
+                        end_date=end.strftime("%Y%m%d"),
+                    )
+                    if nav_df is not None and not nav_df.empty:
+                        latest = nav_df.iloc[-1]
+                        result["nav"] = latest.get("单位净值")
+                        result["accumulated_nav"] = latest.get("累计净值")
+                        nav_date = latest.get("净值日期")
+                        if nav_date is not None:
+                            result["nav_date"] = str(nav_date)[:10]  # datetime.date/Timestamp → ISO date
+                except Exception:
+                    pass
             return _clean_row(result)
         else:
             import yfinance as yf
@@ -2778,6 +2846,162 @@ def cmd_hot_stocks(args):
     return {"count": len(items), "items": items, "source": rows[0]["source"]}
 
 
+# --------------- margin_trading / northbound_flow (A-share only) ---------------
+
+# Exchange margin-detail column layouts differ: SSE carries 融资偿还额/融券偿还量,
+# SZSE carries 融券余额/融资融券余额 — the output keys below follow the source.
+_MARGIN_DETAIL_SSE_COLS = {
+    "标的证券代码": "symbol",
+    "标的证券简称": "name",
+    "融资余额": "margin_balance",
+    "融资买入额": "margin_buy",
+    "融资偿还额": "margin_repay",
+    "融券余量": "short_balance_shares",
+    "融券卖出量": "short_sell_shares",
+    "融券偿还量": "short_repay_shares",
+}
+
+_MARGIN_DETAIL_SZSE_COLS = {
+    "证券代码": "symbol",
+    "证券简称": "name",
+    "融资买入额": "margin_buy",
+    "融资余额": "margin_balance",
+    "融券卖出量": "short_sell_shares",
+    "融券余量": "short_balance_shares",
+    "融券余额": "short_balance",
+    "融资融券余额": "total_balance",
+}
+
+
+def cmd_margin_trading(args):
+    """Per-stock margin trading detail (融资融券) for the last N trading days.
+
+    akshare has no per-stock margin history endpoint — the exchange detail lists
+    (stock_margin_detail_sse / stock_margin_detail_szse) are per-day, all-stock
+    tables, so each trading day is fetched and filtered to the symbol. Daily fetches
+    are independent and run concurrently (5 workers; a serial 60-day run would
+    overrun the host's 120s subprocess budget), then re-sorted newest-first — the
+    output never depends on completion order. A day that fails or has no data is
+    skipped (两融明细 T 日晚间才发布 — a morning run always misses the latest day);
+    only when every day failed is an error returned. Days where the symbol is
+    absent (non-margin underlying that day) are skipped; if no day yields a row the
+    symbol is reported as not covered."""
+    if detect_market(args.symbol) != "A":
+        return {"error": "margin_trading only available for A-shares"}
+    days = getattr(args, "days", 10)
+    if days < 1:
+        return {"error": f"days must be a positive integer, got {days}"}
+    # One akshare call per day — cap the fan-out so a slow source can't overrun
+    # the host's subprocess budget (rows carry their dates; truncation is evident).
+    days = min(days, 60)
+    code = _cn_code(args.symbol)
+    exchange, bare = code[:2], code[2:]
+    try:
+        import concurrent.futures
+
+        import akshare as ak
+        from trading_calendar import prev_trading_days
+
+        if exchange == "sh":
+            col_map = _MARGIN_DETAIL_SSE_COLS
+            detail_fn = ak.stock_margin_detail_sse
+        elif exchange == "sz":
+            col_map = _MARGIN_DETAIL_SZSE_COLS
+            detail_fn = ak.stock_margin_detail_szse
+        else:
+            return {"error": f"margin_trading: {args.symbol} is a BSE code; only SSE/SZSE margin detail is available"}
+        trade_days = prev_trading_days("CN", days)
+        if not trade_days:
+            return {"error": "margin_trading: trading calendar unavailable"}
+
+        def fetch_day(date_iso):
+            """Fetch + filter one day's all-stock table, fault-isolated per day."""
+            try:
+                df = _akshare_retry(detail_fn, date=date_iso.replace("-", ""))
+            except Exception as e:
+                return date_iso, [], f"{date_iso}: {type(e).__name__}: {scrub_secrets(str(e))}"
+            if df is None or df.empty:
+                return date_iso, [], None
+            df = df.rename(columns=col_map)
+            keep = [c for c in col_map.values() if c in df.columns]
+            hit = df[df["symbol"].astype(str) == bare] if "symbol" in df.columns else df.iloc[0:0]
+            return date_iso, [{"date": date_iso, **_clean_row(r)} for r in hit[keep].to_dict("records")], None
+
+        rows = []
+        failures = []
+        with socket_timeout(25), concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            for _date_iso, day_rows, failure in pool.map(fetch_day, trade_days):
+                if failure:
+                    failures.append(failure)
+                rows.extend(day_rows)
+        rows.sort(key=lambda r: r["date"], reverse=True)
+        if not rows:
+            if failures:
+                msg = f"margin detail fetch failed for all {len(trade_days)} day(s): {'; '.join(failures)}"
+                return {"symbol": args.symbol, "error": msg}
+            return {"symbol": args.symbol, "error": f"no margin trading data for {args.symbol} (可能不是两融标的)"}
+        return rows
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _northbound_row_is_shell(row: dict) -> bool:
+    """停披期空壳行：date 之外每个数据字段都是 None。持股市值在停披后被回填 0.0
+    （北向持仓市值约 1.9 万亿，0 是缺失哨兵而非真实值），视同 None。"""
+    for k, v in row.items():
+        if k == "date" or v is None:
+            continue
+        if k == "hold_market_cap" and not v:
+            continue
+        return False
+    return True
+
+
+def cmd_northbound_flow(args):
+    """Market-level northbound (北向资金) flow history via eastmoney hsgt history.
+
+    Data caliber: the exchanges stopped publishing daily northbound net-buy after
+    2024-08-16 — later rows are shells (date only, flow fields all None,
+    持股市值 backfilled 0.0) except quarter-end rows, which still disclose
+    持股市值. Shell rows are filtered out of the tail(days) window; when nothing
+    real remains, a clean error explains the disclosure stop (increase days to
+    reach pre-2024-08 history). The series comes back ascending — returned
+    newest-first."""
+    days = getattr(args, "days", 10)
+    if days < 1:
+        return {"error": f"days must be a positive integer, got {days}"}
+    try:
+        import akshare as ak
+
+        with socket_timeout(25):
+            df = _akshare_retry(ak.stock_hsgt_hist_em, symbol="北向资金")
+        if df is None or df.empty:
+            return {"error": "northbound flow data unavailable"}
+        col_map = {
+            "日期": "date",
+            "当日成交净买额": "net_buy",
+            "买入成交额": "buy_turnover",
+            "卖出成交额": "sell_turnover",
+            "历史累计净买额": "accum_net_buy",
+            "持股市值": "hold_market_cap",
+        }
+        df = df.rename(columns=col_map)
+        keep = [c for c in col_map.values() if c in df.columns]
+        rows = [_clean_row(r) for r in df[keep].tail(days).to_dict("records")]
+        rows = [r for r in rows if not _northbound_row_is_shell(r)]
+        if not rows:
+            return {
+                "error": (
+                    "北向资金日度净买额自 2024-08-16 起交易所停止披露，仅此前历史数据可用"
+                    f"（当前 days={days} 窗口内无有效数据，加大 days 可取历史）"
+                )
+            }
+        rows.reverse()
+        return rows
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # --------------- CLI ---------------
 
 
@@ -2807,6 +3031,7 @@ def main():
 
     p_fin = sub.add_parser("financials")
     p_fin.add_argument("symbol")
+    p_fin.add_argument("--periods", type=int, default=1)
 
     p_snap = sub.add_parser("market_snapshot")
     p_snap.add_argument("--market", default="A", choices=["A", "HK", "US"])
@@ -2848,6 +3073,13 @@ def main():
     p_hot = sub.add_parser("hot_stocks")
     p_hot.add_argument("--top", type=int, default=20)
 
+    p_margin = sub.add_parser("margin_trading")
+    p_margin.add_argument("symbol")
+    p_margin.add_argument("--days", type=int, default=10)
+
+    p_nb = sub.add_parser("northbound_flow")
+    p_nb.add_argument("--days", type=int, default=10)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2871,6 +3103,8 @@ def main():
         "limit_up_pool": cmd_limit_up_pool,
         "dragon_tiger": cmd_dragon_tiger,
         "hot_stocks": cmd_hot_stocks,
+        "margin_trading": cmd_margin_trading,
+        "northbound_flow": cmd_northbound_flow,
     }
     # Provider libraries (baostock etc.) print prose to stdout on failure,
     # which would corrupt the JSON-only contract — divert that noise to stderr.

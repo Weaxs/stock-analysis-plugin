@@ -86,6 +86,21 @@ class TestRegimeFit:
         assert d["regime_fit"] == "unknown"
 
 
+class TestTrailingStopDiagnostics:
+    def test_trailing_stop_reason_counts_as_stop_hit(self):
+        # pnl_pct 2.0 defeats the pnl fallback, so only the reason prefix can classify it.
+        trades = [{"type": "sell", "pnl": 100, "pnl_pct": 2.0, "reason": "移动止损触发 (较高点回撤 8.0% >= 8.0%)"}] * 5
+        d = diagnose_advanced(_metrics(total_return=-0.1, total_trades=5), trades, [], _strategy(stop_loss=-0.05))
+        assert d["stop_loss_hit_ratio"] == 1.0
+        assert "止损" in d["main_failure_reason"]
+
+    def test_chinese_fixed_stop_reason_counts_as_stop_hit(self):
+        # simulate() emits Chinese reasons; the prefix check must recognize them too.
+        trades = [{"type": "sell", "pnl": 100, "pnl_pct": 2.0, "reason": "止损触发 (-11.0% <= -10.0%)"}] * 5
+        d = diagnose_advanced(_metrics(total_return=-0.1, total_trades=5), trades, [], _strategy(stop_loss=-0.05))
+        assert d["stop_loss_hit_ratio"] == 1.0
+
+
 class TestSuggestedParameterChanges:
     def test_loosen_stop_loss(self):
         trades = [{"type": "sell", "pnl_pct": -6.0, "reason": "stop_loss"}] * 5

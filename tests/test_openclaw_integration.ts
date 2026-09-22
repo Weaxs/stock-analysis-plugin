@@ -170,8 +170,8 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_quote: { symbol: "600519" },
   get_capital_flow: {},
   get_news: { symbol: "600519" },
-  get_financials: { symbol: "600519" },
-  get_technical_analysis: { symbol: "600519" },
+  get_financials: { symbol: "600519", periods: 4 },
+  get_technical_analysis: { symbol: "600519", periods: "daily,weekly" },
   analyze_pattern: { symbol: "600519" },
   get_market_indices: {},
   get_sector_rankings: {},
@@ -183,6 +183,8 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_limit_up_pool: {},
   get_dragon_tiger: {},
   get_hot_stocks: {},
+  get_margin_trading: { symbol: "600519" },
+  get_northbound_flow: {},
   get_fundamental_context: { symbol: "600519" },
   screen_stocks: {},
   run_backtest: { strategy: "x.yaml", symbol: "600519" },
@@ -215,7 +217,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
     },
     template: "brief",
   },
-  render_market_report: { report: {} },
+  render_market_report: { report: {}, save: true },
   build_watchlist_context: { symbols: "600519,AAPL" },
   analyze_position_context: {
     symbol: "600519",
@@ -231,6 +233,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   record_signal: { symbol: "600519", direction: "buy", entry_price: 1500 },
   evaluate_signals: {},
   get_signal_summary: {},
+  get_review_history: { limit: 5 },
   parse_stock_list: { text: "600519,AAPL" },
 };
 
@@ -264,6 +267,48 @@ for (const tool of tools) {
 
 if (failures === 0) {
   console.log(`  OK: ${tools.length} execute() calls dispatched`);
+}
+
+// Spot-check argv mapping for the conditional params: periods>1 forwards
+// `--periods N`, save=true appends a bare `--save` (no value).
+const finCall = execCalls.find((c) => c.script.includes("stock_data.py") && c.args[0] === "financials");
+assert(!!finCall, "get_financials: no dispatch captured");
+if (finCall) {
+  const idx = finCall.args.indexOf("--periods");
+  assert(idx > 0 && finCall.args[idx + 1] === "4", "get_financials: periods=4 must pass --periods 4");
+}
+const techCall = execCalls.find((c) => c.script.includes("technical.py") && c.args[0] === "analyze");
+assert(!!techCall, "get_technical_analysis: no dispatch captured");
+if (techCall) {
+  const idx = techCall.args.indexOf("--periods");
+  assert(
+    idx > 0 && techCall.args[idx + 1] === "daily,weekly",
+    "get_technical_analysis: periods must pass --periods daily,weekly"
+  );
+}
+const renderCall = execCalls.find((c) => c.script.includes("report_renderer.py") && c.args[0] === "market");
+assert(!!renderCall, "render_market_report: no dispatch captured");
+if (renderCall) {
+  assert(
+    renderCall.args[renderCall.args.length - 1] === "--save",
+    "render_market_report: save=true must append a bare --save"
+  );
+}
+
+// Negative gating: periods<=1 / save omitted must not emit the flags.
+const finTool = tools.find((t) => t.name === "get_financials");
+assert(!!finTool, "get_financials: not registered");
+if (finTool) {
+  await finTool.execute("call_id_neg", { symbol: "600519", periods: 1 });
+  const last = execCalls[execCalls.length - 1];
+  assert(!last.args.includes("--periods"), "get_financials: periods=1 must not pass --periods");
+}
+const renderTool = tools.find((t) => t.name === "render_market_report");
+assert(!!renderTool, "render_market_report: not registered");
+if (renderTool) {
+  await renderTool.execute("call_id_neg2", { report: {} });
+  const last = execCalls[execCalls.length - 1];
+  assert(!last.args.includes("--save"), "render_market_report: save omitted must not pass --save");
 }
 
 if (failures > 0) {

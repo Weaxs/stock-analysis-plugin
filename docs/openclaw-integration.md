@@ -49,7 +49,7 @@ OpenClaw Gateway 启动时会扫描 `extensions/*` 工作区包并加载。
 openclaw plugins inspect stock-analysis --runtime --json
 ```
 
-应该看到 48 个 tool 全部出现在 `tools` 列表里。也可以直接在 OpenClaw 对话中调用：
+应该看到 51 个 tool 全部出现在 `tools` 列表里。也可以直接在 OpenClaw 对话中调用：
 
 ```
 帮我查一下贵州茅台的实时行情
@@ -159,7 +159,7 @@ const venvPython = join(repoRoot, ".venv", isWin ? "Scripts" : "bin", "python3")
 
 ### 可选工具
 
-OpenClaw 支持把工具标记为 optional——用户必须在 settings 里 `tools.allow` 显式开启才会装载。本插件目前所有 48 个 tool 都是默认可用的（required）。如果你想给某些重型工具（例如 `screen_stocks` 全市场筛选）加上 opt-in，方法是：
+OpenClaw 支持把工具标记为 optional——用户必须在 settings 里 `tools.allow` 显式开启才会装载。本插件目前所有 51 个 tool 都是默认可用的（required）。如果你想给某些重型工具（例如 `screen_stocks` 全市场筛选）加上 opt-in，方法是：
 
 1. `openclaw.plugin.json` 加 `toolMetadata`：
 

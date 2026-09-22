@@ -70,14 +70,22 @@ def get_news(args: dict, **kwargs) -> str:
 
 def get_financials(args: dict, **kwargs) -> str:
     symbol = args["symbol"]
-    return _run("stock_data.py", ["financials", symbol])
+    periods = args.get("periods", 1)
+    argv = ["financials", symbol]
+    if periods > 1:
+        argv += ["--periods", periods]
+    return _run("stock_data.py", argv)
 
 
 def get_technical_analysis(args: dict, **kwargs) -> str:
     symbol = args["symbol"]
     period = args.get("period", "daily")
     count = args.get("count", 120)
-    return _run("technical.py", ["analyze", symbol, "--period", period, "--count", count])
+    argv = ["analyze", symbol, "--period", period, "--count", count]
+    periods = args.get("periods")
+    if periods:
+        argv += ["--periods", periods]
+    return _run("technical.py", argv)
 
 
 def analyze_pattern(args: dict, **kwargs) -> str:
@@ -151,6 +159,17 @@ def get_dragon_tiger(args: dict, **kwargs) -> str:
 def get_hot_stocks(args: dict, **kwargs) -> str:
     top = args.get("top", 20)
     return _run("stock_data.py", ["hot_stocks", "--top", top])
+
+
+def get_margin_trading(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    days = args.get("days", 10)
+    return _run("stock_data.py", ["margin_trading", symbol, "--days", days])
+
+
+def get_northbound_flow(args: dict, **kwargs) -> str:
+    days = args.get("days", 10)
+    return _run("stock_data.py", ["northbound_flow", "--days", days])
 
 
 def get_fundamental_context(args: dict, **kwargs) -> str:
@@ -325,7 +344,15 @@ def render_stock_report(args: dict, **kwargs) -> str:
 def render_market_report(args: dict, **kwargs) -> str:
     report = args["report"]
     payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return _run("report_renderer.py", ["market", "--input-b64", payload])
+    argv = ["market", "--input-b64", payload]
+    if args.get("save"):
+        argv.append("--save")
+    return _run("report_renderer.py", argv)
+
+
+def get_review_history(args: dict, **kwargs) -> str:
+    limit = args.get("limit", 10)
+    return _run("market_review.py", ["history", "--limit", str(limit)])
 
 
 def build_watchlist_context(args: dict, **kwargs) -> str:

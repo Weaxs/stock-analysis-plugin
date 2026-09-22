@@ -10,7 +10,7 @@ description: 热点题材分析：评估板块强度、扩散度、个股关联�
 先运行：
 
 ```bash
-python3 scripts/gather.py <symbol>
+python3 tools/gather.py fundamental <symbol>
 ```
 
 gather 工具返回：
@@ -21,7 +21,8 @@ gather 工具返回：
 - `news` — 近期新闻（题材催化来源）
 - `stock_info` — 公司基本信息（行业、业务）
 - `sector_rankings` — 板块排名（核心数据源）；`get_sector_rankings` 传 `board_type=concept` 时为概念板块排行，热点题材以概念口径为主
-- `hot_stocks` — 全市场人气热搜榜（`get_hot_stocks`，东方财富人气榜），辅助判断题材热度
+
+人气热搜榜不在 gather 返回中，需要时单独调用 `get_hot_stocks`（东方财富人气榜）辅助判断题材热度。
 
 评估扩散度前，必须获取板块成分股及其当日表现；只有板块排名时，仅可判断当日相对强弱，不判断扩散度或持续性。
 

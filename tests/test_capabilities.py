@@ -70,7 +70,7 @@ class TestNewMarkets:
 
 
 class TestShortTermAndSignalTools:
-    A_ONLY = ("get_limit_up_pool", "get_dragon_tiger", "get_hot_stocks")
+    A_ONLY = ("get_limit_up_pool", "get_dragon_tiger", "get_hot_stocks", "get_margin_trading", "get_northbound_flow")
     SIGNAL = ("record_signal", "evaluate_signals", "get_signal_summary")
 
     def test_a_share_supports_new_tools(self):

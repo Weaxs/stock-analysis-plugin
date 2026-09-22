@@ -1,4 +1,4 @@
-akshare>=1.14.0
+akshare>=1.18.97
 yfinance>=0.2.36
 pandas>=2.0.0
 numpy>=1.24.0

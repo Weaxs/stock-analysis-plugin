@@ -43,6 +43,8 @@ TOOL_MATRIX = {
     "get_limit_up_pool": {"markets": ["A"], "reason": "A-share only"},
     "get_dragon_tiger": {"markets": ["A"], "reason": "A-share only"},
     "get_hot_stocks": {"markets": ["A"], "reason": "A-share only"},
+    "get_margin_trading": {"markets": ["A"], "reason": "A-share only"},
+    "get_northbound_flow": {"markets": ["A"], "reason": "A-share only"},
     "get_social_sentiment": {
         "markets": ["A", "HK", "US"],
         "reason": "A-share uses Eastmoney/Xueqiu; HK/US require SENTIMENT_API_KEY",

@@ -24,7 +24,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_quote",
-        "description": "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注",
+        "description": "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价",
         "parameters": {
             "type": "object",
             "properties": {
@@ -82,13 +82,17 @@ TOOL_SCHEMAS = [
                     "type": "string",
                     "description": "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
                 },
+                "periods": {
+                    "type": "number",
+                    "description": "返回最近N个报告期的财务趋势，默认 1（仅最新一期）",
+                },
             },
             "required": ["symbol"],
         },
     },
     {
         "name": "get_technical_analysis",
-        "description": "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
+        "description": "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
         "parameters": {
             "type": "object",
             "properties": {
@@ -104,6 +108,10 @@ TOOL_SCHEMAS = [
                 "count": {
                     "type": "number",
                     "description": "用于计算指标的K线条数，默认 120",
+                },
+                "periods": {
+                    "type": "string",
+                    "description": '多周期共振分析，逗号分隔的周期列表，如 "daily,weekly"；不传则只分析 period 指定的单周期',
                 },
             },
             "required": ["symbol"],
@@ -281,6 +289,37 @@ TOOL_SCHEMAS = [
                 "top": {
                     "type": "number",
                     "description": "返回前N只，默认 20",
+                },
+            },
+        },
+    },
+    {
+        "name": "get_margin_trading",
+        "description": "获取A股个股融资融券明细（融资余额/融资买入额/融券余量等，上交所/深交所官方数据按交易所分流），返回最近N个交易日序列（最新在前）。金额单位为元，short_*_shares 单位为股。仅两融标的有数据，非两融标的返回错误",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "A股股票代码，如 600519",
+                },
+                "days": {
+                    "type": "number",
+                    "description": "返回最近N个交易日，默认 10",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_northbound_flow",
+        "description": "获取北向资金市场级净买入序列（最新在前，单位亿元）。数据口径：东方财富沪深港通历史数据；2024-08-16 起交易所停止披露日度净买额，仅 2024-08 之前历史数据可查（近期小 days 窗口会返回停披错误，加大 days 可取历史）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "number",
+                    "description": "返回最近N个交易日，默认 10",
                 },
             },
         },
@@ -707,13 +746,24 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "render_market_report",
-        "description": "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。仅渲染，不保存不推送",
+        "description": "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history",
         "parameters": {
             "type": "object",
             "properties": {
                 "report": {"type": "object", "description": "结构化市场复盘"},
+                "save": {"type": "boolean", "description": "是否归档到本地复盘 JSONL 存储，默认 false"},
             },
             "required": ["report"],
+        },
+    },
+    {
+        "name": "get_review_history",
+        "description": "复盘归档历史 — 读取本地 JSONL 归档的最近 N 条市场复盘（最新在前），用于纵向对比（温度/姿态/主线变化）。归档由 render_market_report 的 save=true 写入，空存档返回空列表",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "number", "description": "返回条数，默认 10"},
+            },
         },
     },
     {
