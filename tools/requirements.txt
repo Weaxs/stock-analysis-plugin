@@ -1,4 +1,5 @@
-akshare>=1.18.97
+akshare>=1.18.97; python_version >= "3.11"
+akshare>=1.14.0; python_version < "3.11"
 yfinance>=0.2.36
 pandas>=2.0.0
 numpy>=1.24.0
