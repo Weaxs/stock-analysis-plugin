@@ -38,8 +38,9 @@ exit:
   take_profit: "{take_profit}"
 
 simulation:
-  slippage: 0.002
+  slippage: 0.002       # 打板策略用更保守的费率：滑点0.2%、佣金万15（其余示例为 0.001/万2.5）
   commission: 0.0015
+  stamp_tax: 0.0005     # 印花税（A股卖出单边；其他市场按当下实际费率，无则删除本行）
 
 position:
   size: 0.5

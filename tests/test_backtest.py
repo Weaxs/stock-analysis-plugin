@@ -541,6 +541,118 @@ class TestTrailingStop:
         assert sells[1]["reason"].startswith("移动止损触发")
 
 
+class TestStampTax:
+    def test_stamp_tax_deducted_from_sell_proceeds_only(self):
+        # Entry at close 10 (bar 1), take-profit at close 12 (bar 3, +20%).
+        # slippage 0 keeps the arithmetic exact: buy 100k shares at 10 → cost 1,001,000
+        # (commission only); sell gross 1,200,000 → proceeds = gross × (1 − 0.001 − 0.0005).
+        df = _df_from_closes([10, 10, 11, 12])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20},
+            "position": {"size": 1.0},
+            "simulation": {"slippage": 0.0, "commission": 0.001, "stamp_tax": 0.0005},
+        }
+        sim = backtest.simulate(df, strategy, 1000000, "600000")
+        buys = [t for t in sim["trades"] if t["type"] == "buy"]
+        sells = [t for t in sim["trades"] if t["type"] == "sell"]
+        assert len(buys) == 1 and len(sells) == 1
+        assert buys[0]["amount"] == 1001000.0  # stamp tax never touches the buy side
+        assert sells[0]["price"] == 12.0
+        assert sells[0]["amount"] == 100000 * 12 * (1 - 0.001 - 0.0005)
+        assert sim["costs"]["commission_paid"] == pytest.approx(1000 + 1200)
+        assert sim["costs"]["stamp_tax_paid"] == pytest.approx(600)
+
+    def test_default_stamp_tax_zero_matches_explicit_zero(self):
+        # No simulation block must behave exactly like stamp_tax: 0 with default rates.
+        df = _df_from_closes([10, 10, 11, 12, 13, 14, 12.6])
+        base = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20},
+            "position": {"size": 1.0},
+        }
+        implicit = backtest.simulate(df, dict(base), 100000, "600000")
+        explicit = backtest.simulate(
+            df,
+            dict(base, simulation={"slippage": 0.001, "commission": 0.0015, "stamp_tax": 0.0}),
+            100000,
+            "600000",
+        )
+        assert implicit["trades"] == explicit["trades"]
+        assert implicit["costs"]["stamp_tax"] == 0.0
+        assert implicit["costs"]["stamp_tax_paid"] == 0.0
+        assert implicit["costs"]["commission_paid"] == explicit["costs"]["commission_paid"] > 0
+
+    def test_costs_echoed_in_run_backtest_result(self, monkeypatch, make_kline_data):
+        df = pd.DataFrame(make_kline_data(120, "volatile"))
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a, **kw: df)
+        strategy = dict(_MA_CROSS_STRATEGY, simulation={"slippage": 0.001, "commission": 0.00025, "stamp_tax": 0.0005})
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: strategy)
+
+        result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
+
+        costs = result["costs"]
+        assert costs["slippage"] == 0.001
+        assert costs["commission"] == 0.00025
+        assert costs["stamp_tax"] == 0.0005
+        assert costs["commission_paid"] >= 0
+        assert costs["stamp_tax_paid"] >= 0
+
+    @pytest.mark.parametrize("field", ["slippage", "commission", "stamp_tax"])
+    @pytest.mark.parametrize("bad", [-0.001, 1, 5])
+    def test_out_of_range_rate_rejected(self, field, bad):
+        # Orders-of-magnitude entry errors (e.g. 5 instead of 0.0005) must fail
+        # loudly, not silently produce absurd proceeds; main() turns this ValueError
+        # into a JSON error.
+        df = _df_from_closes([10, 10, 12])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20},
+            "position": {"size": 1.0},
+            "simulation": {field: bad},
+        }
+        with pytest.raises(ValueError, match=field):
+            backtest.simulate(df, strategy, 100000, "600000")
+
+    def test_combined_sell_rates_must_stay_below_one(self):
+        # Each rate passes [0,1) alone, but commission + stamp_tax >= 1 makes sell
+        # proceeds non-positive — reject the combination.
+        df = _df_from_closes([10, 10, 12])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20},
+            "position": {"size": 1.0},
+            "simulation": {"commission": 0.6, "stamp_tax": 0.6},
+        }
+        with pytest.raises(ValueError, match="commission"):
+            backtest.simulate(df, strategy, 100000, "600000")
+
+    def test_empty_string_stamp_tax_rejected(self):
+        # "" must error loudly via float(), not silently disable the tax.
+        df = _df_from_closes([10, 10, 12])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20},
+            "position": {"size": 1.0},
+            "simulation": {"stamp_tax": ""},
+        }
+        with pytest.raises(ValueError, match="could not convert"):
+            backtest.simulate(df, strategy, 100000, "600000")
+
+    def test_empty_stamp_tax_value_means_disabled(self):
+        # YAML `stamp_tax:` with no value parses as None → treated as 0 (disabled).
+        df = _df_from_closes([10, 10, 11, 12])
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "exit": {"stop_loss": -0.5, "take_profit": 0.20},
+            "position": {"size": 1.0},
+            "simulation": {"slippage": 0.0, "commission": 0.001, "stamp_tax": None},
+        }
+        sim = backtest.simulate(df, strategy, 1000000, "600000")
+        assert sim["costs"]["stamp_tax"] == 0.0
+        assert sim["costs"]["stamp_tax_paid"] == 0.0
+
+
 class TestBenchmark:
     def test_benchmark_block_added(self, monkeypatch, make_kline_data):
         main_df = pd.DataFrame(make_kline_data(120, "volatile"))

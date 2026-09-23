@@ -30,6 +30,11 @@ exit:
   stop_loss: "{stop_loss}"
   take_profit: "{take_profit}"
 
+simulation:
+  slippage: 0.001       # 滑点（买卖双边）
+  commission: 0.00025   # 佣金（买卖双边，A股常见万2.5）
+  stamp_tax: 0.0005     # 印花税（A股卖出单边；其他市场按当下实际费率，无则删除本行）
+
 position:
   size: 1.0
   max_positions: 1

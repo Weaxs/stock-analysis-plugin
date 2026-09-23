@@ -256,6 +256,13 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
     sim_cfg = strategy.get("simulation", {})
     slippage = float(sim_cfg.get("slippage", 0.001))
     commission = float(sim_cfg.get("commission", 0.0015))
+    tax_raw = sim_cfg.get("stamp_tax")  # sell-side only (e.g. A股印花税); absent/empty = 0 (disabled)
+    stamp_tax = float(0.0 if tax_raw is None else tax_raw)
+    for name, rate in (("slippage", slippage), ("commission", commission), ("stamp_tax", stamp_tax)):
+        if not 0 <= rate < 1:
+            raise ValueError(f"simulation.{name} must be a rate in [0, 1), got {rate}")
+    if commission + stamp_tax >= 1:
+        raise ValueError(f"simulation commission + stamp_tax must be < 1, got {commission + stamp_tax}")
 
     entry = strategy.get("entry", {})
     exit_ = strategy.get("exit", {})
@@ -277,6 +284,8 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
     holding = None
     cash = capital
     trade_id = 0
+    commission_paid = 0.0
+    stamp_tax_paid = 0.0
 
     for i in range(1, len(df)):
         row = df.iloc[i]
@@ -292,6 +301,7 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                 if shares <= 0:
                     continue
                 cost = shares * buy_price * (1 + commission)
+                commission_paid += shares * buy_price * commission
                 cash -= cost
                 trade_id += 1
                 holding = {
@@ -335,7 +345,10 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
 
             if sell:
                 sell_price = price * (1 - slippage)
-                proceeds = holding["shares"] * sell_price * (1 - commission)
+                gross = holding["shares"] * sell_price
+                proceeds = gross * (1 - commission - stamp_tax)
+                commission_paid += gross * commission
+                stamp_tax_paid += gross * stamp_tax
                 cash += proceeds
                 pnl = proceeds - holding["cost"]
                 days = 0
@@ -376,6 +389,13 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
         "trades": trades,
         "equity_curve": equity_curve,
         "final_equity": equity_curve[-1]["equity"] if equity_curve else capital,
+        "costs": {
+            "slippage": slippage,
+            "commission": commission,
+            "stamp_tax": stamp_tax,
+            "commission_paid": round(commission_paid, 2),
+            "stamp_tax_paid": round(stamp_tax_paid, 2),
+        },
     }
 
 
@@ -643,6 +663,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         "period": f"{start} to {end}",
         "initial_capital": capital,
         "final_capital": final,
+        "costs": sim["costs"],
         "metrics": metrics,
         "trades": sim["trades"],
         "equity_curve": sample_curve(sim["equity_curve"]),

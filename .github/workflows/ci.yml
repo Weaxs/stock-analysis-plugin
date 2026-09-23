@@ -244,10 +244,14 @@ jobs:
         # validated CLIs — openclaw@latest installed no working bin, and pi's
         # `list` flags changed between releases. dsh is a developer preview
         # (rc line), so pin it too. `dsh plugin` forwards to pnpm.
+        # dsh 0.1.5-rc.3: 0.1.0-rc.7's patch-layer watcher is incompatible with
+        # the floated cordis-plugin-hmr ≥1.0.19 (registerConfig API removed) and
+        # crashed headless boots with "user patch-layer watching requires the
+        # Cordis HMR service" (2026-09-23). rc-line transitive deps still float.
         run: |
           npm i -g @earendil-works/pi-coding-agent@0.83.0
           npm i -g openclaw@2026.6.33
-          npm i -g @deepseek-ai/dsh@0.1.0-rc.7
+          npm i -g @deepseek-ai/dsh@0.1.5-rc.3
           npm i -g pnpm@10
 
       - name: Real-host smoke QA (${{ matrix.host }})
