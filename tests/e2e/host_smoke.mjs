@@ -172,6 +172,7 @@ function smokeOpenclaw() {
     "--strict-json",
   ]);
   oc(["config", "set", "agents.defaults.model.primary", `smokellm/${MODEL}`]);
+  oc(["config", "set", "tools.allow", '["get_quote"]', "--strict-json"]);
 
   retryQA("openclaw", () => {
     const sessionId = `smoke-${Date.now()}`;
