@@ -20,6 +20,7 @@ import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { venvPythonPath } from "../../scripts/venv-python.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -152,6 +153,7 @@ function smokeOpenclaw() {
 
   // Plugin installs may leave an existing but incomplete venv.
   sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
+  sh(venvPythonPath(extDir), ["-c", "import yfinance"]);
 
   // OpenAI-compatible custom provider; resolve the key from the environment.
   oc([
