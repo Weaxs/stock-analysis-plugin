@@ -4,7 +4,7 @@
 // subprocess-based tool executor. Only meaningful difference vs Hermes is
 // the tool-call path — the LLM prompt/protocol is identical.
 //
-// Requires E2E_LLM_CONFIG (JSON: baseUrl, apiKey, model).
+// Requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
 
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -16,10 +16,11 @@ import OpenAI from "openai";
 
 const execFileAsync = promisify(execFile);
 
-const config = JSON.parse(process.env.E2E_LLM_CONFIG || "{}");
-const { apiKey, baseUrl: baseURL, model: MODEL } = config;
+const apiKey = process.env.OPENAI_API_KEY;
+const baseURL = process.env.OPENAI_BASE_URL;
+const MODEL = process.env.OPENAI_MODEL || "";
 if (!apiKey || !baseURL || !MODEL) {
-  console.log("E2E_LLM_CONFIG needs baseUrl, apiKey, and model — skipping Pi LLM e2e");
+  console.log("OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping Pi LLM e2e");
   process.exit(0);
 }
 

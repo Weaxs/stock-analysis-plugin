@@ -4,7 +4,7 @@ Verifies the full agentic loop works: the configured LLM gets a natural-language
 decides to call our tools, we execute them via Hermes handlers, and the LLM
 produces a final answer.
 
-Requires E2E_LLM_CONFIG (JSON: baseUrl, apiKey, model).
+Requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
 
 Uses the OpenAI SDK against an OpenAI-compatible endpoint.
 """
@@ -17,17 +17,16 @@ import pytest
 pytestmark = pytest.mark.integration_llm
 
 
-E2E_LLM_CONFIG = json.loads(os.environ.get("E2E_LLM_CONFIG", "{}"))
-E2E_LLM_MODEL = E2E_LLM_CONFIG.get("model")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL")
 
 
 @pytest.fixture(scope="module")
 def client():
     """OpenAI-compatible client for the configured model."""
-    api_key = E2E_LLM_CONFIG.get("apiKey")
-    base_url = E2E_LLM_CONFIG.get("baseUrl")
-    if not api_key or not base_url or not E2E_LLM_MODEL:
-        pytest.fail("E2E_LLM_CONFIG must contain baseUrl, apiKey, and model")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    if not api_key or not base_url or not OPENAI_MODEL:
+        pytest.fail("OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required")
     try:
         from openai import OpenAI
     except ImportError:
@@ -89,7 +88,7 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
 
     for _ in range(max_turns):
         resp = client.chat.completions.create(
-            model=E2E_LLM_MODEL,
+            model=OPENAI_MODEL,
             messages=messages,
             tools=tools,
             tool_choice="auto",

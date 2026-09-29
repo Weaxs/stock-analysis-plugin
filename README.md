@@ -439,13 +439,15 @@ python tools/market_regime.py detect A
 
 ## CI 真实宿主测试
 
-GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。要启用它，在仓库 **Settings → Secrets and variables → Actions** 中配置一个 repository secret `E2E_LLM_CONFIG`：
+GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。要启用它，在仓库 **Settings → Secrets and variables → Actions** 中配置三个 repository secrets，所有 E2E 共用：
 
-```json
-{"baseUrl":"https://your-openai-compatible-endpoint/v1","apiKey":"your-api-key","model":"your-tool-calling-model"}
-```
+| Secret | 内容 |
+|---|---|
+| `OPENAI_BASE_URL` | OpenAI 兼容的 API base URL，包含服务商要求的路径（例如 `/v1`） |
+| `OPENAI_API_KEY` | 对应的 API key |
+| `OPENAI_MODEL` | 支持 tool calling 的模型 ID |
 
-`baseUrl` 需包含服务商要求的 API 路径；`model` 需支持 tool calling。`e2e-llm` 也使用同一配置；同仓库 PR 和主分支推送会运行，fork PR 不读取 secret。`e2e-host` 缺少该配置或字段时会失败。
+`e2e-llm` 也使用这三项 secrets；同仓库 PR 和主分支推送会运行，fork PR 不读取 secrets。`e2e-host` 缺少任一项时会失败。
 
 ## 项目结构
 

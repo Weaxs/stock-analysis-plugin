@@ -163,7 +163,7 @@ jobs:
         run: npx tsx tests/e2e/test_dsh_e2e.ts
 
   e2e-llm:
-    # Real OpenAI-compatible call. Configure E2E_LLM_CONFIG as a JSON secret.
+    # Real OpenAI-compatible call. All E2E jobs share three provider secrets.
     # (skipped on forks to prevent secret exposure).
     # continue-on-error: like `network` — non-deterministic output must not
     # block the release path (see publish.yml).
@@ -196,20 +196,24 @@ jobs:
 
       - name: E2E — Hermes LLM flow
         env:
-          E2E_LLM_CONFIG: ${{ secrets.E2E_LLM_CONFIG }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
         run: |
-          if [ -z "$E2E_LLM_CONFIG" ]; then
-            echo "E2E_LLM_CONFIG is required — skipping LLM e2e"
+          if [ -z "$OPENAI_BASE_URL" ] || [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
           pytest tests/e2e/test_hermes_llm.py -m integration_llm -v
 
       - name: E2E — Pi LLM flow
         env:
-          E2E_LLM_CONFIG: ${{ secrets.E2E_LLM_CONFIG }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
         run: |
-          if [ -z "$E2E_LLM_CONFIG" ]; then
-            echo "E2E_LLM_CONFIG is required — skipping LLM e2e"
+          if [ -z "$OPENAI_BASE_URL" ] || [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
           npx tsx tests/e2e/test_pi_llm.ts
@@ -252,10 +256,12 @@ jobs:
 
       - name: Real-host smoke QA (${{ matrix.host }})
         env:
-          E2E_LLM_CONFIG: ${{ secrets.E2E_LLM_CONFIG }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
         run: |
-          if [ -z "$E2E_LLM_CONFIG" ]; then
-            echo "E2E_LLM_CONFIG is required (blocking check)"
+          if [ -z "$OPENAI_BASE_URL" ] || [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required (blocking check)"
             exit 1
           fi
           node tests/e2e/host_smoke.mjs ${{ matrix.host }}

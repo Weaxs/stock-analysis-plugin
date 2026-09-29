@@ -6,7 +6,9 @@
  * Usage: node tests/e2e/host_smoke.mjs <pi|openclaw|hermes|dsh>
  *
  * Env:
- *   E2E_LLM_CONFIG    (required) JSON with baseUrl, apiKey, model
+ *   OPENAI_BASE_URL    (required) OpenAI-compatible API base URL
+ *   OPENAI_API_KEY     (required) API key
+ *   OPENAI_MODEL       (required) model ID
  *   SMOKE_WORKDIR      (optional) scratch dir, default: mktemp
  *
  * Assertions (both required, retried up to 2 times):
@@ -27,15 +29,13 @@ if (!["pi", "openclaw", "hermes", "dsh"].includes(host)) {
   process.exit(2);
 }
 
-let llm;
-try { llm = JSON.parse(process.env.E2E_LLM_CONFIG || "{}"); }
-catch { llm = {}; }
-const { apiKey: API_KEY, baseUrl: BASE_URL, model: MODEL } = llm;
-if (![API_KEY, BASE_URL, MODEL].every((value) => typeof value === "string" && value.length > 0)) {
-  console.error("E2E_LLM_CONFIG must contain baseUrl, apiKey, and model strings");
+const API_KEY = process.env.OPENAI_API_KEY || "";
+const BASE_URL = process.env.OPENAI_BASE_URL || "";
+const MODEL = process.env.OPENAI_MODEL || "";
+if (!API_KEY || !BASE_URL || !MODEL) {
+  console.error("OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required");
   process.exit(2);
 }
-process.env.SMOKE_LLM_API_KEY = API_KEY;
 
 const WORK = process.env.SMOKE_WORKDIR || mkdtempSync(join(tmpdir(), `host-smoke-${host}-`));
 const QUESTION =
@@ -87,7 +87,7 @@ async function smokePi() {
   mkdirSync(piDir, { recursive: true });
   writeFileSync(join(piDir, "models.json"), JSON.stringify({
     providers: { smokellm: {
-      baseUrl: BASE_URL, api: "openai-completions", apiKey: "$SMOKE_LLM_API_KEY",
+      baseUrl: BASE_URL, api: "openai-completions", apiKey: "$OPENAI_API_KEY",
       models: [{ id: MODEL }],
     } },
   }));
@@ -161,7 +161,7 @@ function smokeOpenclaw() {
     "config", "set", "models.providers.smokellm",
     JSON.stringify({
       baseUrl: BASE_URL,
-      apiKey: "${SMOKE_LLM_API_KEY}",
+      apiKey: "${OPENAI_API_KEY}",
       api: "openai-completions",
       models: [{
         id: MODEL, name: MODEL, reasoning: false, input: ["text"],
@@ -296,7 +296,7 @@ function smokeDsh() {
     `  config:\n` +
     `    providers:\n` +
     `      smokellm:\n` +
-    `        apiKeyEnv: SMOKE_LLM_API_KEY\n` +
+    `        apiKeyEnv: OPENAI_API_KEY\n` +
     `        api: openai-completions\n` +
     `        baseURL: ${JSON.stringify(BASE_URL)}\n` +
     `        models:\n` +
