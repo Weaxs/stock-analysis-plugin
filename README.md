@@ -24,6 +24,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 - [策略回测 DSL](#策略回测-dsl)
 - [市场路由规则](#市场路由规则)
 - [独立 CLI 使用](#独立-cli-使用)
+- [CI 真实宿主测试](#ci-真实宿主测试)
 - [项目结构](#项目结构)
 - [致谢](#致谢)
 - [常见问题](#常见问题)
@@ -435,6 +436,16 @@ python tools/risk_screening.py screen 600519
 # 市场状态
 python tools/market_regime.py detect A
 ```
+
+## CI 真实宿主测试
+
+GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。要启用它，在仓库 **Settings → Secrets and variables → Actions** 中配置一个 repository secret `E2E_LLM_CONFIG`：
+
+```json
+{"baseUrl":"https://your-openai-compatible-endpoint/v1","apiKey":"your-api-key","model":"your-tool-calling-model"}
+```
+
+`baseUrl` 需包含服务商要求的 API 路径；`model` 需支持 tool calling。`e2e-llm` 也使用同一配置；同仓库 PR 和主分支推送会运行，fork PR 不读取 secret。`e2e-host` 缺少该配置或字段时会失败。
 
 ## 项目结构
 

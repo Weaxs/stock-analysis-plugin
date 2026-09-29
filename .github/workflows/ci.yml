@@ -163,7 +163,7 @@ jobs:
         run: npx tsx tests/e2e/test_dsh_e2e.ts
 
   e2e-llm:
-    # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
+    # Real OpenAI-compatible call. Configure E2E_LLM_CONFIG as a JSON secret.
     # (skipped on forks to prevent secret exposure).
     # continue-on-error: like `network` — non-deterministic output must not
     # block the release path (see publish.yml).
@@ -196,22 +196,20 @@ jobs:
 
       - name: E2E — Hermes LLM flow
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          E2E_LLM_CONFIG: ${{ secrets.E2E_LLM_CONFIG }}
         run: |
-          if [ -z "$DEEPSEEK_API_KEY" ]; then
-            echo "DEEPSEEK_API_KEY not configured — skipping LLM e2e"
+          if [ -z "$E2E_LLM_CONFIG" ]; then
+            echo "E2E_LLM_CONFIG is required — skipping LLM e2e"
             exit 0
           fi
           pytest tests/e2e/test_hermes_llm.py -m integration_llm -v
 
       - name: E2E — Pi LLM flow
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          E2E_LLM_CONFIG: ${{ secrets.E2E_LLM_CONFIG }}
         run: |
-          if [ -z "$DEEPSEEK_API_KEY" ]; then
-            echo "DEEPSEEK_API_KEY not configured — skipping LLM e2e"
+          if [ -z "$E2E_LLM_CONFIG" ]; then
+            echo "E2E_LLM_CONFIG is required — skipping LLM e2e"
             exit 0
           fi
           npx tsx tests/e2e/test_pi_llm.ts
@@ -236,38 +234,28 @@ jobs:
           python-version: "3.11"
 
       - uses: actions/setup-node@v4
-        # Node 24: openclaw requires >= 22.19, and pi 0.83's undici breaks on 20.x
-        # (dsh also requires ^22.19 || >=24)
+        # OpenClaw 2026.9.6 requires Node >=24.16.
         with:
-          node-version: "24"
+          node-version: "24.16.0"
           cache: "npm"
 
       - name: Install Node dependencies (also builds repo .venv via postinstall)
         run: npm ci
 
       - name: Install host CLIs
-        # Pinned: pi latest and openclaw latest (slim repack) drifted from the
-        # validated CLIs — openclaw@latest installed no working bin, and pi's
-        # `list` flags changed between releases. dsh is a developer preview
-        # (rc line), so pin it too. `dsh plugin` forwards to pnpm.
-        # dsh 0.1.5-rc.3: 0.1.0-rc.7's patch-layer watcher is incompatible with
-        # the floated cordis-plugin-hmr ≥1.0.19 (registerConfig API removed) and
-        # crashed headless boots with "user patch-layer watching requires the
-        # Cordis HMR service" (2026-09-23). rc-line transitive deps still float.
+        # Pin the current host releases so failures are reproducible.
         run: |
-          npm i -g @earendil-works/pi-coding-agent@0.83.0
-          npm i -g openclaw@2026.6.33
-          npm i -g @deepseek-ai/dsh@0.1.5-rc.3
+          npm i -g @earendil-works/pi-coding-agent@0.87.1
+          npm i -g openclaw@2026.9.6
+          npm i -g @deepseek-ai/dsh@0.2.0-rc.2
           npm i -g pnpm@10
 
       - name: Real-host smoke QA (${{ matrix.host }})
         env:
-          SMOKE_LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          SMOKE_LLM_BASE_URL: https://api.deepseek.com
-          SMOKE_LLM_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          E2E_LLM_CONFIG: ${{ secrets.E2E_LLM_CONFIG }}
         run: |
-          if [ -z "$SMOKE_LLM_API_KEY" ]; then
-            echo "SMOKE_LLM_API_KEY not configured — failing (this check is blocking by design)"
+          if [ -z "$E2E_LLM_CONFIG" ]; then
+            echo "E2E_LLM_CONFIG is required (blocking check)"
             exit 1
           fi
           node tests/e2e/host_smoke.mjs ${{ matrix.host }}

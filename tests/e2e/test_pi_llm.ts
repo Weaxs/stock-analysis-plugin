@@ -4,8 +4,7 @@
 // subprocess-based tool executor. Only meaningful difference vs Hermes is
 // the tool-call path — the LLM prompt/protocol is identical.
 //
-// Requires DEEPSEEK_API_KEY. Skip (exit 0) if unset — this test is opt-in.
-// Model: DEEPSEEK_MODEL env (default: deepseek-v4-flash).
+// Requires E2E_LLM_CONFIG (JSON: baseUrl, apiKey, model).
 
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -17,13 +16,12 @@ import OpenAI from "openai";
 
 const execFileAsync = promisify(execFile);
 
-const apiKey = process.env.DEEPSEEK_API_KEY;
-if (!apiKey) {
-  console.log("DEEPSEEK_API_KEY not set — skipping Pi LLM e2e (opt-in)");
+const config = JSON.parse(process.env.E2E_LLM_CONFIG || "{}");
+const { apiKey, baseUrl: baseURL, model: MODEL } = config;
+if (!apiKey || !baseURL || !MODEL) {
+  console.log("E2E_LLM_CONFIG needs baseUrl, apiKey, and model — skipping Pi LLM e2e");
   process.exit(0);
 }
-
-const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
@@ -64,11 +62,11 @@ mod.default(mockPi);
 
 console.log(`Pi LLM e2e (python: ${python}, model: ${MODEL})`);
 
-// --- DeepSeek client ------------------------------------------------------
+// --- OpenAI-compatible client --------------------------------------------
 
 const client = new OpenAI({
   apiKey,
-  baseURL: "https://api.deepseek.com",
+  baseURL,
 });
 
 function toOpenAITools(names: string[]) {
