@@ -119,6 +119,7 @@ jobs:
             fi
           done
           rm -f openclaw/scripts/sync-version.sh
+          cp LICENSE openclaw/LICENSE
 
       # Guard against regression of the issue behind
       # https://github.com/Weaxs/stock-analysis-plugin/issues/3 — a TS entry
@@ -132,6 +133,8 @@ jobs:
           npm pack --dry-run 2>&1 | tee pack-dry-run.txt
           grep -q "dist/index.js" pack-dry-run.txt \
             || { echo "::error::dist/index.js missing from openclaw npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
+          grep -q "LICENSE" pack-dry-run.txt \
+            || { echo "::error::LICENSE missing from openclaw npm tarball"; exit 1; }
           test -f dist/index.js \
             || { echo "::error::openclaw/dist/index.js missing on disk — clawhub publish would ship no compiled entry"; exit 1; }
 
@@ -200,6 +203,7 @@ jobs:
             fi
           done
           rm -f dsh/scripts/sync-version.sh
+          cp LICENSE dsh/LICENSE
 
       # Same regression guard as the OpenClaw job: the dsh profile loader
       # imports built JS, so dist must survive the `files` whitelist, and the
@@ -212,6 +216,8 @@ jobs:
             || { echo "::error::dist/index.js missing from dsh npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
           grep -q "cordis.patch.yml" pack-dry-run.txt \
             || { echo "::error::cordis.patch.yml missing from dsh npm tarball — dsh bundle manifest would dangle"; exit 1; }
+          grep -q "LICENSE" pack-dry-run.txt \
+            || { echo "::error::LICENSE missing from dsh npm tarball"; exit 1; }
 
       - name: npm publish
         working-directory: dsh

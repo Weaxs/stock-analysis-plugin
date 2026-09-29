@@ -119,6 +119,9 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      - name: Python setup failure check
+        run: node tests/test_setup_python.mjs
+
       # tests/conftest.py imports numpy/pandas at module load, so any pytest run
       # needs the tools' runtime deps in system python. npm ci's postinstall
       # separately builds .venv (full requirements) — that's the python the
@@ -140,6 +143,9 @@ jobs:
 
       - name: dsh plugin registration
         run: npx tsx tests/test_dsh_integration.ts
+
+      - name: dsh current SDK compatibility
+        run: npx tsx tests/test_dsh_sdk_compat.ts
 
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
