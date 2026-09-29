@@ -259,7 +259,7 @@ jobs:
       - name: Install host CLIs
         # Pin the current host releases so failures are reproducible.
         run: |
-          npm i -g @earendil-works/pi-coding-agent@0.87.1
+          npm i -g @earendil-works/pi-coding-agent@0.99.0
           npm i -g openclaw@2026.9.6
           npm i -g @deepseek-ai/dsh@0.2.0-rc.2
           npm i -g pnpm@10

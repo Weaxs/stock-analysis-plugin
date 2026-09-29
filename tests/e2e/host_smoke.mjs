@@ -172,15 +172,15 @@ function smokeOpenclaw() {
   oc(["config", "set", "tools.allow", '["get_quote"]', "--strict-json"]);
 
   retryQA("openclaw", () => {
-    const sessionId = `smoke-${Date.now()}`;
+    const sessionKey = `agent:main:smoke-${Date.now()}`;
     const out = oc([
-      "agent", "--local", "--session-id", sessionId,
+      "agent", "--local", "--session-key", sessionKey,
       "-m", QUESTION, "--json", "--timeout", "180",
     ]);
     const parsed = JSON.parse(out);
     const text = (parsed.payloads || []).map((p) => p.text || "").join("\n");
     // Current OpenClaw stores active sessions in SQLite, not session files.
-    const calledGetQuote = oc(["sessions", "tail", "--tail", "80"]).includes("get_quote");
+    const calledGetQuote = oc(["sessions", "tail", "--session-key", sessionKey, "--tail", "80"]).includes("get_quote");
     return {
       ok: calledGetQuote && /\d/.test(text),
       log: `toolCalled=${calledGetQuote} final=${text.slice(0, 80)}`,
