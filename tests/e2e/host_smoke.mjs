@@ -150,11 +150,8 @@ function smokeOpenclaw() {
   assertCond(existsSync(join(extDir, "dist", "index.js")), "installed plugin has dist/index.js");
   assertCond(existsSync(join(extDir, "tools", "stock_data.py")), "installed plugin has tools/");
 
-  // Lifecycle scripts don't run on plugin install — set the python env up like
-  // the docs tell users to.
-  if (!existsSync(join(extDir, ".venv"))) {
-    sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
-  }
+  // Plugin installs may leave an existing but incomplete venv.
+  sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
 
   // OpenAI-compatible custom provider; resolve the key from the environment.
   oc([
@@ -182,12 +179,8 @@ function smokeOpenclaw() {
     ]);
     const parsed = JSON.parse(out);
     const text = (parsed.payloads || []).map((p) => p.text || "").join("\n");
-    // tool-call trace lives in the session transcript file
-    const sessionFile = parsed.meta?.agentMeta?.sessionFile;
-    let calledGetQuote = false;
-    if (sessionFile && existsSync(sessionFile)) {
-      calledGetQuote = readFileSync(sessionFile, "utf-8").includes("get_quote");
-    }
+    // Current OpenClaw stores active sessions in SQLite, not session files.
+    const calledGetQuote = oc(["sessions", "tail", "--tail", "80"]).includes("get_quote");
     return {
       ok: calledGetQuote && /\d/.test(text),
       log: `toolCalled=${calledGetQuote} final=${text.slice(0, 80)}`,
@@ -272,9 +265,7 @@ function smokeDsh() {
   // Profile installs go through pnpm, which skips dependency lifecycle scripts
   // without an allowBuilds entry — set the python env up like the docs tell
   // users to.
-  if (!existsSync(join(pkgDir, ".venv"))) {
-    sh("node", [join(pkgDir, "scripts", "setup-python.mjs")], { cwd: pkgDir, env });
-  }
+  sh("node", [join(pkgDir, "scripts", "setup-python.mjs")], { cwd: pkgDir, env });
 
   // One --patch overlay for the whole smoke:
   //   - smoke-tool-spy: logs every executed tool name (dsh's durable session
