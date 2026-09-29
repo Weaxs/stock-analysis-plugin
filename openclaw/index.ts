@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import * as cp from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
@@ -42,6 +42,9 @@ function pythonBin(): string {
 }
 
 async function runPy(script: string, args: string[]): Promise<string> {
+  if (process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE) {
+    appendFileSync(process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE, `${here} | ${toolsDir} | ${pythonBin()}\n`);
+  }
   return executor(pythonBin(), [join(toolsDir, script), ...args]);
 }
 
