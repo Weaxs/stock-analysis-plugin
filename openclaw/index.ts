@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import * as cp from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
@@ -25,28 +25,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const toolsDir = existsSync(join(here, "tools"))
   ? join(here, "tools")
   : join(here, "..", "tools");
-const repoRoot = dirname(toolsDir);
+const fallbackRoot = dirname(toolsDir);
 const isWin = process.platform === "win32";
 // Windows venvs ship Scripts/python.exe (there is no python3); POSIX venvs ship bin/python3.
 const venvBin = join(".venv", isWin ? "Scripts" : "bin", isWin ? "python.exe" : "python3");
-const venvPython = join(repoRoot, venvBin);
-// Staged-payload layout (openclaw/tools present in a dev checkout): the venv
-// still lives at the repo root one level up.
-const parentVenvPython = join(repoRoot, "..", venvBin);
-
-function pythonBin(): string {
-  if (existsSync(venvPython)) return venvPython;
-  if (existsSync(parentVenvPython)) return parentVenvPython;
-  // On Windows "python3" is usually the Microsoft Store stub — prefer "python".
-  return isWin ? "python" : "python3";
-}
-
-async function runPy(script: string, args: string[]): Promise<string> {
-  if (process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE) {
-    appendFileSync(process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE, `${here} | ${toolsDir} | ${pythonBin()}\n`);
-  }
-  return executor(pythonBin(), [join(toolsDir, script), ...args]);
-}
 
 function asText(text: string) {
   return { content: [{ type: "text" as const, text }] };
@@ -58,6 +40,19 @@ export default definePluginEntry({
   description:
     "Stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets",
   register(api) {
+    // OpenClaw executes a captured copy of the JS bundle; the venv stays in the installed plugin root.
+    const repoRoot = api.rootDir || fallbackRoot;
+    const pythonBin = () => {
+      const venvPython = join(repoRoot, venvBin);
+      if (existsSync(venvPython)) return venvPython;
+      // In a staged dev checkout, the venv still lives at the repo root.
+      const parentVenvPython = join(repoRoot, "..", venvBin);
+      if (existsSync(parentVenvPython)) return parentVenvPython;
+      // On Windows "python3" is usually the Microsoft Store stub — prefer "python".
+      return isWin ? "python" : "python3";
+    };
+    const runPy = (script: string, args: string[]) =>
+      executor(pythonBin(), [join(toolsDir, script), ...args]);
     // --- Data Tools ---
 
     api.registerTool({

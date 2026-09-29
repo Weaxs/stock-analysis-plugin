@@ -20,7 +20,6 @@ import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { venvPythonPath } from "../../scripts/venv-python.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -135,7 +134,6 @@ async function smokePi() {
 
 // ----------------------------------------------------------- openclaw -------
 function smokeOpenclaw() {
-  process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE = join(WORK, "openclaw-python-paths.log");
   // Replicate the publish payload: stage shared dirs, build dist, pack, install.
   for (const d of ["tools", "skills", "schemas", "templates", "strategies", "scripts"]) {
     sh("rm", ["-rf", join(repoRoot, "openclaw", d)]);
@@ -154,8 +152,6 @@ function smokeOpenclaw() {
 
   // Plugin installs may leave an existing but incomplete venv.
   sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
-  sh(venvPythonPath(extDir), ["-c", "import yfinance"]);
-  console.log(sh(venvPythonPath(extDir), [join(extDir, "tools", "stock_data.py"), "quote", "AAPL"]).slice(0, 300));
 
   // OpenAI-compatible custom provider; resolve the key from the environment.
   oc([
@@ -181,9 +177,6 @@ function smokeOpenclaw() {
       "agent", "--local", "--session-id", sessionId,
       "-m", QUESTION, "--json", "--timeout", "180",
     ]);
-    if (existsSync(process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE)) {
-      console.log(readFileSync(process.env.STOCK_ANALYSIS_SMOKE_TRACE_FILE, "utf-8").trim().split("\n").at(-1));
-    }
     const parsed = JSON.parse(out);
     const text = (parsed.payloads || []).map((p) => p.text || "").join("\n");
     // Current OpenClaw stores active sessions in SQLite, not session files.

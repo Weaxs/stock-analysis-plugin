@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { createJiti } from "jiti";
+import { venvPythonPath } from "../scripts/venv-python.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
@@ -25,8 +27,13 @@ interface PluginConfig {
 let capturedConfig: PluginConfig | null = null;
 
 const tools: ToolDef[] = [];
+const pluginRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-root-"));
+const installedPython = venvPythonPath(pluginRoot);
+mkdirSync(dirname(installedPython), { recursive: true });
+writeFileSync(installedPython, "");
 
 const fakeApi = {
+  rootDir: pluginRoot,
   registerTool(tool: ToolDef) {
     tools.push(tool);
   },
@@ -65,7 +72,7 @@ const fakeTypebox = {
 
 // --- Capture execFile calls without actually spawning Python --------------
 
-const execCalls: { script: string; args: string[] }[] = [];
+const execCalls: { bin: string; script: string; args: string[] }[] = [];
 
 const jiti = createJiti(fileURLToPath(import.meta.url), {
   alias: {
@@ -83,9 +90,9 @@ const mod = await jiti.import("../openclaw/index.ts") as {
   __setExecutor: (fn: (bin: string, argv: string[]) => Promise<string>) => void;
 };
 
-mod.__setExecutor(async (_bin, argv) => {
+mod.__setExecutor(async (bin, argv) => {
   const [scriptPath, ...rest] = argv;
-  execCalls.push({ script: scriptPath, args: rest });
+  execCalls.push({ bin, script: scriptPath, args: rest });
   return `mock:${scriptPath}`;
 });
 
@@ -310,6 +317,9 @@ if (renderTool) {
   const last = execCalls[execCalls.length - 1];
   assert(!last.args.includes("--save"), "render_market_report: save omitted must not pass --save");
 }
+
+assert(execCalls.every((call) => call.bin === installedPython), "plugin tools must use installed root venv");
+rmSync(pluginRoot, { recursive: true, force: true });
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

@@ -16,6 +16,7 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
   }
 
   interface PluginAPI {
+    rootDir?: string;
     registerTool<P = any>(
       tool: ToolDefinition<P>,
       opts?: { optional?: boolean }
