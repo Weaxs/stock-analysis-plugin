@@ -145,7 +145,7 @@ function smokeOpenclaw() {
 
   const oc = (args, opts = {}) =>
     sh("openclaw", ["--profile", "ci-smoke", ...args], opts);
-  oc(["plugins", "install", tgz, "--force"]);
+  oc(["plugins", "install", tgz, "--force", "--accept-capabilities"]);
   const extDir = join(process.env.HOME, ".openclaw-ci-smoke", "extensions", "stock-analysis");
   assertCond(existsSync(join(extDir, "dist", "index.js")), "installed plugin has dist/index.js");
   assertCond(existsSync(join(extDir, "tools", "stock_data.py")), "installed plugin has tools/");
