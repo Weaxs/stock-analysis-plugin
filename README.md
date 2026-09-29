@@ -439,15 +439,15 @@ python tools/market_regime.py detect A
 
 ## CI 真实宿主测试
 
-GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。要启用它，在仓库 **Settings → Secrets and variables → Actions** 中配置三个 repository secrets，所有 E2E 共用：
+GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。在仓库 **Settings → Secrets and variables → Actions** 中配置以下三项，所有 E2E 共用：
 
-| Secret | 内容 |
-|---|---|
-| `OPENAI_BASE_URL` | OpenAI 兼容的 API base URL，包含服务商要求的路径（例如 `/v1`） |
-| `OPENAI_API_KEY` | 对应的 API key |
-| `OPENAI_MODEL` | 支持 tool calling 的模型 ID |
+| 名称 | 存放位置 | 内容 |
+|---|---|---|
+| `OPENAI_BASE_URL` | Variable 或 Secret | OpenAI 兼容的 API base URL，包含服务商要求的路径（例如 `/v1`） |
+| `OPENAI_API_KEY` | Secret | 对应的 API key |
+| `OPENAI_MODEL` | Variable 或 Secret | 支持 tool calling 的模型 ID |
 
-`e2e-llm` 也使用这三项 secrets；同仓库 PR 和主分支推送会运行，fork PR 不读取 secrets。`e2e-host` 缺少任一项时会失败。
+`e2e-llm` 也使用这三项配置；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
 
 ## 项目结构
 
