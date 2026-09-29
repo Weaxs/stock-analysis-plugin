@@ -184,6 +184,11 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      - name: Resolve model endpoint on runner
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+        run: node scripts/ci-resolve-llm-host.mjs
+
       - name: Install Python dependencies
         run: |
           pip install -r tools/requirements.txt
@@ -242,6 +247,11 @@ jobs:
         with:
           node-version: "24.16.0"
           cache: "npm"
+
+      - name: Resolve model endpoint on runner
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+        run: node scripts/ci-resolve-llm-host.mjs
 
       - name: Install Node dependencies (also builds repo .venv via postinstall)
         run: npm ci
