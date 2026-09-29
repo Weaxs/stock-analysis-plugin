@@ -154,6 +154,7 @@ function smokeOpenclaw() {
   // Plugin installs may leave an existing but incomplete venv.
   sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
   sh(venvPythonPath(extDir), ["-c", "import yfinance"]);
+  console.log(sh(venvPythonPath(extDir), [join(extDir, "tools", "stock_data.py"), "quote", "AAPL"]).slice(0, 300));
 
   // OpenAI-compatible custom provider; resolve the key from the environment.
   oc([
