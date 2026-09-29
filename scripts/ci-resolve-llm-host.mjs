@@ -13,7 +13,8 @@ if (process.env.OPENAI_BASE_URL) {
   } catch { /* ask a second resolver below */ }
 
   if (!resolved) {
-    const url = `https://dns.alidns.com/resolve?name=${encodeURIComponent(host)}&type=A`;
+    // Ask for the China-facing record; the runner's overseas view gets only a CNAME.
+    const url = `https://dns.alidns.com/resolve?name=${encodeURIComponent(host)}&type=A&edns_client_subnet=223.5.5.0%2F24`;
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`AliDNS lookup failed: HTTP ${response.status}`);
     const answer = (await response.json()).Answer?.find((record) => record.type === 1);
