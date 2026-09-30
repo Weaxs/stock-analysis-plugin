@@ -78,12 +78,9 @@ jobs:
         run: python -m build
 
       - name: Publish to PyPI
-        # PyPI Trusted Publishing (OIDC): id-token: write above + no password
-        # input makes the action mint a short-lived token. Requires the
-        # project to have this workflow registered as a trusted publisher on
-        # PyPI (owner/repo/workflow filename); the long-lived PYPI_TOKEN
-        # secret is no longer used.
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
 
   publish-openclaw:
     runs-on: ubuntu-latest
@@ -154,10 +151,10 @@ jobs:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
 
       - name: Publish to ClawHub (dry-run)
-        run: clawhub package publish ./openclaw --dry-run
+        run: clawhub package publish ./openclaw --family bundle-plugin --dry-run
 
       - name: Publish to ClawHub
-        run: clawhub package publish ./openclaw
+        run: clawhub package publish ./openclaw --family bundle-plugin
 
       - name: Publish unscoped variant to npm
         # Same payload under the unscoped name. Runs after ClawHub so the
