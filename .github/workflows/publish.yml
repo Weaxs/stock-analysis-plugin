@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish or resume
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   # ci is a whole-workflow reusable call — a caller cannot `needs` individual
@@ -11,6 +20,8 @@ jobs:
   # `continue-on-error: true` in ci.yml to keep them off the release path.
   ci:
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
     secrets: inherit
 
   publish-npm:
@@ -22,6 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -30,7 +42,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Sync version from tag
-        run: bash scripts/sync-version.sh
+        run: bash scripts/sync-version.sh "$RELEASE_TAG"
 
       # --ignore-scripts: publishing only packs and uploads — no Python venv.
       - name: Install dependencies
@@ -40,7 +52,10 @@ jobs:
         run: npm pack --dry-run
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: |
+          PACKAGE=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          npm view "$PACKAGE" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -48,7 +63,9 @@ jobs:
         # Same payload under the unscoped name; users may install either.
         run: |
           npm pkg set name=stock-analysis-plugin
-          npm publish --access public --provenance
+          PACKAGE=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          npm view "$PACKAGE" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -59,6 +76,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -69,7 +88,7 @@ jobs:
           node-version: "20"
 
       - name: Sync version from tag
-        run: bash scripts/sync-version.sh
+        run: bash scripts/sync-version.sh "$RELEASE_TAG"
 
       - name: Install build tools
         run: pip install build
@@ -81,6 +100,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true
 
   publish-openclaw:
     runs-on: ubuntu-latest
@@ -90,6 +110,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -97,7 +119,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Sync version from tag
-        run: bash scripts/sync-version.sh
+        run: bash scripts/sync-version.sh "$RELEASE_TAG"
 
       # --ignore-scripts: publishing only packs and uploads — no Python venv.
       - name: Install dependencies
@@ -141,7 +163,10 @@ jobs:
 
       - name: npm publish
         working-directory: openclaw
-        run: npm publish --access public --provenance
+        run: |
+          PACKAGE=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          npm view "$PACKAGE" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -154,7 +179,13 @@ jobs:
         run: clawhub package publish ./openclaw --family bundle-plugin --dry-run
 
       - name: Publish to ClawHub
-        run: clawhub package publish ./openclaw --family bundle-plugin
+        run: |
+          VERSION=$(node -p 'require("./openclaw/package.json").version')
+          if clawhub package inspect @weaxs/openclaw-stock-analysis --version "$VERSION" --json >/dev/null 2>&1; then
+            echo "ClawHub $VERSION already published"
+          else
+            clawhub package publish ./openclaw --family bundle-plugin
+          fi
 
       - name: Publish unscoped variant to npm
         # Same payload under the unscoped name. Runs after ClawHub so the
@@ -162,7 +193,9 @@ jobs:
         working-directory: openclaw
         run: |
           npm pkg set name=openclaw-stock-analysis
-          npm publish --access public --provenance
+          PACKAGE=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          npm view "$PACKAGE" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -174,6 +207,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -181,7 +216,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Sync version from tag
-        run: bash scripts/sync-version.sh
+        run: bash scripts/sync-version.sh "$RELEASE_TAG"
 
       # --ignore-scripts: publishing only packs and uploads — no Python venv.
       - name: Install dependencies
@@ -218,7 +253,10 @@ jobs:
 
       - name: npm publish
         working-directory: dsh
-        run: npm publish --access public --provenance
+        run: |
+          PACKAGE=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          npm view "$PACKAGE" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -232,7 +270,9 @@ jobs:
           npm pkg set name=dsh-stock-analysis
           sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml README.md
           grep -q 'name: "dsh-stock-analysis"' cordis.patch.yml
-          npm publish --access public --provenance
+          PACKAGE=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          npm view "$PACKAGE" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -244,11 +284,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Compose install footer
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           cat > install_footer.md <<EOF
 
           ---
@@ -267,15 +308,18 @@ jobs:
         # Changelog compare link. We append our install footer via --notes-file
         # after the fact, since --generate-notes and --notes-file are exclusive.
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          gh release create "${RELEASE_TAG}" \
+            --title "${RELEASE_TAG}" \
             --generate-notes
           # Fetch the generated body, append install footer, update the release
-          GENERATED=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
+          GENERATED=$(gh release view "${RELEASE_TAG}" --json body --jq .body)
           {
             echo "$GENERATED"
             cat install_footer.md
           } > final_notes.md
-          gh release edit "${GITHUB_REF_NAME}" --notes-file final_notes.md
+          gh release edit "${RELEASE_TAG}" --notes-file final_notes.md
         env:
           GH_TOKEN: ${{ github.token }}
