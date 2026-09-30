@@ -15,7 +15,7 @@ const venvPython = venvPythonPath(pkgDir);
 const requirements = join(pkgDir, "tools", "requirements.txt");
 
 function run(cmd) {
-  execSync(cmd, { stdio: "pipe", timeout: 300_000 });
+  execSync(cmd, { stdio: "inherit", timeout: 1_800_000 });
 }
 
 function findPython() {
@@ -38,20 +38,18 @@ try {
       "\n[stock-analysis-plugin] python3 >= 3.10 not found.\n" +
       "Install Python 3.10+, then re-run: npm install\n"
     );
-    process.exit(0);
+    process.exit(1);
   }
 
   if (!existsSync(venvDir)) {
     run(`${python} -m venv "${venvDir}"`);
   }
 
-  if (existsSync(requirements)) {
-    run(`"${venvPython}" -m pip install -q -r "${requirements}"`);
-  }
+  run(`"${venvPython}" -m pip install -q -r "${requirements}"`);
 } catch (err) {
   console.warn(
     `\n[pi-stock-analysis] Python setup failed: ${err.message}\n` +
     "You can manually create the venv and install tools/requirements.txt with your platform's python.\n"
   );
-  process.exit(0);
+  process.exit(1);
 }

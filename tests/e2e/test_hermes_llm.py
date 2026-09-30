@@ -1,13 +1,12 @@
 """Layer 3 e2e: LLM → tool_use → real Hermes handler → answer.
 
-Verifies the full agentic loop works: DeepSeek gets a natural-language task,
-decides to call our tools, we execute them via Hermes handlers, and DeepSeek
+Verifies the full agentic loop works: the configured LLM gets a natural-language task,
+decides to call our tools, we execute them via Hermes handlers, and the LLM
 produces a final answer.
 
-Requires DEEPSEEK_API_KEY. Marked integration_llm — skipped by default.
+Requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
 
-Uses OpenAI SDK against DeepSeek's OpenAI-compatible endpoint.
-Model: DEEPSEEK_MODEL env var (default: deepseek-v4-flash).
+Uses the OpenAI SDK against an OpenAI-compatible endpoint.
 """
 
 import json
@@ -18,21 +17,21 @@ import pytest
 pytestmark = pytest.mark.integration_llm
 
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL")
 
 
 @pytest.fixture(scope="module")
 def client():
-    """OpenAI-compatible client for DeepSeek."""
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not api_key:
-        pytest.fail("DEEPSEEK_API_KEY not set — layer 3 e2e requires a real API key")
+    """OpenAI-compatible client for the configured model."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    if not api_key or not base_url or not OPENAI_MODEL:
+        pytest.fail("OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required")
     try:
         from openai import OpenAI
     except ImportError:
         pytest.fail("openai SDK not installed. add to requirements-dev.txt")
-    return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+    return OpenAI(api_key=api_key, base_url=base_url)
 
 
 @pytest.fixture(scope="module")
@@ -89,7 +88,7 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
 
     for _ in range(max_turns):
         resp = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
+            model=OPENAI_MODEL,
             messages=messages,
             tools=tools,
             tool_choice="auto",

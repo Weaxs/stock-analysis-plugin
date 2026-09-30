@@ -119,6 +119,9 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      - name: Python setup failure check
+        run: node tests/test_setup_python.mjs
+
       # tests/conftest.py imports numpy/pandas at module load, so any pytest run
       # needs the tools' runtime deps in system python. npm ci's postinstall
       # separately builds .venv (full requirements) — that's the python the
@@ -141,6 +144,9 @@ jobs:
       - name: dsh plugin registration
         run: npx tsx tests/test_dsh_integration.ts
 
+      - name: dsh current SDK compatibility
+        run: npx tsx tests/test_dsh_sdk_compat.ts
+
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
 
@@ -157,7 +163,7 @@ jobs:
         run: npx tsx tests/e2e/test_dsh_e2e.ts
 
   e2e-llm:
-    # Real DeepSeek call. Only runs when DEEPSEEK_API_KEY secret is present
+    # Real OpenAI-compatible call. API key is a secret; URL/model can also be variables.
     # (skipped on forks to prevent secret exposure).
     # continue-on-error: like `network` — non-deterministic output must not
     # block the release path (see publish.yml).
@@ -178,6 +184,11 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      - name: Resolve model endpoint on runner
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+        run: node scripts/ci-resolve-llm-host.mjs
+
       - name: Install Python dependencies
         run: |
           pip install -r tools/requirements.txt
@@ -190,22 +201,24 @@ jobs:
 
       - name: E2E — Hermes LLM flow
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL }}
         run: |
-          if [ -z "$DEEPSEEK_API_KEY" ]; then
-            echo "DEEPSEEK_API_KEY not configured — skipping LLM e2e"
+          if [ -z "$OPENAI_BASE_URL" ] || [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
           pytest tests/e2e/test_hermes_llm.py -m integration_llm -v
 
       - name: E2E — Pi LLM flow
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL }}
         run: |
-          if [ -z "$DEEPSEEK_API_KEY" ]; then
-            echo "DEEPSEEK_API_KEY not configured — skipping LLM e2e"
+          if [ -z "$OPENAI_BASE_URL" ] || [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
           npx tsx tests/e2e/test_pi_llm.ts
@@ -230,38 +243,35 @@ jobs:
           python-version: "3.11"
 
       - uses: actions/setup-node@v4
-        # Node 24: openclaw requires >= 22.19, and pi 0.83's undici breaks on 20.x
-        # (dsh also requires ^22.19 || >=24)
+        # OpenClaw 2026.9.6 requires Node >=24.16.
         with:
-          node-version: "24"
+          node-version: "24.16.0"
           cache: "npm"
+
+      - name: Resolve model endpoint on runner
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+        run: node scripts/ci-resolve-llm-host.mjs
 
       - name: Install Node dependencies (also builds repo .venv via postinstall)
         run: npm ci
 
       - name: Install host CLIs
-        # Pinned: pi latest and openclaw latest (slim repack) drifted from the
-        # validated CLIs — openclaw@latest installed no working bin, and pi's
-        # `list` flags changed between releases. dsh is a developer preview
-        # (rc line), so pin it too. `dsh plugin` forwards to pnpm.
-        # dsh 0.1.5-rc.3: 0.1.0-rc.7's patch-layer watcher is incompatible with
-        # the floated cordis-plugin-hmr ≥1.0.19 (registerConfig API removed) and
-        # crashed headless boots with "user patch-layer watching requires the
-        # Cordis HMR service" (2026-09-23). rc-line transitive deps still float.
+        # Pin the current host releases so failures are reproducible.
         run: |
-          npm i -g @earendil-works/pi-coding-agent@0.83.0
-          npm i -g openclaw@2026.6.33
-          npm i -g @deepseek-ai/dsh@0.1.5-rc.3
+          npm i -g @earendil-works/pi-coding-agent@0.99.0
+          npm i -g openclaw@2026.9.6
+          npm i -g @deepseek-ai/dsh@0.2.0-rc.2
           npm i -g pnpm@10
 
       - name: Real-host smoke QA (${{ matrix.host }})
         env:
-          SMOKE_LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          SMOKE_LLM_BASE_URL: https://api.deepseek.com
-          SMOKE_LLM_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL }}
         run: |
-          if [ -z "$SMOKE_LLM_API_KEY" ]; then
-            echo "SMOKE_LLM_API_KEY not configured — failing (this check is blocking by design)"
+          if [ -z "$OPENAI_BASE_URL" ] || [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required (blocking check)"
             exit 1
           fi
           node tests/e2e/host_smoke.mjs ${{ matrix.host }}

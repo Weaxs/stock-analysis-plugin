@@ -6,9 +6,9 @@
  * Usage: node tests/e2e/host_smoke.mjs <pi|openclaw|hermes|dsh>
  *
  * Env:
- *   SMOKE_LLM_API_KEY  (required) API key for the QA model
- *   SMOKE_LLM_BASE_URL (required) OpenAI-compatible base URL
- *   SMOKE_LLM_MODEL    (optional) default: deepseek-v4-flash
+ *   OPENAI_BASE_URL    (required) OpenAI-compatible API base URL
+ *   OPENAI_API_KEY     (required) API key
+ *   OPENAI_MODEL       (required) model ID
  *   SMOKE_WORKDIR      (optional) scratch dir, default: mktemp
  *
  * Assertions (both required, retried up to 2 times):
@@ -16,7 +16,7 @@
  *   2. the final answer contains a number (real data reached the reply)
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,12 +29,11 @@ if (!["pi", "openclaw", "hermes", "dsh"].includes(host)) {
   process.exit(2);
 }
 
-const API_KEY = process.env.SMOKE_LLM_API_KEY || "";
-const BASE_URL = process.env.SMOKE_LLM_BASE_URL || "";
-const MODEL = process.env.SMOKE_LLM_MODEL || "deepseek-v4-flash";
-const PROVIDER = process.env.SMOKE_LLM_PROVIDER || "deepseek";
-if (!API_KEY || !BASE_URL) {
-  console.error("SMOKE_LLM_API_KEY and SMOKE_LLM_BASE_URL are required");
+const API_KEY = process.env.OPENAI_API_KEY || "";
+const BASE_URL = process.env.OPENAI_BASE_URL || "";
+const MODEL = process.env.OPENAI_MODEL || "";
+if (!API_KEY || !BASE_URL || !MODEL) {
+  console.error("OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required");
   process.exit(2);
 }
 
@@ -44,7 +43,7 @@ const QUESTION =
 const MAX_ATTEMPTS = 2;
 
 function sh(cmd, args, opts = {}) {
-  console.log(`+ ${cmd} ${args.join(" ")}`.slice(0, 160));
+  console.log(`+ ${cmd} (${args.length} args)`);
   return execFileSync(cmd, args, {
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
@@ -84,21 +83,30 @@ function findPython() {
 
 // ---------------------------------------------------------------- pi -------
 async function smokePi() {
+  const piDir = join(WORK, "pi-agent");
+  mkdirSync(piDir, { recursive: true });
+  writeFileSync(join(piDir, "models.json"), JSON.stringify({
+    providers: { smokellm: {
+      baseUrl: BASE_URL, api: "openai-completions", apiKey: "$OPENAI_API_KEY",
+      models: [{ id: MODEL }],
+    } },
+  }));
+  const env = { ...process.env, PI_CODING_AGENT_DIR: piDir };
   // Real install path: project-local `pi install <repo>` records the package in
   // .pi/settings.json; --approve bypasses the interactive project-trust prompt.
   // No separate list assertion: the QA below is the load proof — an unloaded
   // plugin can never produce a get_quote tool call.
-  sh("pi", ["install", repoRoot, "-l"], { cwd: WORK });
+  sh("pi", ["install", repoRoot, "-l"], { cwd: WORK, env });
 
   retryQA("pi", () => {
     const out = sh(
       "pi",
       [
         "--approve", "-p", "--mode", "json", "--no-session",
-        "--provider", PROVIDER, "--model", MODEL, "--api-key", API_KEY,
+        "--provider", "smokellm", "--model", MODEL,
         QUESTION,
       ],
-      { cwd: WORK }
+      { cwd: WORK, env }
     );
     const calledGetQuote = out.includes('"toolName":"get_quote"');
     // last assistant text in the NDJSON stream
@@ -137,23 +145,20 @@ function smokeOpenclaw() {
 
   const oc = (args, opts = {}) =>
     sh("openclaw", ["--profile", "ci-smoke", ...args], opts);
-  oc(["plugins", "install", tgz, "--force"]);
+  oc(["plugins", "install", tgz, "--force", "--accept-capabilities"]);
   const extDir = join(process.env.HOME, ".openclaw-ci-smoke", "extensions", "stock-analysis");
   assertCond(existsSync(join(extDir, "dist", "index.js")), "installed plugin has dist/index.js");
   assertCond(existsSync(join(extDir, "tools", "stock_data.py")), "installed plugin has tools/");
 
-  // Lifecycle scripts don't run on plugin install — set the python env up like
-  // the docs tell users to.
-  if (!existsSync(join(extDir, ".venv"))) {
-    sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
-  }
+  // Plugin installs may leave an existing but incomplete venv.
+  sh("node", [join(extDir, "scripts", "setup-python.mjs")], { cwd: extDir });
 
-  // DeepSeek via openai-completions custom provider.
+  // OpenAI-compatible custom provider; resolve the key from the environment.
   oc([
     "config", "set", "models.providers.smokellm",
     JSON.stringify({
       baseUrl: BASE_URL,
-      apiKey: API_KEY,
+      apiKey: "${OPENAI_API_KEY}",
       api: "openai-completions",
       models: [{
         id: MODEL, name: MODEL, reasoning: false, input: ["text"],
@@ -164,21 +169,18 @@ function smokeOpenclaw() {
     "--strict-json",
   ]);
   oc(["config", "set", "agents.defaults.model.primary", `smokellm/${MODEL}`]);
+  oc(["config", "set", "tools.allow", '["get_quote"]', "--strict-json"]);
 
   retryQA("openclaw", () => {
-    const sessionId = `smoke-${Date.now()}`;
+    const sessionKey = `agent:main:smoke-${Date.now()}`;
     const out = oc([
-      "agent", "--local", "--session-id", sessionId,
+      "agent", "--local", "--session-key", sessionKey,
       "-m", QUESTION, "--json", "--timeout", "180",
     ]);
     const parsed = JSON.parse(out);
     const text = (parsed.payloads || []).map((p) => p.text || "").join("\n");
-    // tool-call trace lives in the session transcript file
-    const sessionFile = parsed.meta?.agentMeta?.sessionFile;
-    let calledGetQuote = false;
-    if (sessionFile && existsSync(sessionFile)) {
-      calledGetQuote = readFileSync(sessionFile, "utf-8").includes("get_quote");
-    }
+    // Current OpenClaw stores active sessions in SQLite, not session files.
+    const calledGetQuote = oc(["sessions", "tail", "--session-key", sessionKey, "--tail", "80"]).includes("get_quote");
     return {
       ok: calledGetQuote && /\d/.test(text),
       log: `toolCalled=${calledGetQuote} final=${text.slice(0, 80)}`,
@@ -194,7 +196,7 @@ function smokeHermes() {
   const pip = join(venv, "bin", "pip");
   const hermes = join(venv, "bin", "hermes");
   sh(pip, ["install", "--quiet", "--upgrade", "pip"]);
-  sh(pip, ["install", "--quiet", "hermes-agent"]);
+  sh(pip, ["install", "--quiet", "hermes-agent==0.19.0"]);
   sh(pip, ["install", "--quiet", repoRoot]);
   // handlers shell out to "python3" — make it resolve to this venv, which has
   // the full data-source deps (yfinance etc.) from tools/requirements.txt
@@ -207,10 +209,6 @@ function smokeHermes() {
   const env = {
     ...process.env,
     PATH: `${join(venv, "bin")}:${process.env.PATH}`,
-    DEEPSEEK_API_KEY: API_KEY,
-    DEEPSEEK_BASE_URL: BASE_URL,
-    KIMI_API_KEY: API_KEY,
-    KIMI_BASE_URL: BASE_URL,
     OPENAI_API_KEY: API_KEY,
     OPENAI_BASE_URL: BASE_URL,
   };
@@ -221,7 +219,7 @@ function smokeHermes() {
       [
         "-z", QUESTION,
         "-m", MODEL,
-        "--provider", PROVIDER,
+        "--provider", "openai-api",
         "-t", "stock-analysis",
         "--usage-file", usageFile,
       ],
@@ -256,7 +254,7 @@ function smokeDsh() {
   // the CLI reconciles our bundle into dsh.profile.bundles from the package's
   // dsh.bundle.patch manifest.
   const dshHome = join(WORK, "dsh-home");
-  const env = { ...process.env, DSH_HOME: dshHome, DEEPSEEK_API_KEY: API_KEY };
+  const env = { ...process.env, DSH_HOME: dshHome };
   const dsh = (args, opts = {}) => sh("dsh", args, { env, ...opts });
 
   dsh(["plugin", "--profile", "headless", "add", tgz]);
@@ -267,18 +265,7 @@ function smokeDsh() {
   // Profile installs go through pnpm, which skips dependency lifecycle scripts
   // without an allowBuilds entry — set the python env up like the docs tell
   // users to.
-  if (!existsSync(join(pkgDir, ".venv"))) {
-    sh("node", [join(pkgDir, "scripts", "setup-python.mjs")], { cwd: pkgDir, env });
-  }
-
-  // Non-default endpoint/model overrides ride the documented surfaces: the
-  // `llm-deepseek:` section of $DSH_HOME/settings.yaml (what the Models page
-  // writes) and a --patch overlay replacing the agent-default-model row.
-  // The CI defaults (api.deepseek.com / deepseek-v4-flash) need neither —
-  // the key resolves from the inherited DEEPSEEK_API_KEY env per request.
-  if (BASE_URL && BASE_URL !== "https://api.deepseek.com") {
-    writeFileSync(join(dshHome, "settings.yaml"), `llm-deepseek:\n  baseURL: ${BASE_URL}\n`);
-  }
+  sh("node", [join(pkgDir, "scripts", "setup-python.mjs")], { cwd: pkgDir, env });
 
   // One --patch overlay for the whole smoke:
   //   - smoke-tool-spy: logs every executed tool name (dsh's durable session
@@ -286,20 +273,30 @@ function smokeDsh() {
   //     via the emit-mode `tools/result` event — is the tool-call trace).
   //   - tool-web disabled: removes the built-in web_search fallback so the
   //     model must reach the price through OUR get_quote, not a search.
-  //   - agent-default-model: only when SMOKE_LLM_MODEL is non-default.
+  //   - llm-pi-ai / agent-default-model: route to the configured endpoint.
   const calledToolsLog = join(WORK, "dsh-called-tools.log");
   const spyPlugin = join(repoRoot, "tests", "e2e", "dsh_tool_spy.mjs");
-  let overlay =
+  const overlay =
     `- insert:\n` +
     `    - id: smoke-tool-spy\n` +
     `      name: "${spyPlugin}"\n` +
     `      config:\n` +
     `        logFile: "${calledToolsLog}"\n` +
     `- id: tool-web\n` +
-    `  disabled: true\n`;
-  if (MODEL !== "deepseek-v4-flash") {
-    overlay += `- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: ${MODEL}\n`;
-  }
+    `  disabled: true\n` +
+    `- id: llm-pi-ai\n` +
+    `  config:\n` +
+    `    providers:\n` +
+    `      smokellm:\n` +
+    `        apiKeyEnv: OPENAI_API_KEY\n` +
+    `        api: openai-completions\n` +
+    `        baseURL: ${JSON.stringify(BASE_URL)}\n` +
+    `        models:\n` +
+    `          - id: ${JSON.stringify(MODEL)}\n` +
+    `- id: agent-default-model\n` +
+    `  config:\n` +
+    `    provider: smokellm\n` +
+    `    model: ${JSON.stringify(MODEL)}\n`;
   const overlayPath = join(WORK, "dsh-smoke-overlay.yml");
   writeFileSync(overlayPath, overlay);
   const bootArgs = ["--profile", "headless", "--patch", overlayPath];

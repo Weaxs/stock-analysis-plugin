@@ -11,12 +11,9 @@ from tools.trading_calendar import prev_trading_days
 
 
 def _real_trade_days(n: int) -> list:
-    """Real prev_trading_days under the mocked-akshare context.
-
-    akshare is patched to a MagicMock in every caller, so the sina calendar fetch
-    yields nothing and cn_trade_dates degrades to its offline weekend-only
-    approximation — deterministic and network-free."""
-    return prev_trading_days("CN", n)
+    """Use the same mocked calendar as cmd_margin_trading in these tests."""
+    with patch.dict(sys.modules, {"akshare": MagicMock()}):
+        return prev_trading_days("CN", n)
 
 
 def _sse_detail(date: str):
