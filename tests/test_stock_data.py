@@ -145,3 +145,163 @@ class TestCalcLimitPriceEdgeCases:
 
     def test_zero_ratio_keeps_price(self):
         assert calc_limit_price(10.0, 0.0, "up") == 10.0
+
+
+def test_financials_annual_history_is_newest_first(monkeypatch):
+    from argparse import Namespace
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    rows = pd.DataFrame(
+        {
+            "日期": ["2020-12-31", "2024-12-31", "2024-09-30", "2023-12-31"],
+            "净资产收益率(%)": [1, 4, 3, 2],
+            "销售毛利率(%)": [10, 40, 30, 20],
+            "销售净利率(%)": [5, 20, 15, 10],
+        }
+    )
+    monkeypatch.setattr(stock_data, "_akshare_retry", lambda *a, **k: rows)
+    result = stock_data.cmd_financials(Namespace(symbol="600519", periods=3, annual=True))
+    assert result["report_date"] == "2024-12-31"
+    assert [r["roe"] for r in result["periods"]] == [4, 2, 1]
+
+
+def test_financial_cache_persists_provider_date_objects(monkeypatch):
+    from argparse import Namespace
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    fetch = MagicMock(return_value=pd.DataFrame({"日期": [date(2025, 12, 31)], "净资产收益率(%)": [15]}))
+    monkeypatch.setattr(stock_data, "_akshare_retry", fetch)
+    args = Namespace(symbol="600519", periods=1, annual=False)
+    stock_data.cmd_financials(args)
+    result = stock_data.cmd_financials(args)
+    assert fetch.call_count == 1
+    assert result["report_date"] == "2025-12-31"
+
+
+def test_basic_info_partial_results_are_not_cached(monkeypatch):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    from tools import stock_data
+
+    fetch = MagicMock(side_effect=ValueError("down"))
+    monkeypatch.setattr(stock_data, "_akshare_retry", fetch)
+    monkeypatch.setattr(stock_data, "resolve_stock_sectors", lambda *a, **k: {"error": "down"})
+    for _ in range(2):
+        result = stock_data.cmd_stock_info(Namespace(symbol="600519"))
+        assert result.get("warnings") or result.get("error")
+    assert fetch.call_count == 2
+
+
+def test_hk_annual_source_failure_keeps_available_yahoo_data(monkeypatch):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    ticker = MagicMock()
+    ticker.info = {"shortName": "Tencent"}
+    ticker.financials = pd.DataFrame({"2025-12-31": [100, 20]}, index=["Total Revenue", "Net Income"])
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: ticker)
+    monkeypatch.setattr(stock_data, "_akshare_retry", MagicMock(side_effect=ValueError("down")))
+    result = stock_data.cmd_financials(Namespace(symbol="0700.HK", periods=10, annual=True))
+    assert result["name"] == "Tencent"
+    assert result["periods"][0]["net_income"] == 20
+    assert result["warnings"]
+
+
+def test_non_a_history_derives_margins_from_available_income_rows(monkeypatch):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    ticker = MagicMock()
+    ticker.info = {"shortName": "Example"}
+    ticker.financials = pd.DataFrame(
+        {"2025-12-31": [100, 20, 40]}, index=["Total Revenue", "Net Income", "Gross Profit"]
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: ticker)
+    result = stock_data.cmd_financials(Namespace(symbol="AAPL", periods=2, annual=False))
+    assert result["periods"][0]["net_profit_margin"] == 20
+    assert result["periods"][0]["gross_margin"] == 40
+
+
+def test_user_directory_sector_cache_survives_legacy_temp_cleanup(monkeypatch, tmp_path):
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    monkeypatch.setattr(stock_data, "_DATA_CACHE_DIR", tmp_path / "legacy")
+    monkeypatch.setattr(
+        stock_data,
+        "sector_constituents_a",
+        lambda *a, **k: {"sector": "白酒", "board_type": "industry", "constituents": [{"code": "600519"}]},
+    )
+    stock_data.cmd_sector_constituents(Namespace(sector="白酒", board_type="industry"))
+    for path in (tmp_path / "legacy").glob("*.json"):
+        path.unlink()
+    assert stock_data._stock_boards_from_cache("600519") == [
+        {"name": "白酒", "source": "cache", "board_type": "industry"}
+    ]
+
+
+def test_hk_financial_backend_uses_five_digits(monkeypatch):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    ticker = MagicMock()
+    ticker.info = {"shortName": "Tencent"}
+    ticker.financials = pd.DataFrame()
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: ticker)
+    calls = []
+
+    def fetch(fn, **kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame(
+            {"REPORT_DATE": ["2025-12-31"], "ROE_AVG": [15], "GROSS_PROFIT_RATIO": [40], "NET_PROFIT_RATIO": [20]}
+        )
+
+    monkeypatch.setattr(stock_data, "_akshare_retry", fetch)
+    result = stock_data.cmd_financials(Namespace(symbol="0700.HK", periods=10, annual=True))
+    assert calls[0]["symbol"] == "00700"
+    assert result["periods"][0]["roe"] == 15
+
+
+def test_hk_annual_history_survives_yahoo_snapshot_failure(monkeypatch):
+    from argparse import Namespace
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    class Ticker:
+        @property
+        def info(self):
+            raise ValueError("snapshot down")
+
+        financials = pd.DataFrame()
+
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: Ticker())
+    monkeypatch.setattr(
+        stock_data, "_akshare_retry", lambda *a, **k: pd.DataFrame({"REPORT_DATE": ["2025-12-31"], "ROE_AVG": [15]})
+    )
+    result = stock_data.cmd_financials(Namespace(symbol="0700.HK", periods=10, annual=True))
+    assert result["periods"][0]["roe"] == 15
+    assert result["warnings"]

@@ -25,6 +25,179 @@ export default (pi: ExtensionAPI) => {
   // --- Data Tools ---
 
   pi.registerTool({
+    name: "get_valuation_history",
+    description: "查询A/HK股票历史 PE-TTM/PB、当前正值分位和10/25/50/75/90分位 Band，返回实际采样区间；亏损估值分位为null。years=1..10，数据按天缓存。",
+    parameters: {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "A股代码或港股.HK代码"
+        },
+        "years": {
+          "type": "number",
+          "description": "历史窗口年数1..10，默认5"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    async execute(_id, p) {
+      const result = await py("value_data.py", ["valuation_history", p.symbol, "--years", String(p.years ?? 5)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_index_valuation",
+    description: "查询中国指数PE/PB历史分位与Band；沪深300等使用乐咕乐股。中证全指等仅有中证近期PE时明确标注覆盖和PE口径，不冒充全历史或PE-TTM。",
+    parameters: {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "指数代码或名称，如000300、沪深300、000985"
+        },
+        "years": {
+          "type": "number",
+          "description": "历史窗口年数1..10，默认5"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    async execute(_id, p) {
+      const result = await py("value_data.py", ["index_valuation", p.symbol, "--years", String(p.years ?? 5)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_earnings_calendar",
+    description: "查询A股指定报告期的财报预约/修订/实际披露日期与已公告业绩预告，可按股票过滤；不是未公告业绩预测。",
+    parameters: {
+      "type": "object",
+      "properties": {
+        "report_date": {
+          "type": "string",
+          "description": "季度报告期YYYY-MM-DD，如2026-09-30"
+        },
+        "symbol": {
+          "type": "string",
+          "description": "可选A股股票代码，省略查全市场"
+        },
+        "top": {
+          "type": "number",
+          "description": "每类最多返回条数1..500，默认50"
+        }
+      },
+      "required": [
+        "report_date"
+      ]
+    },
+    async execute(_id, p) {
+      const result = await py("value_data.py", ["earnings_calendar", "--report-date", p.report_date, "--symbol", p.symbol ?? "", "--top", String(p.top ?? 50)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_shareholder_structure",
+    description: "查询A股股东户数变化、指定已披露报告期十大流通股东及变化、HKSCC北向名义持股；港股返回港交所带日期的南向持股。缺席十大不等于零，北向不假定有日度数据。",
+    parameters: {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "A股代码或港股.HK代码"
+        },
+        "report_date": {
+          "type": "string",
+          "description": "A股报告期YYYY-MM-DD，省略使用最新可取得财报期；港股忽略此参数"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    async execute(_id, p) {
+      const result = await py("value_data.py", ["shareholder_structure", p.symbol, "--report-date", p.report_date ?? ""]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_etf_details",
+    description: "查询A股ETF净值与同日期折溢价、规模变动和最新披露持仓；提供benchmark可查基准指数成分并计算对齐日收益的年化跟踪误差。披露持仓不是实时完整申赎篮子。",
+    parameters: {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "A股ETF代码，如510300"
+        },
+        "benchmark": {
+          "type": "string",
+          "description": "可选基准代码，如sh000300；不猜测基准"
+        },
+        "days": {
+          "type": "number",
+          "description": "净值窗口交易日数10..252，默认60"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    async execute(_id, p) {
+      const result = await py("value_data.py", ["etf_details", p.symbol, "--benchmark", p.benchmark ?? "", "--days", String(p.days ?? 60)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_dividends",
+    description: "查询A/HK历史分红、除权除息日历、已实施TTM股息率和连续支付年数；mode=ranking且不传symbol时返回A股报告期股息率排行，排行不是TTM收益率。预案不计入已支付股息。",
+    parameters: {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "history/calendar必填A股或港股.HK代码；ranking省略"
+        },
+        "mode": {
+          "type": "string",
+          "description": "history默认；calendar未来已公布除息事件；ranking=A股排行",
+          "enum": [
+            "history",
+            "calendar",
+            "ranking"
+          ]
+        },
+        "report_date": {
+          "type": "string",
+          "description": "ranking报告期YYYY-MM-DD，默认上一年年末"
+        },
+        "years": {
+          "type": "number",
+          "description": "历史窗口年数1..20，默认10"
+        },
+        "top": {
+          "type": "number",
+          "description": "排名条数1..500，默认20"
+        }
+      },
+      "required": []
+    },
+    async execute(_id, p) {
+      const result = await py("value_data.py", ["dividends", "--symbol", p.symbol ?? "", "--mode", p.mode ?? "history", "--report-date", p.report_date ?? "", "--years", String(p.years ?? 10), "--top", String(p.top ?? 20)]);
+      return asText(result.stdout);
+    },
+  });
+
+  pi.registerTool({
     name: "get_kline",
     description:
       "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF。A股股票/ETF返回前复权价格，每条记录 adjusted=qfq；sh000xxx/sz399xxx 指数返回原始点位，adjusted=none。需要历史价格自行计算或画图时用；只问指标用 get_technical_analysis，只问现价用 get_quote",
@@ -135,7 +308,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_financials",
     description:
-      "获取股票财务摘要。A股返回最新报告期 ROE/毛利率/净利率/负债率/流动比率；其他市场返回 PE/PB/市值/营收/净利润等。A股估值、成长和分红用 get_fundamental_context",
+      "获取股票财务摘要及历史趋势，按天缓存。A股返回ROE/毛利率/净利率等；annual=true与periods=10取十年年报，港股年度历史按数据源实际可得期数返回。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
     parameters: {
       type: "object",
       properties: {
@@ -143,18 +316,20 @@ export default (pi: ExtensionAPI) => {
           type: "string",
           description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）",
         },
+        annual: { type: "boolean", description: "只取年度报告，默认false" },
         periods: {
           type: "number",
-          description: "返回最近N个报告期的财务趋势，默认 1（仅最新一期）",
+          description: "返回最近N个报告期1..40，默认1；annual=true时periods=10请求10年年报",
         },
       },
       required: ["symbol"],
     },
-    async execute(_id, { symbol, periods = 1 }) {
+    async execute(_id, { symbol, periods = 1, annual = false }) {
       const result = await py("stock_data.py", [
         "financials",
         symbol,
-        ...(periods > 1 ? ["--periods", String(periods)] : []),
+        ...(periods !== 1 ? ["--periods", String(periods)] : []),
+        ...(annual ? ["--annual"] : []),
       ]);
       return asText(result.stdout);
     },
@@ -304,7 +479,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_sector_constituents",
     description:
-      "查询A股板块成分股（正向映射：板块→股票列表）。板块名支持模糊匹配（如「创新药」自动解析到精确板块名），东财行业/概念 + 新浪多源 failover，结果缓存24小时。仅支持A股；反向查个股所属板块用 resolve_stock_sectors",
+      "查询A股板块成分股（正向映射：板块→股票列表）。板块名支持模糊匹配（如「创新药」自动解析到精确板块名），东财行业/概念 + 新浪多源 failover，结果按用户目录缓存7天。仅支持A股；反向查个股所属板块用 resolve_stock_sectors",
     parameters: {
       type: "object",
       properties: {
@@ -481,7 +656,7 @@ export default (pi: ExtensionAPI) => {
   pi.registerTool({
     name: "get_margin_trading",
     description:
-      "获取A股个股融资融券明细（融资余额/融资买入额/融券余量等，上交所/深交所官方数据按交易所分流），返回最近N个交易日序列（最新在前）。金额单位为元，short_*_shares 单位为股。仅两融标的有数据，非两融标的返回错误",
+      "获取A股个股融资融券明细（融资余额/融资买入额/融券余量等，上交所/深交所官方数据按交易所分流），返回最近N个交易日序列（最新在前）。金额单位为元，short_*_shares 单位为股。include_ratio=true追加同日融资买入/成交额百分比（margin_buy_ratio_pct），缺少同日元口径成交额则为null。仅两融标的有数据，非两融标的返回错误",
     parameters: {
       type: "object",
       properties: {
@@ -489,6 +664,7 @@ export default (pi: ExtensionAPI) => {
           type: "string",
           description: "A股股票代码，如 600519",
         },
+        include_ratio: { type: "boolean", description: "追加同日融资买入占比，默认false" },
         days: {
           type: "number",
           description: "返回最近N个交易日，默认 10",
@@ -496,8 +672,8 @@ export default (pi: ExtensionAPI) => {
       },
       required: ["symbol"],
     },
-    async execute(_id, { symbol, days = 10 }) {
-      const result = await py("stock_data.py", ["margin_trading", symbol, "--days", String(days)]);
+    async execute(_id, { symbol, days = 10, include_ratio = false }) {
+      const result = await py("stock_data.py", ["margin_trading", symbol, "--days", String(days), ...(include_ratio ? ["--include-ratio"] : [])]);
       return asText(result.stdout);
     },
   });

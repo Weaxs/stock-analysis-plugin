@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import tools.screener as screener
 from tools.screener import (
@@ -449,3 +450,66 @@ class TestNonFiniteSanitization:
         for c in result["candidates"]:
             assert isinstance(c["scores"]["final"], (int, float))
         json.dumps(result, allow_nan=False)
+
+
+def test_dividend_filter_and_factor_are_opt_in(monkeypatch):
+    raw = [
+        {
+            "symbol": "600519",
+            "pe": 10,
+            "pb": 2,
+            "market_cap": 1e10,
+            "turnover_rate": 1,
+            "change_pct": 0,
+            "volume_ratio": 1,
+        },
+        {
+            "symbol": "000001",
+            "pe": 10,
+            "pb": 2,
+            "market_cap": 1e10,
+            "turnover_rate": 1,
+            "change_pct": 0,
+            "volume_ratio": 1,
+        },
+    ]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda m: raw)
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
+    monkeypatch.setattr(
+        "value_data.dividend_ranking",
+        lambda **k: {
+            "report_date": "2025-12-31",
+            "items": [{"symbol": "600519", "dividend_yield": 2}, {"symbol": "000001", "dividend_yield": 5}],
+        },
+    )
+    result = screen("A", 20, {"filters": {"dividend_yield_min": 3}})
+    assert [r["symbol"] for r in result["candidates"]] == ["000001"]
+    assert result["candidates"][0]["dividend_yield"] == 5
+    assert "dividend" in result["candidates"][0]["scores"]
+
+
+def test_requested_dividend_filter_does_not_silently_skip_missing_source(monkeypatch):
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda m: [{"symbol": "600519", "pe": 10}])
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
+
+    def fail(**_):
+        raise ValueError("down")
+
+    monkeypatch.setattr("value_data.dividend_ranking", fail)
+    assert "error" in screen("A", 20, {"filters": {"dividend_yield_min": 3}})
+
+
+@pytest.mark.parametrize("threshold", ["3%", None, float("nan"), True])
+def test_invalid_dividend_threshold_fails_before_network(monkeypatch, threshold):
+    from unittest.mock import MagicMock
+
+    snapshot = MagicMock(return_value=[{"symbol": "600519", "pe": 10, "pb": 2, "market_cap": 1e10}])
+    monkeypatch.setattr(screener, "fetch_snapshot", snapshot)
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
+    monkeypatch.setattr(
+        "value_data.dividend_ranking",
+        lambda **k: {"report_date": "2025-12-31", "items": [{"symbol": "600519", "dividend_yield": 5}]},
+    )
+    result = screen("A", 20, {"filters": {"dividend_yield_min": threshold}})
+    assert "error" in result
+    snapshot.assert_not_called()

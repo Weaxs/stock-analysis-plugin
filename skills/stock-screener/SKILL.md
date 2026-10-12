@@ -73,3 +73,17 @@ python3 tools/screener.py screen --market A --top 20
 - **成长型**：中等PE + 高营收增长 + 高换手率
 - **趋势型**：放量突破 + 均线多头 + 高量比
 - **低估反转**：超跌 + 低PB + 资金净流入
+
+## 股息因子（A股，可选）
+
+配置 `filters.dividend_yield_min` / `dividend_yield_max` 或 `sort_by: dividend_score` / `dividend_yield` 时才拉取股息数据。`dividend_report_date` 可指定报告期，默认上一年年末。这里使用已实施方案的**报告期股息率**（百分数），不是滚动十二个月股息率；缺失为未知，使用股息阈值时排除。启用后 value 分项加入股息横截面评分，未启用时不增加股息请求。
+
+```yaml
+filters:
+  dividend_yield_min: 3
+sort_by: dividend_score
+sort_order: desc
+dividend_report_date: "2025-12-31"
+```
+
+筛选结果仍需用 `get_dividends(mode="history", symbol=...)` 核查已实施现金分红、连续支付年数与除息时间，不能把高股息直接解释为低风险。

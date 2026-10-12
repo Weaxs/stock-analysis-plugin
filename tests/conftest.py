@@ -110,3 +110,13 @@ def record_socket_timeout(monkeypatch):
         return seen
 
     return _record
+
+
+@pytest.fixture(autouse=True)
+def isolate_slow_data_cache(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "tools"))
+    import _cache
+
+    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path / "slow-data")

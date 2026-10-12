@@ -32,7 +32,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **51 个工具** — 行情数据、技术分析、K 线形态、资金流向、财务指标、新闻舆情、风险筛查、市场状态等
+- **57 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
@@ -93,7 +93,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 51 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
+OpenClaw Gateway 启动后自动加载并注册 57 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -104,7 +104,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 51 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 57 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 详见 [`dsh/README.md`](dsh/README.md)。
 
@@ -236,6 +236,12 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 | 工具 | 说明 |
 |------|------|
+| `get_valuation_history` | A/HK PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口 |
+| `get_index_valuation` | 中国指数 PE/PB 历史水位；中证仅近期 PE 时明确披露限制 |
+| `get_earnings_calendar` | A 股报告期预约/修订/实际披露与已公告业绩预告 |
+| `get_shareholder_structure` | A 股股东户数/十大流通股东变化/报告期北向名义持股；HK 南向持股 |
+| `get_etf_details` | A 股 ETF 净值折溢价、规模变动、披露持仓、可选基准成分与跟踪误差 |
+| `get_dividends` | A/HK 历史分红/除息日历/已实现 TTM 股息与连续年数；A 股报告期排行 |
 | `get_kline` | K 线数据（OHLCV），支持日/周/月线；A 股股票/ETF 前复权，每条记录 `adjusted=qfq`，指数 `adjusted=none` |
 | `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价） |
 | `get_capital_flow` | 资金流向（仅 A 股） |
@@ -399,6 +405,35 @@ position:
 > **粘性优选**：A 股链路（K 线 / 行情 / 市场快照 / 板块成分）会记住最近一次成功的数据源（缓存在系统临时目录，24h 有效），下次调用优先从它开始；若它已失效则自动顺延并更新记录。港美股链路不做粘性——一次 yfinance 瞬时失败不应让后续全天的 quote 降质。
 > 日/韩/台股仅 yfinance 一个数据源（免费数据延迟约 15 分钟）；港股 / 美股 / 日股 / 韩股 / 台股的 ETF 与其所在市场股票走相同链路。
 
+
+## 低频价投与增量数据
+
+```bash
+python tools/value_data.py valuation_history 600519 --years 5
+python tools/stock_data.py financials 600519 --annual --periods 10
+python tools/value_data.py earnings_calendar --report-date 2026-09-30 --symbol 600519
+python tools/value_data.py shareholder_structure 600519 --report-date 2026-06-30
+python tools/value_data.py shareholder_structure 0700.HK
+python tools/value_data.py index_valuation 000300 --years 5
+python tools/value_data.py etf_details 510300 --benchmark sh000300 --days 60
+python tools/stock_data.py margin_trading 600519 --days 10 --include-ratio
+python tools/value_data.py dividends --symbol 600519
+python tools/value_data.py dividends --symbol 0700.HK --mode calendar
+python tools/value_data.py dividends --mode ranking --report-date 2025-12-31
+```
+
+财报、基本信息及估值/股东/ETF/分红等慢变数据缓存到 `~/.stock-analysis/cache`，TTL 一天；板块成分/映射一周。行情报价不缓存。缓存文件原子替换，过期/损坏重拉，错误和显式部分失败不缓存；不以过期数据伪装最新数据。原有临时目录的粘性路由和反向成分缓存保留。
+
+估值使用可得数据的正值样本分位（`<=当前值`），返回 10/25/50/75/90 分位 Band 与实际起止日期；亏损 PE 分位为 null。当前 AKShare 已无 issue 中提到的 `stock_a_indicator_lg`，个股采用百度 PE-TTM/PB 历史，指数采用乐咕乐股；中证全指等中证接口只提供近期总股本 PE1 时会明确提示，不能当作多年 PE-TTM/PB 历史。A 股 `annual=true, periods=10` 请求十年年报；HK 按源实际可得年数返回，不补造缺失比率。
+
+股东数据保留报告期、公告日或港交所披露日：A 股北向只是已披露十大流通股东中的 HKSCC 名义持股，缺席不是零；HK 南向取自港交所 Stock Connect CCASS 记录，不等同完整实益股东名册。财报预约/修订是计划，业绩预告是已公告预估，不是实际业绩。
+
+ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
+
+股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史或分红币种与报价币种不一致时返回未知，不猜测汇率。日历独立返回已公告未来除息日期。排行/选股使用指定报告期的已实施方案股息率（百分数），不是 TTM。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
+
+数据源参考：[AKShare股票接口](https://akshare.akfamily.xyz/data/stock/stock.html)、[指数接口](https://github.com/akfamily/akshare/blob/main/docs/data/index/index.md)、[基金接口](https://github.com/akfamily/akshare/blob/main/docs/data/fund/fund_public.md)、[港交所南向持股](https://www.hkexnews.hk/sdw/search/mutualmarket.aspx?t=hk)。
+
 ## 独立 CLI 使用
 
 Python 工具可脱离 Agent 独立使用，所有输出为 JSON：
@@ -456,26 +491,28 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 51 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 57 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   51 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   57 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×51
+│   └── index.ts                     #   definePluginEntry + registerTool ×57
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×51
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×57
 │
-├── tools/                           # 共享 Python CLI 工具（23 个脚本）
+├── tools/                           # 共享 Python CLI 工具
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
 │   ├── signal_tracker.py            #   AI 买卖建议回测闭环（本地 JSONL 存储）
 │   ├── technical.py                 #   技术指标分析
 │   ├── pattern.py                   #   K 线形态识别
+│   ├── value_data.py                #   估值/财报日历/股东/ETF/股息
+│   ├── _cache.py                    #   用户目录 TTL 缓存
 │   ├── screener.py                  #   全市场多因子筛选（含市场情绪调节，--l2 量化增强）
 │   ├── backtest.py                  #   策略回测引擎
 │   ├── volume_analysis.py           #   量价分析

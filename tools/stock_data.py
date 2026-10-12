@@ -9,10 +9,11 @@ import re
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cache import DAY, WEEK, cached  # noqa: E402
 from _subproc import run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
 
 # Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
@@ -429,8 +430,8 @@ def _sanitize(obj):
     import numpy as np
     import pandas as pd
 
-    if isinstance(obj, (pd.Timestamp, datetime)):
-        return obj.strftime("%Y-%m-%d")
+    if isinstance(obj, (pd.Timestamp, datetime, date)):
+        return None if pd.isna(obj) else obj.strftime("%Y-%m-%d")
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
@@ -1359,17 +1360,46 @@ def _financials_a_row(r) -> dict:
     )
 
 
-def financials_a(symbol: str, periods: int = 1) -> dict:
+def _cached_frame(key, fetch):
+    import pandas as pd
+
+    rows = cached(key, DAY, lambda: [_clean_row(r) for r in fetch().to_dict("records")])
+    return pd.DataFrame(rows)
+
+
+def _yf_info(symbol, ticker):
+    def fetch():
+        info = ticker.info
+        if not isinstance(info, dict) or not any(
+            info.get(k) for k in ("shortName", "longName", "currency", "exchange")
+        ):
+            raise ValueError("Yahoo basic information unavailable")
+        return info
+
+    return cached(f"yf-basic-info:{_yf_hk_symbol(symbol)}", DAY, fetch)
+
+
+def _financials_a_frame(symbol):
     import akshare as ak
 
+    df = _cached_frame(
+        f"financial-source:{symbol}", lambda: _akshare_retry(ak.stock_financial_analysis_indicator, symbol=symbol)
+    )
+    return df.sort_values("日期", ascending=False) if "日期" in df.columns else df
+
+
+def financials_a(symbol: str, periods: int = 1, annual: bool = False) -> dict:
     try:
-        df = _akshare_retry(ak.stock_financial_analysis_indicator, symbol=symbol)
+        df = _financials_a_frame(symbol)
+        if annual and not df.empty:
+            df = df[df["日期"].astype(str).str.endswith("12-31")]
         if df is None or df.empty:
             # error + note coexist (additive): consumers check either key
             return {"symbol": symbol, "error": "No financial data", "note": "No financial data"}
         result = {"symbol": symbol, **_financials_a_row(df.iloc[0])}
         if periods > 1:
             result["periods"] = [_financials_a_row(r) for r in df.head(periods).to_dict("records")]
+            result["available_periods"] = len(result["periods"])
         return result
     except Exception:
         return {"symbol": symbol, "error": "Financial data unavailable", "note": "Financial data unavailable"}
@@ -1382,25 +1412,41 @@ def _yf_financial_periods(t, periods: int) -> list:
         fin = t.financials
         if fin is None or fin.empty:
             return []
-        return [
-            _clean_row(
-                {
-                    "period_end": col,
-                    "total_revenue": fin[col].get("Total Revenue"),
-                    "net_income": fin[col].get("Net Income"),
-                }
+        rows = []
+        for col in list(fin.columns)[:periods]:
+            revenue = _sanitize(_parse_float(fin[col].get("Total Revenue")))
+            profit = _sanitize(_parse_float(fin[col].get("Net Income")))
+            gross = _sanitize(_parse_float(fin[col].get("Gross Profit")))
+            rows.append(
+                _clean_row(
+                    {
+                        "period_end": col,
+                        "total_revenue": revenue,
+                        "net_income": profit,
+                        "net_profit_margin": profit / revenue * 100
+                        if profit is not None and revenue and revenue > 0
+                        else None,
+                        "gross_margin": gross / revenue * 100
+                        if gross is not None and revenue and revenue > 0
+                        else None,
+                    }
+                )
             )
-            for col in list(fin.columns)[:periods]
-        ]
+        return rows
     except Exception:
         return []
 
 
-def financials_yf(symbol: str, periods: int = 1) -> dict:
+def financials_yf(symbol: str, periods: int = 1, annual: bool = False) -> dict:
     import yfinance as yf
 
     t = yf.Ticker(_yf_hk_symbol(symbol))
-    info = t.info
+    warnings = []
+    try:
+        info = _yf_info(symbol, t)
+    except Exception:
+        info = {}
+        warnings.append("Yahoo snapshot unavailable")
     result = _clean_row(
         {
             "symbol": symbol,
@@ -1417,20 +1463,63 @@ def financials_yf(symbol: str, periods: int = 1) -> dict:
             "dividend_yield": info.get("dividendYield"),
         }
     )
-    if periods > 1:
-        history = _yf_financial_periods(t, periods)
+    if warnings:
+        result["warnings"] = warnings
+    if periods > 1 or (annual and detect_market(symbol) == "HK"):
+        history = cached(f"yf-income-history:{_yf_hk_symbol(symbol)}", DAY, lambda: _yf_financial_periods(t, 40))[
+            :periods
+        ]
+        if detect_market(symbol) == "HK" and annual:
+            try:
+                import akshare as ak
+
+                hk_symbol = _yf_hk_symbol(symbol).split(".")[0].zfill(5)
+                df = _cached_frame(
+                    f"hk-annual-indicators:{hk_symbol}",
+                    lambda: _akshare_retry(
+                        ak.stock_financial_hk_analysis_indicator_em, symbol=hk_symbol, indicator="年度"
+                    ),
+                )
+                if df.empty:
+                    raise ValueError("HK annual indicators unavailable")
+                if df is not None and not df.empty:
+                    df = df.sort_values("REPORT_DATE", ascending=False)
+                    history = [
+                        _clean_row(
+                            {
+                                "report_date": str(r.get("REPORT_DATE"))[:10],
+                                "roe": r.get("ROE_AVG"),
+                                "gross_margin": r.get("GROSS_PROFIT_RATIO"),
+                                "net_profit_margin": r.get("NET_PROFIT_RATIO"),
+                                "currency": r.get("CURRENCY"),
+                            }
+                        )
+                        for r in df.head(periods).to_dict("records")
+                    ]
+            except Exception:
+                result.setdefault("warnings", []).append(
+                    "HK annual indicators unavailable; available Yahoo history retained"
+                )
         if history:
             result["periods"] = history
+            result["available_periods"] = len(history)
+            result["requested_periods"] = periods
+            result["history_units"] = {"roe": "percent", "gross_margin": "percent", "net_profit_margin": "percent"}
+    if not info and not result.get("periods"):
+        result["error"] = "Financial data unavailable"
     return result
 
 
 def cmd_financials(args):
     periods = getattr(args, "periods", 1)
-    if periods < 1:
-        return {"error": f"periods must be a positive integer, got {periods}"}
+    if not 1 <= periods <= 40:
+        return {"error": f"periods must be between 1 and 40, got {periods}"}
+    annual = getattr(args, "annual", False)
     market = detect_market(args.symbol)
     try:
-        return financials_a(args.symbol, periods) if market == "A" else financials_yf(args.symbol, periods)
+        return (
+            financials_a(args.symbol, periods, annual) if market == "A" else financials_yf(args.symbol, periods, annual)
+        )
     except Exception as e:
         return {"error": str(e)}
 
@@ -2046,6 +2135,12 @@ def sector_constituents_a(sector: str, board_type: str = "auto") -> dict:
 
 
 def cmd_sector_constituents(args):
+    return cached(
+        f"sector-constituents:{args.sector.strip()}:{args.board_type}", WEEK, lambda: _sector_constituents(args)
+    )
+
+
+def _sector_constituents(args):
     # argparse 保证属性存在；空串仍可传入
     sector = args.sector.strip()
     if not sector:
@@ -2054,9 +2149,6 @@ def cmd_sector_constituents(args):
     # Sector names are user input — hash them instead of sanitizing, so names that
     # differ only in whitespace/punctuation (创新药 vs 创新 药) can't collide.
     cache_key = hashlib.sha256(f"{sector}|{board_type}".encode()).hexdigest()[:16]
-    cached = _disk_cache_get(cache_key)
-    if cached is not None:
-        return cached
     try:
         result = sector_constituents_a(sector, board_type)
     except Exception as e:
@@ -2160,13 +2252,17 @@ def _stock_boards_cninfo(symbol: str) -> list:
 def _stock_boards_from_cache(symbol: str) -> list:
     """Reverse lookup against the get_sector_constituents disk cache — the honest
     fallback when eastmoney blocks the caller's IP and xueqiu has no token (the two
-    live A-share sources are both eastmoney-flavored). Reads every unexpired
-    constituents payload in the cache dir and returns one entry per cached sector
+    live A-share sources are both eastmoney-flavored). Reads week-lived user-directory entries plus legacy temporary payloads,
+    and returns one entry per cached sector
     containing the symbol. Cold cache → []; malformed cache files are skipped
     (_disk_cache_get returns None on expiry, bad JSON, or read errors)."""
+    from itertools import chain
+
+    from _cache import cached_values
+
     boards = []
-    for path in _DATA_CACHE_DIR.glob("*.json"):
-        data = _disk_cache_get(path.stem)
+    legacy = (_disk_cache_get(path.stem) for path in _DATA_CACHE_DIR.glob("*.json"))
+    for data in chain(legacy, cached_values("sector-constituents", WEEK)):
         if not isinstance(data, dict):
             continue
         sector = data.get("sector")
@@ -2174,7 +2270,9 @@ def _stock_boards_from_cache(symbol: str) -> list:
             continue
         for row in data.get("constituents") or []:
             if isinstance(row, dict) and str(row.get("code")) == symbol:
-                boards.append(_board_entry(sector, "cache", data.get("board_type", "")))
+                board = _board_entry(sector, "cache", data.get("board_type", ""))
+                if board not in boards:
+                    boards.append(board)
                 break
     return boards
 
@@ -2219,6 +2317,12 @@ def _resolve_leg_down(name: str) -> bool:
 
 
 def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
+    if info_map is not None:
+        return _resolve_stock_sectors(symbol, info_map)
+    return cached(f"stock-sectors:{symbol}", WEEK, lambda: _resolve_stock_sectors(symbol, info_map))
+
+
+def _resolve_stock_sectors(symbol: str, info_map=None) -> dict:
     """Reverse map: stock → boards it belongs to (A/HK). Sources are merged (a single
     source failing is not fatal — the others' boards are still returned) rather than
     first-hit failover: each source covers a different flavor (industry vs concept).
@@ -2295,6 +2399,8 @@ def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
         result["error"] = error
         return result
     result["sectors"] = deduped
+    if errors:
+        result["warnings"] = errors
     return result
 
 
@@ -2313,7 +2419,10 @@ def cmd_stock_info(args):
                 result["is_etf"] = True
             info_map = None
             try:
-                df = _akshare_retry(ak.stock_individual_info_em, symbol=args.symbol)
+                df = _cached_frame(
+                    f"a-basic-info:{args.symbol}",
+                    lambda: _akshare_retry(ak.stock_individual_info_em, symbol=args.symbol),
+                )
                 if df is not None and not df.empty:
                     info_map = {}
                     for _, row in df.iterrows():
@@ -2325,26 +2434,33 @@ def cmd_stock_info(args):
                     result["float_shares"] = info_map.get("流通股")
                     result["total_market_cap"] = info_map.get("总市值")
                     result["float_market_cap"] = info_map.get("流通市值")
+                else:
+                    result.setdefault("warnings", []).append("basic information unavailable")
             except Exception:
-                pass
+                result.setdefault("warnings", []).append("basic information unavailable")
             try:
                 # boards 复用 resolve_stock_sectors；info_map 透传避免东财二次拉取
                 resolved = resolve_stock_sectors(args.symbol, info_map=info_map)
                 boards = [s["name"] for s in resolved.get("sectors", [])]
                 if boards:
                     result["boards"] = boards[:10]
+                if resolved.get("error") or resolved.get("warnings"):
+                    result.setdefault("warnings", []).append("sector mapping incomplete")
             except Exception:
-                pass
+                result.setdefault("warnings", []).append("sector mapping unavailable")
             if is_etf:
                 try:
                     # ETF 最新净值（天天基金-场内基金历史净值明细）。窄日期窗口 → 单页返回
                     end = datetime.now()
                     start = end - timedelta(days=30)
-                    nav_df = _akshare_retry(
-                        ak.fund_etf_fund_info_em,
-                        fund=args.symbol,
-                        start_date=start.strftime("%Y%m%d"),
-                        end_date=end.strftime("%Y%m%d"),
+                    nav_df = _cached_frame(
+                        f"etf-basic-nav:{args.symbol}",
+                        lambda: _akshare_retry(
+                            ak.fund_etf_fund_info_em,
+                            fund=args.symbol,
+                            start_date=start.strftime("%Y%m%d"),
+                            end_date=end.strftime("%Y%m%d"),
+                        ),
                     )
                     if nav_df is not None and not nav_df.empty:
                         latest = nav_df.iloc[-1]
@@ -2353,14 +2469,16 @@ def cmd_stock_info(args):
                         nav_date = latest.get("净值日期")
                         if nav_date is not None:
                             result["nav_date"] = str(nav_date)[:10]  # datetime.date/Timestamp → ISO date
+                    else:
+                        result.setdefault("warnings", []).append("ETF NAV unavailable")
                 except Exception:
-                    pass
+                    result.setdefault("warnings", []).append("ETF NAV unavailable")
             return _clean_row(result)
         else:
             import yfinance as yf
 
             t = yf.Ticker(_yf_hk_symbol(args.symbol))
-            info = t.info
+            info = _yf_info(args.symbol, t)
             return _clean_row(
                 {
                     "symbol": args.symbol,
@@ -2528,7 +2646,7 @@ def cmd_fundamental_context(args):
             result["valuation"] = {}
 
         try:
-            df = _akshare_retry(ak.stock_financial_analysis_indicator, symbol=args.symbol)
+            df = _financials_a_frame(args.symbol)
             if df is not None and len(df) >= 1:
                 r0 = df.iloc[0]
                 profitability = {
@@ -2936,6 +3054,32 @@ def cmd_margin_trading(args):
                 msg = f"margin detail fetch failed for all {len(trade_days)} day(s): {'; '.join(failures)}"
                 return {"symbol": args.symbol, "error": msg}
             return {"symbol": args.symbol, "error": f"no margin trading data for {args.symbol} (可能不是两融标的)"}
+        if getattr(args, "include_ratio", False):
+            try:
+                with socket_timeout(25):
+                    history = (
+                        _failover(
+                            [
+                                ("akshare", lambda: _kline_akshare(bare, "daily", days + 10)),
+                                ("efinance", lambda: _kline_efinance(bare, "daily", days + 10)),
+                                ("baostock", lambda: _kline_baostock(bare, "daily", days + 10)),
+                            ],
+                            label=f"margin_turnover:{bare}",
+                        )
+                        or []
+                    )
+                    turnovers = {str(r.get("date"))[:10]: _sanitize(_parse_float(r.get("turnover"))) for r in history}
+            except Exception:
+                turnovers = {}
+            for row in rows:
+                turnover = turnovers.get(row["date"])
+                buy = _sanitize(_parse_float(row.get("margin_buy")))
+                row["turnover"] = turnover
+                row["margin_buy_ratio_pct"] = (
+                    round(buy / turnover * 100, 4) if buy is not None and turnover and turnover > 0 else None
+                )
+                if row["margin_buy_ratio_pct"] is None:
+                    row["margin_buy_ratio_note"] = "matching-date CNY turnover unavailable"
         return rows
     except Exception as e:
         return {"error": str(e)}
@@ -3028,6 +3172,7 @@ def main():
     p_fin = sub.add_parser("financials")
     p_fin.add_argument("symbol")
     p_fin.add_argument("--periods", type=int, default=1)
+    p_fin.add_argument("--annual", action="store_true", help="Select annual reports; periods=10 requests ten years")
 
     p_snap = sub.add_parser("market_snapshot")
     p_snap.add_argument("--market", default="A", choices=["A", "HK", "US"])
@@ -3072,6 +3217,7 @@ def main():
     p_margin = sub.add_parser("margin_trading")
     p_margin.add_argument("symbol")
     p_margin.add_argument("--days", type=int, default=10)
+    p_margin.add_argument("--include-ratio", action="store_true", help="Add same-day margin buys / CNY turnover")
 
     p_nb = sub.add_parser("northbound_flow")
     p_nb.add_argument("--days", type=int, default=10)

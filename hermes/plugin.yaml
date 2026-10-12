@@ -2,6 +2,12 @@ name: stock-analysis
 version: 0.1.0
 description: "Stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets"
 provides_tools:
+  - get_valuation_history
+  - get_index_valuation
+  - get_earnings_calendar
+  - get_shareholder_structure
+  - get_etf_details
+  - get_dividends
   - get_kline
   - get_quote
   - get_capital_flow

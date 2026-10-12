@@ -73,8 +73,10 @@ def get_financials(args: dict, **kwargs) -> str:
     symbol = args["symbol"]
     periods = args.get("periods", 1)
     argv = ["financials", symbol]
-    if periods > 1:
+    if periods != 1:
         argv += ["--periods", periods]
+    if args.get("annual"):
+        argv += ["--annual"]
     return _run("stock_data.py", argv)
 
 
@@ -165,7 +167,10 @@ def get_hot_stocks(args: dict, **kwargs) -> str:
 def get_margin_trading(args: dict, **kwargs) -> str:
     symbol = args["symbol"]
     days = args.get("days", 10)
-    return _run("stock_data.py", ["margin_trading", symbol, "--days", days])
+    argv = ["margin_trading", symbol, "--days", days]
+    if args.get("include_ratio"):
+        argv += ["--include-ratio"]
+    return _run("stock_data.py", argv)
 
 
 def get_northbound_flow(args: dict, **kwargs) -> str:
@@ -430,3 +435,58 @@ def parse_stock_list(args: dict, **kwargs) -> str:
     text = args["text"]
     payload = base64.b64encode(str(text).encode("utf-8")).decode("ascii")
     return _run("import_parser.py", ["parse", "--text-b64", payload])
+
+
+def get_valuation_history(args: dict, **kwargs) -> str:
+    return _run("value_data.py", ["valuation_history", args["symbol"], "--years", args.get("years", 5)])
+
+
+def get_index_valuation(args: dict, **kwargs) -> str:
+    return _run("value_data.py", ["index_valuation", args["symbol"], "--years", args.get("years", 5)])
+
+
+def get_earnings_calendar(args: dict, **kwargs) -> str:
+    return _run(
+        "value_data.py",
+        [
+            "earnings_calendar",
+            "--report-date",
+            args["report_date"],
+            "--symbol",
+            args.get("symbol", ""),
+            "--top",
+            args.get("top", 50),
+        ],
+    )
+
+
+def get_shareholder_structure(args: dict, **kwargs) -> str:
+    return _run(
+        "value_data.py", ["shareholder_structure", args["symbol"], "--report-date", args.get("report_date", "")]
+    )
+
+
+def get_etf_details(args: dict, **kwargs) -> str:
+    return _run(
+        "value_data.py",
+        ["etf_details", args["symbol"], "--benchmark", args.get("benchmark", ""), "--days", args.get("days", 60)],
+    )
+
+
+def get_dividends(args: dict, **kwargs) -> str:
+    return _run(
+        "value_data.py",
+        [
+            "dividends",
+            "--symbol",
+            args.get("symbol", ""),
+            "--mode",
+            args.get("mode", "history"),
+            "--report-date",
+            args.get("report_date", ""),
+            "--years",
+            args.get("years", 10),
+            "--top",
+            args.get("top", 20),
+        ],
+    )
