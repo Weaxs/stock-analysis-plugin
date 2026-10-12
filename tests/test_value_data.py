@@ -446,3 +446,75 @@ def test_invalid_explicit_shareholder_report_date_is_not_ignored(monkeypatch):
     monkeypatch.setattr("stock_data.cmd_financials", lambda *a, **k: {})
     with pytest.raises(ValueError, match="report_date"):
         value_data.shareholder_structure(Namespace(symbol="600519", report_date="2026-02-30"))
+
+
+@pytest.mark.parametrize("failed_source", ["calendar", "cash", "quote"])
+def test_hk_dividend_sources_fail_independently(monkeypatch, failed_source):
+    import akshare as ak
+    import yfinance as yf
+
+    from tools import value_data
+
+    def calendar(**kwargs):
+        if failed_source == "calendar":
+            raise OSError("offline")
+        return pd.DataFrame({"除净日": ["2026-12-01"]})
+
+    class Ticker:
+        @property
+        def dividends(self):
+            if failed_source == "cash":
+                raise OSError("offline")
+            return pd.Series([1.0], index=pd.DatetimeIndex(["2026-06-01"], name="Date"))
+
+        @property
+        def info(self):
+            if failed_source == "quote":
+                raise OSError("offline")
+            return {"currentPrice": 20, "currency": "HKD"}
+
+    monkeypatch.setattr(ak, "stock_hk_dividend_payout_em", calendar)
+    monkeypatch.setattr(yf, "Ticker", lambda *a: Ticker())
+    result = value_data.dividends(Namespace(symbol="0700.HK", mode="history", report_date="", top=20, years=10))
+    assert result["warnings"]
+    assert len(result["history"]) == (0 if failed_source == "cash" else 1)
+    assert len(result["calendar"]) == (0 if failed_source == "calendar" else 1)
+    assert result["dividend_yield_ttm"] == (5 if failed_source == "calendar" else None)
+
+
+@pytest.mark.parametrize("mode", ["history", "calendar"])
+def test_hk_dividend_unavailable_sources_do_not_look_like_empty_calendar(monkeypatch, mode):
+    import yfinance as yf
+
+    from tools import value_data
+
+    def unavailable(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(value_data, "dataset", unavailable)
+    monkeypatch.setattr(yf, "Ticker", lambda *a: Namespace(info={}))
+    with pytest.raises(ValueError, match="unavailable"):
+        value_data.dividends(Namespace(symbol="0700.HK", mode=mode, report_date="", top=20, years=10))
+
+
+@pytest.mark.parametrize(
+    "dates, amounts",
+    [(["2026-06-01"], [None]), (["2026-06-01", "2026-08-01"], [1, None]), ([None, "2026-06-01"], [1, 1])],
+)
+def test_missing_paid_dividend_amount_or_date_does_not_understate_yield(monkeypatch, dates, amounts):
+    import akshare as ak
+    import yfinance as yf
+
+    from tools import value_data
+
+    monkeypatch.setattr(ak, "stock_hk_dividend_payout_em", lambda **k: pd.DataFrame())
+    ticker = Namespace(
+        dividends=pd.Series(amounts, index=pd.DatetimeIndex(dates, name="Date")),
+        info={"currentPrice": 20, "currency": "HKD"},
+    )
+    monkeypatch.setattr(yf, "Ticker", lambda *a: ticker)
+    result = value_data.dividends(Namespace(symbol="0700.HK", mode="history", report_date="", top=20, years=10))
+    assert result["cash_per_share_ttm"] is None
+    assert result["dividend_yield_ttm"] is None
+    assert result["consecutive_payment_years"] is None
+    assert result["warnings"]

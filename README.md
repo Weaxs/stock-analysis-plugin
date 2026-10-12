@@ -430,7 +430,7 @@ python tools/value_data.py dividends --mode ranking --report-date 2025-12-31
 
 ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
 
-股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史或分红币种与报价币种不一致时返回未知，不猜测汇率。日历独立返回已公告未来除息日期。排行/选股使用指定报告期的已实施方案股息率（百分数），不是 TTM。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
+股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。排行/选股使用指定报告期的已实施方案股息率（百分数），不是 TTM。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
 
 数据源参考：[AKShare股票接口](https://akshare.akfamily.xyz/data/stock/stock.html)、[指数接口](https://github.com/akfamily/akshare/blob/main/docs/data/index/index.md)、[基金接口](https://github.com/akfamily/akshare/blob/main/docs/data/fund/fund_public.md)、[港交所南向持股](https://www.hkexnews.hk/sdw/search/mutualmarket.aspx?t=hk)。
 

@@ -24,8 +24,8 @@ def records(frame):
     return json.loads(frame.to_json(orient="records", date_format="iso"))
 
 
-def dataset(key, fetch, ttl=DAY):
-    return cached(key, ttl, lambda: records(fetch()))
+def dataset(key, fetch):
+    return cached(key, DAY, lambda: records(fetch()))
 
 
 def number(value):
@@ -396,7 +396,6 @@ def dividends(args):
         "yield_basis": "cash paid per share in trailing 365 days / latest price, before tax; nominal source cash amounts",
     }
     if market == "A":
-        symbol = _cn_code(args.symbol)[2:]
         rows = dataset(f"dividends:{symbol}", lambda: ak.stock_fhps_detail_em(symbol=symbol))
         events = [
             {
@@ -425,8 +424,12 @@ def dividends(args):
     else:
         import yfinance as yf
 
-        symbol = args.symbol.split(".")[0].zfill(5)
-        rows = dataset(f"hk-dividend-calendar:{symbol}", lambda: ak.stock_hk_dividend_payout_em(symbol=symbol))
+        sources = {}
+        capture(
+            sources,
+            "calendar",
+            lambda: dataset(f"hk-dividend-calendar:{symbol}", lambda: ak.stock_hk_dividend_payout_em(symbol=symbol)),
+        )
         calendar = [
             {
                 "ex_date": iso(r.get("除净日")),
@@ -435,9 +438,11 @@ def dividends(args):
                 "plan": r.get("分红方案"),
                 "fiscal_year": r.get("财政年度"),
             }
-            for r in rows
+            for r in sources.get("calendar", [])
         ]
         if args.mode == "calendar":
+            if sources.get("warnings"):
+                raise ValueError("HK dividend calendar unavailable")
             return {
                 "symbol": args.symbol,
                 "market": market,
@@ -456,8 +461,14 @@ def dividends(args):
             )
             return frame.reset_index()
 
-        paid = dataset(f"hk-dividend-cash:{symbol}", cash_history)
-        info = ticker.info
+        capture(sources, "cash", lambda: dataset(f"hk-dividend-cash:{symbol}", cash_history))
+        capture(sources, "quote", lambda: ticker.info)
+        paid = sources.get("cash", [])
+        info = sources.get("quote") or {}
+        if sources.get("warnings"):
+            result["warnings"] = sources["warnings"]
+            if not paid and not calendar:
+                raise ValueError("HK dividend sources unavailable")
         events = [
             {
                 "ex_date": iso(r.get("Date")),
@@ -472,26 +483,41 @@ def dividends(args):
         result["calendar"] = [r for r in calendar if r["ex_date"] and r["ex_date"] > today.isoformat()]
     cutoff = (today - timedelta(days=365.25 * args.years)).isoformat()
     events = sorted(
-        [r for r in events if (r.get("ex_date") or r.get("report_date") or "") >= cutoff],
+        [
+            r
+            for r in events
+            if not (r.get("ex_date") or r.get("report_date")) or (r.get("ex_date") or r["report_date"]) >= cutoff
+        ],
         key=lambda r: r.get("ex_date") or r.get("report_date") or "",
         reverse=True,
     )
-    implemented = [
+    paid_events = [
         r
         for r in events
-        if r["status"] in ("实施分配", "paid")
-        and r.get("ex_date")
-        and r["ex_date"] <= today.isoformat()
-        and r["cash_per_share"] is not None
-        and r["cash_per_share"] > 0
+        if r["status"] in ("实施分配", "paid") and (not r.get("ex_date") or r["ex_date"] <= today.isoformat())
     ]
-    ttm = [r for r in implemented if r["ex_date"] > (today - timedelta(days=365)).isoformat()]
+    incomplete_history = any(
+        not r.get("ex_date") or r["cash_per_share"] is None or r["cash_per_share"] < 0 for r in paid_events
+    )
+    ttm_cutoff = (today - timedelta(days=365)).isoformat()
+    incomplete_ttm = any(
+        not r.get("ex_date") or (r["ex_date"] > ttm_cutoff and (r["cash_per_share"] is None or r["cash_per_share"] < 0))
+        for r in paid_events
+    )
+    implemented = [
+        r for r in paid_events if r.get("ex_date") and r["cash_per_share"] is not None and r["cash_per_share"] > 0
+    ]
+    ttm = [r for r in implemented if r["ex_date"] > ttm_cutoff]
     cash_by_currency = {}
     for row in ttm:
         currency = row.get("currency") or result.get("currency") or "unknown"
         cash_by_currency[currency] = round(cash_by_currency.get(currency, 0) + row["cash_per_share"], 6)
     currency_match = result.get("currency") and all(currency == result["currency"] for currency in cash_by_currency)
-    cash = sum(r["cash_per_share"] for r in ttm) if currency_match and events else None
+    cash = sum(r["cash_per_share"] for r in ttm) if currency_match and events and not incomplete_ttm else None
+    if incomplete_history:
+        result.setdefault("warnings", []).append(
+            "paid dividend dates or cash amounts are missing/invalid; totals and streak are unknown where affected"
+        )
     if not events:
         result.setdefault("warnings", []).append("no dividend history returned; absence is not interpreted as zero")
     elif not currency_match:
@@ -506,9 +532,9 @@ def dividends(args):
     result.update(
         history=events,
         cash_per_share_ttm=round(cash, 6) if cash is not None else None,
-        cash_per_share_ttm_by_currency=cash_by_currency,
+        cash_per_share_ttm_by_currency=None if incomplete_ttm else cash_by_currency,
         dividend_yield_ttm=round(cash / price * 100, 4) if cash is not None and price and price > 0 else None,
-        consecutive_payment_years=consecutive if events else None,
+        consecutive_payment_years=consecutive if events and not incomplete_history else None,
         consecutive_years_end=anchor,
         history_years_requested=args.years,
     )
