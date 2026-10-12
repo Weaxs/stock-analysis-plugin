@@ -89,3 +89,7 @@ gather 工具返回：
 完成标准：区分“已确认事实”“推断的影响路径”和“待验证项”，并为交易计划给出可观察的失效条件。
 
 财报季排期使用 `get_earnings_calendar(report_date="YYYY-MM-DD", symbol=...)`：最新预约/修订日期是计划，实际披露日期是实绩时间，业绩预告是已公告预估。除息事件用 `get_dividends(mode="calendar", symbol=...)`；不补造未公告日期或把分红预案计入已支付现金。
+
+### 补充数据覆盖
+
+get_earnings_calendar 查询 A 股仍需 report_date；HK 提供 symbol，可选财政期末 report_date；优先 HKEX 已公告业绩审批董事会排期 confirmation=official_board_meeting_notice、date_kind=scheduled_board_meeting，不能称实际披露日。供应商备选日期为 provider_only，未知期次在请求特定报告期时另列 unverified_schedules，不能强行匹配。

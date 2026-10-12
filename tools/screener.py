@@ -319,8 +319,8 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         "dividend_yield",
         "dividend_score",
     )
-    if dividend_requested and market != "A":
-        return {"error": "dividend screening currently covers A shares only", "market": market}
+    if dividend_requested and market not in ("A", "HK"):
+        return {"error": "dividend screening currently covers A/HK only", "market": market}
     for key in ("dividend_yield_min", "dividend_yield_max"):
         if key in filters and (
             isinstance(filters[key], bool)
@@ -359,13 +359,17 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         try:
             from value_data import dividend_ranking
 
-            ranked = dividend_ranking(report_date=(config or {}).get("dividend_report_date", ""))
-            yields = {r["symbol"]: r["dividend_yield"] for r in ranked["items"]}
-            df["dividend_yield"] = df["symbol"].map(yields)
+            ranked = dividend_ranking(report_date=(config or {}).get("dividend_report_date", ""), market=market)
+
+            def dividend_key(symbol):
+                return symbol.split(".")[0].lstrip("0") if market == "HK" else symbol
+
+            yields = {dividend_key(r["symbol"]): r["dividend_yield"] for r in ranked["items"]}
+            df["dividend_yield"] = df["symbol"].map(dividend_key).map(yields)
             dividend_meta = {
                 "dividend_factor": {
                     "report_date": ranked["report_date"],
-                    "yield_basis": "provider report-period cash dividend yield, percent",
+                    "yield_basis": ranked.get("yield_basis", "provider report-period cash dividend yield, percent"),
                     "missing": "unknown; excluded by dividend filters",
                 }
             }

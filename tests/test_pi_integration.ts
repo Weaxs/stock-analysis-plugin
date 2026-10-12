@@ -216,3 +216,17 @@ assert(calls[calls.length-1].includes("--include-ratio"), "margin ratio flag mis
 await registeredTools.find(t => t.name === "get_financials")!.execute!("validation", {symbol: "600519", periods: 0});
 const invalidArgs = calls[calls.length-1];
 assert(invalidArgs[invalidArgs.indexOf("--periods")+1] === "0", "periods=0 must reach shared CLI validation");
+
+await registeredTools.find(t => t.name === "get_dividends")!.execute!("hk", {mode: "ranking", market: "HK"});
+let hkArgs = calls[calls.length-1];
+assert(hkArgs[hkArgs.indexOf("--market")+1] === "HK", "HK ranking market must reach CLI");
+await registeredTools.find(t => t.name === "get_earnings_calendar")!.execute!("hk", {symbol: "0700.HK"});
+hkArgs = calls[calls.length-1];
+assert(hkArgs[hkArgs.indexOf("--report-date")+1] === "", "HK calendar must allow omitted report_date");
+if (failures) process.exit(1);
+
+await registeredTools.find(t => t.name === "get_etf_details")!.execute!("full", {symbol: "510300", include_full_holdings: true});
+assert(calls[calls.length-1].includes("--include-full-holdings"), "full equity report flag must reach CLI");
+await registeredTools.find(t => t.name === "get_etf_details")!.execute!("brief", {symbol: "510300"});
+assert(!calls[calls.length-1].includes("--include-full-holdings"), "full report must be opt-in");
+if (failures) process.exit(1);

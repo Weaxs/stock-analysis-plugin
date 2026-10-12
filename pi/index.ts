@@ -51,7 +51,7 @@ export default (pi: ExtensionAPI) => {
 
   pi.registerTool({
     name: "get_index_valuation",
-    description: "查询中国指数PE/PB历史分位与Band；沪深300等使用乐咕乐股。中证全指等仅有中证近期PE时明确标注覆盖和PE口径，不冒充全历史或PE-TTM。",
+    description: "查询中国指数估值历史分位与Band；乐咕乐股PE/PB优先，中证官方历史补充滚动PE并保留近期PE1口径。缺PB时可用LIXINGER_TOKEN补充理杏仁mcw历史，来源与算法分别标明，不混接同一指标。",
     parameters: {
       "type": "object",
       "properties": {
@@ -76,36 +76,34 @@ export default (pi: ExtensionAPI) => {
 
   pi.registerTool({
     name: "get_earnings_calendar",
-    description: "查询A股指定报告期的财报预约/修订/实际披露日期与已公告业绩预告，可按股票过滤；不是未公告业绩预测。",
+    description: "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日），缺失时返回供应商日期。HK可按已知财政期末过滤，未知期次另列。",
     parameters: {
       "type": "object",
       "properties": {
         "report_date": {
           "type": "string",
-          "description": "季度报告期YYYY-MM-DD，如2026-09-30"
+          "description": "A股必填季度期末YYYY-MM-DD；HK可选已公告财政期末，未知期次另列"
         },
         "symbol": {
           "type": "string",
-          "description": "可选A股股票代码，省略查全市场"
+          "description": "A股代码可选（省略查全市场）；HK必须提供港股.HK代码"
         },
         "top": {
           "type": "number",
           "description": "每类最多返回条数1..500，默认50"
         }
       },
-      "required": [
-        "report_date"
-      ]
+      "required": []
     },
     async execute(_id, p) {
-      const result = await py("value_data.py", ["earnings_calendar", "--report-date", p.report_date, "--symbol", p.symbol ?? "", "--top", String(p.top ?? 50)]);
+      const result = await py("value_data.py", ["earnings_calendar", "--report-date", p.report_date ?? "", "--symbol", p.symbol ?? "", "--top", String(p.top ?? 50)]);
       return asText(result.stdout);
     },
   });
 
   pi.registerTool({
     name: "get_shareholder_structure",
-    description: "查询A股股东户数变化、指定已披露报告期十大流通股东及变化、HKSCC北向名义持股；港股返回港交所带日期的南向持股。缺席十大不等于零，北向不假定有日度数据。",
+    description: "查询A股股东户数、十大流通股东变化及沪深交易所季度北向合计持股；官方总量优先，十大HKSCC名义持股仅兜底且标明口径。HK返回港交所南向记录。缺失不当零，期末不等于已公布。",
     parameters: {
       "type": "object",
       "properties": {
@@ -115,7 +113,7 @@ export default (pi: ExtensionAPI) => {
         },
         "report_date": {
           "type": "string",
-          "description": "A股报告期YYYY-MM-DD，省略使用最新可取得财报期；港股忽略此参数"
+          "description": "A股报告期YYYY-MM-DD；省略时北向使用最新已公布季度，十大股东使用最新财报期；HK忽略"
         }
       },
       "required": [
@@ -130,10 +128,11 @@ export default (pi: ExtensionAPI) => {
 
   pi.registerTool({
     name: "get_etf_details",
-    description: "查询A股ETF净值与同日期折溢价、规模变动和最新披露持仓；提供benchmark可查基准指数成分并计算对齐日收益的年化跟踪误差。披露持仓不是实时完整申赎篮子。",
+    description: "查询A股ETF净值折溢价、规模、披露持仓及沪深完整PCF申赎篮子；篮子不是实际持仓。include_full_holdings=true另取最近可得半年度/年度披露股票表，含数量/市值/报告期，非实时全资产组合；benchmark用于跟踪误差。",
     parameters: {
       "type": "object",
       "properties": {
+        "include_full_holdings": {"type": "boolean", "description": "显式请求半年度/年度全部披露股票表，默认false；不是实时全资产组合"},
         "symbol": {
           "type": "string",
           "description": "A股ETF代码，如510300"
@@ -152,24 +151,25 @@ export default (pi: ExtensionAPI) => {
       ]
     },
     async execute(_id, p) {
-      const result = await py("value_data.py", ["etf_details", p.symbol, "--benchmark", p.benchmark ?? "", "--days", String(p.days ?? 60)]);
+      const result = await py("value_data.py", ["etf_details", p.symbol, "--benchmark", p.benchmark ?? "", "--days", String(p.days ?? 60), ...(p.include_full_holdings ? ["--include-full-holdings"] : [])]);
       return asText(result.stdout);
     },
   });
 
   pi.registerTool({
     name: "get_dividends",
-    description: "查询A/HK历史分红、除权除息日历、已实施TTM股息率和连续支付年数；mode=ranking且不传symbol时返回A股报告期股息率排行，排行不是TTM收益率。预案不计入已支付股息。",
+    description: "查询A/HK分红历史、除息日历、已实施TTM股息与连续年数。mode=ranking省略symbol，market=A查报告期排行，market=HK查HKEX/LSEG年度股息率排行（report_date须年末）；排行均非当前TTM收益率。缺失不按零。",
     parameters: {
       "type": "object",
       "properties": {
+        "market": {"type": "string", "enum": ["A", "HK"], "description": "仅ranking选择市场，默认A；历史/除息日历由symbol决定"},
         "symbol": {
           "type": "string",
           "description": "history/calendar必填A股或港股.HK代码；ranking省略"
         },
         "mode": {
           "type": "string",
-          "description": "history默认；calendar未来已公布除息事件；ranking=A股排行",
+          "description": "history默认；calendar未来已公布除息事件；ranking按market查询A/HK排行",
           "enum": [
             "history",
             "calendar",
@@ -178,7 +178,7 @@ export default (pi: ExtensionAPI) => {
         },
         "report_date": {
           "type": "string",
-          "description": "ranking报告期YYYY-MM-DD，默认上一年年末"
+          "description": "ranking报告期YYYY-MM-DD，默认上一年年末；HK仅年度年末日期"
         },
         "years": {
           "type": "number",
@@ -192,7 +192,7 @@ export default (pi: ExtensionAPI) => {
       "required": []
     },
     async execute(_id, p) {
-      const result = await py("value_data.py", ["dividends", "--symbol", p.symbol ?? "", "--mode", p.mode ?? "history", "--report-date", p.report_date ?? "", "--years", String(p.years ?? 10), "--top", String(p.top ?? 20)]);
+      const result = await py("value_data.py", ["dividends", "--market", p.market ?? "A", "--symbol", p.symbol ?? "", "--mode", p.mode ?? "history", "--report-date", p.report_date ?? "", "--years", String(p.years ?? 10), "--top", String(p.top ?? 20)]);
       return asText(result.stdout);
     },
   });

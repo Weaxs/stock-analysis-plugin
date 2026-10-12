@@ -244,3 +244,23 @@ def test_invalid_financial_periods_are_forwarded_for_core_validation(monkeypatch
     monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
     hermes_tools.get_financials({"symbol": "600519", "periods": 0})
     assert calls[-1] == ["financials", "600519", "--periods", 0]
+
+
+def test_hk_calendar_and_dividend_market_dispatch(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
+    hermes_tools.get_dividends({"mode": "ranking", "market": "HK"})
+    assert calls[-1][calls[-1].index("--market") + 1] == "HK"
+    hermes_tools.get_earnings_calendar({"symbol": "0700.HK"})
+    assert calls[-1][calls[-1].index("--report-date") + 1] == ""
+    schema = next(s for s in TOOL_SCHEMAS if s["name"] == "get_earnings_calendar")
+    assert "report_date" not in schema["parameters"].get("required", [])
+
+
+def test_full_disclosed_equities_flag_is_opt_in(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
+    hermes_tools.get_etf_details({"symbol": "510300", "include_full_holdings": True})
+    assert "--include-full-holdings" in calls[-1]
+    hermes_tools.get_etf_details({"symbol": "510300"})
+    assert "--include-full-holdings" not in calls[-1]

@@ -352,6 +352,21 @@ if (failures === 0) {
   console.log(`  OK: ${skills.length} skills registered`);
 }
 
+const hkRankingTool = tools.find(t => t.name === "get_dividends")!;
+await hkRankingTool.execute({mode: "ranking", market: "HK"}, {});
+const hkRankingArgs = execCalls[execCalls.length-1].args;
+assert(hkRankingArgs[hkRankingArgs.indexOf("--market")+1] === "HK", "HK ranking market must reach CLI");
+const hkCalendarTool = tools.find(t => t.name === "get_earnings_calendar")!;
+await hkCalendarTool.execute({symbol: "0700.HK"}, {});
+const hkCalendarArgs = execCalls[execCalls.length-1].args;
+assert(hkCalendarArgs[hkCalendarArgs.indexOf("--report-date")+1] === "", "HK calendar must allow omitted report_date");
+
+const equityTool = tools.find(t => t.name === "get_etf_details")!;
+await equityTool.execute({symbol: "510300", include_full_holdings: true}, {});
+assert(execCalls[execCalls.length-1].args.includes("--include-full-holdings"), "full report flag must reach CLI");
+await equityTool.execute({symbol: "510300"}, {});
+assert(!execCalls[execCalls.length-1].args.includes("--include-full-holdings"), "full report must be opt-in");
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

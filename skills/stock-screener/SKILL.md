@@ -87,3 +87,7 @@ dividend_report_date: "2025-12-31"
 ```
 
 筛选结果仍需用 `get_dividends(mode="history", symbol=...)` 核查已实施现金分红、连续支付年数与除息时间，不能把高股息直接解释为低风险。
+
+### 补充数据覆盖
+
+股息筛选支持 A/HK：A 股为报告期已实施方案股息率，HK 为 HKEX/LSEG 年度股息率。两者都不是当前价 TTM；使用结果的 yield_basis 和 report_date，缺失不当零。
