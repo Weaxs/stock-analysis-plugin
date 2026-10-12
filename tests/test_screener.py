@@ -513,3 +513,34 @@ def test_invalid_dividend_threshold_fails_before_network(monkeypatch, threshold)
     result = screen("A", 20, {"filters": {"dividend_yield_min": threshold}})
     assert "error" in result
     snapshot.assert_not_called()
+
+
+def test_hk_dividend_factor_normalizes_hk_symbols_and_preserves_basis(monkeypatch):
+    raw = [
+        {
+            "symbol": "0005.HK",
+            "pe": 10,
+            "pb": 2,
+            "market_cap": 1e10,
+            "turnover_rate": 1,
+            "change_pct": 0,
+            "volume_ratio": 1,
+        }
+    ]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda m: raw)
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
+    calls = []
+
+    def ranking(**kwargs):
+        calls.append(kwargs)
+        return {
+            "report_date": "2025-12-31",
+            "yield_basis": "HKEX fiscal-year ratio",
+            "items": [{"symbol": "00005.HK", "dividend_yield": 5}],
+        }
+
+    monkeypatch.setattr("value_data.dividend_ranking", ranking)
+    result = screen("HK", 20, {"filters": {"dividend_yield_min": 3}})
+    assert result["candidates"][0]["dividend_yield"] == 5
+    assert result["dividend_factor"]["yield_basis"] == "HKEX fiscal-year ratio"
+    assert calls[0]["market"] == "HK"

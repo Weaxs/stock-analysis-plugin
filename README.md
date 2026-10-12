@@ -237,11 +237,11 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | 工具 | 说明 |
 |------|------|
 | `get_valuation_history` | A/HK PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口 |
-| `get_index_valuation` | 中国指数 PE/PB 历史水位；中证仅近期 PE 时明确披露限制 |
-| `get_earnings_calendar` | A 股报告期预约/修订/实际披露与已公告业绩预告 |
+| `get_index_valuation` | 中国指数 PE/PB 历史水位；中证官方多年滚动 PE；可选理杏仁补充 PB |
+| `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 单股供应商未来排期 |
 | `get_shareholder_structure` | A 股股东户数/十大流通股东变化/报告期北向名义持股；HK 南向持股 |
 | `get_etf_details` | A 股 ETF 净值折溢价、规模变动、披露持仓、可选基准成分与跟踪误差 |
-| `get_dividends` | A/HK 历史分红/除息日历/已实现 TTM 股息与连续年数；A 股报告期排行 |
+| `get_dividends` | A/HK 历史分红/除息日历/已实现 TTM 股息与连续年数；A/HK 报告期/年度排行 |
 | `get_kline` | K 线数据（OHLCV），支持日/周/月线；A 股股票/ETF 前复权，每条记录 `adjusted=qfq`，指数 `adjusted=none` |
 | `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价） |
 | `get_capital_flow` | 资金流向（仅 A 股） |
@@ -420,19 +420,21 @@ python tools/stock_data.py margin_trading 600519 --days 10 --include-ratio
 python tools/value_data.py dividends --symbol 600519
 python tools/value_data.py dividends --symbol 0700.HK --mode calendar
 python tools/value_data.py dividends --mode ranking --report-date 2025-12-31
+python tools/value_data.py dividends --mode ranking --market HK --report-date 2025-12-31
+python tools/value_data.py earnings_calendar --symbol 0700.HK
 ```
 
 财报、基本信息及估值/股东/ETF/分红等慢变数据缓存到 `~/.stock-analysis/cache`，TTL 一天；板块成分/映射一周。行情报价不缓存。缓存文件原子替换，过期/损坏重拉，错误和显式部分失败不缓存；不以过期数据伪装最新数据。原有临时目录的粘性路由和反向成分缓存保留。
 
-估值使用可得数据的正值样本分位（`<=当前值`），返回 10/25/50/75/90 分位 Band 与实际起止日期；亏损 PE 分位为 null。当前 AKShare 已无 issue 中提到的 `stock_a_indicator_lg`，个股采用百度 PE-TTM/PB 历史，指数采用乐咕乐股；中证全指等中证接口只提供近期总股本 PE1 时会明确提示，不能当作多年 PE-TTM/PB 历史。A 股 `annual=true, periods=10` 请求十年年报；HK 按源实际可得年数返回，不补造缺失比率。
+估值使用可得数据的正值样本分位（`<=当前值`），返回 10/25/50/75/90 分位 Band 与实际起止日期；亏损 PE 分位为 null。当前 AKShare 已无 issue 中提到的 `stock_a_indicator_lg`，个股采用百度 PE-TTM/PB 历史，指数采用乐咕乐股；中证全指等通过中证官方历史接口取得多年滚动 PE，近期总股本 PE1 仍单独保留；PB 缺失时可配置 `LIXINGER_TOKEN` 补充理杏仁总市值加权（mcw）历史，返回每个指标的来源与口径，不拼接不同方法的同一指标。未配置或无权限时 PB 保持未知。A 股 `annual=true, periods=10` 请求十年年报；HK 按源实际可得年数返回，不补造缺失比率。
 
-股东数据保留报告期、公告日或港交所披露日：A 股北向只是已披露十大流通股东中的 HKSCC 名义持股，缺席不是零；HK 南向取自港交所 Stock Connect CCASS 记录，不等同完整实益股东名册。财报预约/修订是计划，业绩预告是已公告预估，不是实际业绩。
+股东数据保留报告期、公告日或港交所披露日：A 股北向优先返回沪深交易所披露的季度合计数量，省略报告期时查最新已公布季度；十大流通股东中的 HKSCC 推断保留在 `northbound_nominee`，仅作明确标注的兜底，缺席不是零；HK 南向取自港交所 Stock Connect CCASS 记录，不等同完整实益股东名册。A 股财报预约/修订是计划，业绩预告是已公告预估，不是实际业绩。HK 单股可省略报告期，返回 Yahoo 供应商未来排期，转换为香港日期；`confirmation=provider_only`，报告期未知，不声称官方确认或全港股完整日历。
 
-ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
+ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；新增 `basket` 返回沪深交易所发布的完整当日 PCF（跨境代码原样保留），包含申赎单位、每篮子证券数量、现金替代规则与比例；校验基金代码、实际日期和全部组件数量，失败只提示不可用，不冒充完整。PCF 是申赎对价，不是实际持仓，证券数量也不是净值权重。提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
 
-股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。排行/选股使用指定报告期的已实施方案股息率（百分数），不是 TTM。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
+股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。A 股排行/选股使用指定报告期已实施方案股息率；HK 指定 `market=HK` 时使用 HKEX/LSEG 公布的年度股息率（百分数），不是当前价 TTM；HK `report_date` 仅支持数据源可得年度的年末。港股股息选股因子也使用同一年度口径。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
 
-数据源参考：[AKShare股票接口](https://akshare.akfamily.xyz/data/stock/stock.html)、[指数接口](https://github.com/akfamily/akshare/blob/main/docs/data/index/index.md)、[基金接口](https://github.com/akfamily/akshare/blob/main/docs/data/fund/fund_public.md)、[港交所南向持股](https://www.hkexnews.hk/sdw/search/mutualmarket.aspx?t=hk)。
+数据源参考：[AKShare股票接口](https://akshare.akfamily.xyz/data/stock/stock.html)、[指数接口](https://github.com/akfamily/akshare/blob/main/docs/data/index/index.md)、[基金接口](https://github.com/akfamily/akshare/blob/main/docs/data/fund/fund_public.md)、[港交所南向持股](https://www.hkexnews.hk/sdw/search/mutualmarket.aspx?t=hk)、[HKEX 年度股息率](https://www.hkex.com.hk/Listing/Sustainability/Shareholder-Value-in-Focus/Dividend-Yield-Ratio?sc_lang=en)、[理杏仁指数基本面接口](https://www.lixinger.com/api/open-api/html-doc/cn/index/fundamental)。
 
 ## 独立 CLI 使用
 

@@ -3,11 +3,14 @@
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
 import numpy as np
 import pandas as pd
@@ -124,6 +127,37 @@ INDEX_NAMES = {
 }
 
 
+def lixinger_index_history(code, start, end):
+    import requests
+
+    def fetch():
+        response = requests.post(
+            "https://open.lixinger.com/api/cn/index/fundamental",
+            json={
+                "token": os.environ["LIXINGER_TOKEN"],
+                "stockCodes": [code],
+                "startDate": start,
+                "endDate": end,
+                "metricsList": ["pe_ttm.mcw", "pb.mcw"],
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") != 1:
+            raise ValueError("Lixinger index data unavailable; check token permissions")
+        rows = [
+            {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm.mcw")), "pb": number(r.get("pb.mcw"))}
+            for r in payload.get("data", [])
+            if r.get("stockCode") == code
+        ]
+        if not rows or not any(r["date"] and (r["pe_ttm"] is not None or r["pb"] is not None) for r in rows):
+            raise ValueError("Lixinger returned no usable index history")
+        return rows
+
+    return cached(f"lixinger-index:{code}:{start}:{end}", DAY, fetch)
+
+
 def index_valuation(args):
     import akshare as ak
 
@@ -134,6 +168,7 @@ def index_valuation(args):
         raise ValueError("years must be in 1..10")
     result = {"symbol": code, "name": name, "source": "legulegu", "requested_years": args.years}
     merged = {}
+    cutoff = (pd.Timestamp(date.today()) - pd.DateOffset(years=args.years)).date().isoformat()
     for field, fn, column in [("pe_ttm", ak.stock_index_pe_lg, "滚动市盈率"), ("pb", ak.stock_index_pb_lg, "市净率")]:
         section = {}
         capture(
@@ -143,29 +178,74 @@ def index_valuation(args):
         )
         for row in section.get("rows", []):
             stamp = iso(row.get("日期"))
-            if stamp and stamp >= (date.today() - timedelta(days=365.25 * args.years)).isoformat():
+            if stamp and cutoff <= stamp <= date.today().isoformat():
                 merged.setdefault(stamp, {"date": stamp})[field] = number(row.get(column))
         result.setdefault("warnings", []).extend(section.get("warnings", []))
-    if not merged and re.fullmatch(r"\d{6}|H\d{5}", code, re.I):
-        rows = dataset(f"csi-valuation:{code}", lambda: ak.stock_zh_index_value_csindex(symbol=code))
-        merged = {
-            iso(r["日期"]): {
-                "date": iso(r["日期"]),
-                "pe": number(r.get("市盈率1")),
-                "dividend_yield": number(r.get("股息率1")),
-            }
-            for r in rows
-            if iso(r.get("日期"))
-        }
-        result["source"] = "csindex"
-        result.setdefault("warnings", []).append(
-            "CSI provides recent PE based on total shares, not a full historical PE-TTM/PB series"
+    if not any(number(r.get("pe_ttm")) is not None for r in merged.values()) and re.fullmatch(
+        r"\d{6}|H\d{5}", code, re.I
+    ):
+        section = {}
+        capture(
+            section,
+            "history",
+            lambda: dataset(
+                f"csi-history:{code}:{args.years}",
+                lambda: ak.stock_zh_index_hist_csindex(
+                    symbol=code, start_date=cutoff.replace("-", ""), end_date=date.today().strftime("%Y%m%d")
+                ),
+            ),
+        )
+        for row in section.get("history", []):
+            stamp = iso(row.get("日期"))
+            pe = number(row.get("滚动市盈率"))
+            if stamp and cutoff <= stamp <= date.today().isoformat() and pe is not None:
+                merged.setdefault(stamp, {"date": stamp})["pe_ttm"] = pe
+        capture(
+            section,
+            "recent",
+            lambda: dataset(f"csi-valuation:{code}", lambda: ak.stock_zh_index_value_csindex(symbol=code)),
+        )
+        for row in section.get("recent", []):
+            stamp = iso(row.get("日期"))
+            if stamp and cutoff <= stamp <= date.today().isoformat():
+                merged.setdefault(stamp, {"date": stamp}).update(
+                    pe=number(row.get("市盈率1")), dividend_yield=number(row.get("股息率1"))
+                )
+        result["source"] = (
+            "legulegu/csindex" if any(number(r.get("pb")) is not None for r in merged.values()) else "csindex"
         )
         result["pe_basis"] = "CSI PE1, total shares"
+        result["historical_pe_basis"] = "CSI published rolling PE, not reconstructed from current constituents"
+        result.setdefault("warnings", []).extend(section.get("warnings", []))
+    result["metric_sources"] = {
+        field: "csindex" if field == "pe_ttm" and "historical_pe_basis" in result else "legulegu"
+        for field in ("pe_ttm", "pb")
+        if any(number(r.get(field)) is not None for r in merged.values())
+    }
+    missing = [field for field in ("pe_ttm", "pb") if field not in result["metric_sources"]]
+    if missing and os.environ.get("LIXINGER_TOKEN") and re.fullmatch(r"\d{6}|H\d{5}", code, re.I):
+        section = {}
+        capture(section, "rows", lambda: lixinger_index_history(code, cutoff, date.today().isoformat()))
+        for row in section.get("rows", []):
+            if row["date"] and cutoff <= row["date"] <= date.today().isoformat():
+                for field in missing:
+                    if row[field] is not None:
+                        merged.setdefault(row["date"], {"date": row["date"]})[field] = row[field]
+        for field in missing:
+            if any(number(r.get(field)) is not None for r in merged.values()):
+                result["metric_sources"][field] = "lixinger"
+        result["lixinger_basis"] = "provider-defined total-market-cap-weighted (mcw) index valuation"
+        result.setdefault("warnings", []).extend(section.get("warnings", []))
+        if "lixinger" in result["metric_sources"].values():
+            result["source"] = "/".join(sorted(set(result["metric_sources"].values())))
+    if "pb" not in result["metric_sources"]:
+        result.setdefault("warnings", []).append(
+            "historical PB unavailable; optional LIXINGER_TOKEN enables an additional provider; no estimate substituted"
+        )
     if not merged:
         raise ValueError("no index valuation data available")
     history = sorted(merged.values(), key=lambda r: r["date"])
-    fields = ("pe", "dividend_yield") if result["source"] == "csindex" else ("pe_ttm", "pb")
+    fields = ("pe_ttm", "pb", "pe", "dividend_yield") if "pe_basis" in result else ("pe_ttm", "pb")
     result.update(history=history, metrics={field: valuation_summary(history, field) for field in fields})
     if not result.get("warnings"):
         result.pop("warnings", None)
@@ -177,8 +257,47 @@ def earnings_calendar(args):
 
     stamp = iso(args.report_date)
     suffix = {"03-31": "一季", "06-30": "半年报", "09-30": "三季", "12-31": "年报"}
-    if not stamp or stamp[5:] not in suffix or not 1 <= args.top <= 500:
+    if not 1 <= args.top <= 500 or (args.report_date and (not stamp or stamp[5:] not in suffix)):
         raise ValueError("report_date must be a quarter end and top must be in 1..500")
+    if args.symbol and detect_market(args.symbol) == "HK":
+        import yfinance as yf
+
+        stock_identity(args.symbol)
+
+        def fetch():
+            frame = yf.Ticker(_yf_hk_symbol(args.symbol)).get_earnings_dates(limit=12)
+            if frame is None:
+                raise ValueError("HK earnings schedule unavailable")
+            return sorted({iso(d) for d in frame.index if iso(d)})
+
+        dates = cached(f"hk-earnings-schedule:{_yf_hk_symbol(args.symbol)}", DAY, fetch)
+        events = [
+            {
+                "symbol": args.symbol,
+                "scheduled_date": d,
+                "actual_date": None,
+                "report_date": None,
+                "confirmation": "provider_only",
+            }
+            for d in dates
+            if d >= date.today().isoformat()
+        ]
+        return {
+            "symbol": args.symbol,
+            "market": "HK",
+            "source": "yfinance earnings schedule",
+            "report_date_requested": stamp,
+            "disclosures": events[: args.top],
+            "disclosures_total": len(events),
+            "forecasts": [],
+            "forecasts_total": 0,
+            "warnings": [
+                "provider schedule is not independently confirmed by HKEX/issuer; fiscal report period unknown"
+            ],
+            "as_of": date.today().isoformat(),
+        }
+    if not stamp:
+        raise ValueError("report_date is required for A-share earnings calendars")
     symbol = ""
     if args.symbol:
         market, symbol = stock_identity(args.symbol)
@@ -273,6 +392,101 @@ def southbound_holdings(symbol):
     }
 
 
+def northbound_holdings(symbol, report_date=""):
+    import requests
+
+    exchange = _cn_code(symbol)[:2]
+    if exchange not in ("sh", "sz"):
+        raise ValueError("Stock Connect holdings cover Shanghai/Shenzhen securities only")
+    if report_date and (not iso(report_date) or iso(report_date)[5:] not in ("03-31", "06-30", "09-30", "12-31")):
+        raise ValueError("report_date must be a quarter end")
+
+    def fetch():
+        if exchange == "sh":
+            response = requests.get(
+                "https://query.sse.com.cn/commonSoaQuery.do",
+                params={
+                    "sqlId": "FW_HGTZL_HGTSCSJ_HGTZQCYSL_L",
+                    "tradeDate": report_date.replace("-", ""),
+                    "secCodeName": symbol,
+                    "isPagination": "true",
+                    "pageHelp.pageSize": 20,
+                    "pageHelp.pageNo": 1,
+                },
+                headers={"Referer": "https://www.sse.com.cn/"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = payload.get("result", [])
+            if payload.get("actionErrors") or payload.get("pageHelp", {}).get("pageCount", 0) > 1:
+                raise ValueError("incomplete SSE holdings response")
+            matches = [r for r in rows if str(r.get("secCode", "")).strip() == symbol]
+            if len(matches) != 1:
+                raise ValueError("official northbound holdings unavailable for this security/quarter")
+            row = matches[0]
+            stamp = iso(row.get("tradeDate"))
+            shares = number(str(row.get("totalHoldings")).replace(",", ""))
+            source = "SSE quarterly Stock Connect holdings"
+        else:
+
+            def query(stamp, code):
+                response = requests.get(
+                    "https://www.szse.cn/api/report/ShowReport/data",
+                    params={
+                        "SHOWTYPE": "JSON",
+                        "CATALOGID": "SGT_SGTCGSL",
+                        "txtDate": f"{stamp[:4]}Q{int(stamp[5:7]) // 3}",
+                        "txtZqdm": code,
+                    },
+                    headers={"Referer": "https://www.szse.cn/"},
+                    timeout=20,
+                )
+                response.raise_for_status()
+                section = response.json()[0]
+                if section.get("error"):
+                    raise ValueError("SZSE holdings period unavailable")
+                return section
+
+            stamp = report_date
+            if not stamp:
+                end = date(date.today().year, ((date.today().month - 1) // 3) * 3 + 1, 1) - timedelta(days=1)
+                for _ in range(2):
+                    candidate = end.isoformat()
+                    if query(candidate, "").get("data"):
+                        stamp = candidate
+                        break
+                    end = date(end.year, end.month - 2, 1) - timedelta(days=1)
+            if not stamp:
+                raise ValueError("latest published SZSE holdings quarter unavailable")
+            section = query(stamp, symbol)
+            if section.get("metadata", {}).get("pagecount", 0) > 1:
+                raise ValueError("incomplete SZSE holdings response")
+            matches = [r for r in section.get("data", []) if str(r.get("zqdm", "")).strip() == symbol]
+            if len(matches) != 1:
+                raise ValueError("official northbound holdings unavailable for this security/quarter")
+            shares = number(str(matches[0].get("cysl")).replace(",", ""))
+            source = "SZSE quarterly Stock Connect holdings"
+        if (
+            not stamp
+            or stamp > date.today().isoformat()
+            or (report_date and stamp != report_date)
+            or shares is None
+            or shares < 0
+        ):
+            raise ValueError("invalid official holdings date or quantity")
+        return {
+            "as_of": stamp,
+            "source": source,
+            "shares": shares,
+            "complete": True,
+            "quantity_unit": "fund units" if normalize_stock_code(symbol)["is_etf"] else "shares",
+            "note": "exchange-disclosed aggregate Stock Connect quantity for this security; not a top-ten shareholder inference",
+        }
+
+    return cached(f"northbound-official:{symbol}:{report_date or date.today().isoformat()}", DAY, fetch)
+
+
 def shareholder_structure(args):
     import akshare as ak
 
@@ -341,17 +555,122 @@ def shareholder_structure(args):
         result["northbound"] = {
             "as_of": stamp,
             "source": "disclosed top float shareholder register",
-            "shares": sum(r["shares"] for r in nominee if r["shares"] is not None) if nominee else None,
+            "shares": sum(r["shares"] for r in nominee)
+            if nominee and all(r["shares"] is not None for r in nominee)
+            else None,
             "note": "HKSCC nominee disclosure; absence from top ten is not zero holdings. Daily northbound stock holding disclosure is no longer assumed.",
         }
-    if not result["shareholder_counts"] and not result.get("top_float_shareholders"):
+        result["northbound_nominee"] = result["northbound"]
+    capture(result, "northbound", lambda: northbound_holdings(symbol, args.report_date))
+    if (
+        not result["shareholder_counts"]
+        and not result.get("top_float_shareholders")
+        and not result.get("northbound", {}).get("complete")
+    ):
         raise ValueError("shareholder sources unavailable")
     return result
 
 
-def dividend_ranking(report_date=""):
+def hk_dividend_ranking(report_date=""):
+    import requests
+
+    stamp = iso(report_date) if report_date else f"{date.today().year - 1}-12-31"
+    if not stamp or stamp[5:] != "12-31":
+        raise ValueError("HK dividend ranking requires an annual year-end report_date")
+
+    def fetch():
+        headers = {"Referer": "https://www.hkex.com.hk/", "User-Agent": "Mozilla/5.0"}
+        response = requests.get(
+            "https://www.hkex.com.hk/Listing/Sustainability/Shareholder-Value-in-Focus/Dividend-Yield-Ratio?sc_lang=en",
+            headers=headers,
+            timeout=20,
+        )
+        response.raise_for_status()
+        block = re.search(r"LabCI\.getToken\s*=\s*function\s*\(\)\s*\{(.*?)\}", response.text, re.S)
+        token_match = re.search(r'return\s+"([^"]+)"', re.sub(r"//[^\n]*", "", block.group(1))) if block else None
+        if not token_match:
+            raise ValueError("HKEX public dividend feed unavailable")
+        rows = []
+        years = None
+        total = None
+        page = 1
+        while total is None or len(rows) < total:
+            try:
+                response = requests.get(
+                    "https://www1.hkex.com.hk/hkexwidget/data/getcapitalefficiencylist",
+                    params={
+                        "token": unquote(token_match.group(1)),
+                        "type": "DYR",
+                        "sector": "null",
+                        "hsi": 0,
+                        "page": page,
+                        "limit": 3000,
+                        "sort": 1,
+                        "dir": 1,
+                        "lang": "eng",
+                        "callback": "stockrank",
+                        "qid": 1,
+                    },
+                    headers=headers,
+                    timeout=20,
+                )
+            except requests.RequestException:
+                raise ValueError("HKEX dividend feed request failed") from None
+            if response.status_code != 200:
+                raise ValueError("HKEX dividend feed unavailable")
+            match = re.fullmatch(r"\s*stockrank\((.*)\);?\s*", response.text, re.S)
+            if not match:
+                raise ValueError("unexpected HKEX dividend feed")
+            data = json.loads(match.group(1))["data"]
+            if (
+                data.get("responsecode") != "000"
+                or not isinstance(data.get("totalCount"), int)
+                or not 0 < data["totalCount"] <= 100000
+            ):
+                raise ValueError("invalid HKEX dividend feed")
+            if total is not None and (total != data["totalCount"] or years != data.get("year")):
+                raise ValueError("HKEX dividend pages changed during fetch")
+            total, years = data["totalCount"], data["year"]
+            if not data["datalist"]:
+                raise ValueError("incomplete HKEX dividend ranking")
+            rows.extend(data["datalist"])
+            page += 1
+        if len(rows) != total or len({r["sym"] for r in rows}) != total or stamp[:4] not in years:
+            raise ValueError("incomplete HKEX ranking or requested year unavailable")
+        column = years.index(stamp[:4]) + 1
+        items = []
+        for row in rows:
+            if not re.fullmatch(r"\d{1,5}", row["sym"]) or len(row["data"]) != len(years) + 1:
+                raise ValueError("invalid HKEX dividend row")
+            value = number(row["data"][column])
+            if value is not None:
+                items.append(
+                    {
+                        "symbol": row["sym"].zfill(5) + ".HK",
+                        "name": row["nm"],
+                        "dividend_yield": value,
+                        "yield_year": stamp[:4],
+                        "source_latest_period": row.get("period"),
+                    }
+                )
+        return {
+            "market": "HK",
+            "report_date": stamp,
+            "source": "HKEX/LSEG",
+            "items": items,
+            "yield_basis": "provider fiscal-year dividend yield ratio, percent; not current-price TTM cash yield",
+        }
+
+    return cached(f"hk-dividend-ranking:{stamp}", DAY, fetch)
+
+
+def dividend_ranking(report_date="", market="A"):
     import akshare as ak
 
+    if market == "HK":
+        return hk_dividend_ranking(report_date)
+    if market != "A":
+        raise ValueError("dividend rankings cover A/HK only")
     stamp = iso(report_date) if report_date else f"{date.today().year - 1}-12-31"
     if not stamp or stamp[5:] not in ("03-31", "06-30", "09-30", "12-31"):
         raise ValueError("dividend report_date must be a quarter end")
@@ -381,7 +700,7 @@ def dividends(args):
     if args.mode == "ranking":
         if args.symbol:
             raise ValueError("ranking covers all A shares; omit symbol")
-        result = dividend_ranking(args.report_date)
+        result = dividend_ranking(args.report_date, getattr(args, "market", "A"))
         result["items"] = sorted(result["items"], key=lambda r: r["dividend_yield"], reverse=True)[: args.top]
         return result
     market, symbol = stock_identity(args.symbol)
@@ -617,6 +936,116 @@ def fund_size_history(symbol):
     return cached(f"etf-size:{symbol}", DAY, fetch)
 
 
+def etf_basket(symbol):
+    import requests
+
+    def fetch():
+        if symbol.startswith("5"):
+            response = requests.get(
+                "https://query.sse.com.cn/etfDownload/downloadETF2Bulletin.do",
+                params={"fundCode": symbol},
+                headers={"Referer": "https://www.sse.com.cn/"},
+                timeout=20,
+            )
+            source = "SSE PCF"
+        else:
+            response = requests.get(
+                "https://www.szse.cn/api/report/ShowReport/data",
+                params={
+                    "SHOWTYPE": "JSON",
+                    "CATALOGID": "sgshqd",
+                    "txtJCorDH": symbol,
+                    "txtStart": (date.today() - timedelta(days=30)).isoformat(),
+                    "txtEnd": date.today().isoformat(),
+                },
+                headers={"Referer": "https://www.szse.cn/"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            dates = re.findall(rf"pcf_{re.escape(symbol)}_(\d{{8}})", json.dumps(response.json()))
+            dates = [d for d in dates if iso(d) and iso(d) <= date.today().isoformat()]
+            if not dates:
+                raise ValueError("no published SZSE PCF found")
+            response = requests.get(
+                f"https://reportdocs.static.szse.cn/files/text/ETFDown/pcf_{symbol}_{max(dates)}.xml", timeout=20
+            )
+            source = "SZSE PCF"
+        response.raise_for_status()
+        if b"<!DOCTYPE" in response.content.upper() or b"<!ENTITY" in response.content.upper():
+            raise ValueError("unexpected PCF XML declarations")
+        root = ElementTree.fromstring(response.content)
+        for node in root.iter():
+            node.tag = node.tag.split("}")[-1]
+        if root.tag not in ("SSEPortfolioCompositionFile", "PCFFile"):
+            raise ValueError("unexpected PCF document")
+        fund_code = root.findtext("FundInstrumentID") or root.findtext("SecurityID")
+        stamp = iso(root.findtext("TradingDay"))
+        unit = number(root.findtext("CreationRedemptionUnit"))
+        components = root.findall(".//Component")
+        count = number(root.findtext("TotalRecordNum") or root.findtext("RecordNumber") or root.findtext("RecordNum"))
+        if (
+            fund_code != symbol
+            or not stamp
+            or stamp > date.today().isoformat()
+            or not unit
+            or unit <= 0
+            or count != len(components)
+            or not components
+        ):
+            raise ValueError("incomplete or mismatched PCF document")
+        rows = []
+        for node in components:
+            code = node.findtext("InstrumentID") or node.findtext("UnderlyingSecurityID")
+            quantity = number(node.findtext("Quantity") or node.findtext("ComponentShare"))
+            if not code or quantity is None or quantity < 0:
+                raise ValueError("invalid PCF component")
+            rows.append(
+                {
+                    "code": code,
+                    "name": node.findtext("InstrumentName") or node.findtext("UnderlyingSymbol"),
+                    "quantity_per_unit": quantity,
+                    "exchange_code": node.findtext("UnderlyingSecurityIDSource")
+                    or node.findtext("UnderlyingSecurityID"),
+                    "cash_substitution_flag": node.findtext("SubstitutionFlag") or node.findtext("SubstituteFlag"),
+                    "creation_premium_rate": number(
+                        node.findtext("CreationPremiumRate") or node.findtext("PremiumRatio")
+                    ),
+                    "redemption_discount_rate": number(
+                        node.findtext("RedemptionDiscountRate") or node.findtext("DiscountRatio")
+                    ),
+                    "substitution_cash_amount": number(node.findtext("SubstitutionCashAmount")),
+                    "creation_cash_substitute": number(node.findtext("CreationCashSubstitute")),
+                    "redemption_cash_substitute": number(node.findtext("RedemptionCashSubstitute")),
+                }
+            )
+        return {
+            "source": source,
+            "as_of": stamp,
+            "previous_trading_day": iso(root.findtext("PreTradingDay")),
+            "creation_redemption_unit": unit,
+            "previous_nav": {
+                "as_of": iso(root.findtext("PreTradingDay")),
+                "nav_per_unit": number(root.findtext("NAV")),
+                "nav_per_creation_unit": number(root.findtext("NAVperCU")),
+            },
+            "previous_cash_component": number(root.findtext("PreCashComponent") or root.findtext("CashComponent")),
+            "estimated_cash_component": number(
+                root.findtext("EstimatedCashComponent") or root.findtext("EstimateCashComponent")
+            ),
+            "cash_unit": "CNY per creation/redemption unit",
+            "max_cash_substitution_ratio": number(root.findtext("MaxCashRatio")),
+            "creation_redemption_switch": root.findtext("CreationRedemptionSwitch"),
+            "creation_flag": root.findtext("Creation"),
+            "redemption_flag": root.findtext("Redemption"),
+            "record_count": len(rows),
+            "complete": True,
+            "components": rows,
+            "basis": "complete published creation/redemption basket, not actual fund holdings; quantities per creation unit, rates are fractions",
+        }
+
+    return cached(f"etf-basket:{symbol}:{date.today().isoformat()}", DAY, fetch)
+
+
 def etf_details(args):
     import akshare as ak
     from _subproc import run_tool
@@ -704,6 +1133,7 @@ def etf_details(args):
             if str(r.get("季度", "")) == latest_quarter
         ]
     result["holdings_code_basis"] = "original reported security codes; foreign exchange/market is not inferred"
+    capture(result, "basket", lambda: etf_basket(symbol))
     if args.benchmark:
         benchmark = "sh" + args.benchmark if args.benchmark in INDEX_NAMES else args.benchmark
         benchmark_rows = run_tool("stock_data.py", ["kline", benchmark, "--count", str(args.days + 5)])
@@ -731,7 +1161,7 @@ def etf_details(args):
             "annualized_tracking_error_pct": None,
             "note": "provide benchmark to compute tracking error; benchmark is never guessed",
         }
-    if not nav and not sizes and not result.get("holdings"):
+    if not nav and not sizes and not result.get("holdings") and not result.get("basket", {}).get("complete"):
         raise ValueError("ETF detail sources unavailable")
     return result
 
@@ -745,7 +1175,7 @@ def main():
         p.add_argument("--years", type=int, default=5)
     p = sub.add_parser("earnings_calendar")
     p.add_argument("--symbol", default="")
-    p.add_argument("--report-date", required=True)
+    p.add_argument("--report-date", default="")
     p.add_argument("--top", type=int, default=50)
     p = sub.add_parser("shareholder_structure")
     p.add_argument("symbol")
@@ -757,6 +1187,7 @@ def main():
     p = sub.add_parser("dividends")
     p.add_argument("--symbol", default="")
     p.add_argument("--mode", choices=["history", "calendar", "ranking"], default="history")
+    p.add_argument("--market", choices=["A", "HK"], default="A", help="Ranking market; history/calendar use symbol")
     p.add_argument("--report-date", default="")
     p.add_argument("--years", type=int, default=10)
     p.add_argument("--top", type=int, default=20)

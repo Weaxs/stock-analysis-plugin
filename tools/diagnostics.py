@@ -27,6 +27,12 @@ PROVIDERS = {
     # see stock_data._kline_tushare) — the tushare package is not in requirements,
     # so availability is the token, not a package probe
     "tushare": ("requests", ["TUSHARE_TOKEN"], ["A"], "pure-HTTP API (api.tushare.pro); no tushare package needed"),
+    "lixinger": (
+        "requests",
+        ["LIXINGER_TOKEN"],
+        ["A"],
+        "optional index PE/PB history; subscription permissions not probed",
+    ),
     "efinance": ("efinance", [], ["A"], None),
     "tencent": ("requests", [], ["A"], "qt.gtimg.cn quote/kline, no auth (issue #25)"),
     "sina": (

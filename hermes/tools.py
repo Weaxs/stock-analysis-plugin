@@ -451,7 +451,7 @@ def get_earnings_calendar(args: dict, **kwargs) -> str:
         [
             "earnings_calendar",
             "--report-date",
-            args["report_date"],
+            args.get("report_date", ""),
             "--symbol",
             args.get("symbol", ""),
             "--top",
@@ -478,6 +478,8 @@ def get_dividends(args: dict, **kwargs) -> str:
         "value_data.py",
         [
             "dividends",
+            "--market",
+            args.get("market", "A"),
             "--symbol",
             args.get("symbol", ""),
             "--mode",

@@ -16,6 +16,13 @@ def fixed_today(monkeypatch):
 
     monkeypatch.setattr(value_data, "date", FixedDate)
 
+    def offline(*args, **kwargs):
+        raise OSError("test did not configure this HTTP source")
+
+    monkeypatch.setattr("requests.get", offline)
+    monkeypatch.setattr("requests.post", offline)
+    monkeypatch.delenv("LIXINGER_TOKEN", raising=False)
+
 
 def test_stock_valuation_percentiles_ignore_losses_and_sort_dates(monkeypatch):
     import akshare as ak
@@ -219,6 +226,7 @@ def test_csi_fallback_never_labels_total_share_pe_as_ttm(monkeypatch):
 
     monkeypatch.setattr(ak, "stock_index_pe_lg", unavailable)
     monkeypatch.setattr(ak, "stock_index_pb_lg", unavailable)
+    monkeypatch.setattr(ak, "stock_zh_index_hist_csindex", unavailable)
     monkeypatch.setattr(
         ak,
         "stock_zh_index_value_csindex",
@@ -518,3 +526,334 @@ def test_missing_paid_dividend_amount_or_date_does_not_understate_yield(monkeypa
     assert result["dividend_yield_ttm"] is None
     assert result["consecutive_payment_years"] is None
     assert result["warnings"]
+
+
+def test_csi_historical_pe_extends_recent_indicator_without_changing_basis(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    def unsupported(**kwargs):
+        raise KeyError("unsupported index")
+
+    monkeypatch.setattr(ak, "stock_index_pe_lg", unsupported)
+    monkeypatch.setattr(ak, "stock_index_pb_lg", unsupported)
+    received = []
+
+    def history(**kwargs):
+        received.append(kwargs)
+        return pd.DataFrame(
+            {"日期": ["2020-01-01", "2022-01-01", "2026-10-09", "2026-10-12"], "滚动市盈率": [1, 10, 20, None]}
+        )
+
+    monkeypatch.setattr(ak, "stock_zh_index_hist_csindex", history)
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_index_value_csindex",
+        lambda **kwargs: pd.DataFrame({"日期": ["2026-10-09"], "市盈率1": [18], "股息率1": [2]}),
+    )
+    result = value_data.index_valuation(Namespace(symbol="000985", years=5))
+    assert result["metrics"]["pe_ttm"]["samples"] == 2
+    assert result["metrics"]["pe_ttm"]["current"] == 20
+    assert result["metrics"]["pe_ttm"]["as_of"] == "2026-10-09"
+    assert result["metrics"]["pe"]["current"] == 18
+    assert result["history"][0]["date"] == "2022-01-01"
+    assert received[0]["start_date"] == "20211012"
+    assert result["metrics"]["pb"]["current"] is None
+
+
+def test_sse_pcf_preserves_complete_basket_cash_flags_and_original_codes(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    xml = b"""<SSEPortfolioCompositionFile><FundInstrumentID>510300</FundInstrumentID><TradingDay>20261012</TradingDay><PreTradingDay>20261009</PreTradingDay><CreationRedemptionUnit>900000</CreationRedemptionUnit><RecordNumber>2</RecordNumber><ComponentList><Component><InstrumentID>000001</InstrumentID><InstrumentName>Bank</InstrumentName><Quantity>1600</Quantity><SubstitutionFlag>1</SubstitutionFlag><UnderlyingSecurityID>102</UnderlyingSecurityID></Component><Component><InstrumentID>00700</InstrumentID><InstrumentName>Tencent</InstrumentName><Quantity>0</Quantity><SubstitutionFlag>7</SubstitutionFlag><SubstitutionCashAmount>1234.5</SubstitutionCashAmount><UnderlyingSecurityID>103</UnderlyingSecurityID></Component></ComponentList></SSEPortfolioCompositionFile>"""
+    monkeypatch.setattr("requests.get", lambda *a, **k: Mock(content=xml))
+    result = value_data.etf_basket("510300")
+    assert result["complete"] is True
+    assert result["as_of"] == "2026-10-12"
+    assert result["record_count"] == 2
+    assert result["components"][1]["code"] == "00700"
+    assert result["components"][1]["cash_substitution_flag"] == "7"
+    assert result["components"][1]["quantity_per_unit"] == 0
+    assert result["components"][1]["substitution_cash_amount"] == 1234.5
+
+
+@pytest.mark.parametrize("replacement", [b"<RecordNumber>3</RecordNumber>", b"<RecordNumber>oops</RecordNumber>"])
+def test_incomplete_pcf_is_not_reported_as_complete(monkeypatch, replacement):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    xml = b"<SSEPortfolioCompositionFile><FundInstrumentID>510300</FundInstrumentID><TradingDay>20261012</TradingDay><CreationRedemptionUnit>900000</CreationRedemptionUnit><RecordNumber>0</RecordNumber><ComponentList/></SSEPortfolioCompositionFile>"
+    xml = xml.replace(b"<RecordNumber>0</RecordNumber>", replacement)
+    monkeypatch.setattr("requests.get", lambda *a, **k: Mock(content=xml))
+    with pytest.raises(ValueError):
+        value_data.etf_basket("510300")
+
+
+def test_official_northbound_shares_use_actual_published_quarter(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs["params"])
+        return Mock(
+            json=lambda: {
+                "result": [{"secCode": "600519", "tradeDate": "20260630", "totalHoldings": "53,711,656.00"}],
+                "pageHelp": {"total": 1, "pageCount": 1},
+            }
+        )
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.northbound_holdings("600519")
+    assert result["as_of"] == "2026-06-30"
+    assert result["shares"] == 53711656
+    assert result["complete"] is True
+    assert calls[0]["tradeDate"] == ""
+
+
+def test_szse_northbound_uses_quarter_query_and_stock_units(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs["params"])
+        return Mock(
+            json=lambda: [
+                {"metadata": {"recordcount": 1, "pagecount": 1}, "data": [{"zqdm": "000001  ", "cysl": "736,878,410"}]}
+            ]
+        )
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.northbound_holdings("000001", "2026-06-30")
+    assert result["shares"] == 736878410
+    assert result["as_of"] == "2026-06-30"
+    assert calls[0]["txtDate"] == "2026Q2"
+    assert calls[0]["txtZqdm"] == "000001"
+
+
+def test_unpublished_northbound_quarter_is_unknown_not_zero(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    monkeypatch.setattr(
+        "requests.get", lambda *a, **k: Mock(json=lambda: {"result": [], "pageHelp": {"total": 0, "pageCount": 0}})
+    )
+    with pytest.raises(ValueError, match="unavailable"):
+        value_data.northbound_holdings("600519", "2026-09-30")
+
+
+def test_szse_cross_border_pcf_uses_total_record_count(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    xml = b"""<PCFFile xmlns="http://ts.szse.cn/Fund"><SecurityID>159941</SecurityID><TradingDay>20261012</TradingDay><CreationRedemptionUnit>500000</CreationRedemptionUnit><RecordNum>1</RecordNum><TotalRecordNum>2</TotalRecordNum><Components><Component><UnderlyingSecurityID>159900</UnderlyingSecurityID><UnderlyingSymbol>Cash</UnderlyingSymbol><UnderlyingSecurityIDSource>102</UnderlyingSecurityIDSource><ComponentShare>0</ComponentShare><SubstituteFlag>2</SubstituteFlag></Component><Component><UnderlyingSecurityID>AAPL</UnderlyingSecurityID><UnderlyingSymbol>Apple</UnderlyingSymbol><UnderlyingSecurityIDSource>9999</UnderlyingSecurityIDSource><ComponentShare>100</ComponentShare><SubstituteFlag>2</SubstituteFlag></Component></Components></PCFFile>"""
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(url)
+        if url.endswith("/data"):
+            return Mock(json=lambda: [{"data": [{"jjdm": "pcf_159941_20261012;159941ETF20261012"}]}])
+        return Mock(content=xml)
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.etf_basket("159941")
+    assert result["record_count"] == 2
+    assert result["components"][1]["code"] == "AAPL"
+    assert result["components"][1]["exchange_code"] == "9999"
+    assert calls[-1] == "https://reportdocs.static.szse.cn/files/text/ETFDown/pcf_159941_20261012.xml"
+
+
+def test_latest_szse_northbound_skips_unpublished_quarter(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    calls = []
+
+    def get(url, **kwargs):
+        p = kwargs["params"]
+        calls.append(p.copy())
+        rows = [] if p["txtDate"] == "2026Q3" else [{"zqdm": "000001", "cysl": "42"}]
+        return Mock(json=lambda: [{"metadata": {"pagecount": 1}, "data": rows}])
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.northbound_holdings("000001")
+    assert result["as_of"] == "2026-06-30"
+    assert result["shares"] == 42
+    assert [c["txtDate"] for c in calls] == ["2026Q3", "2026Q2", "2026Q2"]
+
+
+def test_csi_history_survives_recent_indicator_failure(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    def unavailable(**kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(ak, "stock_index_pe_lg", unavailable)
+    monkeypatch.setattr(ak, "stock_index_pb_lg", unavailable)
+    monkeypatch.setattr(ak, "stock_zh_index_value_csindex", unavailable)
+    monkeypatch.setattr(
+        ak, "stock_zh_index_hist_csindex", lambda **k: pd.DataFrame({"日期": ["2026-10-09"], "滚动市盈率": [20]})
+    )
+    result = value_data.index_valuation(Namespace(symbol="000985", years=5))
+    assert result["metrics"]["pe_ttm"]["current"] == 20
+    assert result["warnings"]
+
+
+def test_optional_lixinger_pb_does_not_overwrite_csi_pe(monkeypatch):
+    from unittest.mock import Mock
+
+    import akshare as ak
+
+    from tools import value_data
+
+    def unavailable(**kwargs):
+        raise OSError("unsupported")
+
+    monkeypatch.setattr(ak, "stock_index_pe_lg", unavailable)
+    monkeypatch.setattr(ak, "stock_index_pb_lg", unavailable)
+    monkeypatch.setattr(ak, "stock_zh_index_value_csindex", unavailable)
+    monkeypatch.setattr(
+        ak, "stock_zh_index_hist_csindex", lambda **k: pd.DataFrame({"日期": ["2026-10-09"], "滚动市盈率": [20]})
+    )
+    monkeypatch.setenv("LIXINGER_TOKEN", "test-token")
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return Mock(
+            json=lambda: {
+                "code": 1,
+                "data": [{"date": "2026-10-09T00:00:00+08:00", "stockCode": "000985", "pe_ttm.mcw": 22, "pb.mcw": 2.3}],
+            }
+        )
+
+    monkeypatch.setattr("requests.post", post)
+    result = value_data.index_valuation(Namespace(symbol="000985", years=5))
+    assert result["metrics"]["pb"]["current"] == 2.3
+    assert result["metrics"]["pe_ttm"]["current"] == 20
+    assert result["metric_sources"]["pb"] == "lixinger"
+    assert calls[0]["metricsList"] == ["pe_ttm.mcw", "pb.mcw"]
+    assert "test-token" not in str(result)
+
+
+def test_hk_earnings_calendar_keeps_provider_schedule_unconfirmed(monkeypatch):
+    import yfinance as yf
+
+    from tools import value_data
+
+    monkeypatch.setattr(
+        yf,
+        "Ticker",
+        lambda code: Namespace(
+            get_earnings_dates=lambda **kw: pd.DataFrame(
+                index=pd.DatetimeIndex(["2026-11-17 23:00"], tz="America/New_York")
+            )
+        ),
+    )
+    result = value_data.earnings_calendar(Namespace(symbol="0700.HK", report_date="", top=50))
+    assert result["market"] == "HK"
+    assert result["disclosures"][0]["scheduled_date"] == "2026-11-18"
+    assert result["disclosures"][0]["confirmation"] == "provider_only"
+    assert result["disclosures"][0]["report_date"] is None
+
+
+@pytest.mark.parametrize(
+    "page_token, decoded_token", [("anonymous", "anonymous"), ("anonymous%2Bvalue", "anonymous+value")]
+)
+def test_hk_dividend_ranking_uses_year_column_and_preserves_unknown(monkeypatch, page_token, decoded_token):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    def get(url, **kwargs):
+        if "getcapitalefficiencylist" not in url:
+            return Mock(text='LabCI.getToken = function() { // return "old";\n return "' + page_token + '"; }')
+        data = {
+            "data": {
+                "responsecode": "000",
+                "totalCount": 3,
+                "year": ["2025", "2024"],
+                "datalist": [
+                    {"sym": "700", "nm": "Tencent", "period": "2025 Annual", "data": ["2.1", "2.1", "1.5"]},
+                    {"sym": "5", "nm": "HSBC", "period": "2025 Annual", "data": ["4.2", "4.2", "3.5"]},
+                    {"sym": "1", "nm": "Missing", "period": "2025 Annual", "data": ["N/A", "", "N/A"]},
+                ],
+            }
+        }
+        assert kwargs["params"]["token"] == decoded_token
+        return Mock(status_code=200, text="stockrank(" + __import__("json").dumps(data) + ");")
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.dividends(
+        Namespace(symbol="", mode="ranking", market="HK", report_date="2024-12-31", years=10, top=20)
+    )
+    assert [r["symbol"] for r in result["items"]] == ["00005.HK", "00700.HK"]
+    assert result["items"][0]["dividend_yield"] == 3.5
+    assert result["market"] == "HK"
+    assert "anonymous" not in str(result)
+
+
+def test_etf_details_keeps_valid_basket_when_other_sources_fail(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    def unavailable(**kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(ak, "fund_etf_fund_info_em", unavailable)
+    monkeypatch.setattr(ak, "fund_portfolio_hold_em", unavailable)
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: unavailable())
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True, "components": [{"code": "600519"}]})
+    monkeypatch.setattr("_subproc.run_tool", lambda *a, **k: {})
+    result = value_data.etf_details(Namespace(symbol="510300", benchmark="", days=60))
+    assert result["basket"]["complete"] is True
+    assert result["warnings"]
+
+
+def test_pcf_includes_fund_level_cash_and_previous_nav(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    xml = b"""<SSEPortfolioCompositionFile><FundInstrumentID>510300</FundInstrumentID><TradingDay>20261012</TradingDay><PreTradingDay>20261009</PreTradingDay><CreationRedemptionUnit>900000</CreationRedemptionUnit><RecordNumber>1</RecordNumber><NAV>4.3898</NAV><NAVperCU>3950821.74</NAVperCU><PreCashComponent>106269.74</PreCashComponent><EstimatedCashComponent>103376.74</EstimatedCashComponent><MaxCashRatio>0.5</MaxCashRatio><ComponentList><Component><InstrumentID>000001</InstrumentID><Quantity>1600</Quantity></Component></ComponentList></SSEPortfolioCompositionFile>"""
+    monkeypatch.setattr("requests.get", lambda *a, **k: Mock(content=xml))
+    result = value_data.etf_basket("510300")
+    assert result["previous_cash_component"] == 106269.74
+    assert result["estimated_cash_component"] == 103376.74
+    assert result["previous_nav"]["as_of"] == "2026-10-09"
+    assert result["previous_nav"]["nav_per_unit"] == 4.3898
+    assert result["cash_unit"] == "CNY per creation/redemption unit"
+
+
+def test_missing_nominee_quantity_is_not_zero_when_official_source_fails(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_gdhs_detail_em",
+        lambda **k: pd.DataFrame({"股东户数统计截止日": ["2026-06-30"], "股东户数-本次": [100]}),
+    )
+    monkeypatch.setattr(
+        ak,
+        "stock_gdfx_free_top_10_em",
+        lambda **k: pd.DataFrame({"股东名称": ["香港中央结算有限公司"], "持股数": [None]}),
+    )
+    result = value_data.shareholder_structure(Namespace(symbol="600519", report_date="2026-06-30"))
+    assert result["northbound_nominee"]["shares"] is None
+    assert result["northbound"]["shares"] is None

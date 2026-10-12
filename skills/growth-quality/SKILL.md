@@ -79,3 +79,7 @@ gather 工具返回：
 只有收入、利润、现金流和 ROE 均有可比多期数据时，才可给出“优质”结论；否则完成标准是给出已验证项、缺失项和最小补证建议。
 
 用户要求长期质量、五到十年财报或 ROE/利润率趋势时，补充 `get_financials(symbol, periods=10, annual=true)`；逐年比较同口径年报，实际可得年份不足时明确标注，不以最近十个季度代替十年。结合 `get_valuation_history` 检查估值分位，分位窗口以实际返回数据为准。
+
+### 补充数据覆盖
+
+指数估值可用 get_index_valuation；中证补充多年滚动 PE，配置 LIXINGER_TOKEN 可补理杏仁 mcw 历史 PB。每个指标按其来源/口径使用，不把缺失 PB 或近期 PE1 当长期数据。
