@@ -1004,8 +1004,9 @@ def etf_basket(symbol):
                     "code": code,
                     "name": node.findtext("InstrumentName") or node.findtext("UnderlyingSymbol"),
                     "quantity_per_unit": quantity,
-                    "exchange_code": node.findtext("UnderlyingSecurityIDSource")
-                    or node.findtext("UnderlyingSecurityID"),
+                    "exchange_code": node.findtext("UnderlyingSecurityID")
+                    if root.tag == "SSEPortfolioCompositionFile"
+                    else node.findtext("UnderlyingSecurityIDSource"),
                     "cash_substitution_flag": node.findtext("SubstitutionFlag") or node.findtext("SubstituteFlag"),
                     "creation_premium_rate": number(
                         node.findtext("CreationPremiumRate") or node.findtext("PremiumRatio")

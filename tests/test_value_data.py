@@ -857,3 +857,21 @@ def test_missing_nominee_quantity_is_not_zero_when_official_source_fails(monkeyp
     result = value_data.shareholder_structure(Namespace(symbol="600519", report_date="2026-06-30"))
     assert result["northbound_nominee"]["shares"] is None
     assert result["northbound"]["shares"] is None
+
+
+def test_szse_pcf_missing_exchange_is_unknown_not_the_security_code(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    xml = b"""<PCFFile xmlns="http://ts.szse.cn/Fund"><SecurityID>159941</SecurityID><TradingDay>20261012</TradingDay><CreationRedemptionUnit>500000</CreationRedemptionUnit><TotalRecordNum>1</TotalRecordNum><Components><Component><UnderlyingSecurityID>AAPL</UnderlyingSecurityID><UnderlyingSymbol>Apple</UnderlyingSymbol><ComponentShare>100</ComponentShare></Component></Components></PCFFile>"""
+
+    def get(url, **kwargs):
+        if url.endswith("/data"):
+            return Mock(json=lambda: [{"data": [{"jjdm": "pcf_159941_20261012;159941ETF20261012"}]}])
+        return Mock(content=xml)
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.etf_basket("159941")
+    assert result["components"][0]["code"] == "AAPL"
+    assert result["components"][0]["exchange_code"] is None
