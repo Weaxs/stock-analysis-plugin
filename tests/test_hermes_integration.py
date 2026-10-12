@@ -14,6 +14,12 @@ from hermes.schemas import TOOL_SCHEMAS
 
 EXPECTED_TOOLS = sorted(
     [
+        "get_valuation_history",
+        "get_index_valuation",
+        "get_earnings_calendar",
+        "get_shareholder_structure",
+        "get_etf_details",
+        "get_dividends",
         "get_kline",
         "get_quote",
         "get_capital_flow",
@@ -203,3 +209,38 @@ class TestRunArgv:
 
         monkeypatch.setattr(hermes_tools.subprocess, "run", timeout)
         assert "timed out" in json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"]
+
+
+@pytest.mark.parametrize(
+    "name,args,command",
+    [
+        ("get_valuation_history", {"symbol": "600519"}, "valuation_history"),
+        ("get_index_valuation", {"symbol": "000300"}, "index_valuation"),
+        ("get_earnings_calendar", {"report_date": "2026-09-30"}, "earnings_calendar"),
+        ("get_shareholder_structure", {"symbol": "0700.HK"}, "shareholder_structure"),
+        ("get_etf_details", {"symbol": "510300", "benchmark": "sh000300"}, "etf_details"),
+        ("get_dividends", {"mode": "ranking"}, "dividends"),
+    ],
+)
+def test_value_cli_dispatch(monkeypatch, name, args, command):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
+    getattr(hermes_tools, name)(args)
+    assert calls[0][0] == "value_data.py"
+    assert calls[0][1][0] == command
+
+
+def test_financial_and_margin_flags(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
+    hermes_tools.get_financials({"symbol": "600519", "periods": 10, "annual": True})
+    assert "--annual" in calls[-1]
+    hermes_tools.get_margin_trading({"symbol": "600519", "include_ratio": True})
+    assert "--include-ratio" in calls[-1]
+
+
+def test_invalid_financial_periods_are_forwarded_for_core_validation(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
+    hermes_tools.get_financials({"symbol": "600519", "periods": 0})
+    assert calls[-1] == ["financials", "600519", "--periods", 0]

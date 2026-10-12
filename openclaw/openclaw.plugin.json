@@ -54,7 +54,13 @@
       "evaluate_signals",
       "get_signal_summary",
       "get_review_history",
-      "parse_stock_list"
+      "parse_stock_list",
+      "get_valuation_history",
+      "get_index_valuation",
+      "get_earnings_calendar",
+      "get_shareholder_structure",
+      "get_etf_details",
+      "get_dividends"
     ]
   },
   "activation": {

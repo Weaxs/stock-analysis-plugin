@@ -3,6 +3,12 @@ import { fileURLToPath } from "url";
 import { createJiti } from "jiti";
 
 const EXPECTED_TOOLS = [
+  "get_valuation_history",
+  "get_index_valuation",
+  "get_earnings_calendar",
+  "get_shareholder_structure",
+  "get_etf_details",
+  "get_dividends",
   "get_kline",
   "get_quote",
   "get_capital_flow",
@@ -83,17 +89,20 @@ interface ToolRegistration {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  execute?: Function;
 }
 
 const registeredTools: ToolRegistration[] = [];
 let skillPaths: string[] = [];
 
+const calls: string[][] = [];
 const mockPi = {
   registerTool(config: ToolRegistration & { execute: Function }) {
     registeredTools.push({
       name: config.name,
       description: config.description,
       parameters: config.parameters,
+      execute: config.execute,
     });
   },
   on(event: string, handler: Function) {
@@ -102,7 +111,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async () => ({ stdout: "{}", exitCode: 0 }),
+  exec: async (_python: string, args: string[]) => { calls.push(args); return { stdout: "{}", exitCode: 0 }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -185,3 +194,25 @@ if (failures > 0) {
 } else {
   console.log("\nAll Pi integration checks passed");
 }
+
+for (const [name, args, command] of [
+  ["get_valuation_history", {symbol: "600519", years: 10}, "valuation_history"],
+  ["get_index_valuation", {symbol: "000300"}, "index_valuation"],
+  ["get_earnings_calendar", {report_date: "2026-09-30"}, "earnings_calendar"],
+  ["get_shareholder_structure", {symbol: "0700.HK"}, "shareholder_structure"],
+  ["get_etf_details", {symbol: "510300", benchmark: "sh000300"}, "etf_details"],
+  ["get_dividends", {mode: "ranking"}, "dividends"],
+] as const) {
+  const tool = registeredTools.find(t => t.name === name);
+  await tool!.execute!("test", args);
+  const argv = calls[calls.length - 1];
+  assert(argv[0].endsWith("value_data.py") && argv[1] === command, `${name}: CLI dispatch missing`);
+}
+await registeredTools.find(t => t.name === "get_financials")!.execute!("test", {symbol: "600519", periods: 10, annual: true});
+assert(calls[calls.length-1].includes("--annual"), "annual flag missing");
+await registeredTools.find(t => t.name === "get_margin_trading")!.execute!("test", {symbol: "600519", include_ratio: true});
+assert(calls[calls.length-1].includes("--include-ratio"), "margin ratio flag missing");
+
+await registeredTools.find(t => t.name === "get_financials")!.execute!("validation", {symbol: "600519", periods: 0});
+const invalidArgs = calls[calls.length-1];
+assert(invalidArgs[invalidArgs.indexOf("--periods")+1] === "0", "periods=0 must reach shared CLI validation");

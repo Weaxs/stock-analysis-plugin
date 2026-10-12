@@ -85,3 +85,18 @@ python3 scripts/gather.py <symbol>
 - 如果风险筛查返回 veto_buy=true，必须醒目标注并建议谨慎
 
 完成标准：每个买卖建议都对应可观察的触发条件和失效条件，且所有缺失数据及其影响已说明。
+
+## 低频价投数据
+
+按用户问题选择数据，完整说明口径、采样覆盖和缺失项：
+
+- 判断估值贵贱：`get_valuation_history(symbol, years=5)` 的 PE-TTM/PB 历史正值分位与 Band；亏损 PE 不计算分位，实际采样不足五年必须说明。
+- 读多年财报：`get_financials(symbol, periods=10, annual=true)`；A 股按年报筛选，港股按源实际可得年度数返回。财报期不等于公告日，年报历史不能用于假定当时已知信息的回测。
+- 财报季排期：`get_earnings_calendar(report_date="YYYY-MM-DD", symbol=...)`，区分最新预约日期、实际披露日期和已公告业绩预告，不把预告当业绩实绩。
+- 股东变化：`get_shareholder_structure`。A 股北向值是财报十大流通股东中的 HKSCC 名义持股，缺席不等于零，不能当成日度北向买卖；港股南向值按港交所披露日期使用。
+- 大盘估值：`get_index_valuation(symbol="000300", years=5)`；中证近期 PE1 不冒充 PE-TTM、PB 或多年分位。
+- ETF：`get_etf_details(symbol="510300", benchmark="sh000300")`。折溢价须看净值/行情日期；披露持仓不是完整实时申赎篮子，指数成分与基金持仓分别呈现。跟踪误差必须给出用户认可的基准。
+- 股息：`get_dividends` 区分历史、未来已公布除息日历和 A 股报告期排行；预案不计入已实现 TTM 股息。名义每股现金未重算送转股口径，遇送转股时不得据此精确比较持有收益。
+- 两融：`get_margin_trading(include_ratio=true)` 的 `margin_buy_ratio_pct` 只使用同日成交额；null 表示不可计算。
+
+慢变数据存于 `~/.stock-analysis/cache`：财报、基本信息及新历史数据按天，板块映射按周；行情仍实时查询。输出中的报告期/数据日期决定能否用于判断，缓存命中不代表数据已更新。

@@ -18,6 +18,12 @@ ALL_MARKETS = ["A", "HK", "US", "JP", "KR", "TW"]
 
 # tool_name -> {markets: [supported markets], reason: str for unsupported}
 TOOL_MATRIX = {
+    "get_valuation_history": {"markets": ["A", "HK"], "reason": "A/HK historical valuation providers only"},
+    "get_index_valuation": {"markets": ["A"], "reason": "Chinese index valuation only"},
+    "get_earnings_calendar": {"markets": ["A"], "reason": "A-share report disclosure and forecasts only"},
+    "get_shareholder_structure": {"markets": ["A", "HK"], "reason": "A-share shareholder reports / HK southbound only"},
+    "get_etf_details": {"markets": ["A"], "reason": "A-share ETF portfolio/NAV/size only"},
+    "get_dividends": {"markets": ["A", "HK"], "reason": "A/HK dividend history; ranking is A-share only"},
     "get_kline": {"markets": ALL_MARKETS, "reason": None},
     "get_quote": {"markets": ALL_MARKETS, "reason": None},
     "get_news": {"markets": ALL_MARKETS, "reason": None},

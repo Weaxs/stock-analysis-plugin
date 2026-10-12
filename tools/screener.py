@@ -73,6 +73,13 @@ def merge_filters(config: dict | None) -> dict:
 
 def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     conditions = []
+    for bound, op in [("dividend_yield_min", "min"), ("dividend_yield_max", "max")]:
+        if bound in filters:
+            if "dividend_yield" not in df.columns:
+                return df.iloc[0:0].copy()
+            conditions.append(
+                df["dividend_yield"] >= filters[bound] if op == "min" else df["dividend_yield"] <= filters[bound]
+            )
     if "pe" in df.columns:
         conditions.append(df["pe"] >= filters["pe_min"])
         conditions.append(df["pe"] <= filters["pe_max"])
@@ -121,7 +128,10 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         value_parts.append(100 - _minmax(df["pe"]))
     if "pb" in df.columns:
         value_parts.append(100 - _minmax(df["pb"]))
-    df["value_score"] = sum(value_parts) / max(len(value_parts), 1)
+    if "dividend_yield" in df.columns:
+        df["dividend_score"] = _minmax(df["dividend_yield"])
+        value_parts.append(df["dividend_score"])
+    df["value_score"] = pd.concat(value_parts, axis=1).mean(axis=1) if value_parts else 0.0
 
     # Momentum: higher change_pct and volume_ratio → higher score
     mom_parts = []
@@ -304,6 +314,20 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
 
 
 def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict:
+    filters = merge_filters(config)
+    dividend_requested = any(k.startswith("dividend_yield_") for k in filters) or (config or {}).get("sort_by") in (
+        "dividend_yield",
+        "dividend_score",
+    )
+    if dividend_requested and market != "A":
+        return {"error": "dividend screening currently covers A shares only", "market": market}
+    for key in ("dividend_yield_min", "dividend_yield_max"):
+        if key in filters and (
+            isinstance(filters[key], bool)
+            or not isinstance(filters[key], (int, float))
+            or not np.isfinite(filters[key])
+        ):
+            return {"error": f"{key} must be a finite number in percent units", "market": market}
     raw = fetch_snapshot(market)
     if isinstance(raw, dict) and "error" in raw:
         return raw
@@ -330,7 +354,26 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     if existing:
         df = df.dropna(subset=existing)
 
-    filters = merge_filters(config)
+    dividend_meta = {}
+    if dividend_requested:
+        try:
+            from value_data import dividend_ranking
+
+            ranked = dividend_ranking(report_date=(config or {}).get("dividend_report_date", ""))
+            yields = {r["symbol"]: r["dividend_yield"] for r in ranked["items"]}
+            df["dividend_yield"] = df["symbol"].map(yields)
+            dividend_meta = {
+                "dividend_factor": {
+                    "report_date": ranked["report_date"],
+                    "yield_basis": "provider report-period cash dividend yield, percent",
+                    "missing": "unknown; excluded by dividend filters",
+                }
+            }
+        except Exception:
+            return {
+                "error": "dividend data unavailable; requested dividend criterion was not applied",
+                "market": market,
+            }
     df = apply_filters(df, filters)
     filtered_count = len(df)
 
@@ -344,6 +387,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "candidates": [],
             "market_sentiment": sentiment,
             "l2_enabled": l2_enabled,
+            **dividend_meta,
         }
 
     df = compute_scores(df)
@@ -374,6 +418,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "pb",
             "market_cap",
             "volume_ratio",
+            "dividend_yield",
         ]:
             v = _finite(row.get(field))
             if v is not None:
@@ -386,6 +431,8 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "composite": None if composite is None else round(composite, 1),
             "final": None if composite is None else round(composite * multiplier, 1),
         }
+        if "dividend_score" in row:
+            entry["scores"]["dividend"] = _finite(round(float(row["dividend_score"]), 1))
         candidates.append(entry)
 
     if l2_enabled:
@@ -403,6 +450,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         "candidates": candidates,
         "market_sentiment": sentiment,
         "l2_enabled": l2_enabled,
+        **dividend_meta,
     }
 
 

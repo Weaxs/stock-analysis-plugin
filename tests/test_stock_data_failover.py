@@ -1599,7 +1599,7 @@ class TestCmdSectorConstituents:
             assert cmd_sector_constituents(args) == payload
             assert mock_fn.call_count == 2
 
-    def test_expired_cache_refetches(self, sector_cache_dir):
+    def test_expired_cache_refetches(self, sector_cache_dir, monkeypatch):
         import os
         import time
 
@@ -1610,6 +1610,8 @@ class TestCmdSectorConstituents:
             for f in sector_cache_dir.glob("*.json"):
                 old = time.time() - 25 * 3600
                 os.utime(f, (old, old))
+            real_now = time.time()
+            monkeypatch.setattr("_cache.time.time", lambda: real_now + 8 * 86400)
             mock_fn.reset_mock()
             cmd_sector_constituents(args)
             mock_fn.assert_called_once()
@@ -1983,7 +1985,7 @@ class TestResolveStockSectors:
         first = resolve_stock_sectors("600519")
         second = resolve_stock_sectors("600519")
         assert mock_em.call_count == 1  # second call skipped the marked-down leg
-        assert mock_ef.call_count == 2  # healthy legs still run every call
+        assert mock_ef.call_count == 2  # partial merged mapping is not cached; healthy sources keep running
         for result in (first, second):
             assert "error" not in result
             assert [s["name"] for s in result["sectors"]] == ["白酒"]
@@ -2993,8 +2995,20 @@ class TestFinancialsPeriodsYf:
         result = financials_yf("AAPL", periods=2)
         periods = result["periods"]
         assert len(periods) == 2
-        assert periods[0] == {"period_end": "2024-12-31", "total_revenue": 100.0, "net_income": 10.0}
-        assert periods[1] == {"period_end": "2023-12-31", "total_revenue": 90.0, "net_income": 9.0}
+        assert periods[0] == {
+            "period_end": "2024-12-31",
+            "total_revenue": 100.0,
+            "net_income": 10.0,
+            "net_profit_margin": 10.0,
+            "gross_margin": None,
+        }
+        assert periods[1] == {
+            "period_end": "2023-12-31",
+            "total_revenue": 90.0,
+            "net_income": 9.0,
+            "net_profit_margin": 10.0,
+            "gross_margin": None,
+        }
         assert result["name"] == "Apple"
 
     def test_empty_financials_degrades_silently(self, mock_yfinance):

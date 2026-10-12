@@ -359,3 +359,17 @@ class TestNorthboundFlow:
         assert isinstance(result, dict)
         assert "error" in result
         assert "2024-08-16" in result["error"]
+
+
+def test_margin_buy_ratio_uses_matching_day_turnover(monkeypatch):
+    from tools import stock_data
+
+    mock_ak = MagicMock()
+    mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
+    monkeypatch.setattr(
+        stock_data, "_kline_akshare", lambda *a, **k: [{"date": _real_trade_days(1)[0], "turnover": 1.2e9}]
+    )
+    with patch.dict(sys.modules, {"akshare": mock_ak}):
+        rows = cmd_margin_trading(Namespace(symbol="600519", days=1, include_ratio=True))
+    assert rows[0]["margin_buy_ratio_pct"] == 25
+    assert rows[0]["turnover"] == 1.2e9

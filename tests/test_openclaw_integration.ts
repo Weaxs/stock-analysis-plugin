@@ -173,11 +173,17 @@ if (failures === 0) {
 console.log("Tool execute() smoke test:");
 
 const sampleArgs: Record<string, Record<string, unknown>> = {
+  get_valuation_history: { symbol: "600519" },
+  get_index_valuation: { symbol: "000300" },
+  get_earnings_calendar: { report_date: "2026-09-30", symbol: "600519" },
+  get_shareholder_structure: { symbol: "600519", report_date: "2026-06-30" },
+  get_etf_details: { symbol: "510300", benchmark: "sh000300" },
+  get_dividends: { symbol: "600519" },
   get_kline: { symbol: "600519" },
   get_quote: { symbol: "600519" },
   get_capital_flow: {},
   get_news: { symbol: "600519" },
-  get_financials: { symbol: "600519", periods: 4 },
+  get_financials: { symbol: "600519", periods: 4, annual: true },
   get_technical_analysis: { symbol: "600519", periods: "daily,weekly" },
   analyze_pattern: { symbol: "600519" },
   get_market_indices: {},
@@ -190,7 +196,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_limit_up_pool: {},
   get_dragon_tiger: {},
   get_hot_stocks: {},
-  get_margin_trading: { symbol: "600519" },
+  get_margin_trading: { symbol: "600519", include_ratio: true },
   get_northbound_flow: {},
   get_fundamental_context: { symbol: "600519" },
   screen_stocks: {},
@@ -302,13 +308,28 @@ if (renderCall) {
   );
 }
 
-// Negative gating: periods<=1 / save omitted must not emit the flags.
+// New flags and shared value-data CLI dispatch must reach Python unchanged.
+assert(!!finCall && finCall.args.includes("--annual"), "get_financials: annual must append --annual");
+const ratioCall = execCalls.find(c => c.args[0] === "margin_trading");
+assert(!!ratioCall && ratioCall.args.includes("--include-ratio"), "get_margin_trading: ratio flag missing");
+const valueCommands = ["valuation_history", "index_valuation", "earnings_calendar", "shareholder_structure", "etf_details", "dividends"];
+for (const command of valueCommands) {
+  assert(execCalls.some(c => c.script.includes("value_data.py") && c.args[0] === command), `${command}: shared CLI dispatch missing`);
+}
+
+// Negative gating: periods=1 / save omitted must not emit the flags.
 const finTool = tools.find((t) => t.name === "get_financials");
 assert(!!finTool, "get_financials: not registered");
 if (finTool) {
   await finTool.execute("call_id_neg", { symbol: "600519", periods: 1 });
   const last = execCalls[execCalls.length - 1];
   assert(!last.args.includes("--periods"), "get_financials: periods=1 must not pass --periods");
+}
+if (finTool) {
+  await finTool.execute("validation", {symbol: "600519", periods: 0});
+  const last = execCalls[execCalls.length - 1];
+  const idx = last.args.indexOf("--periods");
+  assert(idx >= 0 && last.args[idx+1] === "0", "periods=0 must reach shared CLI validation");
 }
 const renderTool = tools.find((t) => t.name === "render_market_report");
 assert(!!renderTool, "render_market_report: not registered");
