@@ -875,3 +875,100 @@ def test_szse_pcf_missing_exchange_is_unknown_not_the_security_code(monkeypatch)
     result = value_data.etf_basket("159941")
     assert result["components"][0]["code"] == "AAPL"
     assert result["components"][0]["exchange_code"] is None
+
+
+def test_hk_calendar_prefers_official_board_notice_and_parses_day_first(monkeypatch):
+    from unittest.mock import Mock
+
+    import yfinance as yf
+
+    from tools import value_data
+
+    html = """<table><tr><th>BM Date</th><th></th><th>Stock Short Name</th><th>Code</th><th>Purpose</th><th>Period</th></tr><tr><td>06/11/2026</td><td></td><td>HKEX</td><td>388</td><td>RESULTS</td><td>9-MTH-ENDED30/09/26</td></tr><tr><td>07/11/2026</td><td></td><td>HKEX</td><td>388</td><td>DIVIDEND</td><td></td></tr></table>"""
+    monkeypatch.setattr("requests.get", lambda *a, **k: Mock(text=html))
+    monkeypatch.setattr(yf, "Ticker", lambda *a: pytest.fail("official schedule must not require Yahoo"))
+    result = value_data.earnings_calendar(Namespace(symbol="0388.HK", report_date="2026-09-30", top=50))
+    event = result["disclosures"][0]
+    assert event["scheduled_date"] == "2026-11-06"
+    assert event["report_date"] == "2026-09-30"
+    assert event["confirmation"] == "official_board_meeting_notice"
+    assert event["date_kind"] == "scheduled_board_meeting"
+    assert event["actual_date"] is None
+    assert len(result["disclosures"]) == 1
+
+
+def test_hk_unknown_provider_period_is_not_assigned_to_requested_report(monkeypatch):
+    import yfinance as yf
+
+    from tools import value_data
+
+    monkeypatch.setattr(
+        yf,
+        "Ticker",
+        lambda *a: Namespace(
+            get_earnings_dates=lambda **kw: pd.DataFrame(index=pd.DatetimeIndex(["2026-11-18"], tz="Asia/Hong_Kong"))
+        ),
+    )
+    result = value_data.earnings_calendar(Namespace(symbol="0700.HK", report_date="2026-06-30", top=50))
+    assert result["disclosures"] == []
+    assert result["unverified_schedules"][0]["scheduled_date"] == "2026-11-18"
+    assert result["unverified_schedules"][0]["report_date"] is None
+
+
+def test_disclosed_equity_report_keeps_actual_positions_units_and_period(monkeypatch):
+    import json
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    html = """<div class="boxitem"><h4 class="t"><a href="http://fund.eastmoney.com/510300.html">Fund</a>2026年2季度股票投资明细 截止至：2026-06-30</h4><table><tr><th>序号</th><th>股票代码</th><th>股票名称</th><th>占净值比例</th><th>持股数（万股）</th><th>持仓市值（万元）</th></tr><tr><td>1</td><td>000001</td><td>Bank</td><td>1.25%</td><td>12.5</td><td>100</td></tr><tr><td>2</td><td>00700</td><td>Tencent</td><td>2.5%</td><td>3</td><td>200</td></tr></table></div>"""
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(kwargs["params"])
+        return Mock(text="var apidata={content:" + json.dumps(html) + ",curyear:2026};")
+
+    monkeypatch.setattr("requests.get", get)
+    result = value_data.fund_disclosed_equities("510300")
+    assert result["as_of"] == "2026-06-30"
+    assert result["position_count"] == 2
+    assert result["equity_positions"][0]["quantity_shares"] == 125000
+    assert result["equity_positions"][0]["market_value_cny"] == 1000000
+    assert result["equity_positions"][1]["code"] == "00700"
+    assert result["is_realtime"] is False
+    assert calls[0]["year"] == "2026" and calls[0]["month"] == "6"
+    assert calls[0]["topline"] == 10000
+
+
+def test_full_disclosed_holdings_is_explicit_opt_in(monkeypatch):
+    from tools import value_data
+
+    called = []
+
+    def report(symbol):
+        called.append(symbol)
+        return {"as_of": "2026-06-30", "position_count": 339}
+
+    monkeypatch.setattr(value_data, "fund_disclosed_equities", report)
+    monkeypatch.setattr(value_data, "dataset", lambda *a, **k: [])
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True})
+    monkeypatch.setattr("_subproc.run_tool", lambda *a, **k: {})
+    args = Namespace(symbol="510300", benchmark="", days=60, include_full_holdings=False)
+    assert "disclosed_equity_report" not in value_data.etf_details(args)
+    assert called == []
+    args.include_full_holdings = True
+    assert value_data.etf_details(args)["disclosed_equity_report"]["position_count"] == 339
+
+
+def test_disclosed_equities_optional_name_does_not_break_json(monkeypatch):
+    import json
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    html = """<div class="boxitem"><h4><a href="http://fund.eastmoney.com/510300.html">Fund</a>2026-06-30</h4><table><tr><th>股票代码</th><th>股票名称</th><th>占净值比例</th><th>持股数（万股）</th><th>持仓市值（万元）</th></tr><tr><td>000001</td><td></td><td>1%</td><td>10</td><td>100</td></tr></table></div>"""
+    monkeypatch.setattr("requests.get", lambda *a, **k: Mock(text="var apidata={content:" + json.dumps(html) + "};"))
+    result = value_data.fund_disclosed_equities("510300")
+    assert result["equity_positions"][0]["name"] is None
+    json.dumps(result, allow_nan=False)

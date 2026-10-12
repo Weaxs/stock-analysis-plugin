@@ -104,3 +104,5 @@ python3 scripts/gather.py <symbol>
 ### 补充数据覆盖
 
 get_shareholder_structure 的 northbound 优先使用沪深官方季度总量；northbound_nominee 只是十大股东推断，不能混同。get_etf_details 的 basket 是完整已发布 PCF，对价数量/现金替代规则不是基金实际持仓或NAV权重。HK 股息排行使用 get_dividends(mode=ranking, market=HK)，年度口径不能称 TTM。
+
+实际披露股票持仓可用 get_etf_details(include_full_holdings=true) 获取半年度/年度表；按 as_of 解释，数量为股、市值为人民币元。默认不取大量明细；不是实时全资产组合，不与 PCF 对价数量混同。

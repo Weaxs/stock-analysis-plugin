@@ -255,3 +255,12 @@ def test_hk_calendar_and_dividend_market_dispatch(monkeypatch):
     assert calls[-1][calls[-1].index("--report-date") + 1] == ""
     schema = next(s for s in TOOL_SCHEMAS if s["name"] == "get_earnings_calendar")
     assert "report_date" not in schema["parameters"].get("required", [])
+
+
+def test_full_disclosed_equities_flag_is_opt_in(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
+    hermes_tools.get_etf_details({"symbol": "510300", "include_full_holdings": True})
+    assert "--include-full-holdings" in calls[-1]
+    hermes_tools.get_etf_details({"symbol": "510300"})
+    assert "--include-full-holdings" not in calls[-1]

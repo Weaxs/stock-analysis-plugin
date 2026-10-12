@@ -25,13 +25,13 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_earnings_calendar",
-        "description": "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与已公告业绩预告；HK必须提供symbol，返回转换香港日期的供应商未来排期，非官方独立确认、报告期未知，report_date可省略。",
+        "description": "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日），缺失时返回供应商日期。HK可按已知财政期末过滤，未知期次另列。",
         "parameters": {
             "type": "object",
             "properties": {
                 "report_date": {
                     "type": "string",
-                    "description": "A股必填季度报告期YYYY-MM-DD；HK可省略，供应商排期无法确认报告期",
+                    "description": "A股必填季度期末YYYY-MM-DD；HK可选已公告财政期末，未知期次另列",
                 },
                 "symbol": {"type": "string", "description": "A股代码可选（省略查全市场）；HK必须提供港股.HK代码"},
                 "top": {"type": "number", "description": "每类最多返回条数1..500，默认50"},
@@ -56,10 +56,14 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_etf_details",
-        "description": "查询A股ETF净值折溢价、规模、披露持仓与沪深官方完整PCF申赎篮子（含跨境代码、数量和现金替代规则）；篮子不是基金实际持仓。提供benchmark计算跟踪误差与查询指数成分。",
+        "description": "查询A股ETF净值折溢价、规模、披露持仓及沪深完整PCF申赎篮子；篮子不是实际持仓。include_full_holdings=true另取最近可得半年度/年度披露股票表，含数量/市值/报告期，非实时全资产组合；benchmark用于跟踪误差。",
         "parameters": {
             "type": "object",
             "properties": {
+                "include_full_holdings": {
+                    "type": "boolean",
+                    "description": "显式请求半年度/年度全部披露股票表，默认false；不是实时全资产组合",
+                },
                 "symbol": {"type": "string", "description": "A股ETF代码，如510300"},
                 "benchmark": {"type": "string", "description": "可选基准代码，如sh000300；不猜测基准"},
                 "days": {"type": "number", "description": "净值窗口交易日数10..252，默认60"},

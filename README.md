@@ -238,7 +238,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 |------|------|
 | `get_valuation_history` | A/HK PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口 |
 | `get_index_valuation` | 中国指数 PE/PB 历史水位；中证官方多年滚动 PE；可选理杏仁补充 PB |
-| `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 单股供应商未来排期 |
+| `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 已公告业绩审批董事会排期／供应商备选日期 |
 | `get_shareholder_structure` | A 股股东户数/十大流通股东变化/报告期北向名义持股；HK 南向持股 |
 | `get_etf_details` | A 股 ETF 净值折溢价、规模变动、披露持仓、可选基准成分与跟踪误差 |
 | `get_dividends` | A/HK 历史分红/除息日历/已实现 TTM 股息与连续年数；A/HK 报告期/年度排行 |
@@ -416,6 +416,7 @@ python tools/value_data.py shareholder_structure 600519 --report-date 2026-06-30
 python tools/value_data.py shareholder_structure 0700.HK
 python tools/value_data.py index_valuation 000300 --years 5
 python tools/value_data.py etf_details 510300 --benchmark sh000300 --days 60
+python tools/value_data.py etf_details 510300 --include-full-holdings
 python tools/stock_data.py margin_trading 600519 --days 10 --include-ratio
 python tools/value_data.py dividends --symbol 600519
 python tools/value_data.py dividends --symbol 0700.HK --mode calendar
@@ -428,9 +429,9 @@ python tools/value_data.py earnings_calendar --symbol 0700.HK
 
 估值使用可得数据的正值样本分位（`<=当前值`），返回 10/25/50/75/90 分位 Band 与实际起止日期；亏损 PE 分位为 null。当前 AKShare 已无 issue 中提到的 `stock_a_indicator_lg`，个股采用百度 PE-TTM/PB 历史，指数采用乐咕乐股；中证全指等通过中证官方历史接口取得多年滚动 PE，近期总股本 PE1 仍单独保留；PB 缺失时可配置 `LIXINGER_TOKEN` 补充理杏仁总市值加权（mcw）历史，返回每个指标的来源与口径，不拼接不同方法的同一指标。未配置或无权限时 PB 保持未知。A 股 `annual=true, periods=10` 请求十年年报；HK 按源实际可得年数返回，不补造缺失比率。
 
-股东数据保留报告期、公告日或港交所披露日：A 股北向优先返回沪深交易所披露的季度合计数量，省略报告期时查最新已公布季度；十大流通股东中的 HKSCC 推断保留在 `northbound_nominee`，仅作明确标注的兜底，缺席不是零；HK 南向取自港交所 Stock Connect CCASS 记录，不等同完整实益股东名册。A 股财报预约/修订是计划，业绩预告是已公告预估，不是实际业绩。HK 单股可省略报告期，返回 Yahoo 供应商未来排期，转换为香港日期；`confirmation=provider_only`，报告期未知，不声称官方确认或全港股完整日历。
+股东数据保留报告期、公告日或港交所披露日：A 股北向优先返回沪深交易所披露的季度合计数量，省略报告期时查最新已公布季度；十大流通股东中的 HKSCC 推断保留在 `northbound_nominee`，仅作明确标注的兜底，缺席不是零；HK 南向取自港交所 Stock Connect CCASS 记录，不等同完整实益股东名册。A 股财报预约/修订是计划，业绩预告是已公告预估，不是实际业绩。HK 单股优先使用 HKEX 主板/GEM 已公告业绩审批董事会排期，标记 `confirmation=official_board_meeting_notice`、`date_kind=scheduled_board_meeting`；这是计划会议日，不是实际披露日。可按已知财政期末过滤；找不到匹配公告时保留 Yahoo 供应商未来排期，`confirmation=provider_only`，未知报告期不归入指定期次，而另列 `unverified_schedules`。日期转为香港日期，公告表也不承诺覆盖所有港股。
 
-ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；新增 `basket` 返回沪深交易所发布的完整当日 PCF（跨境代码原样保留），包含申赎单位、每篮子证券数量、现金替代规则与比例；校验基金代码、实际日期和全部组件数量，失败只提示不可用，不冒充完整。PCF 是申赎对价，不是实际持仓，证券数量也不是净值权重。提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
+ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；新增 `basket` 返回沪深交易所发布的完整当日 PCF（跨境代码原样保留），包含申赎单位、每篮子证券数量、现金替代规则与比例；校验基金代码、实际日期和全部组件数量，失败只提示不可用，不冒充完整。PCF 是申赎对价，不是实际持仓，证券数量也不是净值权重。`include_full_holdings=true` 时另取最近可得半年度/年度披露股票表，显式指定年份/月并请求较高行数上限，包含股票数量（股）、市值（人民币元）和实际报告期；返回全部收到的表格行，但不声称覆盖债券/现金等全资产或实时持仓，也不以 PCF 数量验证实际持仓。默认不取数百行明细。提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
 
 股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。A 股排行/选股使用指定报告期已实施方案股息率；HK 指定 `market=HK` 时使用 HKEX/LSEG 公布的年度股息率（百分数），不是当前价 TTM；HK `report_date` 仅支持数据源可得年度的年末。港股股息选股因子也使用同一年度口径。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
 

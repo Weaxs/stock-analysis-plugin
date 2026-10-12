@@ -467,10 +467,10 @@ def get_shareholder_structure(args: dict, **kwargs) -> str:
 
 
 def get_etf_details(args: dict, **kwargs) -> str:
-    return _run(
-        "value_data.py",
-        ["etf_details", args["symbol"], "--benchmark", args.get("benchmark", ""), "--days", args.get("days", 60)],
-    )
+    argv = ["etf_details", args["symbol"], "--benchmark", args.get("benchmark", ""), "--days", args.get("days", 60)]
+    if args.get("include_full_holdings"):
+        argv.append("--include-full-holdings")
+    return _run("value_data.py", argv)
 
 
 def get_dividends(args: dict, **kwargs) -> str:

@@ -92,4 +92,4 @@ gather 工具返回：
 
 ### 补充数据覆盖
 
-get_earnings_calendar 查询 A 股仍需 report_date；HK 提供 symbol 并可省略 report_date，供应商未来排期 confirmation=provider_only、报告期未知，必须另核实发行人公告，不能称已官方确认。
+get_earnings_calendar 查询 A 股仍需 report_date；HK 提供 symbol，可选财政期末 report_date；优先 HKEX 已公告业绩审批董事会排期 confirmation=official_board_meeting_notice、date_kind=scheduled_board_meeting，不能称实际披露日。供应商备选日期为 provider_only，未知期次在请求特定报告期时另列 unverified_schedules，不能强行匹配。

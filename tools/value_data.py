@@ -252,17 +252,72 @@ def index_valuation(args):
     return result
 
 
+def hk_board_meetings(board):
+    import requests
+
+    url = f"https://www.hkex-is.hk/wwwroot/link/{'ebmn' if board == 'main' else 'ebmngem'}.htm"
+
+    def fetch():
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+        frames = pd.read_html(StringIO(response.text), header=0, converters={"Code": str}, keep_default_na=False)
+        frame = next((f for f in frames if {"BM Date", "Code", "Purpose", "Period"}.issubset(f.columns)), None)
+        if frame is None:
+            raise ValueError("HKEX board-meeting table unavailable")
+        rows = []
+        for row in frame.to_dict("records"):
+            code = str(row["Code"]).strip()
+            purpose = str(row["Purpose"]).strip()
+            if not re.fullmatch(r"\d{1,5}", code) or not re.search(r"\bRES(?:ULTS)?\b", purpose, re.I):
+                continue
+            stamp = iso(pd.to_datetime(str(row["BM Date"]).strip(), format="%d/%m/%Y", errors="coerce"))
+            if not stamp:
+                raise ValueError("invalid HKEX board-meeting date")
+            period = str(row["Period"])
+            match = re.search(r"\d{2}/\d{2}/\d{2}(?!\d)", period)
+            report_date = iso(pd.to_datetime(match.group(), format="%d/%m/%y", errors="coerce")) if match else None
+            rows.append(
+                {
+                    "symbol": code.zfill(5) + ".HK",
+                    "scheduled_date": stamp,
+                    "report_date": report_date,
+                    "period_description": period,
+                    "purpose": purpose,
+                    "actual_date": None,
+                    "confirmation": "official_board_meeting_notice",
+                    "date_kind": "scheduled_board_meeting",
+                    "source_url": url,
+                }
+            )
+        return rows
+
+    return cached(f"hk-board-meetings:{board}", DAY, fetch)
+
+
 def earnings_calendar(args):
     import akshare as ak
 
     stamp = iso(args.report_date)
     suffix = {"03-31": "一季", "06-30": "半年报", "09-30": "三季", "12-31": "年报"}
-    if not 1 <= args.top <= 500 or (args.report_date and (not stamp or stamp[5:] not in suffix)):
-        raise ValueError("report_date must be a quarter end and top must be in 1..500")
+    if not 1 <= args.top <= 500 or (args.report_date and not stamp):
+        raise ValueError("report_date must be a valid date and top must be in 1..500")
     if args.symbol and detect_market(args.symbol) == "HK":
         import yfinance as yf
 
-        stock_identity(args.symbol)
+        _, hk_code = stock_identity(args.symbol)
+        sections = {}
+        for board in ("main", "gem"):
+            capture(sections, board, lambda board=board: hk_board_meetings(board))
+        events = [
+            r
+            for board in ("main", "gem")
+            for r in sections.get(board, [])
+            if r["symbol"] == hk_code + ".HK"
+            and r["scheduled_date"] >= date.today().isoformat()
+            and (not stamp or r["report_date"] == stamp)
+        ]
+        events = list({(r["scheduled_date"], r["purpose"], r["report_date"]): r for r in events}.values())
+        events.sort(key=lambda r: r["scheduled_date"])
 
         def fetch():
             frame = yf.Ticker(_yf_hk_symbol(args.symbol)).get_earnings_dates(limit=12)
@@ -270,34 +325,43 @@ def earnings_calendar(args):
                 raise ValueError("HK earnings schedule unavailable")
             return sorted({iso(d) for d in frame.index if iso(d)})
 
-        dates = cached(f"hk-earnings-schedule:{_yf_hk_symbol(args.symbol)}", DAY, fetch)
-        events = [
+        if not events:
+            capture(sections, "dates", lambda: cached(f"hk-earnings-schedule:{_yf_hk_symbol(args.symbol)}", DAY, fetch))
+        provider_events = [
             {
                 "symbol": args.symbol,
                 "scheduled_date": d,
                 "actual_date": None,
                 "report_date": None,
                 "confirmation": "provider_only",
+                "date_kind": "provider_earnings_schedule",
             }
-            for d in dates
+            for d in sections.get("dates", [])
             if d >= date.today().isoformat()
         ]
+        if not stamp and not events:
+            events = provider_events
         return {
             "symbol": args.symbol,
             "market": "HK",
-            "source": "yfinance earnings schedule",
+            "source": "HKEX board-meeting notices"
+            if any(r["confirmation"] == "official_board_meeting_notice" for r in events)
+            else "yfinance earnings schedule",
             "report_date_requested": stamp,
             "disclosures": events[: args.top],
             "disclosures_total": len(events),
             "forecasts": [],
             "forecasts_total": 0,
-            "warnings": [
-                "provider schedule is not independently confirmed by HKEX/issuer; fiscal report period unknown"
+            "unverified_schedules": provider_events[: args.top] if stamp else [],
+            "warnings": sections.get("warnings", [])
+            + [
+                "official dates are scheduled board meetings approving results, not actual disclosure dates; notice list may not be exhaustive",
+                "provider-only schedules have unverified fiscal periods and are not assigned to requested report_date",
             ],
             "as_of": date.today().isoformat(),
         }
-    if not stamp:
-        raise ValueError("report_date is required for A-share earnings calendars")
+    if not stamp or stamp[5:] not in suffix:
+        raise ValueError("report_date must be a quarter end for A-share earnings calendars")
     symbol = ""
     if args.symbol:
         market, symbol = stock_identity(args.symbol)
@@ -1047,6 +1111,78 @@ def etf_basket(symbol):
     return cached(f"etf-basket:{symbol}:{date.today().isoformat()}", DAY, fetch)
 
 
+def fund_disclosed_equities(symbol):
+    import requests
+    from akshare.utils import demjson
+    from bs4 import BeautifulSoup
+
+    limit = 10000
+
+    def fetch(stamp):
+        response = requests.get(
+            "https://fundf10.eastmoney.com/FundArchivesDatas.aspx",
+            params={"type": "jjcc", "code": symbol, "topline": limit, "year": stamp[:4], "month": str(int(stamp[5:7]))},
+            headers={"Referer": f"https://fundf10.eastmoney.com/ccmx_{symbol}.html"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        text = response.text
+        payload = demjson.decode(text[text.index("{") : text.rindex("}") + 1])
+        soup = BeautifulSoup(payload["content"], "lxml")
+        for block in soup.select("div.boxitem"):
+            heading = block.find("h4")
+            link = heading.find("a", href=True) if heading else None
+            if not heading or not link or not link["href"].endswith(f"/{symbol}.html"):
+                continue
+            match = re.search(r"\d{4}-\d{2}-\d{2}", heading.get_text())
+            if not match or match.group() != stamp:
+                continue
+            table = block.find("table")
+            if table is None:
+                raise ValueError("disclosed equity table unavailable")
+            frame = pd.read_html(StringIO(str(table)), converters={"股票代码": str})[0]
+            frame.columns = [re.sub(r"\s+", "", str(c)) for c in frame.columns]
+            value_column = next((c for c in frame.columns if c in ("持仓市值（万元）", "持仓市值（万元人民币）")), None)
+            if not {"股票代码", "股票名称", "占净值比例", "持股数（万股）"}.issubset(frame.columns) or not value_column:
+                raise ValueError("unknown disclosed equity units/schema")
+            if frame.empty or len(frame) >= limit:
+                raise ValueError("empty or potentially truncated disclosed equity table")
+            positions = []
+            for row in frame.to_dict("records"):
+                quantity = number(str(row["持股数（万股）"]).replace(",", ""))
+                value = number(str(row[value_column]).replace(",", ""))
+                positions.append(
+                    {
+                        "code": str(row["股票代码"]),
+                        "name": str(row["股票名称"]) if pd.notna(row["股票名称"]) else None,
+                        "weight_pct": number(str(row["占净值比例"]).replace("%", "")),
+                        "quantity_shares": quantity * 10000 if quantity is not None else None,
+                        "market_value_cny": value * 10000 if value is not None else None,
+                    }
+                )
+            return {
+                "source": "eastmoney periodic equity report",
+                "as_of": stamp,
+                "is_realtime": False,
+                "position_count": len(positions),
+                "equity_positions": positions,
+                "coverage": "all received source-table equity rows, not total fund assets; source completeness is not independently verified",
+                "source_url": f"https://fundf10.eastmoney.com/ccmx_{symbol}.html",
+            }
+        raise ValueError("requested semiannual/annual equity report not available")
+
+    end = date(date.today().year, ((date.today().month - 1) // 6) * 6 + 1, 1) - timedelta(days=1)
+    requested = end.isoformat()
+    for _ in range(2):
+        stamp = end.isoformat()
+        try:
+            result = cached(f"fund-equity-report:{symbol}:{stamp}", DAY, lambda stamp=stamp: fetch(stamp))
+            return {**result, "requested_report_date": requested}
+        except Exception:
+            end = date(end.year, end.month - 5, 1) - timedelta(days=1)
+    raise ValueError("latest disclosed semiannual/annual equity report unavailable")
+
+
 def etf_details(args):
     import akshare as ak
     from _subproc import run_tool
@@ -1135,6 +1271,8 @@ def etf_details(args):
         ]
     result["holdings_code_basis"] = "original reported security codes; foreign exchange/market is not inferred"
     capture(result, "basket", lambda: etf_basket(symbol))
+    if getattr(args, "include_full_holdings", False):
+        capture(result, "disclosed_equity_report", lambda: fund_disclosed_equities(symbol))
     if args.benchmark:
         benchmark = "sh" + args.benchmark if args.benchmark in INDEX_NAMES else args.benchmark
         benchmark_rows = run_tool("stock_data.py", ["kline", benchmark, "--count", str(args.days + 5)])
@@ -1162,7 +1300,13 @@ def etf_details(args):
             "annualized_tracking_error_pct": None,
             "note": "provide benchmark to compute tracking error; benchmark is never guessed",
         }
-    if not nav and not sizes and not result.get("holdings") and not result.get("basket", {}).get("complete"):
+    if (
+        not nav
+        and not sizes
+        and not result.get("holdings")
+        and not result.get("basket", {}).get("complete")
+        and not result.get("disclosed_equity_report")
+    ):
         raise ValueError("ETF detail sources unavailable")
     return result
 
@@ -1185,6 +1329,9 @@ def main():
     p.add_argument("symbol")
     p.add_argument("--benchmark", default="")
     p.add_argument("--days", type=int, default=60)
+    p.add_argument(
+        "--include-full-holdings", action="store_true", help="Fetch latest disclosed semiannual/annual equity table"
+    )
     p = sub.add_parser("dividends")
     p.add_argument("--symbol", default="")
     p.add_argument("--mode", choices=["history", "calendar", "ranking"], default="history")

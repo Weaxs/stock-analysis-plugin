@@ -85,3 +85,38 @@ PCF是当日申购赎回对价篮子，含现金替代规则、现金差额与�
 主任务实现首次实时请求403后，追加只读差异验证：同一旧来源HTML的访问值，callback分别`probe/stockrank`均200；fresh HTML的访问值，两个callback均403；requests.Session保留来源页面cookies也403，因此不能通过换callback/Session修复。本次fresh来源函数返回值含URL百分号编码，直接交给`requests.get(params=...)`会把`%`再次编码为`%25`。官网SSDL源码将参数直接拼进querystring，未发生此二次编码。
 
 已用当前fresh页面验证：`urllib.parse.unquote(token_match.group(1))`解码一次后，再交给requests params，`callback=stockrank,limit=3000`实际200且2808条完整响应。不需要旧访问值、硬编码或用户凭据。首次研究旧HTML值为未百分号编码形态，故未暴露此差异。实现应覆盖“官网值已percent-encoded”的用例，且任何失败信息不得带包含访问值的请求URL。此修复验证只在`/tmp/hk_token_decode.py`探针进行，本研究代理未改业务代码。
+
+## 第三轮补足验证：无凭据长期PB与官方HK排期
+
+### 000985长期PB：公开乐咕路径可访问但目标指数无数据
+
+[乐咕000985.CSI页面](https://www.legulegu.com/stockdata/index-basic?indexCode=000985.CSI)当前实际200，标题“中证全指”、内容标“中证全指指数 · 000985.CSI”；`.SH`页面标题“中证全指(SH)”。这证明页面身份，并不能证明历史数据存在。[官网页面JS](https://www.legulegu.com/static/js/lg-charts-industry-chart.js)明确普通图表请求`/api/stockdata/index-basic?indexCode=...&freq=day&token=...`，主题图表省略freq；token是官网JS将当日`YYYY-MM-DD`做MD5产生的公开页面请求标识，另有正常CSRF/cookies链。探针只执行公开页面正常读取流程，未用登录凭据/伪造VIP或绕身份校验。
+
+实际API：`https://www.legulegu.com/api/stockdata/index-basic`，参数`indexCode=000985.CSI`或`000985.SH`，`freq=day/month`或省略，带正常页面CSRF/cookies、Referer及当日公开请求标识，均200但`data=[]`、`vip=false/user=false`。同链正控`930743.CSI`实测61条（2021-10-29至2026-10-12），包含`pb/addPb/middlePb`，所以不能把目标空数据归因于全站网络失败；也不能将生科指数PB套给中证全指。公开overview索引没有找到000985链接。本次仅证明“这些公开请求没有目标数据”，不能推断VIP是否有数据。
+
+原始目标空响应与正控放于`/tmp/stock-coverage-probes/legu-000985.CSI.json`、`legu-000985.SH.json`、`legu-930743.CSI-None.json`，不含请求访问值。无配置LIXINGER_TOKEN/TUSHARE_TOKEN时，中证全指多年PB仍应报告blocked/unknown；已验证CSI多年PE与仅20行PE/dividend文件不能填补PB。完整实时真实持仓也不等于PCF，任何新增来源必须独立核验口径。
+
+### HK官方通用已公告排期：主板/GEM董事会通知汇总表已取到
+
+无需ticker硬编码或用户凭据，公开GET：
+
+- [Main Board董事会排期](https://www.hkex-is.hk/wwwroot/link/ebmn.htm)
+- [GEM董事会排期](https://www.hkex-is.hk/wwwroot/link/ebmngem.htm)
+
+HKEX[官方说明](https://www.hkex.com.hk/News/News-Release/2011/110902news?sc_lang=en)明确`www.hkex-is.hk`为额外公告板，官方[投资者FAQ](https://www.hkex.com.hk/-/media/HKEX-Market/Listing/Rules-and-Guidance/eSubmission-System/Listed-Company-Information-Dissemination-and-Related-Trading-Arrangements/faqinv.pdf)说明可在Exchange Reports/Board Meeting Notifications查看上市公司排期。这是官方汇总证据，并非Yahoo供应商预计。
+
+当前两页实际200，更新时间`Date : 09/10/2026`。HTML最后一张表有6列：`BM Date / 空列 / Stock Short Name / Code / Purpose / Period`。`pd.read_html(StringIO(html),keep_default_na=False)[-1]`实测Main `(43,6)`、GEM `(3,6)`，前两行是表头和虚线，实际41/1记录；代码在本次解析为字符串`388/700/8307`，仍应按字符串去空格再zfill(5)，不接受`388.0`。
+
+通用处理：按明确`%d/%m/%Y`解析BM Date；保留Purpose、Period原文，只有结果用途（如RESULTS、3RD QUARTER RES、FIN RES/DIV、INT RES/DIV）进入财报排期，纯`3RD INT DIV`不能当业绩事件，`QUARTERLY REVENUE`也不能凭名字升格为财报。Period含`9-MTH-ENDED30/09/26`或`Y.E.31/07/26`时可独立提取明确期末`%d/%m/%y`；只有`THIRD QUARTER 2026`则保留原文、不从用户requestedquarter伪造actual报告期。无Period保持unknown。
+
+例证：表内已公布`00388 HKEX`会议2026-11-06、用途RESULTS、期末2026-09-30；`00700 TENCENT`会议2026-11-18、用途3RD QUARTER RES/DIV、期末2026-09-30；`08307 MEDICSKIN`会议2026-11-24、RESULTS/INT DIV、期末2026-09-30；此外含大量其他证券。前文HKEX发行人页面TBC是当时检索的旧页面状态，此更新汇总表提供了其精确日期官方排期证据。
+
+输出应标`scheduled_board_meeting`与`confirmation=official_exchange_schedule`、`scheduled_date`及独立`report_date`；`actual_disclosure_date`仍unknown。这些表明确“may not be exhaustive”“以发行人公告为准”，多日会议只显示首日。因此可补足官方已公告排期的通用来源，但不承诺全部港股覆盖，不把不在列表当无排期，不把会议日期自动当实际披露日期，也不声称历史完整列表。实际公布日期仍需对应业绩公告。供应商回退若保留必须单独标provider_estimate，并不得覆盖本官方证据。
+
+原始完整HTML：`/tmp/stock-coverage-probes/hk-board-main.html`、`hk-board-gem.html`。原始报告含人民币柜台（如80388/80700），它们是明确表中证券代码，不能无证据与主柜台混成两个独立发行人。
+
+## 后续实测：定期披露股票表
+
+2026-10-12 实测东财 FundArchivesDatas.aspx type=jjcc，只有显式 year/month 才取得目标报告较完整股票表，year留空即使topline10000仍只有最新季度10条。year=2026,month=6,topline=10000实测510300为339条、159915为121条、513100为102条，报告日均2026-06-30。源列持股数为万股、市值为万元（跨境列万元人民币），规范化分别乘10000；原始证券代码按字符串保留。未以股票表推断完整全资产，未用PCF证券数量或指数名单替代实际组合，未声称实时持仓。源：[基金股票持仓](https://fundf10.eastmoney.com/ccmx_510300.html)、[AKShare持仓实现](https://github.com/akfamily/akshare/blob/main/akshare/fund/fund_portfolio_em.py)。
+
+PR #47 b9f30b8 的CI已全部通过：Python3.10/3.11、三系统compat、四真实宿主、网络和LLM e2e均成功。后续新增实现仍需在新提交上重跑，不能沿用旧提交CI结果。
