@@ -24,7 +24,6 @@ from tools.stock_data import (
     _kline_alphavantage,
     _kline_finnhub,
     _kline_longbridge,
-    _kline_pytdx,
     _kline_sina,
     _kline_tencent,
     _kline_tushare,
@@ -519,7 +518,7 @@ class TestKlineTushare:
     @patch.dict("os.environ", {"TUSHARE_TOKEN": "test_token"})
     @patch("requests.post")
     def test_returns_data(self, mock_post):
-        mock_post.return_value = MagicMock(
+        price_response = MagicMock(
             json=lambda: {
                 "code": 0,
                 "data": {
@@ -531,6 +530,15 @@ class TestKlineTushare:
                 },
             }
         )
+        mock_post.side_effect = [
+            price_response,
+            MagicMock(
+                json=lambda: {
+                    "code": 0,
+                    "data": {"fields": ["trade_date", "adj_factor"], "items": [["20260519", 1], ["20260518", 1]]},
+                }
+            ),
+        ]
         result = _kline_tushare("600519", "daily", 5)
         assert len(result) == 2
         assert result[0]["close"] == 10.0
@@ -580,53 +588,6 @@ class TestQuoteTushare:
     def test_no_token_raises(self):
         with pytest.raises(ValueError, match="TUSHARE_TOKEN not set"):
             _quote_tushare("600519")
-
-
-class TestKlinePytdx:
-    """pytdx connect() returns bool, not a context manager — mocks must reflect that."""
-
-    def test_returns_data(self):
-        mock_api_cls = MagicMock()
-        mock_api = MagicMock()
-        mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value = True
-        mock_api.get_security_bars.return_value = [
-            {
-                "datetime": "2026-05-18 15:00",
-                "open": 9.5,
-                "high": 10.5,
-                "low": 9.0,
-                "close": 10.0,
-                "vol": 900,
-                "amount": 9000,
-            },
-            {
-                "datetime": "2026-05-19 15:00",
-                "open": 10.0,
-                "high": 11.0,
-                "low": 9.0,
-                "close": 10.5,
-                "vol": 1000,
-                "amount": 10500,
-            },
-        ]
-        with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}):
-            result = _kline_pytdx("600519", "daily", 5)
-        assert len(result) == 2
-        assert result[0]["close"] == 10.0
-        mock_api.disconnect.assert_called_once()
-
-    def test_empty_raises(self):
-        mock_api_cls = MagicMock()
-        mock_api = MagicMock()
-        mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value = True
-        mock_api.get_security_bars.return_value = []
-        with (
-            patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}),
-            pytest.raises(ValueError, match="pytdx returned empty"),
-        ):
-            _kline_pytdx("600519", "daily", 10)
 
 
 class TestQuotePytdx:
@@ -811,23 +772,20 @@ class TestKlineAFailover:
             patch("tools.stock_data._kline_efinance") as mock_ef,
             patch("tools.stock_data._kline_tencent", return_value=[{"close": 1}]),
             patch("tools.stock_data._kline_sina"),
-            patch("tools.stock_data._kline_pytdx") as mock_ptdx,
             patch("tools.stock_data._kline_baostock"),
         ):
             assert kline_a("sh000001", "daily", 10) == [{"close": 1}]
         mock_ak.assert_not_called()
         mock_ts.assert_not_called()
         mock_ef.assert_not_called()
-        mock_ptdx.assert_not_called()
 
     @patch("tools.stock_data._kline_baostock")
-    @patch("tools.stock_data._kline_pytdx")
     @patch("tools.stock_data._kline_sina")
     @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_akshare_success_others_not_called(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+    def test_akshare_success_others_not_called(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_bs):
         mock_ak.return_value = [{"close": 100}]
         result = kline_a("600519", "daily", 10)
         assert result == [{"close": 100}]
@@ -837,13 +795,12 @@ class TestKlineAFailover:
         mock_sina.assert_not_called()
 
     @patch("tools.stock_data._kline_baostock")
-    @patch("tools.stock_data._kline_pytdx")
     @patch("tools.stock_data._kline_sina")
     @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_bs):
         """The issue #25 scenario: all eastmoney-flavored sources down, tencent saves the day."""
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
@@ -852,40 +809,38 @@ class TestKlineAFailover:
         result = kline_a("600519", "daily", 10)
         assert result == [{"close": 150}]
         mock_sina.assert_not_called()
-        mock_ptdx.assert_not_called()
 
     @patch("tools.stock_data._kline_baostock")
-    @patch("tools.stock_data._kline_pytdx")
     @patch("tools.stock_data._kline_sina")
     @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_falls_through_to_pytdx(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+    def test_falls_through_to_baostock_skipping_raw_sources(
+        self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_bs
+    ):
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
         mock_ef.side_effect = ValueError("down")
         mock_tx.side_effect = ValueError("down")
         mock_sina.side_effect = ValueError("down")
-        mock_ptdx.return_value = [{"close": 200}]
+        mock_bs.return_value = [{"close": 200}]
         result = kline_a("600519", "daily", 10)
         assert result == [{"close": 200}]
-        mock_bs.assert_not_called()
+        mock_sina.assert_not_called()
 
     @patch("tools.stock_data._kline_baostock")
-    @patch("tools.stock_data._kline_pytdx")
     @patch("tools.stock_data._kline_sina")
     @patch("tools.stock_data._kline_tencent")
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_bs):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
         mock_tx.side_effect = ValueError("tx down")
         mock_sina.side_effect = ValueError("sina down")
-        mock_ptdx.side_effect = ValueError("ptdx down")
         mock_bs.side_effect = ValueError("bs down")
         with pytest.raises(RuntimeError, match="bs down"):
             kline_a("600519", "daily", 10)
@@ -2521,11 +2476,11 @@ class TestKlineTencent:
         assert ",week," in mock_get.call_args.kwargs["params"]["param"]
 
     @patch("requests.get")
-    def test_falls_back_to_raw_key(self, mock_get):
+    def test_rejects_raw_stock_key(self, mock_get):
         """BSE codes have no qfq series — the endpoint answers with a plain `day` key."""
         mock_get.return_value = MagicMock(json=lambda: self._response(key="day", code="bj920001"))
-        result = _kline_tencent("920001", "daily", 5)
-        assert len(result) == 2
+        with pytest.raises(ValueError, match="required adjustment"):
+            _kline_tencent("920001", "daily", 5)
 
     @patch("requests.get")
     def test_api_error_raises(self, mock_get):

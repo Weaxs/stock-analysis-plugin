@@ -41,6 +41,7 @@ def _run(script: str, argv: list) -> str:
 
 
 def get_kline(args: dict, **kwargs) -> str:
+    """Relay the CLI array, including each A-share row's adjusted=qfq/none marker."""
     symbol = args["symbol"]
     period = args.get("period", "daily")
     count = args.get("count", 60)

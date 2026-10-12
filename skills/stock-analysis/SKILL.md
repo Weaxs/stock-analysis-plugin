@@ -77,6 +77,7 @@ python3 scripts/gather.py <symbol>
 - 信号持久化在本地 JSONL（`$STOCK_SIGNAL_STORE` 或 `~/.stock-analysis/signals.jsonl`）；是否记录由宿主 Agent 决定，不阻塞报告输出。
 
 ## 注意事项
+- `get_kline` 的 A 股股票/ETF 数据为前复权，每条记录 `adjusted="qfq"`；显式指数 `sh000xxx` / `sz399xxx` 为原始点位，`adjusted="none"`。复权数据源全部失败时说明数据缺失，不用未复权价格补算指标或信号。
 - 始终提供风险提示
 - 不做绝对化的涨跌预测
 - 建议用户结合自身风险偏好做决策
