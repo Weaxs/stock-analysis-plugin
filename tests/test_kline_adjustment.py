@@ -13,7 +13,7 @@ from tools.stock_data import _kline_tencent
 def isolate_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(stock_data, "_DATA_CACHE_DIR", tmp_path)
     monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
-    for name in ("akshare", "efinance", "tencent", "sina", "pytdx", "baostock"):
+    for name in ("akshare", "efinance", "tencent", "sina", "baostock"):
         monkeypatch.setattr(stock_data, f"_kline_{name}", MagicMock(side_effect=ValueError("offline")))
 
 
@@ -60,6 +60,38 @@ def test_week_month_uses_adjusted_ohlc(monkeypatch, period, freq):
     assert calls[0]["params"]["freq"] == freq
 
 
+@pytest.mark.parametrize("symbol,ts_code", [("600519", "600519.SH"), ("900901", "900901.SH"), ("920001", "920001.BJ")])
+def test_tushare_preserves_exchange_mapping(monkeypatch, symbol, ts_code):
+    calls = []
+
+    def post(_url, *, json, timeout):
+        calls.append(json)
+        return response(
+            ["trade_date", "open_qfq", "high_qfq", "low_qfq", "close_qfq", "vol"],
+            [["20260522", 10, 12, 9, 11, 900]],
+        )
+
+    monkeypatch.setattr("requests.post", post)
+    rows = stock_data.cmd_kline(Namespace(symbol=symbol, period="weekly", count=1))
+    assert rows[0]["close"] == 11
+    assert calls[0]["params"]["ts_code"] == ts_code
+
+
+def test_tencent_index_selects_raw_points_when_both_series_exist(monkeypatch):
+    raw = [["2026-05-18", "3000", "3100", "3200", "2900", "900"]]
+    adjusted = [["2026-05-18", "30", "31", "32", "29", "900"]]
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **k: MagicMock(
+            json=lambda: {
+                "code": 0,
+                "data": {"sh000001": {"day": raw, "qfqday": adjusted}},
+            }
+        ),
+    )
+    assert _kline_tencent("sh000001", "daily", 1)[0]["close"] == 3100
+
+
 def test_weekly_raw_only_response_is_not_accepted(monkeypatch):
     monkeypatch.setattr(
         "requests.post",
@@ -103,12 +135,9 @@ def test_missing_or_invalid_factors_fail_over_without_using_raw_prices(monkeypat
     stock_data._kline_baostock.side_effect = None
     stock_data._kline_sina.side_effect = None
     stock_data._kline_sina.return_value = [{"close": 22}]
-    stock_data._kline_pytdx.side_effect = None
-    stock_data._kline_pytdx.return_value = [{"close": 22}]
     rows = stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1))
     assert rows == [{"close": 11, "adjusted": "qfq"}]
     stock_data._kline_sina.assert_not_called()
-    stock_data._kline_pytdx.assert_not_called()
     # The winning adjusted source stays preferred on the next call.
     assert stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1)) == rows
     assert stock_data._kline_baostock.call_count == 2

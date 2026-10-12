@@ -528,8 +528,7 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
     end = datetime.now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
 
-    exchange = "BJ" if normalize_stock_code(symbol)["board"] == "BSE" else "SH" if symbol.startswith("6") else "SZ"
-    ts_code = f"{symbol}.{exchange}"
+    ts_code = f"{symbol}.{_cn_code(symbol)[:2].upper()}"
     params = {
         "ts_code": ts_code,
         "start_date": start.strftime("%Y%m%d"),
@@ -557,6 +556,7 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
     df = pd.DataFrame(data["data"]["items"], columns=data["data"]["fields"])
     if not set(fields).issubset(df.columns):
         raise ValueError("tushare returned incomplete adjusted prices")
+    df[fields] = df[fields].apply(pd.to_numeric, errors="coerce")
     if period == "daily":
         factor_resp = requests.post(
             "http://api.tushare.pro",
@@ -573,19 +573,17 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
         df = df.merge(factors, on="trade_date", how="left", validate="one_to_one")
         if df["adj_factor"].isna().any():
             raise ValueError("tushare adjustment factors missing for price dates")
-        df[prices] = df[prices].apply(pd.to_numeric, errors="coerce").mul(df["adj_factor"] / latest_factor, axis=0)
+        df[prices] = df[prices].mul(df["adj_factor"] / latest_factor, axis=0)
     else:
         df = df.drop(columns=prices, errors="ignore")
         df = df.rename(columns={f"{c}_qfq": c for c in prices})
-    df[prices] = df[prices].apply(pd.to_numeric, errors="coerce")
-    if not (df[prices].gt(-float("inf")) & df[prices].lt(float("inf"))).all().all():
+    if not df[prices].abs().lt(float("inf")).all().all():
         raise ValueError("tushare returned invalid adjusted prices")
     col_map = {"trade_date": "date", "vol": "volume", "amount": "turnover", "pct_chg": "change_pct"}
     df = df.rename(columns=col_map)
     df = df.sort_values("date")
-    for c in ["open", "high", "low", "close", "volume"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+    if "volume" in df.columns:
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
     keep = [c for c in ["date", "open", "high", "low", "close", "volume", "turnover", "change_pct"] if c in df.columns]
     df = df[keep].tail(count)
     return [_clean_row(r) for r in df.to_dict("records")]
@@ -660,41 +658,6 @@ def _pytdx_connect(api) -> None:
         except Exception as e:
             errors.append(f"{ip}:{port} {e}")
     raise ConnectionError(f"pytdx failed to connect to any TDX server ({'; '.join(errors)})")
-
-
-def _kline_pytdx(symbol: str, period: str, count: int) -> list:
-    """pytdx kline from TDX market servers. No credentials needed."""
-    from pytdx.hq import TdxHq_API
-
-    market = 1 if symbol.startswith(("6", "9", "5")) else 0
-    freq_map = {"daily": 9, "weekly": 5, "monthly": 6}
-
-    api = TdxHq_API()
-    try:
-        _pytdx_connect(api)
-        data = api.get_security_bars(freq_map.get(period, 9), market, symbol, 0, count)
-    finally:
-        api.disconnect()
-
-    if not data:
-        raise ValueError("pytdx returned empty data")
-
-    rows = []
-    for bar in data:
-        rows.append(
-            _clean_row(
-                {
-                    "date": bar["datetime"][:10],
-                    "open": bar["open"],
-                    "high": bar["high"],
-                    "low": bar["low"],
-                    "close": bar["close"],
-                    "volume": bar["vol"],
-                    "turnover": bar.get("amount"),
-                }
-            )
-        )
-    return rows[-count:]
 
 
 def _quote_pytdx(symbol: str) -> dict:
