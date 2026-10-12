@@ -519,7 +519,7 @@ class TestKlineTushare:
     @patch.dict("os.environ", {"TUSHARE_TOKEN": "test_token"})
     @patch("requests.post")
     def test_returns_data(self, mock_post):
-        mock_post.return_value = MagicMock(
+        price_response = MagicMock(
             json=lambda: {
                 "code": 0,
                 "data": {
@@ -531,6 +531,15 @@ class TestKlineTushare:
                 },
             }
         )
+        mock_post.side_effect = [
+            price_response,
+            MagicMock(
+                json=lambda: {
+                    "code": 0,
+                    "data": {"fields": ["trade_date", "adj_factor"], "items": [["20260519", 1], ["20260518", 1]]},
+                }
+            ),
+        ]
         result = _kline_tushare("600519", "daily", 5)
         assert len(result) == 2
         assert result[0]["close"] == 10.0
@@ -861,16 +870,19 @@ class TestKlineAFailover:
     @patch("tools.stock_data._kline_efinance")
     @patch("tools.stock_data._kline_tushare")
     @patch("tools.stock_data._kline_akshare")
-    def test_falls_through_to_pytdx(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs):
+    def test_falls_through_to_baostock_skipping_raw_sources(
+        self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx, mock_bs
+    ):
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
         mock_ef.side_effect = ValueError("down")
         mock_tx.side_effect = ValueError("down")
         mock_sina.side_effect = ValueError("down")
-        mock_ptdx.return_value = [{"close": 200}]
+        mock_bs.return_value = [{"close": 200}]
         result = kline_a("600519", "daily", 10)
         assert result == [{"close": 200}]
-        mock_bs.assert_not_called()
+        mock_sina.assert_not_called()
+        mock_ptdx.assert_not_called()
 
     @patch("tools.stock_data._kline_baostock")
     @patch("tools.stock_data._kline_pytdx")
@@ -2521,11 +2533,11 @@ class TestKlineTencent:
         assert ",week," in mock_get.call_args.kwargs["params"]["param"]
 
     @patch("requests.get")
-    def test_falls_back_to_raw_key(self, mock_get):
+    def test_rejects_raw_stock_key(self, mock_get):
         """BSE codes have no qfq series — the endpoint answers with a plain `day` key."""
         mock_get.return_value = MagicMock(json=lambda: self._response(key="day", code="bj920001"))
-        result = _kline_tencent("920001", "daily", 5)
-        assert len(result) == 2
+        with pytest.raises(ValueError, match="required adjustment"):
+            _kline_tencent("920001", "daily", 5)
 
     @patch("requests.get")
     def test_api_error_raises(self, mock_get):

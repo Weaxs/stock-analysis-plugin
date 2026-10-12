@@ -19,6 +19,7 @@ from _subproc import run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa
 # Bare 6-digit codes are always stocks; the prefix is the disambiguation escape
 # hatch for index codes (sh000001 = 上证指数, not 平安银行).
 _A_PREFIXED_RE = re.compile(r"(?:sh|sz|bj)\d{6}", re.IGNORECASE)
+_A_INDEX_RE = re.compile(r"(?:sh000\d{3}|sz399\d{3})", re.IGNORECASE)
 
 
 def detect_market(symbol: str) -> str:
@@ -140,7 +141,7 @@ def _kline_efinance(symbol: str, period: str, count: int) -> list:
     import efinance as ef
 
     freq_map = {"daily": 101, "weekly": 102, "monthly": 103}
-    df = ef.stock.get_quote_history(symbol, klt=freq_map.get(period, 101))
+    df = ef.stock.get_quote_history(symbol, klt=freq_map.get(period, 101), fqt=1)
     if df is None or df.empty:
         raise ValueError("efinance returned empty data")
     col_map = {
@@ -318,8 +319,7 @@ def _quote_tencent(symbol: str) -> dict:
 
 def _kline_tencent(symbol: str, period: str, count: int) -> list:
     """Tencent kline via web.ifzq.gtimg.cn. Rows are [date, open, close, high, low,
-    volume(手)] ascending; qfq-adjusted like akshare. When a symbol has no qfq series
-    (e.g. BSE codes) the endpoint returns the raw `day/week/month` key instead."""
+    volume(手)] ascending; raw series are accepted only for explicit indices."""
     import requests
 
     p_map = {"daily": "day", "weekly": "week", "monthly": "month"}
@@ -334,9 +334,9 @@ def _kline_tencent(symbol: str, period: str, count: int) -> list:
     if data.get("code") != 0:
         raise ValueError(f"tencent kline failed: {data.get('msg', '')}")
     node = data.get("data", {}).get(code, {})
-    rows = node.get(f"qfq{p}") or node.get(p)
+    rows = node.get(p) if _A_INDEX_RE.fullmatch(symbol) else node.get(f"qfq{p}")
     if not rows:
-        raise ValueError("tencent kline returned empty data")
+        raise ValueError("tencent kline returned empty data for required adjustment")
     return [
         _clean_row(
             {
@@ -450,24 +450,22 @@ def _clean_row(d: dict) -> dict:
 
 
 def kline_a(symbol: str, period: str, count: int) -> list:
-    """A-share kline with failover: akshare → tushare → efinance → tencent → sina → pytdx → baostock.
+    """A-share qfq kline: akshare → tushare → efinance → tencent → baostock.
 
-    Explicitly-prefixed symbols (sh000001, typically indices) skip the eastmoney
-    sources — they take bare 6-digit codes only and would fail slowly first."""
-    if _A_PREFIXED_RE.fullmatch(symbol):
+    Explicit indices keep raw points; unadjusted stock sources never enter the chain."""
+    if _A_INDEX_RE.fullmatch(symbol):
         sources = [
             ("tencent", lambda: _kline_tencent(symbol, period, count)),
             ("sina", lambda: _kline_sina(symbol, period, count)),
             ("baostock", lambda: _kline_baostock(symbol, period, count)),
         ]
     else:
+        symbol = symbol[2:] if _A_PREFIXED_RE.fullmatch(symbol) else symbol
         sources = [
             ("akshare", lambda: _kline_akshare(symbol, period, count)),
             ("tushare", lambda: _kline_tushare(symbol, period, count)),
             ("efinance", lambda: _kline_efinance(symbol, period, count)),
             ("tencent", lambda: _kline_tencent(symbol, period, count)),
-            ("sina", lambda: _kline_sina(symbol, period, count)),
-            ("pytdx", lambda: _kline_pytdx(symbol, period, count)),
             ("baostock", lambda: _kline_baostock(symbol, period, count)),
         ]
     with socket_timeout(25):
@@ -515,7 +513,7 @@ def _kline_akshare(symbol: str, period: str, count: int) -> list:
 
 
 def _kline_tushare(symbol: str, period: str, count: int) -> list:
-    """Tushare kline via HTTP API. Requires TUSHARE_TOKEN."""
+    """Tushare qfq kline via daily factors or the adjusted week/month endpoint."""
     import os
 
     import pandas as pd
@@ -525,23 +523,30 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
     if not token:
         raise ValueError("TUSHARE_TOKEN not set")
 
-    api_name_map = {"daily": "daily", "weekly": "weekly", "monthly": "monthly"}
+    if normalize_stock_code(symbol)["is_etf"]:
+        raise ValueError("tushare stock adjustment does not cover ETFs")
     end = datetime.now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
 
-    ts_code = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
+    exchange = "BJ" if normalize_stock_code(symbol)["board"] == "BSE" else "SH" if symbol.startswith("6") else "SZ"
+    ts_code = f"{symbol}.{exchange}"
+    params = {
+        "ts_code": ts_code,
+        "start_date": start.strftime("%Y%m%d"),
+        "end_date": end.strftime("%Y%m%d"),
+    }
+    prices = ["open", "high", "low", "close"]
+    if period != "daily":
+        params["freq"] = "week" if period == "weekly" else "month"
+    fields = prices if period == "daily" else [f"{c}_qfq" for c in prices]
 
     resp = requests.post(
         "http://api.tushare.pro",
         json={
-            "api_name": api_name_map.get(period, "daily"),
+            "api_name": "daily" if period == "daily" else "stk_week_month_adj",
             "token": token,
-            "params": {
-                "ts_code": ts_code,
-                "start_date": start.strftime("%Y%m%d"),
-                "end_date": end.strftime("%Y%m%d"),
-            },
-            "fields": "trade_date,open,high,low,close,vol,amount,pct_chg",
+            "params": params,
+            "fields": ",".join(["trade_date", *fields, "vol", "amount", "pct_chg"]),
         },
         timeout=15,
     )
@@ -550,6 +555,31 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
         raise ValueError(f"tushare returned no data: {data.get('msg', '')}")
 
     df = pd.DataFrame(data["data"]["items"], columns=data["data"]["fields"])
+    if not set(fields).issubset(df.columns):
+        raise ValueError("tushare returned incomplete adjusted prices")
+    if period == "daily":
+        factor_resp = requests.post(
+            "http://api.tushare.pro",
+            json={"api_name": "adj_factor", "token": token, "params": params, "fields": "trade_date,adj_factor"},
+            timeout=15,
+        ).json()
+        if factor_resp.get("code") != 0 or not factor_resp.get("data", {}).get("items"):
+            raise ValueError("tushare returned no adjustment factors")
+        factors = pd.DataFrame(factor_resp["data"]["items"], columns=factor_resp["data"]["fields"])
+        factors["adj_factor"] = pd.to_numeric(factors["adj_factor"], errors="coerce")
+        if not (factors["adj_factor"].gt(0) & factors["adj_factor"].lt(float("inf"))).all():
+            raise ValueError("tushare returned invalid adjustment factors")
+        latest_factor = factors.sort_values("trade_date").iloc[-1]["adj_factor"]
+        df = df.merge(factors, on="trade_date", how="left", validate="one_to_one")
+        if df["adj_factor"].isna().any():
+            raise ValueError("tushare adjustment factors missing for price dates")
+        df[prices] = df[prices].apply(pd.to_numeric, errors="coerce").mul(df["adj_factor"] / latest_factor, axis=0)
+    else:
+        df = df.drop(columns=prices, errors="ignore")
+        df = df.rename(columns={f"{c}_qfq": c for c in prices})
+    df[prices] = df[prices].apply(pd.to_numeric, errors="coerce")
+    if not (df[prices].gt(-float("inf")) & df[prices].lt(float("inf"))).all().all():
+        raise ValueError("tushare returned invalid adjusted prices")
     col_map = {"trade_date": "date", "vol": "volume", "amount": "turnover", "pct_chg": "change_pct"}
     df = df.rename(columns=col_map)
     df = df.sort_values("date")
@@ -966,6 +996,9 @@ def cmd_kline(args):
     try:
         if market == "A":
             data = kline_a(args.symbol, args.period, args.count)
+            if data:
+                adjusted = "none" if _A_INDEX_RE.fullmatch(args.symbol) else "qfq"
+                data = [dict(row, adjusted=adjusted) for row in data]
         else:
             data = kline_yf(args.symbol, args.period, args.count)
         return data

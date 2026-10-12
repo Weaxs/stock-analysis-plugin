@@ -236,7 +236,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 | 工具 | 说明 |
 |------|------|
-| `get_kline` | K 线数据（OHLCV），支持日/周/月线 |
+| `get_kline` | K 线数据（OHLCV），支持日/周/月线；A 股股票/ETF 前复权，每条记录 `adjusted=qfq`，指数 `adjusted=none` |
 | `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价） |
 | `get_capital_flow` | 资金流向（仅 A 股） |
 | `get_news` | 个股相关新闻 |
@@ -381,11 +381,11 @@ position:
 
 ## 市场路由规则
 
-| 代码格式 | 示例 | 市场 | 数据源 Failover 链 |
+| 代码格式 | 示例 | 市场 | 行情报价 Failover 链（K 线差异见下方） |
 |----------|------|------|---------------------|
 | 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare → tushare → efinance → 腾讯 → 新浪 → pytdx → baostock |
 | 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | akshare（基金接口）→ tushare → efinance → 腾讯 → 新浪 → pytdx → baostock |
-| 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪（K 线另有 baostock） |
+| 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪 |
 | `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
 | `.T` 结尾 | `7203.T` | 日股 | yfinance |
@@ -394,6 +394,8 @@ position:
 
 > 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
 > 裸 6 位代码一律按**个股**处理（`000001` 是平安银行）；指数需带交易所前缀（`sh000001` = 上证指数），显式前缀代码直接走腾讯/新浪（东财源只认裸代码）。
+> **A 股 K 线口径**：股票/ETF 仅接受前复权数据，链路为 akshare → tushare（仅股票）→ efinance → 腾讯（仅 qfq 数据）→ baostock；带前缀的股票/ETF 先去前缀再走同一链路。新浪和 pytdx 的未复权 K 线不参与股票/ETF 容灾。显式指数 `sh000xxx` / `sz399xxx` 保留原始点位，走腾讯 → 新浪 → baostock。上述路由表的完整链路仍适用于实时行情。
+> K 线响应保留原有 JSON 数组，每条 A 股记录新增 `adjusted`：股票/ETF 为 `"qfq"`，指数为 `"none"`。Tushare 日线通过 `adj_factor` 前复权，周/月线使用 `stk_week_month_adj` 的 qfq 字段；复权权限不足、因子缺失或源只返回原始价格时继续切换，所有可用复权源都失败时返回 JSON `error`，不降级到未复权股票价格。Tushare 复权接口需至少 2000 积分，见[复权因子](https://tushare.pro/document/2?doc_id=28)与[复权周/月线](https://tushare.pro/document/2?doc_id=365)。
 > **粘性优选**：A 股链路（K 线 / 行情 / 市场快照 / 板块成分）会记住最近一次成功的数据源（缓存在系统临时目录，24h 有效），下次调用优先从它开始；若它已失效则自动顺延并更新记录。港美股链路不做粘性——一次 yfinance 瞬时失败不应让后续全天的 quote 降质。
 > 日/韩/台股仅 yfinance 一个数据源（免费数据延迟约 15 分钟）；港股 / 美股 / 日股 / 韩股 / 台股的 ETF 与其所在市场股票走相同链路。
 
