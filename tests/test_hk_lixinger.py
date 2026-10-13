@@ -172,3 +172,40 @@ def test_hk_enrichment_preserves_existing_snapshot(monkeypatch):
     assert result["roe"] == 0.22
     assert result["periods"] == [{"roe": 12}]
     assert result["warnings"] == ["short history"]
+
+
+def test_hk_snapshot_currency_does_not_inherit_different_history_currency(monkeypatch):
+    import lixinger
+
+    monkeypatch.setenv("LIXINGER_TOKEN", "test-token")
+    monkeypatch.setattr(
+        lixinger,
+        "financials_hk",
+        lambda *a: {
+            "source": "lixinger",
+            "currency": "HKD",
+            "report_date": "2025-03-31",
+            "total_revenue": 999,
+            "net_income": 20,
+            "periods": [{"currency": "HKD", "total_revenue": 999}],
+        },
+    )
+    monkeypatch.setattr(
+        stock_data,
+        "_yf_info",
+        lambda *a: {
+            "shortName": "Example",
+            "financialCurrency": "USD",
+            "currency": "HKD",
+            "marketCap": 300,
+            "totalRevenue": 100,
+        },
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda *a: SimpleNamespace())
+    result = stock_data.cmd_financials(Namespace(symbol="0700.HK", periods=10, annual=True))
+    assert result["total_revenue"] == 100
+    assert result["report_date"] is None
+    assert result["currency"] == "USD"
+    assert result["market_cap"] == 300 and result["market_cap_currency"] == "HKD"
+    assert result["net_income"] is None
+    assert result["periods"][0]["currency"] == "HKD"

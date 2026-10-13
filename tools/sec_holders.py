@@ -12,6 +12,7 @@ import zipfile
 from collections import Counter
 from datetime import date
 from pathlib import Path
+from xml.etree import ElementTree
 
 import _cache
 from sec_edgar import archive_base, sec_get, xml_root
@@ -53,7 +54,10 @@ def issuer_cusips(cik, data):
             continue
         filing = {"accessionNumber": recent["accessionNumber"][i]}
         url = f"{archive_base(cik, filing)}/{document}"
-        root = xml_root(sec_get(url, as_json=False))
+        try:
+            root = xml_root(sec_get(url, as_json=False))
+        except (ValueError, ElementTree.ParseError):
+            continue
         issuer = root.find(".//issuerInfo")
         if issuer is None:
             continue
@@ -84,10 +88,7 @@ def latest_bulk():
         if not match:
             continue
 
-        def stamp(value):
-            return date(int(value[5:]), MONTHS.index(value[2:5].lower()) + 1, int(value[:2])).isoformat()
-
-        start, end = map(stamp, match.groups())
+        start, end = (sec_date(f"{value[:2]}-{value[2:5]}-{value[5:]}") for value in match.groups())
         if href.startswith("/files/"):
             url = "https://www.sec.gov" + href
         elif href.startswith("https://www.sec.gov/files/"):
@@ -160,13 +161,13 @@ def scan_holders(path, cusips):
             row = {**row, "date": sec_date(row["FILING_DATE"]), "accession": accession, **covers.get(accession, {})}
             managers.setdefault(row["CIK"].zfill(10), []).append(row)
         by_accession = {row["accession"]: (cik, row) for cik, filings in managers.items() for row in filings}
-        selected = {}
+        selected = set()
         incomplete = set()
         for cik, filings in managers.items():
             bases = [r for r in filings if r["SUBMISSIONTYPE"] == "13F-HR" or r.get("AMENDMENTTYPE") == "RESTATEMENT"]
             base = max(bases, key=lambda r: (r["date"], r["accession"])) if bases else None
             if base:
-                selected[base["accession"]] = (cik, base)
+                selected.add(base["accession"])
             else:
                 incomplete.add(cik)
             for r in filings:
@@ -174,7 +175,7 @@ def scan_holders(path, cusips):
                     not base or (r["date"], r["accession"]) > (base["date"], base["accession"])
                 ):
                     if r.get("AMENDMENTTYPE") == "NEW HOLDINGS":
-                        selected[r["accession"]] = (cik, r)
+                        selected.add(r["accession"])
                     else:
                         incomplete.add(cik)
         result = {}

@@ -1472,7 +1472,9 @@ def financials_yf(symbol: str, periods: int = 1, annual: bool = False) -> dict:
         {
             "symbol": symbol,
             "name": info.get("shortName"),
+            "currency": info.get("financialCurrency"),
             "market_cap": info.get("marketCap"),
+            "market_cap_currency": info.get("currency"),
             "pe": info.get("trailingPE"),
             "forward_pe": info.get("forwardPE"),
             "pb": info.get("priceToBook"),
@@ -1549,10 +1551,13 @@ def cmd_financials(args):
                         {
                             key: value
                             for key, value in snapshot.items()
-                            if value is not None and key not in ("warnings", "error")
+                            if key not in ("warnings", "error") and (not snapshot.get("error") or value is not None)
                         }
                     )
                     result["snapshot_available"] = not snapshot.get("error")
+                    result["snapshot_source"] = "yfinance" if result["snapshot_available"] else None
+                    if result["snapshot_available"]:
+                        result["report_date"] = snapshot.get("report_date")
                     if snapshot.get("warnings"):
                         result.setdefault("warnings", []).extend(snapshot["warnings"])
                     return result

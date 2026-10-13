@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -75,10 +76,16 @@ def submissions(cik, forms, cutoff=None):
     rows = filing_rows(data.get("filings", {}).get("recent", {}))
     files = data.get("filings", {}).get("files", [])
     relevant = [f for f in files if not cutoff or f.get("filingTo", "") >= cutoff]
+    relevant.sort(key=lambda f: f.get("filingTo", ""), reverse=True)
     loaded = 0
     # shortcut: at most three older submission shards; expose incomplete coverage when more are needed.
     for file in relevant[:3]:
-        if not cutoff and any(r.get("form") == "13F-HR" for r in rows):
+        latest = max((r.get("reportDate") or "" for r in rows if r.get("form") in forms), default="")
+        if (
+            not cutoff
+            and file.get("filingTo", "") <= latest
+            and any(r.get("form") == "13F-HR" and (r.get("reportDate") or "") == latest for r in rows)
+        ):
             break
         name = file.get("name", "")
         if not re.fullmatch(r"CIK\d{10}-submissions-\d+\.json", name):
@@ -90,7 +97,9 @@ def submissions(cik, forms, cutoff=None):
         loaded += 1
     result = [r for r in rows if r.get("form") in forms and (not cutoff or r.get("filingDate", "") >= cutoff)]
     result.sort(key=lambda r: (r.get("filingDate", ""), r.get("accessionNumber", "")), reverse=True)
-    return data.get("name"), result, bool(cutoff and loaded < len(relevant))
+    earliest_unsearched = cutoff or max((r.get("reportDate") or "" for r in result), default="")
+    incomplete = any(f.get("filingTo", "") >= earliest_unsearched for f in relevant[loaded:])
+    return data.get("name"), result, incomplete
 
 
 def archive_base(cik, filing):
@@ -124,7 +133,7 @@ def numeric(node, path):
     value = node.findtext(path)
     try:
         result = float(value)
-        return result if result == result and abs(result) != float("inf") else None
+        return result if math.isfinite(result) else None
     except (ValueError, TypeError):
         return None
 
@@ -150,11 +159,13 @@ def holdings(args):
             from sec_holders import issuer_holders
 
             return issuer_holders(cik, data)
-    name, filings, _ = submissions(cik, {"13F-HR", "13F-HR/A"})
+    name, filings, incomplete = submissions(cik, {"13F-HR", "13F-HR/A"})
     originals = [r for r in filings if r["form"] == "13F-HR"]
     if not originals:
         raise ValueError("No original 13F-HR in available submission history; issuer CIK is not a holder index")
     filing = max(originals, key=lambda r: (r.get("reportDate", ""), r.get("filingDate", "")))
+    if max((r.get("reportDate") or "" for r in filings), default="") > (filing.get("reportDate") or ""):
+        raise ValueError("Latest 13F report period has amendments but its original is unavailable in searched history")
     amendments = [r for r in filings if r["form"] == "13F-HR/A" and r.get("reportDate") == filing.get("reportDate")]
     base = archive_base(cik, filing)
 
@@ -200,6 +211,7 @@ def holdings(args):
         "filing_deadline_days": 45,
         "data_age_days": (date.today() - date.fromisoformat(filing["reportDate"])).days,
         "realtime": False,
+        "history_truncated": incomplete,
         "coverage": "13F reportable securities only; not a complete portfolio or issuer-to-managers index",
         "amendments": [
             {
@@ -210,8 +222,12 @@ def holdings(args):
             for r in amendments
         ],
     }
+    if incomplete:
+        result["warnings"] = ["Older submission history not fully searched; latest report period may be incomplete"]
     if amendments:
-        result["warnings"] = ["Amendments exist; original holdings returned, review amendment links before comparison"]
+        result.setdefault("warnings", []).append(
+            "Amendments exist; original holdings returned, review amendment links before comparison"
+        )
     return result
 
 

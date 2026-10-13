@@ -211,3 +211,27 @@ def test_mapping_requires_exact_issuer_cik_even_when_name_matches(issuer_source)
     issuer_source([rows[0]], [rows[1]], [rows[2]], issuer_cik="0000000001")
     with pytest.raises(ValueError, match="No verified issuer"):
         sec_edgar.holdings(Namespace(cik="320193", mode="issuer"))
+
+
+def test_bad_mapping_document_does_not_hide_later_verified_mapping(issuer_source, monkeypatch):
+    import requests
+
+    source_reports(issuer_source, report("0000000001-26-000001", "1"))
+    original = requests.get
+    metadata = original("https://data.sec.gov/submissions/CIK0000320193.json").json()
+    metadata["filings"]["recent"] = {
+        "form": ["SCHEDULE 13G", "SCHEDULE 13G"],
+        "accessionNumber": ["0002100119-26-000140", "0002100119-26-000139"],
+        "filingDate": ["2026-05-01", "2026-04-29"],
+        "primaryDocument": ["bad.xml", "primary_doc.xml"],
+    }
+
+    def get(url, **kwargs):
+        if url.endswith("bad.xml"):
+            return SimpleNamespace(raise_for_status=lambda: None, text="not XML")
+        return original(url, **kwargs)
+
+    monkeypatch.setattr(requests, "get", get)
+    result = sec_edgar.holdings(Namespace(cik="320193", mode="issuer"))
+    assert result["cusips"] == ["037833100"]
+    assert result["institution_count"] == 1

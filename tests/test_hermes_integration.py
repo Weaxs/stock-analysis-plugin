@@ -327,3 +327,14 @@ def test_issuer_holdings_mode_is_forwarded(monkeypatch):
     monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
     hermes_tools.get_us_holdings({"cik": "0000320193", "mode": "issuer"})
     assert calls == [("sec_edgar.py", ["holdings", "0000320193", "--mode", "issuer"])]
+
+
+def test_cold_issuer_lookup_has_time_for_valid_200_second_download(monkeypatch):
+    def run(cmd, **kwargs):
+        if kwargs["timeout"] < 200:
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"query_type":"issuer","institutions":[]}', stderr="")
+
+    monkeypatch.setattr(hermes_tools.subprocess, "run", run)
+    result = json.loads(hermes_tools.get_us_holdings({"cik": "320193", "mode": "issuer"}))
+    assert result["query_type"] == "issuer"

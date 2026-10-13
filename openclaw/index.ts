@@ -285,7 +285,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "get_financials",
-      description: "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
+      description: "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。有效Yahoo顶层快照按整组保留，currency为财报币种、market_cap_currency为市值币种、snapshot_source标明来源；缺失值及report_date不混入历史数值/日期。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
       parameters: Type.Object({
         symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         annual: Type.Optional(Type.Boolean({description: "只取年度报告，默认false"})),

@@ -629,7 +629,7 @@ python3 tools/sec_edgar.py insider_trades AAPL --days 90 --top 10
 
 公告类别为 `all/forecast/express/annual/interim/quarterly/reduction/issuance/inquiry/dividend`。默认最近 90 天，最多 500 条；通过巨潮官方股票目录取得 orgId，沪深京统一使用官方 `szse` 查询栏目。业绩快报和问询使用标题关键词查询。第一版返回 PDF 原文链接，不引入 PDF 解析依赖；`total/truncated` 表示供应商匹配数量及截断，查询无结果与请求失败分开。
 
-港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时保留可用的 Yahoo 顶层快照；快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。
+港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。
 
 SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通过环境变量提供。单进程最多每秒 2 次请求（多个并行进程需控制账户/IP 总量不超过 SEC 的每秒 10 次），并缓存 ticker/CIK、申报元数据和 XML 解析结果。13F 返回机构最近季度的原始申报，不是实时完整组合；通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准，2023-01-03 起金额单位为美元，更早申报为千美元。修订文件另列原文链接，避免错误合并补充与重述；发行人 CIK 反查现已通过 `mode=issuer` 支持：从结构化 Schedule 13D/G 校验发行人 CIK、提取 CUSIP，再扫描官方最新已发布 13F 批量窗口。`auto` 默认有当前或已检索历史 13F 时查机构，否则查发行人；Berkshire 等兼具两种身份时显式选择 `issuer`。修订按 `RESTATEMENT` 替换与 `NEW HOLDINGS` 补充重建；无法判断的修订或缺少基础版时总量为 null，并给出 `unresolved_manager_count`。
 
@@ -648,3 +648,5 @@ python3 tools/sec_edgar.py holdings 0001067983 --mode manager
 首次下载当前 SEC 包约 100 MB；ZIP 按周缓存，CUSIP 反查结果按天缓存，流式扫描不解压整个持仓表、不增加数据库依赖。返回 `report_date`（持仓日期）、`filing_window_end`（公开申报窗口截止）、`cusip_evidence`（原文映射依据），不把文件披露窗口当作持仓日期。`mapping_complete=false` 表示最近十份结构化 13D/G 可能未覆盖所有证券类别或 CUSIP 变更；缺映射直接报错，不做名称模糊匹配。`complete_for_mapped_cusips` 仅在该报告期没有未解决申报链时为 true，不代表实时全部股东。期权与本金持仓在 `positions` 保留，`shares` 合计只计无 PUT/CALL 的 SH 股票。不能将跨机构合计当作已去重的全市场持股。
 
 来源格式与实測依据见 [#51 数据研究](docs/research/issue-51-reverse-holdings.md)。
+
+Hermes 的 `get_us_holdings` 子进程预算为 300 秒，允许首次下载批量包；其他 CLI 仍为 120 秒。机构查询优先寻找最新已知报告期的原始 13F：较新修订对应的原始版未找到时明确报错，历史分片仍未完全检索时返回 `history_truncated` 与警告。发行人 CUSIP 查询会跳过不可访问/无效 XML，继续核对后续原文；没有任何可验证映射时才报缺失。

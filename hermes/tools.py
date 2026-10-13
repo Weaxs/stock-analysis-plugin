@@ -23,16 +23,17 @@ def _find_python() -> str:
 def _run(script: str, argv: list) -> str:
     # argv list: 参数原样进子进程，不经 shell（Windows 同理）
     python = _find_python()
+    timeout = 300 if script == "sec_edgar.py" and argv[:1] == ["holdings"] else 120
     try:
         result = subprocess.run(
             [python, TOOLS_DIR / script, *map(str, argv)],
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=120,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "Command timed out after 120s"})
+        return json.dumps({"error": f"Command timed out after {timeout}s"})
     except Exception as e:
         return json.dumps({"error": f"Python command failed ({type(e).__name__})"})
     if result.returncode != 0:

@@ -288,3 +288,97 @@ def test_auto_mode_preserves_archived_manager_without_recent_13f(monkeypatch):
     monkeypatch.setattr("requests.get", get)
     result = sec_edgar.holdings(Namespace(cik="1067983"))
     assert result["holdings"][0]["cusip"] == "037833100"
+
+
+def test_manager_uses_original_for_latest_known_amended_quarter(monkeypatch):
+    def get(url, **kwargs):
+        if url.endswith("CIK0001067983.json"):
+            return response(
+                {
+                    "name": "Manager",
+                    "filings": {
+                        "recent": {
+                            "form": ["13F-HR/A", "13F-HR"],
+                            "accessionNumber": ["0001067983-26-000003", "0001067983-26-000001"],
+                            "filingDate": ["2026-09-01", "2026-08-20"],
+                            "reportDate": ["2026-06-30", "2025-12-31"],
+                            "primaryDocument": ["primary.xml", "primary.xml"],
+                        },
+                        "files": [{"name": "CIK0001067983-submissions-001.json", "filingTo": "2026-08-14"}],
+                    },
+                }
+            )
+        if url.endswith("submissions-001.json"):
+            return response(
+                {
+                    "form": ["13F-HR"],
+                    "accessionNumber": ["0001067983-26-000002"],
+                    "filingDate": ["2026-08-14"],
+                    "reportDate": ["2026-06-30"],
+                    "primaryDocument": ["primary.xml"],
+                }
+            )
+        if url.endswith("index.json"):
+            return response({"directory": {"item": [{"name": "table.xml"}]}})
+        return response(
+            "<informationTable><infoTable><nameOfIssuer>APPLE</nameOfIssuer><cusip>037833100</cusip><value>100</value></infoTable></informationTable>"
+        )
+
+    monkeypatch.setattr("requests.get", get)
+    result = sec_edgar.holdings(Namespace(cik="1067983", mode="manager"))
+    assert result["report_date"] == "2026-06-30"
+    assert result["accession"] == "0001067983-26-000002"
+
+
+def test_missing_original_for_latest_period_does_not_return_old_quarter(monkeypatch):
+    metadata = {
+        "filings": {
+            "recent": {
+                "form": ["13F-HR/A", "13F-HR"],
+                "accessionNumber": ["0001067983-26-000003", "0001067983-26-000001"],
+                "filingDate": ["2026-09-01", "2026-08-20"],
+                "reportDate": ["2026-06-30", "2025-12-31"],
+            },
+            "files": [],
+        }
+    }
+
+    def get(url, **kwargs):
+        assert "submissions" in url, "must not fetch an older quarter as latest"
+        return response(metadata)
+
+    monkeypatch.setattr("requests.get", get)
+    with pytest.raises(ValueError, match="Latest 13F report period"):
+        sec_edgar.holdings(Namespace(cik="1067983", mode="manager"))
+
+
+def test_unsearched_recent_history_is_explicitly_truncated(monkeypatch):
+    files = [{"name": f"CIK0001067983-submissions-00{i}.json", "filingTo": "2026-07-01"} for i in range(1, 5)]
+
+    def get(url, **kwargs):
+        if url.endswith("CIK0001067983.json"):
+            return response(
+                {
+                    "filings": {
+                        "recent": {
+                            "form": ["13F-HR"],
+                            "accessionNumber": ["0001067983-26-000001"],
+                            "filingDate": ["2026-08-14"],
+                            "reportDate": ["2026-06-30"],
+                        },
+                        "files": files,
+                    }
+                }
+            )
+        if "submissions-00" in url:
+            return response({"accessionNumber": []})
+        if url.endswith("index.json"):
+            return response({"directory": {"item": [{"name": "table.xml"}]}})
+        return response(
+            "<informationTable><infoTable><cusip>037833100</cusip><value>100</value></infoTable></informationTable>"
+        )
+
+    monkeypatch.setattr("requests.get", get)
+    result = sec_edgar.holdings(Namespace(cik="1067983", mode="manager"))
+    assert result["history_truncated"] is True
+    assert any("not fully searched" in warning for warning in result["warnings"])
