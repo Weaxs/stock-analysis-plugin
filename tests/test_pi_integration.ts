@@ -3,6 +3,9 @@ import { fileURLToPath } from "url";
 import { createJiti } from "jiti";
 
 const EXPECTED_TOOLS = [
+  "get_announcements",
+  "get_us_holdings",
+  "get_insider_trades",
   "get_valuation_history",
   "get_index_valuation",
   "get_earnings_calendar",
@@ -187,6 +190,15 @@ if (missingSkills.length === 0 && extraSkills.length === 0) {
   console.log(`  OK: ${skillNames.length} skills registered`);
 }
 
+
+// Disclosure tools forward every option unchanged to the shared Python CLI.
+await registeredTools.find(t => t.name === "get_announcements")!.execute!("disclosure", {symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80});
+assert(calls[calls.length - 1].some(x => x.endsWith("value_data.py")) && JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["announcements", "600519", "--category", "inquiry", "--start-date", "2026-01-01", "--end-date", "2026-10-01", "--top", "80"]), "get_announcements: argv mismatch");
+await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("disclosure", {cik: "0001067983"});
+assert(calls[calls.length - 1].some(x => x.endsWith("sec_edgar.py")) && JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["holdings", "0001067983"]), "get_us_holdings: argv mismatch");
+await registeredTools.find(t => t.name === "get_insider_trades")!.execute!("disclosure", {symbol: "AAPL", days: 30, top: 2});
+assert(calls[calls.length - 1].some(x => x.endsWith("sec_edgar.py")) && JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["insider_trades", "AAPL", "--days", "30", "--top", "2"]), "get_insider_trades: argv mismatch");
+
 // --- Summary ---
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
@@ -229,4 +241,7 @@ await registeredTools.find(t => t.name === "get_etf_details")!.execute!("full", 
 assert(calls[calls.length-1].includes("--include-full-holdings"), "full equity report flag must reach CLI");
 await registeredTools.find(t => t.name === "get_etf_details")!.execute!("brief", {symbol: "510300"});
 assert(!calls[calls.length-1].includes("--include-full-holdings"), "full report must be opt-in");
+await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("issuer", {cik: "0000320193", mode: "issuer"});
+assert(JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["holdings", "0000320193", "--mode", "issuer"]), "issuer mode must reach CLI");
+
 if (failures) process.exit(1);

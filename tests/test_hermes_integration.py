@@ -14,6 +14,9 @@ from hermes.schemas import TOOL_SCHEMAS
 
 EXPECTED_TOOLS = sorted(
     [
+        "get_announcements",
+        "get_us_holdings",
+        "get_insider_trades",
         "get_valuation_history",
         "get_index_valuation",
         "get_earnings_calendar",
@@ -202,7 +205,8 @@ class TestRunArgv:
             "run",
             lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom"),
         )
-        assert json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"] == "boom"
+        assert "Python command failed" in json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"]
+        assert "boom" not in hermes_tools.get_quote({"symbol": "X"})
 
         def timeout(cmd, **kwargs):
             raise subprocess.TimeoutExpired(cmd, 120)
@@ -264,3 +268,73 @@ def test_full_disclosed_equities_flag_is_opt_in(monkeypatch):
     assert "--include-full-holdings" in calls[-1]
     hermes_tools.get_etf_details({"symbol": "510300"})
     assert "--include-full-holdings" not in calls[-1]
+
+
+@pytest.mark.parametrize(
+    "name,args,script,argv",
+    [
+        (
+            "get_announcements",
+            {
+                "symbol": "600519",
+                "category": "inquiry",
+                "start_date": "2026-01-01",
+                "end_date": "2026-10-01",
+                "top": 80,
+            },
+            "value_data.py",
+            [
+                "announcements",
+                "600519",
+                "--category",
+                "inquiry",
+                "--start-date",
+                "2026-01-01",
+                "--end-date",
+                "2026-10-01",
+                "--top",
+                80,
+            ],
+        ),
+        ("get_us_holdings", {"cik": "0001067983"}, "sec_edgar.py", ["holdings", "0001067983"]),
+        (
+            "get_insider_trades",
+            {"symbol": "AAPL", "days": 30, "top": 2},
+            "sec_edgar.py",
+            ["insider_trades", "AAPL", "--days", 30, "--top", 2],
+        ),
+    ],
+)
+def test_disclosure_cli_dispatch(monkeypatch, name, args, script, argv):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
+    getattr(hermes_tools, name)(args)
+    assert calls == [(script, argv)]
+
+
+def test_disclosure_error_json_reaches_hermes(monkeypatch):
+    payload = '{"error": "Set SEC_USER_AGENT to your application name and real contact email"}'
+    monkeypatch.setattr(
+        hermes_tools.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout=payload, stderr=""),
+    )
+    assert hermes_tools.get_us_holdings({"cik": "1067983"}) == payload
+
+
+def test_issuer_holdings_mode_is_forwarded(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
+    hermes_tools.get_us_holdings({"cik": "0000320193", "mode": "issuer"})
+    assert calls == [("sec_edgar.py", ["holdings", "0000320193", "--mode", "issuer"])]
+
+
+def test_cold_issuer_lookup_has_time_for_valid_200_second_download(monkeypatch):
+    def run(cmd, **kwargs):
+        if kwargs["timeout"] < 200:
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        return subprocess.CompletedProcess(cmd, 0, stdout='{"query_type":"issuer","institutions":[]}', stderr="")
+
+    monkeypatch.setattr(hermes_tools.subprocess, "run", run)
+    result = json.loads(hermes_tools.get_us_holdings({"cik": "320193", "mode": "issuer"}))
+    assert result["query_type"] == "issuer"

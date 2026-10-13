@@ -18,6 +18,9 @@ ALL_MARKETS = ["A", "HK", "US", "JP", "KR", "TW"]
 
 # tool_name -> {markets: [supported markets], reason: str for unsupported}
 TOOL_MATRIX = {
+    "get_announcements": {"markets": ["A"], "reason": "cninfo A-share disclosures only"},
+    "get_us_holdings": {"markets": ["US"], "reason": "SEC manager holdings or verified issuer-CUSIP reverse lookup"},
+    "get_insider_trades": {"markets": ["US"], "reason": "SEC issuer Form 4 only"},
     "get_valuation_history": {"markets": ["A", "HK"], "reason": "A/HK historical valuation providers only"},
     "get_index_valuation": {"markets": ["A"], "reason": "Chinese index valuation only"},
     "get_earnings_calendar": {

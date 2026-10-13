@@ -22,6 +22,8 @@ gather 工具返回：
 - `stock_info` — 公司基本信息
 - `sector_rankings` — 板块排名
 
+A 股事件原文先调用 `get_announcements`：业绩预告用 `forecast`、快报用 `express`、减持用 `reduction`、增发用 `issuance`、问询及回复用 `inquiry`、分红用 `dividend`，指定 `start_date/end_date`。返回 PDF 链接而非正文；读取原文后再量化，`truncated=true` 时缩小日期范围。
+
 新闻摘要只用于发现事件。金额、期限、合同对手、业绩变化或政策原文必须由公告/原文确认；只有摘要时不做精确量化。
 
 制定短线计划时读取[短线交易决策框架](../stock-analysis/references/short-term-trading.md)，用状态机、相对强弱和风险单位约束事件交易。

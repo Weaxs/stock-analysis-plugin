@@ -23,20 +23,29 @@ def _find_python() -> str:
 def _run(script: str, argv: list) -> str:
     # argv list: 参数原样进子进程，不经 shell（Windows 同理）
     python = _find_python()
+    timeout = 300 if script == "sec_edgar.py" and argv[:1] == ["holdings"] else 120
     try:
         result = subprocess.run(
             [python, TOOLS_DIR / script, *map(str, argv)],
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=120,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "Command timed out after 120s"})
+        return json.dumps({"error": f"Command timed out after {timeout}s"})
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": f"Python command failed ({type(e).__name__})"})
     if result.returncode != 0:
-        return json.dumps({"error": result.stderr.strip() or f"exit code {result.returncode}"})
+        try:
+            payload = json.loads(result.stdout)
+            if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+                return result.stdout
+        except ValueError:
+            pass
+        return json.dumps(
+            {"error": f"Python command failed (exit {result.returncode}); check interpreter/dependencies"}
+        )
     return result.stdout
 
 
@@ -491,4 +500,35 @@ def get_dividends(args: dict, **kwargs) -> str:
             "--top",
             args.get("top", 20),
         ],
+    )
+
+
+def get_announcements(args: dict, **kwargs) -> str:
+    return _run(
+        "value_data.py",
+        [
+            "announcements",
+            args["symbol"],
+            "--category",
+            args.get("category", "all"),
+            "--start-date",
+            args.get("start_date", ""),
+            "--end-date",
+            args.get("end_date", ""),
+            "--top",
+            args.get("top", 50),
+        ],
+    )
+
+
+def get_us_holdings(args: dict, **kwargs) -> str:
+    argv = ["holdings", args["cik"]]
+    if args.get("mode"):
+        argv += ["--mode", args["mode"]]
+    return _run("sec_edgar.py", argv)
+
+
+def get_insider_trades(args: dict, **kwargs) -> str:
+    return _run(
+        "sec_edgar.py", ["insider_trades", args["symbol"], "--days", args.get("days", 90), "--top", args.get("top", 10)]
     )

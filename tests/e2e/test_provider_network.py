@@ -148,7 +148,8 @@ class TestScreenerNetwork:
 
     def test_screen_us_sentiment_path(self):
         """US market: sentiment must still resolve (index + breadth) or degrade to 1.0."""
-        out = _run_cli("screener.py", ["screen", "--market", "US", "--top", "2"], timeout=180)
+        # Snapshot may take 240s, then sentiment up to 30s; match the other screener tests.
+        out = _run_cli("screener.py", ["screen", "--market", "US", "--top", "2"], timeout=300)
         self._skip_if_snapshot_down(out, "US")
         assert isinstance(out, dict) and "candidates" in out, f"unexpected shape: {list(out)}"
         self._assert_sentiment(out)

@@ -32,7 +32,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **57 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
+- **60 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
@@ -93,7 +93,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 57 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
+OpenClaw Gateway 启动后自动加载并注册 60 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -104,7 +104,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 57 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 60 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 详见 [`dsh/README.md`](dsh/README.md)。
 
@@ -147,6 +147,8 @@ pip install -r tools/requirements.txt
 
 | 环境变量 | 用途 |
 |---------|------|
+| `LIXINGER_TOKEN` | 理杏仁可选数据源：指数 PB 与港股非金融公司财务/每日估值（需对应权限） |
+| `SEC_USER_AGENT` | SEC EDGAR 身份声明：应用名称与真实联系邮箱，13F/Form 4 必需 |
 | `TAVILY_API_KEY` | Tavily 搜索 |
 | `BRAVE_API_KEY` | Brave 搜索 |
 | `SERPAPI_KEY` | SerpAPI |
@@ -236,6 +238,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 | 工具 | 说明 |
 |------|------|
+| `get_announcements` | A 股巨潮公告查询：类别/日期范围/标题/原文 PDF 链接 |
+| `get_us_holdings` | SEC 机构组合 / 发行人 CIK 反查机构：精确 CUSIP 映射、季度数据与修订处理（需 SEC_USER_AGENT） |
+| `get_insider_trades` | SEC 股票 ticker/发行人 CIK 的 Form 4 内部人交易、代码和脚注 |
 | `get_valuation_history` | A/HK PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口 |
 | `get_index_valuation` | 中国指数 PE/PB 历史水位；中证官方多年滚动 PE；可选理杏仁补充 PB |
 | `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 已公告业绩审批董事会排期／供应商备选日期 |
@@ -395,7 +400,7 @@ position:
 | `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → 腾讯 → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
 | `.T` 结尾 | `7203.T` | 日股 | yfinance |
-| `.KS` / `.KQ` 结尾 | `005930.KS`, `035720.KQ` | 韩股 | yfinance |
+| `.KS` / `.KQ` 结尾 | `005930.KS`, `036020.KQ` | 韩股 | yfinance |
 | `.TW` / `.TWO` 结尾 | `2330.TW`, `6510.TWO` | 台股 | yfinance |
 
 > 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
@@ -495,20 +500,20 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 57 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 60 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   57 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   60 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×57
+│   └── index.ts                     #   definePluginEntry + registerTool ×60
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×57
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×60
 │
 ├── tools/                           # 共享 Python CLI 工具
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
@@ -610,3 +615,38 @@ CLI 使用：`python tools/screener.py screen --config my_filter.yaml --top 30`
 ## License
 
 MIT
+
+### 公告与港美股研究数据（#49–#51）
+
+```bash
+python3 tools/value_data.py announcements 600519 --category forecast --start-date 2026-01-01 --end-date 2026-10-13 --top 50
+python3 tools/stock_data.py financials 0700.HK --annual --periods 10
+python3 tools/value_data.py valuation_history 0700.HK --years 10
+# SEC_USER_AGENT 必须配置为应用名称 + 你的真实联系邮箱
+python3 tools/sec_edgar.py holdings 0001067983
+python3 tools/sec_edgar.py insider_trades AAPL --days 90 --top 10
+```
+
+公告类别为 `all/forecast/express/annual/interim/quarterly/reduction/issuance/inquiry/dividend`。默认最近 90 天，最多 500 条；通过巨潮官方股票目录取得 orgId，沪深京统一使用官方 `szse` 查询栏目。业绩快报和问询使用标题关键词查询。第一版返回 PDF 原文链接，不引入 PDF 解析依赖；`total/truncated` 表示供应商匹配数量及截断，查询无结果与请求失败分开。
+
+港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。
+
+SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通过环境变量提供。单进程最多每秒 2 次请求（多个并行进程需控制账户/IP 总量不超过 SEC 的每秒 10 次），并缓存 ticker/CIK、申报元数据和 XML 解析结果。13F 返回机构最近季度的原始申报，不是实时完整组合；通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准，2023-01-03 起金额单位为美元，更早申报为千美元。修订文件另列原文链接，避免错误合并补充与重述；发行人 CIK 反查现已通过 `mode=issuer` 支持：从结构化 Schedule 13D/G 校验发行人 CIK、提取 CUSIP，再扫描官方最新已发布 13F 批量窗口。`auto` 默认有当前或已检索历史 13F 时查机构，否则查发行人；Berkshire 等兼具两种身份时显式选择 `issuer`。修订按 `RESTATEMENT` 替换与 `NEW HOLDINGS` 补充重建；无法判断的修订或缺少基础版时总量为 null，并给出 `unresolved_manager_count`。
+
+Form 4 的 `days` 是申报日期窗口，`top=1..20` 限制文件数，返回全部已解析交易。保留多人联报、衍生品、交易代码、脚注、直接/间接持有和修订信息；仅 P/S 标为买/卖，其余行为不推断方向，价格未披露为 null。读取 `truncated/warnings`，原件与修订不要重复计数。风险组合工具 `screen_risk` 仍为 A 股专用。
+
+接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
+
+股票 CIK 反查示例：
+
+```bash
+python3 tools/sec_edgar.py holdings 0000320193 --mode issuer
+# 原机构查询保持可用
+python3 tools/sec_edgar.py holdings 0001067983 --mode manager
+```
+
+首次下载当前 SEC 包约 100 MB；ZIP 按周缓存，CUSIP 反查结果按天缓存，流式扫描不解压整个持仓表、不增加数据库依赖。返回 `report_date`（持仓日期）、`filing_window_end`（公开申报窗口截止）、`cusip_evidence`（原文映射依据），不把文件披露窗口当作持仓日期。`mapping_complete=false` 表示最近十份结构化 13D/G 可能未覆盖所有证券类别或 CUSIP 变更；缺映射直接报错，不做名称模糊匹配。`complete_for_mapped_cusips` 仅在该报告期没有未解决申报链时为 true，不代表实时全部股东。期权与本金持仓在 `positions` 保留，`shares` 合计只计无 PUT/CALL 的 SH 股票。不能将跨机构合计当作已去重的全市场持股。
+
+来源格式与实測依据见 [#51 数据研究](docs/research/issue-51-reverse-holdings.md)。
+
+Hermes 的 `get_us_holdings` 子进程预算为 300 秒，允许首次下载批量包；其他 CLI 仍为 120 秒。机构查询优先寻找最新已知报告期的原始 13F：较新修订对应的原始版未找到时明确报错，历史分片仍未完全检索时返回 `history_truncated` 与警告。发行人 CUSIP 查询会跳过不可访问/无效 XML，继续核对后续原文；没有任何可验证映射时才报缺失。

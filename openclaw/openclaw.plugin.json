@@ -60,7 +60,10 @@
       "get_earnings_calendar",
       "get_shareholder_structure",
       "get_etf_details",
-      "get_dividends"
+      "get_dividends",
+      "get_announcements",
+      "get_us_holdings",
+      "get_insider_trades"
     ]
   },
   "activation": {

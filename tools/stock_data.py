@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -1471,7 +1472,9 @@ def financials_yf(symbol: str, periods: int = 1, annual: bool = False) -> dict:
         {
             "symbol": symbol,
             "name": info.get("shortName"),
+            "currency": info.get("financialCurrency"),
             "market_cap": info.get("marketCap"),
+            "market_cap_currency": info.get("currency"),
             "pe": info.get("trailingPE"),
             "forward_pe": info.get("forwardPE"),
             "pb": info.get("priceToBook"),
@@ -1537,6 +1540,37 @@ def cmd_financials(args):
     annual = getattr(args, "annual", False)
     market = detect_market(args.symbol)
     try:
+        if market == "HK":
+            if os.environ.get("LIXINGER_TOKEN"):
+                try:
+                    from lixinger import financials_hk
+
+                    result = financials_hk(args.symbol, periods, annual)
+                    snapshot = financials_yf(args.symbol, 1, False)
+                    result.update(
+                        {
+                            key: value
+                            for key, value in snapshot.items()
+                            if key not in ("warnings", "error") and (not snapshot.get("error") or value is not None)
+                        }
+                    )
+                    result["snapshot_available"] = not snapshot.get("error")
+                    result["snapshot_source"] = "yfinance" if result["snapshot_available"] else None
+                    if result["snapshot_available"]:
+                        result["report_date"] = snapshot.get("report_date")
+                    if snapshot.get("warnings"):
+                        result.setdefault("warnings", []).extend(snapshot["warnings"])
+                    return result
+                except Exception:
+                    warning = "Lixinger HK unavailable (permissions/company type/provider); existing sources retained"
+            else:
+                warning = "LIXINGER_TOKEN not configured; extended HK financial history unavailable"
+            result = financials_yf(args.symbol, periods, annual)
+            result.setdefault("warnings", []).append(warning)
+            result.setdefault("source", "yfinance/eastmoney")
+            if len(result.get("periods", [])) < periods:
+                result["warnings"].append("Requested HK financial history incomplete")
+            return result
         return (
             financials_a(args.symbol, periods, annual) if market == "A" else financials_yf(args.symbol, periods, annual)
         )

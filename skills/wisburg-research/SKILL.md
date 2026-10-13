@@ -7,6 +7,8 @@ description: 智堡投研检索：查找机构研报、财报公告、电话会�
 
 智堡 MCP 涵盖海外投行研报、国内券商研究、资管报告、央行/政府文献、电话会纪要和财报公告。首先检查这些 MCP 工具是否可用；不可用时直接改用 `search_comprehensive_intel`。
 
+港股估值功课调用 `get_valuation_history(symbol, years=10)`；配置 `LIXINGER_TOKEN` 时优先理杏仁非金融公司每日 PE-TTM/PB，失败回退百度。以返回的实际窗口和正值样本计算分位及 Band，不混接同一指标的不同来源，不将缺失解释为低估。
+
 ## 可用工具
 
 智堡 MCP 提供以下工具（通过 `mcp__wisburg-mcp-server__` 前缀调用）：

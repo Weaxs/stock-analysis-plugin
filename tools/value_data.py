@@ -7,6 +7,7 @@ import os
 import re
 import sys
 from datetime import date, timedelta
+from html import unescape
 from io import StringIO
 from pathlib import Path
 from urllib.parse import unquote
@@ -86,6 +87,36 @@ def valuation_history(args):
     market, symbol = stock_identity(args.symbol)
     if not 1 <= args.years <= 10:
         raise ValueError("valuation history requires an A/HK symbol and years in 1..10")
+    warning = None
+    if market == "HK":
+        if os.environ.get("LIXINGER_TOKEN"):
+            try:
+                from lixinger import hk_data
+
+                rows = hk_data(args.symbol, "fundamental", ["pe_ttm", "pb"])
+                cutoff = (date.today() - pd.DateOffset(years=args.years)).date().isoformat()
+                history = sorted(
+                    [
+                        {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm")), "pb": number(r.get("pb"))}
+                        for r in rows
+                        if iso(r.get("date")) and iso(r.get("date")) >= cutoff
+                    ],
+                    key=lambda r: r["date"],
+                )
+                if not history or not all(any(r[field] is not None for r in history) for field in ("pe_ttm", "pb")):
+                    raise ValueError("Lixinger HK valuation history incomplete")
+                return {
+                    "symbol": args.symbol,
+                    "market": market,
+                    "source": "lixinger",
+                    "requested_years": args.years,
+                    "history": history,
+                    "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
+                }
+            except Exception:
+                warning = "Lixinger HK unavailable; Baidu history retained without mixing sources"
+        else:
+            warning = "LIXINGER_TOKEN not configured; HK history limited to available Baidu data"
     fetch = ak.stock_zh_valuation_baidu if market == "A" else ak.stock_hk_valuation_baidu
     period = "近一年" if args.years == 1 else "近三年" if args.years <= 3 else "近五年" if args.years <= 5 else "近十年"
     if market == "HK" and args.years > 3:
@@ -114,6 +145,8 @@ def valuation_history(args):
     result.update(history=history, metrics={field: valuation_summary(history, field) for field in ("pe_ttm", "pb")})
     if series.get("warnings"):
         result["warnings"] = series["warnings"]
+    if warning:
+        result.setdefault("warnings", []).append(warning)
     return result
 
 
@@ -1311,6 +1344,125 @@ def etf_details(args):
     return result
 
 
+ANNOUNCEMENT_CATEGORIES = {
+    "all": ("", ""),
+    "forecast": ("category_yjygjxz_szsh", "业绩预告"),
+    "express": ("", "业绩快报"),
+    "annual": ("category_ndbg_szsh", ""),
+    "interim": ("category_bndbg_szsh", ""),
+    "quarterly": ("category_yjdbg_szsh;category_sjdbg_szsh", ""),
+    "reduction": ("category_gqbd_szsh", "减持"),
+    "issuance": ("category_zf_szsh", ""),
+    "inquiry": ("", "问询"),
+    "dividend": ("category_qyfpxzcs_szsh", ""),
+}
+
+
+def announcements(args):
+    import requests
+
+    market, symbol = stock_identity(args.symbol)
+    if market != "A" or not 1 <= args.top <= 500 or args.category not in ANNOUNCEMENT_CATEGORIES:
+        raise ValueError("announcements require an A-share stock, valid category and top in 1..500")
+    end = date.fromisoformat(args.end_date) if args.end_date else date.today()
+    start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
+    if start > end:
+        raise ValueError("start_date must not exceed end_date")
+
+    def stock_list():
+        response = requests.get("https://www.cninfo.com.cn/new/data/szse_stock.json", timeout=20)
+        response.raise_for_status()
+        return response.json()["stockList"]
+
+    stocks = cached("cninfo-stocks:A", DAY, stock_list)
+    stock = next((r for r in stocks if r.get("code") == symbol), None)
+    if not stock or not stock.get("orgId"):
+        raise ValueError("stock not found in cninfo A-share directory")
+    category, keyword = ANNOUNCEMENT_CATEGORIES[args.category]
+    payload = {
+        "pageNum": 1,
+        "pageSize": 30,
+        "column": "szse",
+        "tabName": "fulltext",
+        "plate": "",
+        "stock": f"{symbol},{stock['orgId']}",
+        "searchkey": keyword,
+        "category": category,
+        "seDate": f"{start.isoformat()}~{end.isoformat()}",
+        "sortName": "time",
+        "sortType": "desc",
+        "isHLtitle": "false",
+    }
+    rows, seen = [], set()
+    total = 0
+    # shortcut: bounded 17-page query, narrow the date range for more than 500 disclosures.
+    for page in range(1, (args.top + 29) // 30 + 1):
+        payload["pageNum"] = page
+        response = requests.post(
+            "https://www.cninfo.com.cn/new/hisAnnouncement/query",
+            data=payload,
+            headers={"Referer": "https://www.cninfo.com.cn/"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "totalAnnouncement" not in data:
+            raise ValueError("cninfo announcement response unavailable")
+        total = int(data["totalAnnouncement"])
+        items = data.get("announcements") or []
+        for row in items:
+            if row.get("secCode") != symbol:
+                continue
+            stamp = iso(pd.to_datetime(row.get("announcementTime"), unit="ms", utc=True))
+            path = row.get("adjunctUrl") or ""
+            if not stamp or not start.isoformat() <= stamp <= end.isoformat() or path in seen:
+                continue
+            if not re.fullmatch(r"finalpage/[\d-]+/[\w.-]+\.pdf", path, re.I):
+                continue
+            seen.add(path)
+            title = unescape(re.sub(r"<[^>]+>", "", row.get("announcementTitle") or ""))
+            inferred = next(
+                (
+                    key
+                    for key, pattern in [
+                        ("forecast", "业绩预告"),
+                        ("express", "业绩快报"),
+                        ("inquiry", "问询"),
+                        ("reduction", "减持"),
+                        ("interim", "半年度报告"),
+                        ("annual", "年度报告"),
+                        ("quarterly", "季度报告"),
+                        ("issuance", "发行|增发|定增"),
+                        ("dividend", "分红|权益分派|利润分配"),
+                    ]
+                    if re.search(pattern, title)
+                ),
+                "other",
+            )
+            rows.append(
+                {
+                    "title": title,
+                    "date": stamp,
+                    "category": inferred,
+                    "pdf_url": f"https://static.cninfo.com.cn/{path}",
+                }
+            )
+        if not items or page * 30 >= total or len(rows) >= args.top:
+            break
+    return {
+        "symbol": args.symbol,
+        "market": "A",
+        "source": "cninfo",
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "total": total,
+        "announcements": rows[: args.top],
+        "truncated": total > len(rows[: args.top]),
+        "body_extracted": False,
+        "requested_category": args.category,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Value-investing datasets and dated historical context")
     sub = parser.add_subparsers(dest="command")
@@ -1318,6 +1470,12 @@ def main():
         p = sub.add_parser(command)
         p.add_argument("symbol")
         p.add_argument("--years", type=int, default=5)
+    p = sub.add_parser("announcements")
+    p.add_argument("symbol")
+    p.add_argument("--category", choices=list(ANNOUNCEMENT_CATEGORIES), default="all")
+    p.add_argument("--start-date", default="")
+    p.add_argument("--end-date", default="")
+    p.add_argument("--top", type=int, default=50)
     p = sub.add_parser("earnings_calendar")
     p.add_argument("--symbol", default="")
     p.add_argument("--report-date", default="")
@@ -1342,6 +1500,7 @@ def main():
     try:
         args = parser.parse_args()
         handlers = {
+            "announcements": announcements,
             "valuation_history": valuation_history,
             "index_valuation": index_valuation,
             "earnings_calendar": earnings_calendar,
