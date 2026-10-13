@@ -76,6 +76,16 @@ class TestNonEastmoneyFallbacks:
         q = _quote_tencent("600519")
         assert q["price"] and q["name"]
 
+    @pytest.mark.parametrize("symbol", ["00700.HK", "09988.HK"])
+    def test_quote_tencent_hk_live(self, symbol):
+        from tools.stock_data import _quote_tencent
+
+        q = _quote_tencent(symbol)
+        assert q["symbol"] == symbol
+        assert q["price"] > 0 and q["name"]
+        assert q["volume"] >= 0 and q["turnover"] >= 0
+        assert q["market_cap"] > 0
+
     def test_kline_sina_live(self):
         from tools.stock_data import _kline_sina
 

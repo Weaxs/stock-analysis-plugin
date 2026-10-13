@@ -1113,7 +1113,8 @@ class TestNewMarketKlineChain:
 
     @patch("tools.stock_data._quote_finnhub")
     @patch("tools.stock_data._quote_yfinance")
-    def test_hk_quote_still_has_finnhub_fallback(self, mock_yf, mock_fh):
+    @patch("tools.stock_data._quote_tencent", side_effect=ValueError("tencent down"))
+    def test_hk_quote_still_has_finnhub_fallback(self, mock_tx, mock_yf, mock_fh):
         mock_yf.side_effect = ValueError("yf down")
         mock_fh.return_value = {"price": 500}
         assert quote_yf("0700.HK") == {"price": 500}
@@ -2438,6 +2439,109 @@ class TestQuoteTencent:
         mock_get.return_value = MagicMock(content=b'v_pv_none_match="1";')
         with pytest.raises(ValueError, match="no quote"):
             _quote_tencent("999999")
+
+
+@pytest.mark.parametrize("symbol", ["00700.HK", "0700.HK", "700.hk"])
+def test_hk_quote_tencent_fallback_without_keys(monkeypatch, symbol):
+    """Captured HK quote: shares and HKD, unlike A-share lots and ten-thousand CNY."""
+    payload = (
+        'v_r_hk00700="100~腾讯控股~00700~420.800~425.800~421.000~5387197.0~0~0~420.800~0~0~0~0~0~0~0~0~0~'
+        "420.800~0~0~0~0~0~0~0~0~0~5387197.0~2026/10/13 10:55:14~-5.000~-1.17~425.000~419.800~420.800~"
+        "5387197.0~2275850477.730~0~15.37~~0~0~1.22~38261.7127~38261.7127~TENCENT~1.26~658.700~411.000~"
+        "1.20~12.71~0~0~0~0~0~14.11~2.94~0.06~100~-29.12~-1.73~GP~20.41~11.00~-4.32~-2.28~-11.93~"
+        '9092612336.00~9092612336.00~14.56~5.315~422.455~-30.41~HKD~1~30";'
+    ).encode("gbk")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("LONGBRIDGE_APP_KEY", raising=False)
+    with (
+        patch("tools.stock_data._quote_yfinance", side_effect=ValueError("Too Many Requests")),
+        patch("requests.get", return_value=MagicMock(content=payload)) as get,
+        patch("tools.stock_data._quote_finnhub", side_effect=AssertionError("should not need a key")) as fh,
+        patch("tools.stock_data._quote_longbridge", side_effect=AssertionError("should not need a key")) as lb,
+    ):
+        result = quote_yf(symbol)
+    get.assert_called_once_with("https://qt.gtimg.cn/q=r_hk00700", timeout=10)
+    fh.assert_not_called()
+    lb.assert_not_called()
+    assert result == {
+        "symbol": symbol,
+        "name": "腾讯控股",
+        "price": 420.8,
+        "change": -5.0,
+        "change_pct": -1.17,
+        "volume": 5387197.0,
+        "turnover": 2275850477.73,
+        "high": 425.0,
+        "low": 419.8,
+        "open": 421.0,
+        "prev_close": 425.8,
+        "market_cap": pytest.approx(3826171270000.0),
+        "pe": 15.37,
+        "pb": None,  # f[47] is dividend yield in Tencent's official HK_SQT_MAP, not PB
+        "turnover_rate": None,
+        "volume_ratio": None,
+        "amplitude": 1.22,
+    }
+
+
+@pytest.mark.parametrize("symbol", ["00700.HK", "AAPL", "7203.T", "005930.KS", "2330.TW"])
+def test_quote_yfinance_success_does_not_call_tencent(symbol):
+    with (
+        patch("tools.stock_data._quote_yfinance", return_value={"price": 420.2}),
+        patch("requests.get") as get,
+    ):
+        assert quote_yf(symbol) == {"price": 420.2}
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize("symbol", ["AAPL", "7203.T", "005930.KS", "2330.TW"])
+def test_non_hk_quote_failure_does_not_call_tencent(symbol):
+    with (
+        patch("tools.stock_data._quote_yfinance", side_effect=ValueError("yf down")),
+        patch("tools.stock_data._quote_finnhub", side_effect=ValueError("fh down")),
+        patch("tools.stock_data._quote_longbridge", side_effect=ValueError("lb down")),
+        patch("tools.stock_data._quote_alphavantage", side_effect=ValueError("av down")),
+        patch("requests.get") as get,
+        pytest.raises(RuntimeError, match="yf down"),
+    ):
+        quote_yf(symbol)
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["missing", "0", "N/A", "nan", "inf", "http_error"])
+def test_hk_unusable_tencent_quote_continues_to_longbridge(failure):
+    response = MagicMock(content=b'v_pv_none_match="1";')
+    if failure in ("0", "N/A", "nan", "inf"):
+        response.content = _tencent_quote_payload({1: "腾讯控股", 2: "00700", 3: failure}, "hk00700")
+    if failure == "http_error":
+        import requests
+
+        response.raise_for_status.side_effect = requests.HTTPError("503 Service Unavailable")
+    with (
+        patch("tools.stock_data._quote_yfinance", side_effect=ValueError("yf down")),
+        patch("requests.get", return_value=response),
+        patch("tools.stock_data._quote_finnhub", side_effect=ValueError("fh down")),
+        patch("tools.stock_data._quote_longbridge", return_value={"price": 420.2}) as lb,
+    ):
+        assert quote_yf("00700.HK") == {"price": 420.2}
+    lb.assert_called_once_with("00700.HK")
+
+
+@pytest.mark.parametrize("symbol", ["foo.HK", "123456.HK", "700,sh600519.HK"])
+def test_tencent_invalid_hk_symbol_does_not_request(symbol):
+    with patch("requests.get") as get, pytest.raises(ValueError, match="invalid HK symbol"):
+        _quote_tencent(symbol)
+    get.assert_not_called()
+
+
+def test_tencent_short_hk_quote_has_null_optional_fields():
+    fields = ["100", "腾讯控股", "00700", "420.200"] + [""] * 31
+    with patch("requests.get", return_value=MagicMock(content=f'v_hk00700="{"~".join(fields)}";'.encode("gbk"))):
+        result = _quote_tencent("00700.HK")
+    assert result["price"] == 420.2
+    assert result["pb"] is None
+    assert result["market_cap"] is None
+    assert result["turnover"] is None
 
 
 class TestKlineTencent:

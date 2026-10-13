@@ -127,7 +127,7 @@ pip install -r tools/requirements.txt
 | pytdx | A 股 TDX 行情（免费兜底源） |
 | longport | 港股 / 美股 Longbridge SDK |
 
-> A 股行情另有**腾讯（qt.gtimg.cn）/ 新浪（hq.sinajs.cn）**两个免鉴权兜底源，不依赖任何 Python 包（直接 HTTP 调用），用于东财域名不可达的网络环境（境外主机、企业出网限制等）。
+> A 股行情另有**腾讯（qt.gtimg.cn）/ 新浪（hq.sinajs.cn）**两个免鉴权兜底源，直接 HTTP 调用，用于东财域名不可达的网络环境（境外主机、企业出网限制等）。港股实时行情也使用腾讯作为 yfinance 之后的免 key 备用源。
 
 ### 环境变量
 
@@ -392,13 +392,14 @@ position:
 | 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | akshare → tushare → efinance → 腾讯 → 新浪 → pytdx → baostock |
 | 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | akshare（基金接口）→ tushare → efinance → 腾讯 → 新浪 → pytdx → baostock |
 | 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪 |
-| `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → finnhub → longbridge |
+| `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → 腾讯 → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
 | `.T` 结尾 | `7203.T` | 日股 | yfinance |
 | `.KS` / `.KQ` 结尾 | `005930.KS`, `035720.KQ` | 韩股 | yfinance |
 | `.TW` / `.TWO` 结尾 | `2330.TW`, `6510.TWO` | 台股 | yfinance |
 
 > 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
+> 港股腾讯备用源使用 `r_hk` 通道（`hk` 通道延迟约 15 分钟），仅用于实时报价，K 线仍走 yfinance → finnhub → longbridge。支持 `00700.HK` / `0700.HK` / `700.hk`，成交量单位为股，成交额及市值为港元；PB、换手率、量比在此备用源中返回 null，不套用 A 股字段。
 > 裸 6 位代码一律按**个股**处理（`000001` 是平安银行）；指数需带交易所前缀（`sh000001` = 上证指数），显式前缀代码直接走腾讯/新浪（东财源只认裸代码）。
 > **A 股 K 线口径**：股票/ETF 仅接受前复权数据，链路为 akshare → tushare（仅股票）→ efinance → 腾讯（仅 qfq 数据）→ baostock；带前缀的股票/ETF 先去前缀再走同一链路。新浪和 pytdx 的未复权 K 线不参与股票/ETF 容灾。显式指数 `sh000xxx` / `sz399xxx` 保留原始点位，走腾讯 → 新浪 → baostock。上述路由表的完整链路仍适用于实时行情。
 > K 线响应保留原有 JSON 数组，每条 A 股记录新增 `adjusted`：股票/ETF 为 `"qfq"`，指数为 `"none"`。Tushare 日线通过 `adj_factor` 前复权，周/月线使用 `stk_week_month_adj` 的 qfq 字段；复权权限不足、因子缺失或源只返回原始价格时继续切换，所有可用复权源都失败时返回 JSON `error`，不降级到未复权股票价格。Tushare 复权接口需至少 2000 积分，见[复权因子](https://tushare.pro/document/2?doc_id=28)与[复权周/月线](https://tushare.pro/document/2?doc_id=365)。

@@ -32,6 +32,8 @@ python3 scripts/gather.py <symbol>
 
 解读实时行情前先调 `get_trading_phase` 确认该市场当前盘中阶段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），避免把休市时的静态快照当作盘中信号解读。
 
+港股 `get_quote` 自动按 yfinance → 腾讯 → finnhub → longbridge 容灾，腾讯无需 API key，使用 `r_hk` 实时报价通道（`hk` 通道延迟约 15 分钟）。腾讯港股成交量为股，成交额及市值为港元；PB、换手率、量比为 null 时按缺失处理。该备用源只覆盖报价，K 线仍走原链路。
+
 ### 第二步：综合研判
 
 根据获取的数据进行多维度分析：
