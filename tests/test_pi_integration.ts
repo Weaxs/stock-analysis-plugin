@@ -241,4 +241,7 @@ await registeredTools.find(t => t.name === "get_etf_details")!.execute!("full", 
 assert(calls[calls.length-1].includes("--include-full-holdings"), "full equity report flag must reach CLI");
 await registeredTools.find(t => t.name === "get_etf_details")!.execute!("brief", {symbol: "510300"});
 assert(!calls[calls.length-1].includes("--include-full-holdings"), "full report must be opt-in");
+await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("issuer", {cik: "0000320193", mode: "issuer"});
+assert(JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["holdings", "0000320193", "--mode", "issuer"]), "issuer mode must reach CLI");
+
 if (failures) process.exit(1);

@@ -368,6 +368,9 @@ await tools.find(t => t.name === "get_us_holdings")!.execute("disclosure", {cik:
 assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["holdings", "0001067983"]), "get_us_holdings: argv mismatch");
 await tools.find(t => t.name === "get_insider_trades")!.execute("disclosure", {symbol: "AAPL", days: 30, top: 2});
 assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["insider_trades", "AAPL", "--days", "30", "--top", "2"]), "get_insider_trades: argv mismatch");
+await tools.find(t => t.name === "get_us_holdings")!.execute("issuer", {cik: "0000320193", mode: "issuer"});
+assert(JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["holdings", "0000320193", "--mode", "issuer"]), "issuer mode must reach CLI");
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

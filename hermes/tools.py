@@ -521,7 +521,10 @@ def get_announcements(args: dict, **kwargs) -> str:
 
 
 def get_us_holdings(args: dict, **kwargs) -> str:
-    return _run("sec_edgar.py", ["holdings", args["cik"]])
+    argv = ["holdings", args["cik"]]
+    if args.get("mode"):
+        argv += ["--mode", args["mode"]]
+    return _run("sec_edgar.py", argv)
 
 
 def get_insider_trades(args: dict, **kwargs) -> str:

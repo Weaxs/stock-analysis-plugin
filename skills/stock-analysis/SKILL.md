@@ -5,7 +5,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 # 综合股票分析
 
-美股机构研究调用 `get_us_holdings(cik)`，输入机构 CIK（如 Berkshire `0001067983`），不是股票 CIK；返回最近季度原始 13F-HR、CUSIP、申报金额单位和修订链接。13F 通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准且只覆盖可申报证券，不能视作实时完整组合；存在修订时先读修订，不能自动推断持仓变化。当前不支持用股票 CIK 反查全部机构。
+美股机构研究调用 `get_us_holdings(cik, mode=auto)`：有当前或已检索历史 13F 时返回机构组合，否则按发行人 CIK 反查机构；也可显式选 `manager/issuer`，如 Berkshire `0001067983` 查组合、Apple `0000320193` 用 `issuer` 查机构。发行人映射仅使用核对 CIK 的官方 13D/G CUSIP，不做名称猜测；无映射直接报缺失。首次下载约 100 MB，后续缓存。读取 `report_date/filing_window_end/cusip_evidence`，区分持仓日期与披露窗口；修订重述替换、新增补充，缺基础版或未知修订时总量 null，并计入 `unresolved_manager_count`。`mapping_complete=false` 表示不能保证涵盖所有类别或变更，`complete_for_mapped_cusips` 只表示已映射证券在公开数据窗口的申报链完整性，不能称实时全部股东。期权/本金在 `positions` 单列，不能把跨机构持股简单合计成去重比例。机构组合查询仍返回原始 13F 与修订链接，存在修订先读原文，不能自动推断变化。
 
 美股内部人研究调用 `get_insider_trades(symbol, days=90, top=10)`，需设置含真实联系邮箱的 `SEC_USER_AGENT`。`days` 按申报日期过滤，`top` 限制文件数；只将代码 P/S 视作买卖信号，授予、行权、赠与等保留原始代码和脚注，衍生品单列。Form 4/A 与原申报勿重复计算，检查截断和失败提示；`screen_risk` 仍仅支持 A 股。
 

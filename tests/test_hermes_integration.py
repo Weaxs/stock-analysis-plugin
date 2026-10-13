@@ -320,3 +320,10 @@ def test_disclosure_error_json_reaches_hermes(monkeypatch):
         lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout=payload, stderr=""),
     )
     assert hermes_tools.get_us_holdings({"cik": "1067983"}) == payload
+
+
+def test_issuer_holdings_mode_is_forwarded(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
+    hermes_tools.get_us_holdings({"cik": "0000320193", "mode": "issuer"})
+    assert calls == [("sec_edgar.py", ["holdings", "0000320193", "--mode", "issuer"])]

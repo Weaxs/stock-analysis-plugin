@@ -249,3 +249,42 @@ def test_13f_ignores_unrelated_malformed_xml_before_information_table(monkeypatc
     monkeypatch.setattr("requests.get", get)
     result = sec_edgar.holdings(Namespace(cik="1067983"))
     assert result["holdings"][0]["cusip"] == "037833100"
+
+
+def test_auto_mode_preserves_archived_manager_without_recent_13f(monkeypatch):
+    def get(url, **kwargs):
+        if url.endswith("CIK0001067983.json"):
+            return response(
+                {
+                    "name": "Manager",
+                    "filings": {
+                        "recent": {
+                            "form": ["8-K"],
+                            "accessionNumber": ["0001067983-26-000002"],
+                            "filingDate": ["2026-09-01"],
+                            "reportDate": ["2026-06-30"],
+                            "primaryDocument": ["primary.htm"],
+                        },
+                        "files": [{"name": "CIK0001067983-submissions-001.json", "filingTo": "2026-08-14"}],
+                    },
+                }
+            )
+        if url.endswith("submissions-001.json"):
+            return response(
+                {
+                    "form": ["13F-HR"],
+                    "accessionNumber": ["0001067983-26-000001"],
+                    "filingDate": ["2026-08-14"],
+                    "reportDate": ["2026-06-30"],
+                    "primaryDocument": ["primary.xml"],
+                }
+            )
+        if url.endswith("index.json"):
+            return response({"directory": {"item": [{"name": "table.xml"}]}})
+        return response(
+            "<informationTable><infoTable><nameOfIssuer>APPLE</nameOfIssuer><cusip>037833100</cusip><value>100</value></infoTable></informationTable>"
+        )
+
+    monkeypatch.setattr("requests.get", get)
+    result = sec_edgar.holdings(Namespace(cik="1067983"))
+    assert result["holdings"][0]["cusip"] == "037833100"

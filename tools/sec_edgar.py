@@ -27,14 +27,21 @@ def identity():
     return agent
 
 
-def sec_get(url, as_json=True):
+def sec_get(url, as_json=True, stream=False):
     global _last_request
     agent = identity()
     time.sleep(max(0, 0.5 - (time.monotonic() - _last_request)))
     _last_request = time.monotonic()
     try:
-        response = requests.get(url, headers={"User-Agent": agent, "Accept-Encoding": "gzip, deflate"}, timeout=20)
+        response = requests.get(
+            url,
+            headers={"User-Agent": agent, "Accept-Encoding": "gzip, deflate"},
+            timeout=(10, 30) if stream else 20,
+            stream=stream,
+        )
         response.raise_for_status()
+        if stream:
+            return response
         return response.json() if as_json else response.text
     except Exception as exc:
         raise ValueError(
@@ -125,8 +132,24 @@ def numeric(node, path):
 def holdings(args):
     identity()
     if not re.fullmatch(r"\d{1,10}", args.cik) or int(args.cik) == 0:
-        raise ValueError("13F requires an institutional manager CIK (1..10 digits)")
+        raise ValueError("13F requires a manager or issuer CIK (1..10 digits)")
     cik = args.cik.zfill(10)
+    mode = getattr(args, "mode", "auto")
+    if mode not in ("auto", "manager", "issuer"):
+        raise ValueError("mode must be auto, manager or issuer")
+    if mode != "manager":
+        data = cached(f"sec-submissions:{cik}", DAY, lambda: sec_get(f"https://data.sec.gov/submissions/CIK{cik}.json"))
+        if not isinstance(data.get("filings", {}).get("recent"), dict):
+            raise ValueError("SEC submissions metadata unavailable")
+        forms = data["filings"]["recent"].get("form", [])
+        is_manager = any(form in ("13F-HR", "13F-HR/A") for form in forms)
+        if mode == "auto" and not is_manager:
+            _, archived, _ = submissions(cik, {"13F-HR", "13F-HR/A"})
+            is_manager = any(row["form"] == "13F-HR" for row in archived)
+        if mode == "issuer" or not is_manager:
+            from sec_holders import issuer_holders
+
+            return issuer_holders(cik, data)
     name, filings, _ = submissions(cik, {"13F-HR", "13F-HR/A"})
     originals = [r for r in filings if r["form"] == "13F-HR"]
     if not originals:
@@ -163,6 +186,7 @@ def holdings(args):
     result = {
         "cik": cik,
         "manager": name,
+        "query_type": "manager",
         "source": "sec_edgar",
         "report_date": filing.get("reportDate"),
         "filing_date": filing["filingDate"],
@@ -282,6 +306,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("holdings")
     p.add_argument("cik")
+    p.add_argument("--mode", choices=["auto", "manager", "issuer"], default="auto")
     p = sub.add_parser("insider_trades")
     p.add_argument("symbol")
     p.add_argument("--days", type=int, default=90)

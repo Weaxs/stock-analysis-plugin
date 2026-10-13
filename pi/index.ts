@@ -73,21 +73,22 @@ export default (pi: ExtensionAPI) => {
 
   pi.registerTool({
     name: "get_us_holdings",
-    description: "查询机构CIK最近季度原始13F-HR持仓（SEC官方XML），返回CUSIP/股数/申报金额单位/披露日和修订链接。需SEC_USER_AGENT含真实联系邮箱；季度后通常45天内披露（节假日顺延），不是实时完整组合，不支持股票CIK反查全部机构。",
+    description: "查询SEC 13F：mode=auto默认有13F申报时查机构，否则按发行人CIK反查持仓机构；manager/issuer可显式指定。发行人通过官方13D/G精确映射CUSIP，扫描最新已发布13F窗口，处理重述/补充修订，返回实际报告期、截止日及映射覆盖。首次约100MB下载，后续缓存；无映射明确报错，不做名称猜测。需SEC_USER_AGENT含真实联系邮箱，不是实时或全部证券持仓。",
     parameters: {
   "type": "object",
   "properties": {
     "cik": {
       "type": "string",
-      "description": "机构CIK，1..10位数字，如0001067983"
-    }
+      "description": "机构或发行人CIK，1..10位数字，如0001067983/0000320193"
+    },
+    "mode": {"type": "string", "enum": ["auto", "manager", "issuer"], "description": "默认auto；manager查机构组合，issuer反查发行人持仓机构"}
   },
   "required": [
     "cik"
   ]
 },
     async execute(_id, p) {
-      const result = await py("sec_edgar.py", ["holdings", p.cik]);
+      const result = await py("sec_edgar.py", ["holdings", p.cik, ...(p.mode ? ["--mode", p.mode] : [])]);
       return asText(result.stdout);
     },
   });
