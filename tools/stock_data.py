@@ -278,6 +278,7 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
     """Build the quote row from one Tencent `~`-separated payload (already split).
     Shared by _quote_tencent (single) and _tencent_batch_quotes (snapshot leg)."""
     f += [""] * (50 - len(f))  # pad optional tail fields (pe/pb/market_cap/volume_ratio…) on short payloads
+    hk = detect_market(symbol) == "HK"
     turnover = _parse_float(f[37])
     market_cap = _parse_float(f[45])
     return {
@@ -286,36 +287,45 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
         "price": _parse_float(f[3]),
         "change": _parse_float(f[31]),
         "change_pct": _parse_float(f[32]),
-        "volume": _parse_float(f[6]),  # 手, same as akshare
-        "turnover": turnover * 1e4 if turnover is not None else None,
+        "volume": _parse_float(f[6]),  # A: 手; HK: shares, same as yfinance
+        "turnover": turnover * (1 if hk else 1e4) if turnover is not None else None,
         "high": _parse_float(f[33]),
         "low": _parse_float(f[34]),
         "open": _parse_float(f[5]),
         "prev_close": _parse_float(f[4]),
         "market_cap": market_cap * 1e8 if market_cap is not None else None,
         "pe": _parse_float(f[39]),
-        "pb": _parse_float(f[46]),
-        "turnover_rate": _parse_float(f[38]),
-        "volume_ratio": _parse_float(f[49]),
+        # Tencent's HK map labels f[47] DY and f[49] WK52_Low; neither is an A-share ratio.
+        "pb": None if hk else _parse_float(f[46]),
+        "turnover_rate": None if hk else _parse_float(f[38]),
+        "volume_ratio": None if hk else _parse_float(f[49]),
         "amplitude": _parse_float(f[43]),
     }
 
 
 def _quote_tencent(symbol: str) -> dict:
-    """Tencent quote via qt.gtimg.cn. GBK-encoded `v_sh600519="1~name~code~..."` fields.
+    """Tencent A/HK quote via qt.gtimg.cn, with a GBK-encoded `~` payload.
 
-    Units differ from akshare: turnover arrives in 万元 and market_cap in 亿元 —
-    both are normalized to 元 to match the rest of the chain."""
+    A-share turnover is 万元; HK turnover is already HKD. Market cap is 亿元
+    (CNY/HKD respectively); normalize monetary fields to currency units."""
     import requests
 
-    resp = requests.get(f"https://qt.gtimg.cn/q={_cn_code(symbol)}", timeout=10)
+    hk = detect_market(symbol) == "HK"
+    if hk and not re.fullmatch(r"[0-9]{1,5}\.HK", symbol, re.IGNORECASE):
+        raise ValueError(f"invalid HK symbol: {symbol}")
+    # Tencent's hk feed is delayed 15 minutes; r_hk uses the same fields for live quotes.
+    code = f"r_hk{symbol[:-3].zfill(5)}" if hk else _cn_code(symbol)
+    resp = requests.get(f"https://qt.gtimg.cn/q={code}", timeout=10)
+    resp.raise_for_status()
     f = _gbk_var_payload(resp.content).split("~")
     if len(f) < 35 or not f[1]:
         raise ValueError(f"tencent returned no quote for {symbol}")
-    row = _tencent_payload_row(f, symbol)
+    row = _clean_row(_tencent_payload_row(f, symbol))
+    if hk and (row["price"] is None or row["price"] <= 0):
+        raise ValueError(f"tencent returned no quote for {symbol}")
     if normalize_stock_code(symbol)["is_etf"]:
         row["is_etf"] = True
-    return _clean_row(row)
+    return row
 
 
 def _kline_tencent(symbol: str, period: str, count: int) -> list:
@@ -1127,7 +1137,17 @@ def _quote_finnhub(symbol: str) -> dict:
 
 
 def quote_yf(symbol: str) -> dict:
-    """HK/US/JP/KR/TW quote. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
+    """HK adds Tencent after yfinance; US/JP/KR/TW keep their existing failover chains."""
+    if detect_market(symbol) == "HK":
+        return _failover(
+            [
+                ("yfinance", lambda: _quote_yfinance(symbol)),
+                ("tencent", lambda: _quote_tencent(symbol)),
+                ("finnhub", lambda: _quote_finnhub(symbol)),
+                ("longbridge", lambda: _quote_longbridge(symbol)),
+            ],
+            label=f"quote:{symbol}",
+        )
     return _yf_failover(
         symbol,
         lambda: _quote_yfinance(symbol),
