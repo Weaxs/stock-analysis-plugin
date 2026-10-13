@@ -22,6 +22,8 @@ gather 工具返回：
 - `stock_info` — 公司基本信息（行业、板块）
 - `sector_rankings` — 板块排名
 
+需要财务趋势时调用 `get_financials(symbol, annual=true, periods=10)`。港股配置 `LIXINGER_TOKEN` 后优先理杏仁非金融公司财报，按真实 `report_type` 判断年报，保留实际财年末、披露日期、币种；历史 ROE/毛利率/净利率为百分数，顶层 `roe/profit_margin` 延续小数比例。读取 `available_periods/warnings`，缺期不补造。
+
 `financials` 通常只是单期摘要。多期趋势、经营现金流、应收账款或同业估值未返回时，把对应维度标为“数据不足”，不推断趋势、不计分。
 
 ## 分析框架（4 步法）

@@ -173,6 +173,9 @@ if (failures === 0) {
 console.log("Tool execute() smoke test:");
 
 const sampleArgs: Record<string, Record<string, unknown>> = {
+  get_announcements: { symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80 },
+  get_us_holdings: { cik: "0001067983" },
+  get_insider_trades: { symbol: "AAPL", days: 30, top: 2 },
   get_valuation_history: { symbol: "600519" },
   get_index_valuation: { symbol: "000300" },
   get_earnings_calendar: { report_date: "2026-09-30", symbol: "600519" },
@@ -357,6 +360,14 @@ assert(execCalls[execCalls.length-1].args.includes("--include-full-holdings"), "
 await equityTool.execute("brief", {symbol: "510300"});
 assert(!execCalls[execCalls.length-1].args.includes("--include-full-holdings"), "full report must be opt-in");
 
+
+// Disclosure tools forward every option unchanged to the shared Python CLI.
+await tools.find(t => t.name === "get_announcements")!.execute("disclosure", {symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80});
+assert(execCalls[execCalls.length - 1].script.endsWith("value_data.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["announcements", "600519", "--category", "inquiry", "--start-date", "2026-01-01", "--end-date", "2026-10-01", "--top", "80"]), "get_announcements: argv mismatch");
+await tools.find(t => t.name === "get_us_holdings")!.execute("disclosure", {cik: "0001067983"});
+assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["holdings", "0001067983"]), "get_us_holdings: argv mismatch");
+await tools.find(t => t.name === "get_insider_trades")!.execute("disclosure", {symbol: "AAPL", days: 30, top: 2});
+assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["insider_trades", "AAPL", "--days", "30", "--top", "2"]), "get_insider_trades: argv mismatch");
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

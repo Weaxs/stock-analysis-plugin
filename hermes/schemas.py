@@ -1,7 +1,60 @@
 TOOL_SCHEMAS = [
     {
+        "name": "get_announcements",
+        "description": "查询A股巨潮公告标题、日期、类型和原文PDF链接；按日期范围/类别筛选，默认近90天，top=1..500。第一版不提取正文，truncated提示截断。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "A股代码"},
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "all",
+                        "forecast",
+                        "express",
+                        "annual",
+                        "interim",
+                        "quarterly",
+                        "reduction",
+                        "issuance",
+                        "inquiry",
+                        "dividend",
+                    ],
+                    "description": "公告类别，默认all",
+                },
+                "start_date": {"type": "string", "description": "开始日期YYYY-MM-DD，默认结束日期前90天"},
+                "end_date": {"type": "string", "description": "结束日期YYYY-MM-DD，默认今天"},
+                "top": {"type": "number", "description": "最多条数1..500，默认50"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_us_holdings",
+        "description": "查询机构CIK最近季度原始13F-HR持仓（SEC官方XML），返回CUSIP/股数/申报金额单位/披露日和修订链接。需SEC_USER_AGENT含真实联系邮箱；季度后通常45天内披露（节假日顺延），不是实时完整组合，不支持股票CIK反查全部机构。",
+        "parameters": {
+            "type": "object",
+            "properties": {"cik": {"type": "string", "description": "机构CIK，1..10位数字，如0001067983"}},
+            "required": ["cik"],
+        },
+    },
+    {
+        "name": "get_insider_trades",
+        "description": "查询美股发行人近期Form "
+        "4/4-A内部人交易（SEC官方XML），保留人员职务、交易代码、买卖方向、数量、价格、脚注和衍生品标志。需SEC_USER_AGENT含真实联系邮箱；days按申报日期筛选，top限制文件数，修订勿重复计数。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "美股ticker或发行人CIK"},
+                "days": {"type": "number", "description": "申报日期窗口1..365天，默认90"},
+                "top": {"type": "number", "description": "最多解析Form 4文件数1..20，默认10"},
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
         "name": "get_valuation_history",
-        "description": "查询A/HK股票历史 PE-TTM/PB、当前正值分位和10/25/50/75/90分位 Band，返回实际采样区间；亏损估值分位为null。years=1..10，数据按天缓存。",
+        "description": "查询A/HK股票历史PE-TTM/PB、当前正值分位和10/25/50/75/90分位Band，返回实际采样区间；亏损估值分位为null。years=1..10，按天缓存。HK配置LIXINGER_TOKEN时优先理杏仁非金融公司日历史，失败降级百度，不混接来源。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -173,7 +226,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_financials",
-        "description": "获取股票财务摘要及历史趋势，按天缓存。A股返回ROE/毛利率/净利率等；annual=true与periods=10取十年年报，港股年度历史按数据源实际可得期数返回。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
+        "description": "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
         "parameters": {
             "type": "object",
             "properties": {

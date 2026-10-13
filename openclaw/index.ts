@@ -11,8 +11,19 @@ type Executor = (bin: string, argv: string[]) => Promise<string>;
 
 const defaultExecutor: Executor = async (bin, argv) => {
   const exec = promisify(cp.execFile);
-  const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024 });
-  return stdout;
+  try {
+    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024 });
+    return stdout;
+  } catch (error) {
+    const stdout = (error as { stdout?: string }).stdout;
+    try {
+      const data = JSON.parse(stdout ?? "");
+      if (data && typeof data.error === "string") return stdout!;
+    } catch {
+      // A failed subprocess without JSON must not expose stderr or command arguments.
+    }
+    return JSON.stringify({ error: "Python command failed; check interpreter/dependencies" });
+  }
 };
 
 let executor: Executor = defaultExecutor;
@@ -56,8 +67,50 @@ export default definePluginEntry({
     // --- Data Tools ---
 
     api.registerTool({
+      name: "get_announcements",
+      description: "查询A股巨潮公告标题、日期、类型和原文PDF链接；按日期范围/类别筛选，默认近90天，top=1..500。第一版不提取正文，truncated提示截断。",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "A股代码" }),
+        category: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("forecast"), Type.Literal("express"), Type.Literal("annual"), Type.Literal("interim"), Type.Literal("quarterly"), Type.Literal("reduction"), Type.Literal("issuance"), Type.Literal("inquiry"), Type.Literal("dividend")], { description: "公告类别，默认all" })),
+        start_date: Type.Optional(Type.String({ description: "开始日期YYYY-MM-DD，默认结束日期前90天" })),
+        end_date: Type.Optional(Type.String({ description: "结束日期YYYY-MM-DD，默认今天" })),
+        top: Type.Optional(Type.Number({ description: "最多条数1..500，默认50" })),
+      }),
+      async execute(_id, p) {
+        const out = await runPy("value_data.py", ["announcements", p.symbol, "--category", p.category ?? "all", "--start-date", p.start_date ?? "", "--end-date", p.end_date ?? "", "--top", String(p.top ?? 50)]);
+        return asText(out);
+      },
+    });
+
+    api.registerTool({
+      name: "get_us_holdings",
+      description: "查询机构CIK最近季度原始13F-HR持仓（SEC官方XML），返回CUSIP/股数/申报金额单位/披露日和修订链接。需SEC_USER_AGENT含真实联系邮箱；季度后通常45天内披露（节假日顺延），不是实时完整组合，不支持股票CIK反查全部机构。",
+      parameters: Type.Object({
+        cik: Type.String({ description: "机构CIK，1..10位数字，如0001067983" }),
+      }),
+      async execute(_id, p) {
+        const out = await runPy("sec_edgar.py", ["holdings", p.cik]);
+        return asText(out);
+      },
+    });
+
+    api.registerTool({
+      name: "get_insider_trades",
+      description: "查询美股发行人近期Form 4/4-A内部人交易（SEC官方XML），保留人员职务、交易代码、买卖方向、数量、价格、脚注和衍生品标志。需SEC_USER_AGENT含真实联系邮箱；days按申报日期筛选，top限制文件数，修订勿重复计数。",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "美股ticker或发行人CIK" }),
+        days: Type.Optional(Type.Number({ description: "申报日期窗口1..365天，默认90" })),
+        top: Type.Optional(Type.Number({ description: "最多解析Form 4文件数1..20，默认10" })),
+      }),
+      async execute(_id, p) {
+        const out = await runPy("sec_edgar.py", ["insider_trades", p.symbol, "--days", String(p.days ?? 90), "--top", String(p.top ?? 10)]);
+        return asText(out);
+      },
+    });
+
+    api.registerTool({
       name: "get_valuation_history",
-      description: "查询A/HK股票历史 PE-TTM/PB、当前正值分位和10/25/50/75/90分位 Band，返回实际采样区间；亏损估值分位为null。years=1..10，数据按天缓存。",
+      description: "查询A/HK股票历史PE-TTM/PB、当前正值分位和10/25/50/75/90分位Band，返回实际采样区间；亏损估值分位为null。years=1..10，按天缓存。HK配置LIXINGER_TOKEN时优先理杏仁非金融公司日历史，失败降级百度，不混接来源。",
       parameters: Type.Object({
         symbol: Type.String({ description: "A股代码或港股.HK代码" }),
         years: Type.Optional(Type.Number({ description: "历史窗口年数1..10，默认5" })),
@@ -231,7 +284,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "get_financials",
-      description: "获取股票财务摘要及历史趋势，按天缓存。A股返回ROE/毛利率/净利率等；annual=true与periods=10取十年年报，港股年度历史按数据源实际可得期数返回。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
+      description: "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
       parameters: Type.Object({
         symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         annual: Type.Optional(Type.Boolean({description: "只取年度报告，默认false"})),

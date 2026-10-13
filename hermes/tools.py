@@ -34,9 +34,17 @@ def _run(script: str, argv: list) -> str:
     except subprocess.TimeoutExpired:
         return json.dumps({"error": "Command timed out after 120s"})
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": f"Python command failed ({type(e).__name__})"})
     if result.returncode != 0:
-        return json.dumps({"error": result.stderr.strip() or f"exit code {result.returncode}"})
+        try:
+            payload = json.loads(result.stdout)
+            if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+                return result.stdout
+        except ValueError:
+            pass
+        return json.dumps(
+            {"error": f"Python command failed (exit {result.returncode}); check interpreter/dependencies"}
+        )
     return result.stdout
 
 
@@ -491,4 +499,32 @@ def get_dividends(args: dict, **kwargs) -> str:
             "--top",
             args.get("top", 20),
         ],
+    )
+
+
+def get_announcements(args: dict, **kwargs) -> str:
+    return _run(
+        "value_data.py",
+        [
+            "announcements",
+            args["symbol"],
+            "--category",
+            args.get("category", "all"),
+            "--start-date",
+            args.get("start_date", ""),
+            "--end-date",
+            args.get("end_date", ""),
+            "--top",
+            args.get("top", 50),
+        ],
+    )
+
+
+def get_us_holdings(args: dict, **kwargs) -> str:
+    return _run("sec_edgar.py", ["holdings", args["cik"]])
+
+
+def get_insider_trades(args: dict, **kwargs) -> str:
+    return _run(
+        "sec_edgar.py", ["insider_trades", args["symbol"], "--days", args.get("days", 90), "--top", args.get("top", 10)]
     )

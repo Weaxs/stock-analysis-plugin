@@ -126,6 +126,18 @@ console.log("OpenClaw e2e host→python round-trip");
   console.log("  OK: diagnose_data_sources");
 }
 
+// Provider/config errors exit nonzero but carry a safe JSON error on stdout.
+{
+  const previousIdentity = process.env.SEC_USER_AGENT;
+  delete process.env.SEC_USER_AGENT;
+  try {
+    const out = await callTool("get_us_holdings", { cik: "1067983" });
+    assert(typeof out.error === "string" && out.error.includes("SEC_USER_AGENT"), "SEC config error must reach the host as JSON");
+  } finally {
+    if (previousIdentity !== undefined) process.env.SEC_USER_AGENT = previousIdentity;
+  }
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);
