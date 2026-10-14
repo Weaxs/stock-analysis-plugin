@@ -121,6 +121,7 @@ def review_report(client, model, case, report, *, request_context=None, tool_cal
     response = client.chat.completions.create(
         model=model,
         timeout=120,
+        response_format={"type": "json_object"},
         messages=[
             {
                 "role": "system",

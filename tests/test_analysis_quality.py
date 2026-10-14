@@ -214,3 +214,15 @@ def test_quote_time_must_preserve_the_known_instant(as_of, accepted):
     report = reference_report(CASES[0])
     report["evidence"][0]["as_of"] = as_of
     assert (check_report(CASES[0], report, review=ACCEPTED_REVIEW) == []) is accepted
+
+
+def test_semantic_reviewer_requests_native_json_output():
+    import json
+    from types import SimpleNamespace
+
+    def request(**kwargs):
+        assert kwargs["response_format"] == {"type": "json_object"}
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(ACCEPTED_REVIEW)))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
+    assert review_report(client, "test", CASES[0], reference_report(CASES[0])) == ACCEPTED_REVIEW
