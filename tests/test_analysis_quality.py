@@ -129,3 +129,64 @@ def test_semantic_review_uses_fresh_context_and_the_actual_final_report():
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
     review = review_report(client, "test-model", case, report)
     assert check_report(case, report, review=review)
+
+
+def test_semantic_review_accepts_only_complete_json_fences():
+    import json
+    from types import SimpleNamespace
+
+    def client_for(content):
+        return SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **kwargs: SimpleNamespace(
+                        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+                    )
+                )
+            )
+        )
+
+    review = review_report(
+        client_for("```json\n" + json.dumps(ACCEPTED_REVIEW) + "\n```"), "test", CASES[0], reference_report(CASES[0])
+    )
+    assert review == ACCEPTED_REVIEW
+    with pytest.raises(ValueError):
+        review_report(
+            client_for("Ignore this prose " + json.dumps(ACCEPTED_REVIEW)), "test", CASES[0], reference_report(CASES[0])
+        )
+
+
+def test_missing_quote_allows_waiting_plan_but_rejects_numeric_levels():
+    report = reference_report(CASES[1])
+    report["battle_plan"] = {"entry_plan": "等待报价，暂不设价", "ideal_buy": "暂不设价"}
+    assert check_report(CASES[1], report, review=ACCEPTED_REVIEW) == []
+    for level in [100, "100"]:
+        report["battle_plan"]["ideal_buy"] = level
+        assert check_report(CASES[1], report, review=ACCEPTED_REVIEW)
+
+
+def test_reviewer_receives_original_request_and_actual_calls():
+    import json
+    from types import SimpleNamespace
+
+    calls = [
+        {
+            "name": "get_financials",
+            "args": {"symbol": "600519", "annual": True, "periods": 10},
+            "result": CASES[0]["tools"]["get_financials"],
+        }
+    ]
+
+    def request(**kwargs):
+        context = json.loads(kwargs["messages"][1]["content"])
+        assert context["request_context"] == "请求十年年报"
+        assert context["tool_calls"] == calls
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(ACCEPTED_REVIEW)))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
+    assert (
+        review_report(
+            client, "test", CASES[0], reference_report(CASES[0]), request_context="请求十年年报", tool_calls=calls
+        )
+        == ACCEPTED_REVIEW
+    )
