@@ -89,6 +89,11 @@ def check_report(case, report, *, review=None):
         try:
             path = evidence["path"]
             value, source, as_of = evidence_at(case, path)
+            parent_path, _, key = path.rpartition(".")
+            parent = evidence_at(case, parent_path)[0] if parent_path else None
+            if isinstance(parent, dict) and key not in parent:
+                source = source if evidence.get("source") is not None else None
+                as_of = as_of if evidence.get("as_of") is not None else None
             if evidence.get("source") != source or not same_data_time(evidence.get("as_of"), as_of):
                 raise ValueError(
                     f"path={path!r}: source/as_of expected {source!r}/{as_of!r}, "

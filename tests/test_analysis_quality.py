@@ -31,7 +31,7 @@ def reference_report(case):
         value, source, as_of = evidence_at(case, path)
         evidence.append({"path": path, "label": "核对数据", "value": value, "source": source, "as_of": as_of})
     return {
-        "stock_name": "测试股票",
+        "stock_name": case["tools"].get("get_quote", {}).get("name", "未知"),
         "stock_code": "600519",
         "analysis_date": "2026-10-14",
         "sentiment_score": 50,
@@ -280,3 +280,24 @@ def test_formal_review_verdict_must_match_schema(verdict):
     )
     with pytest.raises(ValueError):
         review_report(client, "test", CASES[0], reference_report(CASES[0]))
+
+
+@pytest.mark.parametrize(
+    "source,as_of,accepted",
+    [(None, None, True), ("fixture", None, True), ("invented", None, False), (None, "2030-01-01", False)],
+)
+def test_missing_leaf_may_leave_metadata_unknown_without_fabricating_it(source, as_of, accepted):
+    report = reference_report(CASES[0])
+    report["evidence"].append({"path": "get_quote.fetched_at", "value": None, "source": source, "as_of": as_of})
+    assert (check_report(CASES[0], report, review=ACCEPTED_REVIEW) == []) is accepted
+
+
+def test_existing_evidence_cannot_drop_known_provenance():
+    report = reference_report(CASES[0])
+    report["evidence"][0].update(source=None, as_of=None)
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
+
+
+def test_reference_report_does_not_invent_a_missing_stock_name():
+    case = next(case for case in CASES if case["id"] == "missing")
+    assert reference_report(case)["stock_name"] == "未知"

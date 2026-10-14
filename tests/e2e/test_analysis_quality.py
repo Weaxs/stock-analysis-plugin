@@ -36,7 +36,7 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
     prompt = (
         "按以下 skill 分析600519；这是固定数据测试，以2026-10-14为分析日。"
         "必须先调用所有提供的工具取得证据。只有这些工具可用，无法覆盖skill其余维度时如实标注缺失。"
-        "只输出最终报告 JSON，不加代码围栏。缺失、过期、同口径冲突或样本不足时降低置信度。"
+        "只输出最终报告 JSON，不加代码围栏。股票名称未返回时stock_name填未知，不凭常识补名。缺失、过期、同口径冲突或样本不足时降低置信度。"
         "evidence 必须保留原始数值，不将百分数与小数混为一谈；path 使用工具名加字段路径，数组下标用数字。"
         "path不含调用参数，例如get_financials.periods.0.roe；来源及时间未返回时必须填null，不用工具名或方法名代替来源。"
         "as_of只引用结果中的data_as_of并保留完整时间及其时区；report_date是财报报告期，要单独引用value，不能替代as_of。"
