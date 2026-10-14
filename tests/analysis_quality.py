@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from datetime import datetime
 from pathlib import Path
 
 CASES = json.loads((Path(__file__).parent / "fixtures" / "analysis_quality.json").read_text(encoding="utf-8"))
@@ -20,9 +21,20 @@ def evidence_at(case, path):
     for key in path.split("."):
         if isinstance(value, dict):
             source = value.get("source", value.get("snapshot_source", source))
-            as_of = value.get("data_as_of", value.get("report_date", as_of))
+            as_of = value.get("data_as_of", as_of)
         value = value[int(key)] if isinstance(value, list) else value[key]
     return value, source, as_of
+
+
+def same_data_time(actual, expected):
+    if actual == expected:
+        return True
+    try:
+        actual_time = datetime.fromisoformat(actual.replace("Z", "+00:00"))
+        expected_time = datetime.fromisoformat(expected.replace("Z", "+00:00"))
+        return bool(actual_time.tzinfo and expected_time.tzinfo and actual_time == expected_time)
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def check_report(case, report, *, review=None):
@@ -74,8 +86,11 @@ def check_report(case, report, *, review=None):
         try:
             path = evidence["path"]
             value, source, as_of = evidence_at(case, path)
-            if evidence.get("source") != source or evidence.get("as_of") != as_of:
-                raise ValueError(f"source/as_of must be {source!r}/{as_of!r}")
+            if evidence.get("source") != source or not same_data_time(evidence.get("as_of"), as_of):
+                raise ValueError(
+                    f"path={path!r}: source/as_of expected {source!r}/{as_of!r}, "
+                    f"got {evidence.get('source')!r}/{evidence.get('as_of')!r}"
+                )
             claimed = evidence["value"]
             if isinstance(claimed, float) and not math.isfinite(claimed):
                 raise ValueError("Non-finite claim")

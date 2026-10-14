@@ -39,6 +39,7 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
         "只输出最终报告 JSON，不加代码围栏。缺失、过期、同口径冲突或样本不足时降低置信度。"
         "evidence 必须保留原始数值，不将百分数与小数混为一谈；path 使用工具名加字段路径，数组下标用数字。"
         "path不含调用参数，例如get_financials.periods.0.roe；来源及时间未返回时必须填null，不用工具名或方法名代替来源。"
+        "as_of只引用结果中的data_as_of并保留完整时间及其时区；report_date是财报报告期，要单独引用value，不能替代as_of。"
         "错误证据也保留原始字符串，例如value='provider unavailable'，不能加error:前缀。"
         "只能引用实际返回的字段，未知现价时可以给等待数据的文字计划，不能编造数值价位。"
         "报告需核对所有返回的现价、数据时间、财务报告期及ROE（包括历史periods），有回测时引用total_trades和win_rate。"

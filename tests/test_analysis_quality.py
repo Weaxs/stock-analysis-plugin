@@ -190,3 +190,27 @@ def test_reviewer_receives_original_request_and_actual_calls():
         )
         == ACCEPTED_REVIEW
     )
+
+
+def test_report_period_does_not_invent_financial_data_time():
+    report = reference_report(CASES[0])
+    report["evidence"][1]["as_of"] = None
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW) == []
+    report["evidence"][1]["value"] = "2026-01-01"
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
+
+
+@pytest.mark.parametrize(
+    "as_of,accepted",
+    [
+        ("2026-10-14T07:00:00Z", True),
+        ("2026-10-14", False),
+        ("2026-10-14T15:00:00", False),
+        ("2026-10-14T07:01:00Z", False),
+        (None, False),
+    ],
+)
+def test_quote_time_must_preserve_the_known_instant(as_of, accepted):
+    report = reference_report(CASES[0])
+    report["evidence"][0]["as_of"] = as_of
+    assert (check_report(CASES[0], report, review=ACCEPTED_REVIEW) == []) is accepted

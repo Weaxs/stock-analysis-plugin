@@ -72,7 +72,7 @@ python3 scripts/gather.py <symbol>
 ### 第三步：渲染研报
 
 1. 按 [报告 schema](../../schemas/report_schema.json) 构建结构化报告。
-2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。 来源只使用结果中的 source/snapshot_source，不能用工具名或策略方法名代替；原始字段未提供来源或时间时填 null。证据 path 不含调用参数，例如 get_financials.periods.0.roe；错误 value 保留原始字符串，不加 error: 前缀。请求的期间或文件路径不证明实际数据覆盖期或文件内容，需与实际返回数据区分。
+2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。 来源只使用结果中的 source/snapshot_source，不能用工具名或策略方法名代替；原始字段未提供来源或时间时填 null；as_of 只引用结果中的 data_as_of，保留完整时间及其时区。report_date 是财报报告期，应单独引用 value，不能当成披露日期或 data_as_of。证据 path 不含调用参数，例如 get_financials.periods.0.roe；错误 value 保留原始字符串，不加 error: 前缀。请求的期间或文件路径不证明实际数据覆盖期或文件内容，需与实际返回数据区分。
    同时填写 `data_quality.flags/limitations`：关键数据缺失用 `partial_data`，明确过期行情用 `stale_quote`，同期间同口径来源冲突用 `conflicting_data`，回测/信号样本不足用 `insufficient_sample`。出现这些限制时降低置信度，不能给出 strong_buy；没有有效现价时不编造数值交易计划。数据完整时 flags 为空数组，限制仍按实际模拟条件说明。
 3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。

@@ -173,6 +173,7 @@
             ]
           },
           "as_of": {
+            "description": "仅引用工具结果中的 data_as_of，保留完整时间与时区；缺失为 null。report_date 是报告期，不能代替此时间。",
             "type": [
               "string",
               "null"
