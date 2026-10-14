@@ -5,7 +5,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 # 综合股票分析
 
-美股机构研究调用 `get_us_holdings(cik, mode=auto)`：有当前或已检索历史 13F 时返回机构组合，否则按发行人 CIK 反查机构；也可显式选 `manager/issuer`，如 Berkshire `0001067983` 查组合、Apple `0000320193` 用 `issuer` 查机构。发行人映射仅使用核对 CIK 的官方 13D/G CUSIP，不做名称猜测；无映射直接报缺失。首次下载约 100 MB，后续缓存，Hermes 查询预算 300 秒。读取 `report_date/filing_window_end/cusip_evidence`，区分持仓日期与披露窗口；修订重述替换、新增补充，缺基础版或未知修订时总量 null，并计入 `unresolved_manager_count`。`mapping_complete=false` 表示不能保证涵盖所有类别或变更，`complete_for_mapped_cusips` 只表示已映射证券在公开数据窗口的申报链完整性，不能称实时全部股东。期权/本金在 `positions` 单列，不能把跨机构持股简单合计成去重比例。机构组合查询仍返回最新已知报告期的原始 13F 与修订链接，缺少对应原始版时明确报错；`history_truncated=true` 时不能将旧记录当作已完整检索。存在修订先读原文，不能自动推断变化。
+美股机构研究调用 `get_us_holdings(cik, mode=auto)`：有当前或已检索历史 13F 时返回机构组合，否则按发行人 CIK 反查机构；也可显式选 `manager/issuer`，如 Berkshire `0001067983` 查组合、Apple `0000320193` 用 `issuer` 查机构。发行人映射仅使用核对 CIK 的官方 13D/G CUSIP，不做名称猜测；无映射直接报缺失。首次下载约 100 MB，后续缓存，共享 CLI 查询预算 300 秒（宿主另留退出余量）。读取 `report_date/filing_window_end/cusip_evidence`，区分持仓日期与披露窗口；修订重述替换、新增补充，缺基础版或未知修订时总量 null，并计入 `unresolved_manager_count`。`mapping_complete=false` 表示不能保证涵盖所有类别或变更，`complete_for_mapped_cusips` 只表示已映射证券在公开数据窗口的申报链完整性，不能称实时全部股东。期权/本金在 `positions` 单列，不能把跨机构持股简单合计成去重比例。机构组合查询仍返回最新已知报告期的原始 13F 与修订链接，缺少对应原始版时明确报错；`history_truncated=true` 时不能将旧记录当作已完整检索。存在修订先读原文，不能自动推断变化。
 
 美股内部人研究调用 `get_insider_trades(symbol, days=90, top=10)`，需设置含真实联系邮箱的 `SEC_USER_AGENT`。`days` 按申报日期过滤，`top` 限制文件数；只将代码 P/S 视作买卖信号，授予、行权、赠与等保留原始代码和脚注，衍生品单列。Form 4/A 与原申报勿重复计算，检查截断和失败提示；`screen_risk` 仍仅支持 A 股。
 
@@ -72,18 +72,20 @@ python3 scripts/gather.py <symbol>
 ### 第三步：渲染研报
 
 1. 按 [报告 schema](../../schemas/report_schema.json) 构建结构化报告。
-2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。
+2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。
+   同时填写 `data_quality.flags/limitations`：关键数据缺失用 `partial_data`，明确过期行情用 `stale_quote`，同期间同口径来源冲突用 `conflicting_data`，回测/信号样本不足用 `insufficient_sample`。出现这些限制时降低置信度，不能给出 strong_buy；没有有效现价时不编造数值交易计划。数据完整时 flags 为空数组，限制仍按实际模拟条件说明。
 3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
 
 ## 信号跟踪闭环
 
 - 给出明确买卖建议（方向 + 入场价/目标价/止损价）时，调 `record_signal` 存档，`source` 填触发该建议的 skill 名（如 `stock-analysis`、`dragon-head`）。
-- 后续会话用 `evaluate_signals` 结算到期信号（target_hit/stop_hit/timeout 并回写收益），用 `get_signal_summary` 复盘胜率（可按 source/symbol/status 过滤）。
+- 后续会话用 `evaluate_signals` 结算到期信号（target_hit/stop_hit/timeout 并回写收益），用 `get_signal_summary` 复盘胜率与平均收益（可按 source/symbol/status 过滤），同时报告 `return_samples/sample_warning`，缺失收益不按零计；这些是观察性建议记录，不是扣除成本的策略回测。
 - 信号持久化在本地 JSONL（`$STOCK_SIGNAL_STORE` 或 `~/.stock-analysis/signals.jsonl`）；是否记录由宿主 Agent 决定，不阻塞报告输出。
 
 ## 注意事项
 - `get_kline` 的 A 股股票/ETF 数据为前复权，每条记录 `adjusted="qfq"`；显式指数 `sh000xxx` / `sz399xxx` 为原始点位，`adjusted="none"`。复权数据源全部失败时说明数据缺失，不用未复权价格补算指标或信号。
+- 行情读取 `source/fetched_at/data_as_of`，`fetched_at` 是 UTC 采集时间；`as_of_basis=trading_calendar` 是日历推断，不能声称是提供方报价时间。提供方时间未知时明确说明时效性未核实。
 - 始终提供风险提示
 - 不做绝对化的涨跌预测
 - 建议用户结合自身风险偏好做决策
@@ -112,3 +114,7 @@ python3 scripts/gather.py <symbol>
 get_shareholder_structure 的 northbound 优先使用沪深官方季度总量；northbound_nominee 只是十大股东推断，不能混同。get_etf_details 的 basket 是完整已发布 PCF，对价数量/现金替代规则不是基金实际持仓或NAV权重。HK 股息排行使用 get_dividends(mode=ranking, market=HK)，年度口径不能称 TTM。
 
 实际披露股票持仓可用 get_etf_details(include_full_holdings=true) 获取半年度/年度表；按 as_of 解释，数量为股、市值为人民币元。默认不取大量明细；不是实时全资产组合，不与 PCF 对价数量混同。
+
+信号价格使用原始报价口径。复权 K 线需有记录日的可核实 adjustment_factor，才能换算入场/目标/止损及收益；缺失时 skipped_price_basis 并保持未结算，不得猜测拆股或除权比例。evaluate_signals 返回 complete/deferred/warnings；预算耗尽时已完成结果保存，未处理记录下次重试。当前仅日线 Tushare、Alpha Vantage 提供可验证换算系数，其余复权来源可能跳过结算。
+
+自选股上下文异动检查失败时 anomaly_status=unavailable、anomaly_count=null，并提供 anomaly_error/warnings；summary.partial 不得写成无异常或完整成功。

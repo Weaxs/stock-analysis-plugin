@@ -33,8 +33,8 @@ class TestCalcTemperature:
 
     def test_no_data(self):
         result = calc_temperature(None, None)
-        assert result["score"] == 50
-        assert result["signal"] == "yellow"
+        assert result["score"] is None
+        assert result["signal"] == "unknown"
 
     def test_only_indices(self):
         indices = [{"change_pct": 3.0}]
@@ -74,10 +74,21 @@ class TestSignalToStance:
         assert _signal_to_stance("red") == "defensive"
 
     def test_unknown(self):
-        assert _signal_to_stance("unknown") == "balanced"
+        assert _signal_to_stance("unknown") is None
 
 
 class TestReviewMarket:
+    @patch("tools.market_review._run_tool")
+    @pytest.mark.parametrize("failure", [None, {"error": "provider unavailable"}])
+    def test_missing_market_data_has_no_temperature_or_stance(self, mock_run, failure):
+        mock_run.return_value = failure
+        result = review_market("A")
+        assert result["temperature"] == {"score": None, "level": "unknown", "signal": "unknown"}
+        assert result["strategy_stance"] is None
+        assert "partial_data" in result["data_quality"]["flags"]
+        assert result["warnings"]
+        assert result["data_quality"]["limitations"]
+
     @patch("tools.market_review._run_tool")
     def test_a_market_structure(self, mock_run):
         mock_run.return_value = None
@@ -86,7 +97,7 @@ class TestReviewMarket:
         assert "date" in result
         assert "temperature" in result
         assert "strategy_stance" in result
-        assert result["temperature"]["signal"] == "yellow"
+        assert result["temperature"]["signal"] == "unknown"
 
     @patch("tools.market_review._run_tool")
     def test_hk_market(self, mock_run):
@@ -132,7 +143,7 @@ class TestReviewMarket:
         assert stats_call[0][0][2] == 240  # positional timeout arg
         # the other legs keep the run_tool default
         news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py"]
-        assert news_call[0][0][2] == 30
+        assert news_call[0][0][2] == 120
 
 
 class TestReviewArchive:
@@ -235,3 +246,28 @@ class TestReviewArchive:
         out = json.loads(capsys.readouterr().out)
         assert out["count"] == 1
         assert out["records"][0]["market"] == "A"
+
+
+@pytest.mark.parametrize(
+    "failed_index",
+    [
+        {"code": "sh000001", "name": "上证指数", "note": "data unavailable"},
+        {"code": "sh000001", "change_pct": None},
+    ],
+)
+def test_failed_index_rows_and_empty_sectors_are_reported_as_partial(monkeypatch, failed_index):
+    def fetch(script, args, *a, **kw):
+        if args[0] == "market_stats":
+            return {"up_count": 90, "down_count": 10}
+        if args[0] == "market_indices":
+            return [failed_index]
+        if args[0] == "sector_rankings":
+            return []
+        return {"ok": True}
+
+    monkeypatch.setattr(mr, "_run_tool", fetch)
+    result = review_market("A")
+    assert result["temperature"]["score"] == 90
+    assert "partial_data" in result["data_quality"]["flags"]
+    assert any("indices" in warning for warning in result["warnings"])
+    assert any("sectors" in warning for warning in result["warnings"])

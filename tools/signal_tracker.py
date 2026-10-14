@@ -16,12 +16,13 @@ import math
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import run_tool, utf8_stdio  # noqa: E402
+from _subproc import command_timeout, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
 
 
@@ -234,7 +235,26 @@ def _valid_bar(bar) -> bool:
     )
 
 
+def _price_factor(rec, bars):
+    if all(bar.get("adjusted") == "none" for bar in bars):
+        return 1.0
+    anchor = next((bar for bar in bars if bar["date"] == rec["record_date"]), {})
+    basis = anchor.get("adjusted")
+    factor = anchor.get("adjustment_factor")
+    if (
+        basis in ("qfq", "total_return")
+        and all(bar.get("adjusted") == basis for bar in bars)
+        and not isinstance(factor, bool)
+        and isinstance(factor, (int, float))
+        and math.isfinite(factor)
+        and factor > 0
+    ):
+        return factor
+    return None
+
+
 def cmd_evaluate(args):
+    deadline = time.monotonic() + command_timeout("signal_tracker.py", ["evaluate"]) - 30
     store = _store_path(args)
     try:
         with _store_lock(store):
@@ -244,16 +264,22 @@ def cmd_evaluate(args):
     results = []
     evaluated = closed = 0
     changed = False
+    deferred = 0
     for rec in records:
         if rec.get("status") != "open":
             continue
         if args.symbol and rec.get("symbol") != args.symbol:
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            deferred += 1
             continue
         evaluated += 1
         entry = {"id": rec.get("id"), "symbol": rec.get("symbol")}
         bars = run_tool(
             "stock_data.py",
             ["kline", rec["symbol"], "--period", "daily", "--count", str(_kline_count(rec))],
+            timeout=min(command_timeout("stock_data.py", ["kline"]), remaining),
         )
         if (
             not isinstance(bars, list)
@@ -262,12 +288,24 @@ def cmd_evaluate(args):
             or min(str(b.get("date", ""))[:10] for b in bars) > rec["record_date"]
         ):
             entry.update({"outcome": "skipped_no_data", "return_pct": None, "exit_date": None})
+        elif (factor := _price_factor(rec, bars)) is None:
+            entry.update(
+                outcome="skipped_price_basis",
+                return_pct=None,
+                exit_date=None,
+                warning="Adjusted or unknown prices lack a verified conversion to the original signal prices",
+            )
         else:
-            ev = _evaluate_bars(rec, bars)
+            priced = dict(rec)
+            for key in ("entry_price", "target_price", "stop_price"):
+                if priced.get(key) is not None:
+                    priced[key] *= factor
+            ev = _evaluate_bars(priced, bars)
             if ev is None:
                 entry.update({"outcome": "open", "return_pct": None, "exit_date": None})
             else:
                 outcome, exit_price, exit_date = ev
+                exit_price /= factor
                 ret = round((exit_price - rec["entry_price"]) / rec["entry_price"] * 100, 2)
                 if rec.get("direction") == "sell":
                     ret = -ret
@@ -278,6 +316,7 @@ def cmd_evaluate(args):
                         "exit_price": exit_price,
                         "exit_date": exit_date,
                         "return_pct": ret,
+                        "evaluation_price_basis": {"adjusted": bars[0].get("adjusted"), "factor": factor},
                     }
                 )
                 changed = True
@@ -299,7 +338,15 @@ def cmd_evaluate(args):
                         closed += 1
         except (OSError, ValueError) as e:
             return {"error": str(e)}
-    return {"evaluated": evaluated, "closed": closed, "still_open": evaluated - closed, "results": results}
+    return {
+        "evaluated": evaluated,
+        "closed": closed,
+        "still_open": evaluated + deferred - closed,
+        "results": results,
+        "deferred": deferred,
+        "complete": deferred == 0,
+        "warnings": ["Time budget exhausted; deferred signals remain open for the next evaluation"] if deferred else [],
+    }
 
 
 def cmd_summary(args):
@@ -324,14 +371,27 @@ def cmd_summary(args):
         for o in ("target_hit", "stop_hit", "timeout_profit", "timeout_loss")
     }
     wins = counts["target_hit"] + counts["timeout_profit"]
-    returns = [r["return_pct"] for r in closed_recs if isinstance(r.get("return_pct"), (int, float))]
+    returns = [
+        r["return_pct"]
+        for r in closed_recs
+        if isinstance(r.get("return_pct"), (int, float))
+        and not isinstance(r["return_pct"], bool)
+        and math.isfinite(r["return_pct"])
+    ]
     by_source = {}
     for r in closed_recs:
-        agg = by_source.setdefault(r.get("source") or "unknown", {"closed": 0, "wins": 0})
+        agg = by_source.setdefault(r.get("source") or "unknown", {"closed": 0, "wins": 0, "returns": []})
         agg["closed"] += 1
+        value = r.get("return_pct")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            agg["returns"].append(value)
         if r.get("outcome") in ("target_hit", "timeout_profit"):
             agg["wins"] += 1
     for agg in by_source.values():
+        samples = agg.pop("returns")
+        agg["return_samples"] = len(samples)
+        agg["avg_return_pct"] = round(sum(samples) / len(samples), 2) if samples else None
+        agg["sample_warning"] = "Small observational sample; not strategy validation" if len(samples) < 15 else None
         agg["win_rate"] = round(agg["wins"] / agg["closed"] * 100, 2) if agg["closed"] else None
     return {
         "filters": {"source": args.source, "symbol": args.symbol, "status": args.status},

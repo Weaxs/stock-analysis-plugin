@@ -1,3 +1,4 @@
+import { commandTimeout } from "../scripts/cli-timeout.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as cp from "node:child_process";
 import { promisify } from "node:util";
@@ -19,7 +20,7 @@ type Executor = (bin: string, argv: string[]) => Promise<string>;
 const defaultExecutor: Executor = async (bin, argv) => {
   const exec = promisify(cp.execFile);
   try {
-    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024 });
+    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024, timeout: commandTimeout(argv[0], argv.slice(1)) });
     return stdout;
   } catch (error) {
     const stdout = (error as { stdout?: string }).stdout;
@@ -29,7 +30,7 @@ const defaultExecutor: Executor = async (bin, argv) => {
     } catch {
       // A failed subprocess without JSON must not expose stderr or command arguments.
     }
-    return JSON.stringify({ error: "Python command failed; check interpreter/dependencies" });
+    return JSON.stringify({ error: (error as { killed?: boolean }).killed ? "Python command timed out" : "Python command failed; check interpreter/dependencies" });
   }
 };
 
@@ -358,7 +359,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "get_kline",
       description:
-        "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF。A股股票/ETF返回前复权价格，每条记录 adjusted=qfq；sh000xxx/sz399xxx 指数返回原始点位，adjusted=none。需要历史价格自行计算或画图时用；只问指标用 get_technical_analysis，只问现价用 get_quote",
+        "获取股票K线数据（OHLCV）。支持A股（如600519）、港股（如00700.HK）、美股（如AAPL）、日股（如7203.T）、韩股（如005930.KS）、台股（如2330.TW）及A股ETF。A股股票/ETF返回前复权价格，每条记录 adjusted=qfq；sh000xxx/sz399xxx 指数返回原始点位，adjusted=none。需要历史价格自行计算或画图时用；只问指标用 get_technical_analysis，只问现价用 get_quote。每条记录附 source、UTC fetched_at、data_as_of 和 adjusted；非A股复权口径可能为total_return/qfq/unknown，未知不能假定已复权。部分来源附 adjustment_factor（复权价格/原始价格）；缺失不能猜测换算系数。",
       parameters: {
         symbol: {
           type: "string",
@@ -388,7 +389,7 @@ export function apply(ctx: Context) {
   ctx.tools.register(
     pyTool({
       name: "get_quote",
-      description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价",
+      description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价。返回 source、UTC fetched_at 和提供方 data_as_of（未知为null）；as_of_basis区分提供方时间与交易日历推断，采集时间不等于行情时间。",
       parameters: {
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
       },
@@ -753,7 +754,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "screen_stocks",
       description:
-        "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强。显式筛选条件缺少数据时报error，filters_applied只列实际执行的条件",
+        "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强。显式筛选条件缺少数据时报error，filters_applied只列实际执行的条件。候选factor_coverage列出可用/缺失因子、加权覆盖率和effective_weights；L1与L2均按可用因子归一化后排序，缺失/非有限值不按零分计；L2另返回effective_scores供结合市场系数复算final，按可用因子重归一化，高分不代表数据完整。选股预算按候选数量及采集批次计算，top须为正整数。",
       parameters: {
         market: {
           type: "string",
@@ -778,7 +779,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "run_backtest",
       description:
-        "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算",
+        "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算。默认前日收盘信号、次日开盘成交；YAML simulation.execution=same_close可复现旧假设。execution返回模型、阻止成交次数和未模拟约束；零成交量及带历史限价的一字板不成交。",
       parameters: {
         strategy: { type: "string", required: true, description: "策略YAML文件路径" },
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
@@ -1105,7 +1106,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "get_market_review",
       description:
-        "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议。复盘类需求的首选，无需再分别调指数/统计/板块工具",
+        "大盘复盘 — 获取市场日度复盘数据，包含指数、涨跌统计、板块排名、新闻、市场温度与策略建议。复盘类需求的首选，无需再分别调指数/统计/板块工具。数据不足时温度score及strategy_stance为null，信号unknown；warnings/data_quality说明限制",
       parameters: {
         market: {
           type: "string",
@@ -1202,7 +1203,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "render_stock_report",
       description:
-        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送",
+        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
       parameters: {
         report: {
           type: "object",
@@ -1270,7 +1271,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "build_watchlist_context",
       description:
-        "自选股上下文包 — 对多只股票输出评分/趋势/异常/风险/建议 next_tools 的 agent 友好摘要。宿主 agent 决定如何写日报或深入分析",
+        "自选股上下文包 — 对多只股票输出评分/趋势/异常/风险/建议 next_tools 的 agent 友好摘要。宿主 agent 决定如何写日报或深入分析。异动检查失败时anomaly_status=unavailable、anomaly_count=null，保留anomaly_error/warnings；汇总计入partial",
       parameters: {
         symbols: { type: "string", required: true, description: "逗号分隔的股票代码列表" },
         include_market_review: {
@@ -1383,7 +1384,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "evaluate_signals",
       description:
-        "评估到期信号：拉取记录日之后的日K，判定 target_hit/stop_hit/timeout 并计算收益，回写存储。记录建议用 record_signal，胜率复盘用 get_signal_summary。历史K线未覆盖记录日时skipped_no_data并保持未结算，不能用较新行情代替",
+        "评估到期信号：拉取记录日之后的日K，判定 target_hit/stop_hit/timeout 并计算收益，回写存储。记录建议用 record_signal，胜率复盘用 get_signal_summary。历史K线未覆盖记录日时skipped_no_data并保持未结算，不能用较新行情代替。原始信号价与复权K线须有可核实的adjustment_factor，缺失则skipped_price_basis保持未结算。CLI预算300秒，截止前返回并保存已完成结果；complete/deferred/warnings说明未处理记录，下次可重试",
       parameters: {
         symbol: { type: "string", description: "股票代码（可选，只评估该股的信号）" },
       },
@@ -1400,7 +1401,7 @@ export function apply(ctx: Context) {
     pyTool({
       name: "get_signal_summary",
       description:
-        "信号胜率汇总（可按 source/symbol/status 过滤）：胜率、平均收益、结果分布与明细",
+        "信号胜率汇总（可按 source/symbol/status 过滤）：胜率、平均收益、结果分布与明细。by_source附avg_return_pct、return_samples和sample_warning；仅观察性复盘，样本少不能认定策略有效。",
       parameters: {
         source: { type: "string", description: "按信号来源过滤（可选）" },
         symbol: { type: "string", description: "按股票代码过滤（可选）" },

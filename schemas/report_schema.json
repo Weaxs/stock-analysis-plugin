@@ -124,7 +124,69 @@
         "action_checklist": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "risk_warning": { "type": "array", "items": { "type": "string" } }
+    "risk_warning": { "type": "array", "items": { "type": "string" } },
+    "data_quality": {
+      "type": "object",
+      "properties": {
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "partial_data",
+              "stale_quote",
+              "conflicting_data",
+              "insufficient_sample"
+            ]
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "flags",
+        "limitations"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "原始工具结果路径，例如 get_quote.price"
+          },
+          "label": {
+            "type": "string",
+            "description": "读者可理解的指标名"
+          },
+          "value": {},
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "value",
+          "source",
+          "as_of"
+        ]
+      }
+    }
   },
   "required": ["stock_name", "stock_code", "analysis_date", "sentiment_score",
                 "decision_type", "confidence", "core_conclusion"]

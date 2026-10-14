@@ -18,7 +18,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _subproc import run_tool, utf8_stdio
+from _subproc import command_timeout, run_tool, utf8_stdio
 from market_review import calc_temperature
 from stock_data import compute_market_stats
 
@@ -35,6 +35,8 @@ DEFAULT_FILTERS = {
     "volume_ratio_min": 0.5,
 }
 
+L1_WEIGHTS = {"value": 0.4, "momentum": 0.3, "liquidity": 0.3}
+
 L2_WEIGHTS = {
     "value": 0.15,
     "quality": 0.20,
@@ -48,15 +50,17 @@ L2_WEIGHTS = {
 _INDEX_REGION = {"A": "cn", "HK": "hk", "US": "us"}
 
 
-def _fetch_json(args: list[str], timeout: int = 30) -> dict | list | None:
-    """Run a stock_data.py CLI command and parse its JSON stdout; None on any failure."""
-    return run_tool("stock_data.py", args, timeout=timeout)
+def _fetch_json(args: list[str], timeout: int | None = None) -> dict | list | None:
+    """Fetch JSON with the shared command budget and preserve structured failures."""
+    return run_tool("stock_data.py", args, timeout=timeout, preserve_errors=True)
 
 
 def fetch_snapshot(market: str) -> list:
     # a cold full-market snapshot can exceed 30s (CI runners) — allow longer; with
     # all eastmoney/sina legs timing out, the tencent fallback leg needs ~2min more
-    return _fetch_json(["market_snapshot", "--market", market], timeout=240)
+    return _fetch_json(
+        ["market_snapshot", "--market", market], timeout=command_timeout("stock_data.py", ["market_snapshot"])
+    )
 
 
 def load_config(path: str) -> dict:
@@ -106,9 +110,10 @@ def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
 
 
 def _minmax(s: pd.Series) -> pd.Series:
+    s = s.where(np.isfinite(s))
     mn, mx = s.min(), s.max()
     if mx == mn:
-        return pd.Series(50.0, index=s.index)
+        return pd.Series(50.0, index=s.index).where(s.notna())
     return ((s - mn) / (mx - mn) * 100).clip(0, 100)
 
 
@@ -131,7 +136,7 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
     if "dividend_yield" in df.columns:
         df["dividend_score"] = _minmax(df["dividend_yield"])
         value_parts.append(df["dividend_score"])
-    df["value_score"] = pd.concat(value_parts, axis=1).mean(axis=1) if value_parts else 0.0
+    df["value_score"] = pd.concat(value_parts, axis=1).mean(axis=1) if value_parts else np.nan
 
     # Momentum: higher change_pct and volume_ratio → higher score
     mom_parts = []
@@ -139,7 +144,7 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         mom_parts.append(_minmax(df["change_pct"]))
     if "volume_ratio" in df.columns:
         mom_parts.append(_minmax(df["volume_ratio"]))
-    df["momentum_score"] = sum(mom_parts) / max(len(mom_parts), 1)
+    df["momentum_score"] = pd.concat(mom_parts, axis=1).mean(axis=1) if mom_parts else np.nan
 
     # Liquidity: higher turnover_rate and volume → higher score
     liq_parts = []
@@ -147,9 +152,11 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         liq_parts.append(_minmax(df["turnover_rate"]))
     if "volume" in df.columns:
         liq_parts.append(_minmax(df["volume"].astype(float)))
-    df["liquidity_score"] = sum(liq_parts) / max(len(liq_parts), 1)
+    df["liquidity_score"] = pd.concat(liq_parts, axis=1).mean(axis=1) if liq_parts else np.nan
 
-    df["composite_score"] = 0.4 * df["value_score"] + 0.3 * df["momentum_score"] + 0.3 * df["liquidity_score"]
+    groups = df[[f"{group}_score" for group in L1_WEIGHTS]].rename(columns=lambda name: name.removesuffix("_score"))
+    weights = pd.Series(L1_WEIGHTS)
+    df["composite_score"] = groups.mul(weights).sum(axis=1, min_count=1) / groups.notna().mul(weights).sum(axis=1)
     return df
 
 
@@ -298,8 +305,9 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
         scores = c["scores"]
         # scores are sanitized to None when non-finite; L2 math needs numbers
         components = {
-            "value": scores["value"] or 0,
-            "liquidity": scores["liquidity"] or 0,
+            group: scores[group]
+            for group in ("value", "liquidity")
+            if group in c["factor_coverage"]["available"] and scores[group] is not None
         }
         # momentum is L2-only: candidates without kline factors drop the group and renormalize weights.
         components.update(
@@ -309,11 +317,20 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
             {g: round(groups[g], 1) for g in ("quality", "growth", "moneyflow", "low_volatility") if g in groups}
         )
         total_weight = sum(L2_WEIGHTS[g] for g in components)
-        composite_l2 = sum(L2_WEIGHTS[g] * components[g] for g in components) / total_weight
-        scores["final"] = round(composite_l2 * multiplier, 1)
+        composite_l2 = sum(L2_WEIGHTS[g] * components[g] for g in components) / total_weight if total_weight else None
+        scores["final"] = round(composite_l2 * multiplier, 1) if composite_l2 is not None else None
+        c["factor_coverage"] = {
+            "available": list(components),
+            "missing": [g for g in L2_WEIGHTS if g not in components],
+            "ratio": round(total_weight, 4),
+            "effective_weights": {g: L2_WEIGHTS[g] / total_weight for g in components},
+            "effective_scores": components,
+        }
 
 
 def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict:
+    if isinstance(top, bool) or not isinstance(top, int) or top <= 0:
+        return {"error": "top must be a positive integer", "market": market}
     if config is not None and (not isinstance(config, dict) or not isinstance(config.get("filters", {}), dict)):
         return {"error": "config and filters must be objects", "market": market}
     filters = merge_filters(config)
@@ -443,11 +460,36 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         }
         if "dividend_score" in row:
             entry["scores"]["dividend"] = _finite(round(float(row["dividend_score"]), 1))
+        factor_inputs = {
+            "value": ("pe", "pb", "dividend_yield"),
+            "momentum": ("change_pct", "volume_ratio"),
+            "liquidity": ("turnover_rate", "volume"),
+        }
+        weights = L1_WEIGHTS
+        available = [
+            g
+            for g, fields in factor_inputs.items()
+            if entry["scores"][g] is not None and any(field in entry for field in fields)
+        ]
+        for group in weights:
+            if group not in available:
+                entry["scores"][group] = None
+        if not available:
+            entry["scores"]["composite"] = entry["scores"]["final"] = None
+        total_weight = sum(weights[g] for g in available)
+        entry["factor_coverage"] = {
+            "available": available,
+            "missing": [g for g in weights if g not in available],
+            "ratio": round(total_weight, 4),
+            "effective_weights": {g: weights[g] / total_weight for g in available},
+        }
         candidates.append(entry)
 
     if l2_enabled:
         _apply_l2(candidates, market, multiplier)
-        candidates.sort(key=lambda c: c["scores"]["final"], reverse=True)
+        candidates.sort(
+            key=lambda c: c["scores"]["final"] if c["scores"]["final"] is not None else -float("inf"), reverse=True
+        )
         for rank, entry in enumerate(candidates, 1):
             entry["rank"] = rank
 

@@ -11,8 +11,9 @@ import re
 import sys
 import tempfile
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, WEEK, cached  # noqa: E402
@@ -96,7 +97,7 @@ _STICKY_CHAINS = {
 }
 
 
-def _failover(sources: list, label: str):
+def _failover(sources: list, label: str, evidence: bool = False):
     """Return first truthy result; else raise RuntimeError aggregating each source's error.
 
     Sticky ordering (issue #25): for chains in _STICKY_CHAINS (keyed by the label
@@ -117,6 +118,21 @@ def _failover(sources: list, label: str):
             if result:
                 if chain in _STICKY_CHAINS:
                     _disk_cache_set(f"sticky-{chain}", name)
+                if evidence:
+                    fetched_at = datetime.now(timezone.utc).isoformat()
+                    rows = result if isinstance(result, list) else [result]
+                    for row in rows:
+                        if not isinstance(row, dict) or "error" in row:
+                            continue
+                        row.update(source=name, fetched_at=fetched_at)
+                        row.setdefault("data_as_of", row.get("date"))
+                        if chain.startswith("kline"):
+                            row.setdefault(
+                                "adjusted",
+                                {"yfinance": "total_return", "alphavantage": "total_return", "longbridge": "qfq"}.get(
+                                    name, "unknown"
+                                ),
+                            )
                 return result
         except Exception as e:
             errors.append(f"{name}: {type(e).__name__}: {scrub_secrets(str(e))}")
@@ -277,6 +293,13 @@ def _gbk_var_payload(content: bytes) -> str:
     return content.decode("gbk", errors="replace").split('="', 1)[-1].rsplit('"', 1)[0]
 
 
+def _quote_time(value: str, fmt: str) -> str | None:
+    try:
+        return datetime.strptime(value, fmt).replace(tzinfo=timezone(timedelta(hours=8))).isoformat()
+    except ValueError:
+        return None
+
+
 def _tencent_payload_row(f: list, symbol: str) -> dict:
     """Build the quote row from one Tencent `~`-separated payload (already split).
     Shared by _quote_tencent (single) and _tencent_batch_quotes (snapshot leg)."""
@@ -303,6 +326,7 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
         "turnover_rate": None if hk else _parse_float(f[38]),
         "volume_ratio": None if hk else _parse_float(f[49]),
         "amplitude": _parse_float(f[43]),
+        "data_as_of": _quote_time(f[30], "%Y/%m/%d %H:%M:%S" if hk else "%Y%m%d%H%M%S"),
     }
 
 
@@ -394,6 +418,7 @@ def _quote_sina(symbol: str) -> dict:
         "low": _parse_float(f[5]),
         "open": _parse_float(f[1]),
         "prev_close": prev_close,
+        "data_as_of": _quote_time(f"{f[30]} {f[31]}", "%Y-%m-%d %H:%M:%S") if len(f) > 31 else None,
     }
     if normalize_stock_code(symbol)["is_etf"]:
         row["is_etf"] = True
@@ -463,7 +488,7 @@ def _clean_row(d: dict) -> dict:
 # --------------- kline ---------------
 
 
-def kline_a(symbol: str, period: str, count: int) -> list:
+def kline_a(symbol: str, period: str, count: int, evidence: bool = False) -> list:
     """A-share qfq kline: akshare → tushare → efinance → tencent → baostock.
 
     Explicit indices keep raw points; unadjusted stock sources never enter the chain."""
@@ -483,7 +508,7 @@ def kline_a(symbol: str, period: str, count: int) -> list:
             ("baostock", lambda: _kline_baostock(symbol, period, count)),
         ]
     with socket_timeout(25):
-        return _failover(sources, label=f"kline_a:{symbol}")
+        return _failover(sources, label=f"kline_a:{symbol}", evidence=evidence)
 
 
 def _kline_akshare(symbol: str, period: str, count: int) -> list:
@@ -587,6 +612,7 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
         df = df.merge(factors, on="trade_date", how="left", validate="one_to_one")
         if df["adj_factor"].isna().any():
             raise ValueError("tushare adjustment factors missing for price dates")
+        df["adjustment_factor"] = df["adj_factor"] / latest_factor
         df[prices] = df[prices].mul(df["adj_factor"] / latest_factor, axis=0)
     else:
         df = df.drop(columns=prices, errors="ignore")
@@ -598,7 +624,11 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
     df = df.sort_values("date")
     if "volume" in df.columns:
         df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
-    keep = [c for c in ["date", "open", "high", "low", "close", "volume", "turnover", "change_pct"] if c in df.columns]
+    keep = [
+        c
+        for c in ["date", "open", "high", "low", "close", "volume", "turnover", "change_pct", "adjustment_factor"]
+        if c in df.columns
+    ]
     df = df[keep].tail(count)
     return [_clean_row(r) for r in df.to_dict("records")]
 
@@ -905,6 +935,7 @@ def _kline_alphavantage(symbol: str, period: str, count: int) -> list:
                     "high": float(vals["2. high"]) * factor,
                     "low": float(vals["3. low"]) * factor,
                     "close": adjusted,
+                    "adjustment_factor": factor,
                     "volume": int(vals.get("6. volume", vals.get("5. volume", 0))),
                 }
             )
@@ -947,7 +978,7 @@ def _quote_alphavantage(symbol: str) -> dict:
     )
 
 
-def _yf_failover(symbol: str, yfinance, finnhub, longbridge, alphavantage, label: str):
+def _yf_failover(symbol: str, yfinance, finnhub, longbridge, alphavantage, label: str, evidence: bool = False):
     """Shared HK/US/JP/KR/TW failover chain: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only).
 
     Each provider is a zero-arg callable; callers bind their own symbol/period/count.
@@ -958,10 +989,10 @@ def _yf_failover(symbol: str, yfinance, finnhub, longbridge, alphavantage, label
         sources += [("finnhub", finnhub), ("longbridge", longbridge)]
     if market == "US":
         sources.append(("alphavantage", alphavantage))
-    return _failover(sources, label=label)
+    return _failover(sources, label=label, evidence=evidence)
 
 
-def kline_yf(symbol: str, period: str, count: int) -> list:
+def kline_yf(symbol: str, period: str, count: int, evidence: bool = False) -> list:
     """HK/US/JP/KR/TW kline. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
     return _yf_failover(
         symbol,
@@ -970,6 +1001,7 @@ def kline_yf(symbol: str, period: str, count: int) -> list:
         lambda: _kline_longbridge(symbol, period, count),
         lambda: _kline_alphavantage(symbol, period, count),
         label=f"kline:{symbol}",
+        evidence=evidence,
     )
 
 
@@ -977,12 +1009,12 @@ def cmd_kline(args):
     market = detect_market(args.symbol)
     try:
         if market == "A":
-            data = kline_a(args.symbol, args.period, args.count)
+            data = kline_a(args.symbol, args.period, args.count, evidence=True)
             if data:
                 adjusted = "none" if _A_INDEX_RE.fullmatch(args.symbol) else "qfq"
                 data = [dict(row, adjusted=adjusted) for row in data]
         else:
-            data = kline_yf(args.symbol, args.period, args.count)
+            data = kline_yf(args.symbol, args.period, args.count, evidence=True)
         return data
     except Exception as e:
         return {"error": str(e)}
@@ -991,7 +1023,7 @@ def cmd_kline(args):
 # --------------- quote ---------------
 
 
-def quote_a(symbol: str) -> dict:
+def quote_a(symbol: str, evidence: bool = False) -> dict:
     """A-share quote with failover: akshare → tushare → efinance → tencent → sina → pytdx. ETFs try fund spot first.
 
     Explicitly-prefixed symbols (sh000001, typically indices) go straight to
@@ -1001,7 +1033,7 @@ def quote_a(symbol: str) -> dict:
     if _A_PREFIXED_RE.fullmatch(symbol):
         sources = [("tencent", lambda: _quote_tencent(symbol)), ("sina", lambda: _quote_sina(symbol))]
         with socket_timeout(25):
-            return _failover(sources, label=f"quote_a:{symbol}")
+            return _failover(sources, label=f"quote_a:{symbol}", evidence=evidence)
     is_etf = normalize_stock_code(symbol)["is_etf"]
     sources = []
     if is_etf:
@@ -1016,7 +1048,7 @@ def quote_a(symbol: str) -> dict:
     ]
     chain = "quote_a_etf" if is_etf else "quote_a"
     with socket_timeout(25):
-        return _failover(sources, label=f"{chain}:{symbol}")
+        return _failover(sources, label=f"{chain}:{symbol}", evidence=evidence)
 
 
 def _quote_akshare_etf(symbol: str) -> dict:
@@ -1099,9 +1131,15 @@ def _quote_yfinance(symbol: str) -> dict:
     info = t.info
     if not info or "regularMarketPrice" not in info:
         raise ValueError(f"No data for {symbol}")
+    quoted_at = None
+    timestamp = info.get("regularMarketTime")
+    if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and timestamp > 0:
+        with contextlib.suppress(ValueError, OverflowError, OSError):
+            quoted_at = datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
     return _clean_row(
         {
             "symbol": symbol,
+            "data_as_of": quoted_at,
             "name": info.get("shortName"),
             "price": info.get("regularMarketPrice") or info.get("currentPrice"),
             "change": info.get("regularMarketChange"),
@@ -1144,7 +1182,7 @@ def _quote_finnhub(symbol: str) -> dict:
     )
 
 
-def quote_yf(symbol: str) -> dict:
+def quote_yf(symbol: str, evidence: bool = False) -> dict:
     """HK adds Tencent after yfinance; US/JP/KR/TW keep their existing failover chains."""
     if detect_market(symbol) == "HK":
         return _failover(
@@ -1155,6 +1193,7 @@ def quote_yf(symbol: str) -> dict:
                 ("longbridge", lambda: _quote_longbridge(symbol)),
             ],
             label=f"quote:{symbol}",
+            evidence=evidence,
         )
     return _yf_failover(
         symbol,
@@ -1163,6 +1202,7 @@ def quote_yf(symbol: str) -> dict:
         lambda: _quote_longbridge(symbol),
         lambda: _quote_alphavantage(symbol),
         label=f"quote:{symbol}",
+        evidence=evidence,
     )
 
 
@@ -1192,6 +1232,7 @@ def _quote_stale_marker(market: str):
     as_of = prev[0]
     return {
         "as_of": as_of,
+        "as_of_basis": "trading_calendar",
         "stale": True,
         "note": f"market is not in a live session; quote is the last completed trading day {as_of}'s close",
     }
@@ -1200,13 +1241,32 @@ def _quote_stale_marker(market: str):
 def cmd_quote(args):
     market = detect_market(args.symbol)
     try:
-        result = quote_a(args.symbol) if market == "A" else quote_yf(args.symbol)
+        result = quote_a(args.symbol, evidence=True) if market == "A" else quote_yf(args.symbol, evidence=True)
     except Exception as e:
         return {"error": str(e)}
     if isinstance(result, dict) and "error" not in result:
         marker = _quote_stale_marker(market)
         if marker:
             result.update(marker)
+        result.setdefault("data_as_of", None)
+        if result["data_as_of"]:
+            result["as_of"] = result["data_as_of"]
+            result["as_of_basis"] = "provider"
+            if marker:
+                result["calendar_as_of"] = marker["as_of"]
+                result["note"] = (
+                    "Quote time is supplied by the provider; the market calendar is a separate freshness hint"
+                )
+            try:
+                from trading_calendar import market_phase
+
+                info = market_phase("CN" if market == "A" else market)
+                quoted = datetime.fromisoformat(result["data_as_of"])
+                if quoted.tzinfo and quoted.astimezone(ZoneInfo(info["timezone"])).date().isoformat() < info["date"]:
+                    result["stale"] = True
+                    result["note"] = "Provider quote predates the current market date"
+            except (ValueError, KeyError, TypeError, OSError):
+                pass  # Calendar/timestamp unavailable: retain the provider evidence without guessing.
     return result
 
 

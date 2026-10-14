@@ -42,6 +42,7 @@ exit:
   take_profit: 0.15           # 止盈比例
 
 simulation:
+  execution: next_open        # 默认：前日收盘信号，次日开盘成交
   slippage: 0.001             # 滑点（买卖双边），默认 0.001
   commission: 0.00025         # 佣金（买卖双边，券商自定；A股常见万2.5），默认 0.0015
   stamp_tax: 0.0005           # 印花税（仅卖出收；A股 0.05%，其他市场按当下实际费率，无则省略），默认 0
@@ -69,6 +70,10 @@ python3 tools/backtest.py run <path.yaml> <symbol> --start <date> --end <date>
 - 前两个为位置参数，依次为：策略 YAML 文件路径、股票代码
 - `--start` / `--end`：回测时间范围（可选，默认近一年）
 - 初始资金默认 100 万，可用 `--capital` 调整
+
+默认 `simulation.execution=next_open`：信号在前一交易日收盘确定，下一有效交易日按开盘价加滑点成交；交易同时保留 `signal_date` 与实际 `date`。最后一天新信号没有后续开盘时不能成交。需要复现旧结果时显式使用 `same_close`，并说明它按信号日收盘成交，可能高估可执行收益。零/缺失成交量（已有 volume 字段时）阻止成交；一字涨跌停仅在输入提供同口径历史 `limit_up/limit_down` 时保守阻止，不猜 ST、IPO 或 ETF 限价。
+
+读取 `execution.model/blocked_orders/unfilled_order/limitations` 并说明未成交情况。止损、止盈和移动止损均是收盘信号，不承诺盘中按阈值成交；次日跳空按实际开盘价计算。没有历史限价数据时，不能声称已验证涨跌停可成交性。
 
 ### 第三步：分析结果
 

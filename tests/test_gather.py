@@ -31,8 +31,7 @@ class TestParseJson:
 
 
 class TestRun:
-    """gather's _run is _subproc.run_tool pinned to raw stdout + a 60s default
-    timeout (helper internals are covered in tests/test_subproc.py)."""
+    """Gather relays raw JSON and uses the shared command timeout."""
 
     @patch("tools._subproc.subprocess.run")
     def test_raw_stdout_and_default_timeout(self, mock_run):
@@ -41,7 +40,7 @@ class TestRun:
         cmd = mock_run.call_args[0][0]
         assert cmd[1].endswith("stock_data.py")
         assert cmd[2:] == ["quote", "600519"]
-        assert mock_run.call_args.kwargs["timeout"] == 60
+        assert mock_run.call_args.kwargs["timeout"] == 120
 
     @patch("tools._subproc.subprocess.run")
     def test_custom_timeout(self, mock_run):
@@ -245,7 +244,7 @@ class TestGatherScreen:
     def test_default_params(self, mock_run):
         mock_run.return_value = '[{"code": "600519"}]'
         result = gather_screen()
-        mock_run.assert_called_once_with("screener.py", ["screen", "--market", "A", "--top", "20"], timeout=120)
+        mock_run.assert_called_once_with("screener.py", ["screen", "--market", "A", "--top", "20"], timeout=1830)
         assert result == {"screen_results": [{"code": "600519"}]}
 
     @patch("tools.gather._run")
@@ -255,7 +254,7 @@ class TestGatherScreen:
         mock_run.assert_called_once_with(
             "screener.py",
             ["screen", "--market", "US", "--top", "10", "--config", "/path/to/config.json"],
-            timeout=120,
+            timeout=1110,
         )
 
     @patch("tools.gather._run")
@@ -360,3 +359,15 @@ class TestMainFundamental:
         with patch("sys.argv", ["gather.py", "fundamental", "600519"]):
             tools.gather.main()
         mock_gather.assert_called_once_with("600519")
+
+
+def test_gather_can_receive_slow_successful_provider_chain():
+    import subprocess
+
+    def run(command, **kwargs):
+        if kwargs["timeout"] < 90:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return MagicMock(returncode=0, stdout='{"price":100}')
+
+    with patch("tools._subproc.subprocess.run", side_effect=run):
+        assert json.loads(_run("stock_data.py", ["quote", "600519"])) == {"price": 100}

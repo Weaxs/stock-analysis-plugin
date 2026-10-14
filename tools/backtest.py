@@ -70,9 +70,9 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
         d1 = datetime.strptime(end, "%Y-%m-%d")
         count = max((datetime.now() - d0).days + 60, (d1 - d0).days + 60, 300)
 
-    # run_tool gives venv-python + a bounded timeout + None on any failure
-    # (non-zero exit, empty/invalid stdout); callers turn that into clean JSON.
-    data = run_tool("stock_data.py", ["kline", symbol, "--period", "daily", "--count", str(count)])
+    data = run_tool(
+        "stock_data.py", ["kline", symbol, "--period", "daily", "--count", str(count)], preserve_errors=True
+    )
     if data is None:
         raise RuntimeError(f"Failed to fetch kline for {symbol}")
     if isinstance(data, dict) and "error" in data:
@@ -191,7 +191,7 @@ def get_indicator(
 
 
 def check_condition(series: pd.Series, operator: str, value: float, idx: int) -> bool:
-    if idx < 1 or idx >= len(series):
+    if idx < 0 or idx >= len(series):
         return False
     cur = float(series.iloc[idx])
     ops = {
@@ -203,6 +203,8 @@ def check_condition(series: pd.Series, operator: str, value: float, idx: int) ->
     }
     if operator in ops:
         return ops[operator]
+    if idx == 0:
+        return False
     prev = float(series.iloc[idx - 1])
     if operator == "cross_above":
         return prev <= value and cur > value
@@ -256,9 +258,17 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
         raise ValueError("capital must be finite and positive")
     if not np.isfinite(df["close"]).all() or (df["close"] <= 0).any():
         raise ValueError("backtest prices must be finite and positive")
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("backtest dates must be valid, unique and increasing")
     market = detect_market(symbol)
     lot_size = 100 if market == "A" else 1
     sim_cfg = strategy.get("simulation", {})
+    execution = sim_cfg.get("execution", "next_open")
+    if execution not in ("next_open", "same_close"):
+        raise ValueError("simulation.execution must be next_open or same_close")
+    if execution == "next_open" and ("open" not in df or not np.isfinite(df["open"]).all() or (df["open"] <= 0).any()):
+        raise ValueError("next_open requires finite positive open prices")
     slippage = float(sim_cfg.get("slippage", 0.001))
     commission = float(sim_cfg.get("commission", 0.0015))
     tax_raw = sim_cfg.get("stamp_tax")  # sell-side only (e.g. A股印花税); absent/empty = 0 (disabled)
@@ -293,19 +303,43 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
     trade_id = 0
     commission_paid = 0.0
     stamp_tax_paid = 0.0
+    pending = None
+    blocked_orders = 0
+
+    def tradable(row, side):
+        if "volume" in row and (not pd.notna(row["volume"]) or row["volume"] <= 0):
+            return False
+        limit = row.get("limit_up" if side == "buy" else "limit_down")
+        # shortcut: limits need supplied historical prices; add verified limit series before enforcing provider bars.
+        return not (
+            limit is not None
+            and pd.notna(limit)
+            and row.get("high") == row.get("low")
+            and abs(float(row["high"]) - float(limit)) < 0.005
+        )
 
     for i in range(1, len(df)):
         row = df.iloc[i]
         date_str = str(row["date"].date()) if hasattr(row["date"], "date") else str(row["date"])
-        price = float(row["close"])
+        signal_idx = i if execution == "same_close" else i - 1
+        price = float(df["close"].iloc[signal_idx])
+        fill_price = float(row["close"] if execution == "same_close" else row["open"])
+        signal_date = str(pd.Timestamp(df["date"].iloc[signal_idx]).date())
 
         if holding is None:
-            hit, reason = evaluate_conditions(df, entry_conditions, entry_logic, i, cache)
-            if hit:
-                buy_price = price * (1 + slippage)
+            hit, reason = evaluate_conditions(df, entry_conditions, entry_logic, signal_idx, cache)
+            if pending:
+                hit, reason, signal_date = True, pending[0], pending[1]
+            if hit and not tradable(row, "buy"):
+                pending = (reason, signal_date)
+                blocked_orders += 1
+            if hit and tradable(row, "buy"):
+                pending = None
+                buy_price = fill_price * (1 + slippage)
                 buy_amount = cash * size_frac
                 shares = int(buy_amount / (buy_price * (1 + commission)) / lot_size) * lot_size
                 if shares <= 0:
+                    equity_curve.append({"date": date_str, "equity": round(cash, 2)})
                     continue
                 cost = shares * buy_price * (1 + commission)
                 commission_paid += shares * buy_price * commission
@@ -317,13 +351,14 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                     "buy_price": round(buy_price, 4),
                     "shares": shares,
                     "cost": cost,
-                    "peak_close": price,
+                    "peak_close": float(row["close"]),
                 }
                 trades.append(
                     {
                         "id": trade_id,
                         "type": "buy",
                         "date": date_str,
+                        "signal_date": signal_date,
                         "price": round(buy_price, 2),
                         "shares": shares,
                         "amount": round(cost, 2),
@@ -348,10 +383,16 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
             elif pnl_pct >= take_profit:
                 sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
             elif exit_conditions:
-                sell, reason = evaluate_conditions(df, exit_conditions, exit_logic, i, cache)
+                sell, reason = evaluate_conditions(df, exit_conditions, exit_logic, signal_idx, cache)
 
-            if sell:
-                sell_price = price * (1 - slippage)
+            if pending:
+                sell, reason, signal_date = True, pending[0], pending[1]
+            if sell and not tradable(row, "sell"):
+                pending = (reason, signal_date)
+                blocked_orders += 1
+            if sell and tradable(row, "sell"):
+                pending = None
+                sell_price = fill_price * (1 - slippage)
                 gross = holding["shares"] * sell_price
                 proceeds = gross * (1 - commission - stamp_tax)
                 commission_paid += gross * commission
@@ -371,6 +412,7 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
                         "id": trade_id_sell,
                         "type": "sell",
                         "date": date_str,
+                        "signal_date": signal_date,
                         "price": round(sell_price, 2),
                         "shares": holding["shares"],
                         "amount": round(proceeds, 2),
@@ -384,7 +426,7 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
 
         equity = cash
         if holding:
-            equity += holding["shares"] * price
+            equity += holding["shares"] * float(row["close"])
         equity_curve.append({"date": date_str, "equity": round(equity, 2)})
 
     if holding:
@@ -396,6 +438,22 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
         "trades": trades,
         "equity_curve": equity_curve,
         "final_equity": equity_curve[-1]["equity"] if equity_curve else capital,
+        "execution": {
+            "model": execution,
+            "blocked_orders": blocked_orders,
+            "unfilled_order": pending is not None,
+            "limitations": [
+                "Stops are close signals, not intraday guaranteed stop prices",
+                "Historical price limits are enforced only when limit_up/limit_down are supplied",
+                "Queue priority, partial fills, market impact and settlement are not simulated",
+                "Adjusted OHLC are synthetic prices; corporate actions and cash dividends are not simulated separately",
+            ]
+            + (
+                ["same_close uses the signal day's close and can overstate executable returns"]
+                if execution == "same_close"
+                else []
+            ),
+        },
         "costs": {
             "slippage": slippage,
             "commission": commission,
@@ -680,6 +738,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         "initial_capital": capital,
         "final_capital": final,
         "costs": sim["costs"],
+        "execution": sim["execution"],
         "metrics": metrics,
         "trades": sim["trades"],
         "equity_curve": sample_curve(sim["equity_curve"]),

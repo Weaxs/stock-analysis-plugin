@@ -66,7 +66,9 @@ python3 tools/screener.py screen --market A --top 20
 - 建议结合个股深度分析后再做决策
 ```
 
-完成标准：列出实际生效的市场、过滤条件、排序口径和候选数量，且推荐理由只使用返回数据。
+每个候选必须读取 `factor_coverage.available/missing/ratio/effective_weights`。ratio 是已覆盖因子的原始权重之和；L1 与 L2 的 effective_weights 均按可用因子重归一化，缺失或非有限值不按零分计，排序前先按实际可用因子计算综合分，effective_scores 保留实际参与计算的各组分数；用 sum(effective_scores[g] × effective_weights[g]) × market_sentiment.multiplier 核对 scores.final（四舍五入至一位）。scores.momentum 仍保留 L1 参考值，L2 贡献以 effective_scores.momentum 为准。相同分数但缺失因子不同的候选不能视为同等证据，报告缺失项和覆盖度，不以 `enriched=true` 代替覆盖判断。`scores.final=null` 表示没有足够因子计算，不能作为高分候选推荐。
+
+完成标准：列出实际生效的市场、过滤条件、排序口径和候选数量，且推荐理由只使用返回数据，并说明因子覆盖。
 
 ## 策略模板
 
@@ -93,3 +95,5 @@ dividend_report_date: "2025-12-31"
 ### 补充数据覆盖
 
 股息筛选支持 A/HK：A 股为报告期已实施方案股息率，HK 为 HKEX/LSEG 年度股息率。两者都不是当前价 TTM；使用结果的 yield_basis 和 report_date，缺失不当零。
+
+选股的 top 必须为正整数；超时预算按候选数量与采集批次计算。

@@ -71,3 +71,5 @@ gather 工具返回以下字段：
 - 港股/美股：因数据限制，聚焦指数结构 + 消息催化 + 策略建议
 
 完成标准：市场阶段、温度和次日策略均可追溯到返回数据，非 A 股报告不出现 A 股专属宽度或板块结论。
+
+数据不足时 temperature.score 和 strategy_stance 保持 null，temperature.level/signal 为 unknown。将 data_quality.limitations 保留在报告中；未知状态不能写成中性、均衡或有效仓位建议。

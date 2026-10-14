@@ -2529,6 +2529,7 @@ def test_hk_quote_tencent_fallback_without_keys(monkeypatch, symbol):
     lb.assert_not_called()
     assert result == {
         "symbol": symbol,
+        "data_as_of": "2026-10-13T10:55:14+08:00",
         "name": "腾讯控股",
         "price": 420.8,
         "change": -5.0,
@@ -2863,7 +2864,7 @@ class TestCmdQuoteStaleMarker:
         )
 
     def test_closed_market_annotates_as_of(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol, **_kw: {"symbol": symbol, "price": 1257.12})
         self._patch_calendar(monkeypatch, "closed")
         result = cmd_quote(Namespace(symbol="600519"))
         assert result["stale"] is True
@@ -2873,28 +2874,28 @@ class TestCmdQuoteStaleMarker:
 
     @pytest.mark.parametrize("phase", ["morning", "lunch_break", "afternoon", "intraday", "post_market"])
     def test_live_or_same_day_phases_have_no_marker(self, monkeypatch, phase):
-        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol, **_kw: {"symbol": symbol, "price": 1257.12})
         self._patch_calendar(monkeypatch, phase, date="2026-09-18")
         result = cmd_quote(Namespace(symbol="600519"))
         assert "stale" not in result
         assert "as_of" not in result
 
     def test_pre_market_annotates_previous_trading_day(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.quote_yf", lambda symbol: {"symbol": symbol, "price": 336.13})
+        monkeypatch.setattr("tools.stock_data.quote_yf", lambda symbol, **_kw: {"symbol": symbol, "price": 336.13})
         self._patch_calendar(monkeypatch, "pre_market", date="2026-09-21", prev="2026-09-18")
         result = cmd_quote(Namespace(symbol="AAPL"))
         assert result["stale"] is True
         assert result["as_of"] == "2026-09-18"
 
     def test_no_previous_trading_day_no_marker(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol, **_kw: {"symbol": symbol, "price": 1257.12})
         self._patch_calendar(monkeypatch, "closed", prev=None)
         result = cmd_quote(Namespace(symbol="600519"))
         assert "stale" not in result
         assert "as_of" not in result
 
     def test_calendar_unavailable_keeps_quote_clean(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1257.12})
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol, **_kw: {"symbol": symbol, "price": 1257.12})
         monkeypatch.setattr("trading_calendar.market_phase", lambda market: {"market": market, "error": "no calendar"})
         result = cmd_quote(Namespace(symbol="600519"))
         assert "stale" not in result
@@ -2902,7 +2903,7 @@ class TestCmdQuoteStaleMarker:
 
     def test_a_share_maps_to_cn_calendar(self, monkeypatch):
         seen = {}
-        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"symbol": symbol, "price": 1.0})
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol, **_kw: {"symbol": symbol, "price": 1.0})
 
         def fake_phase(market):
             seen["market"] = market
@@ -2913,7 +2914,7 @@ class TestCmdQuoteStaleMarker:
         assert seen["market"] == "CN"
 
     def test_error_result_not_annotated(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol: {"error": "all sources down"})
+        monkeypatch.setattr("tools.stock_data.quote_a", lambda symbol, **_kw: {"error": "all sources down"})
         self._patch_calendar(monkeypatch, "closed")
         result = cmd_quote(Namespace(symbol="600519"))
         assert result == {"error": "all sources down"}
@@ -3017,7 +3018,7 @@ class TestSnapshotHkUsErrorDetail:
     truncated) instead of a bare fixed string — same shape as snapshot_a's error."""
 
     def test_hk_error_carries_summary(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
         mock_ak = MagicMock()
         mock_ak.stock_hk_spot_em.side_effect = ConnectionError("reset by peer")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
@@ -3027,7 +3028,7 @@ class TestSnapshotHkUsErrorDetail:
         assert result == [{"error": "HK snapshot unavailable: ConnectionError: reset by peer"}]
 
     def test_us_error_carries_summary(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
         mock_ak = MagicMock()
         mock_ak.stock_us_spot_em.side_effect = ValueError("bad payload")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
@@ -3037,7 +3038,7 @@ class TestSnapshotHkUsErrorDetail:
         assert result == [{"error": "US snapshot unavailable: ValueError: bad payload"}]
 
     def test_long_error_truncated(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
         mock_ak = MagicMock()
         mock_ak.stock_hk_spot_em.side_effect = ConnectionError("x" * 500)
         with patch.dict(sys.modules, {"akshare": mock_ak}):
@@ -3064,7 +3065,7 @@ class TestFinancialsAKeys:
         assert result["note"] == "No financial data"
 
     def test_exception_has_error_and_note(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s: None)
+        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
         mock_ak = MagicMock()
         mock_ak.stock_financial_analysis_indicator.side_effect = ConnectionError("blocked")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
@@ -3215,3 +3216,19 @@ class TestFinancialsPeriodsCli:
 
         result = cmd_financials(Namespace(symbol="AAPL", periods=-2))
         assert "error" in result
+
+
+@patch("requests.get")
+def test_hk_tencent_retains_slash_formatted_provider_time(mock_get):
+    mock_get.return_value = MagicMock(
+        content=_tencent_quote_payload({1: "Tencent", 3: "10", 30: "2026/10/14 16:08:31"}, vname="r_hk00700")
+    )
+    assert _quote_tencent("00700.HK")["data_as_of"] == "2026-10-14T16:08:31+08:00"
+
+
+@patch("requests.get")
+def test_sina_retains_provider_date_and_time(mock_get):
+    fields = ["0"] * 32
+    fields[0], fields[3], fields[30], fields[31] = "测试", "10", "2026-10-14", "15:34:59"
+    mock_get.return_value = MagicMock(content=('var hq_str_sh600519="' + ",".join(fields) + '";').encode("gbk"))
+    assert _quote_sina("600519")["data_as_of"] == "2026-10-14T15:34:59+08:00"

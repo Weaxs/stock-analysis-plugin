@@ -305,3 +305,53 @@ def test_hk_annual_history_survives_yahoo_snapshot_failure(monkeypatch):
     result = stock_data.cmd_financials(Namespace(symbol="0700.HK", periods=10, annual=True))
     assert result["periods"][0]["roe"] == 15
     assert result["warnings"]
+
+
+def test_quote_and_kline_failover_carry_provider_evidence():
+    from tools.stock_data import _failover
+
+    quote = _failover([("unavailable", lambda: None), ("fixture", lambda: {"price": 10})], "quote:AAPL", evidence=True)
+    assert quote["source"] == "fixture"
+    assert quote["data_as_of"] is None
+    assert quote["fetched_at"].endswith("+00:00")
+    bars = _failover([("yfinance", lambda: [{"date": "2024-01-02", "close": 10}])], "kline:AAPL", evidence=True)
+    assert bars[0]["source"] == "yfinance"
+    assert bars[0]["data_as_of"] == "2024-01-02"
+    assert bars[0]["adjusted"] == "total_return"
+
+
+def test_provider_timestamp_can_reveal_stale_quote_during_live_session(monkeypatch):
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    monkeypatch.setattr(
+        stock_data, "quote_a", lambda *args, **kwargs: {"price": 10, "data_as_of": "2000-01-01T15:00:00+08:00"}
+    )
+    monkeypatch.setattr(stock_data, "_quote_stale_marker", lambda market: None)
+    result = stock_data.cmd_quote(Namespace(symbol="600519"))
+    assert result["stale"] is True
+    assert result["as_of_basis"] == "provider"
+    assert result["as_of"] == "2000-01-01T15:00:00+08:00"
+
+
+def test_yahoo_quote_preserves_time_from_same_info_response(monkeypatch):
+    from argparse import Namespace
+    from types import SimpleNamespace
+
+    from tools import stock_data
+
+    calls = []
+
+    def ticker(symbol):
+        calls.append(symbol)
+        return SimpleNamespace(
+            info={"shortName": "Fixture", "regularMarketPrice": 100, "regularMarketTime": 1704205800}
+        )
+
+    monkeypatch.setattr("yfinance.Ticker", ticker)
+    monkeypatch.setattr(stock_data, "_quote_stale_marker", lambda market: None)
+    quote = stock_data.cmd_quote(Namespace(symbol="AAPL"))
+    assert quote["data_as_of"] == "2024-01-02T14:30:00+00:00"
+    assert quote["as_of_basis"] == "provider"
+    assert calls == ["AAPL"]

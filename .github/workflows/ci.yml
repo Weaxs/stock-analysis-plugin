@@ -212,7 +212,7 @@ jobs:
             echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
-          pytest tests/e2e/test_hermes_llm.py -m integration_llm -v
+          pytest tests/e2e/test_hermes_llm.py tests/e2e/test_analysis_quality.py -m integration_llm -v
 
       - name: E2E — Pi LLM flow
         env:

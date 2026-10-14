@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import run_tool as _run_json  # noqa: E402
-from _subproc import utf8_stdio
+from _subproc import scrub_secrets, utf8_stdio
 from stock_data import detect_market  # noqa: E402
 from watchlist import analyze_watchlist, has_analysis_data  # noqa: E402
 
@@ -46,8 +46,15 @@ def _build_item(symbol: str, data: dict | None) -> dict:
     risk = data.get("risk") or {}
 
     # anomalies — separate call (watchlist gather doesn't include them)
-    anom_result = _run_json("anomaly_detect.py", ["detect", symbol]) or {}
-    anomalies = anom_result.get("anomalies", []) if isinstance(anom_result, dict) else []
+    anom_result = _run_json("anomaly_detect.py", ["detect", symbol], preserve_errors=True)
+    anomaly_ok = (
+        isinstance(anom_result, dict) and "error" not in anom_result and isinstance(anom_result.get("anomalies"), list)
+    )
+    anomalies = anom_result["anomalies"] if anomaly_ok else []
+    anomaly_error = None
+    if not anomaly_ok:
+        error = anom_result.get("error") if isinstance(anom_result, dict) else None
+        anomaly_error = scrub_secrets(error) if isinstance(error, str) else "Anomaly data unavailable"
 
     score = tech.get("signal_score")
     trend = (tech.get("trend") or {}).get("overall") or "unknown"
@@ -72,7 +79,10 @@ def _build_item(symbol: str, data: dict | None) -> dict:
         "anomalies": [
             {"type": a.get("type"), "severity": a.get("severity"), "direction": a.get("direction")} for a in anomalies
         ],
-        "anomaly_count": len(anomalies),
+        "anomaly_count": len(anomalies) if anomaly_ok else None,
+        "anomaly_status": "ok" if anomaly_ok else "unavailable",
+        "anomaly_error": anomaly_error,
+        "warnings": [f"Anomaly detection unavailable: {anomaly_error}"] if anomaly_error else [],
         "next_tools": _suggest_next_tools(market, trend, anomalies, risk_level),
     }
 
@@ -100,11 +110,12 @@ def build_context(symbols: list[str], include_market_review: bool = False, worke
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "freshness": "realtime_or_latest_trade_day",
             "fallback_used": False,
-            "warnings": [],
+            "warnings": [f"{i['symbol']}: {warning}" for i in items for warning in i.get("warnings", [])],
         },
         "summary": {
             "total": len(symbols),
-            "success": sum(1 for i in items if "error" not in i),
+            "success": sum(1 for i in items if "error" not in i and i.get("anomaly_status") == "ok"),
+            "partial": sum(1 for i in items if "error" not in i and i.get("anomaly_status") == "unavailable"),
             "failed": sum(1 for i in items if "error" in i),
             "high_risk_count": sum(1 for i in items if i.get("risk_level") == "high"),
             "veto_count": sum(1 for i in items if i.get("veto_buy")),
@@ -116,7 +127,7 @@ def build_context(symbols: list[str], include_market_review: bool = False, worke
         markets = sorted({i.get("market") for i in items if i.get("market")})
         review = {}
         for m in markets:
-            r = _run_json("market_review.py", ["review", "--market", m], timeout=60)
+            r = _run_json("market_review.py", ["review", "--market", m])
             if r:
                 review[m] = r
         output["market_review"] = review

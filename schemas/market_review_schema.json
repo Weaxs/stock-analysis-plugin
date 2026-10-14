@@ -18,16 +18,23 @@
       "type": "object",
       "description": "市场温度（来自 market_review.review）",
       "properties": {
-        "score": { "type": "number", "minimum": 0, "maximum": 100 },
-        "level": { "type": "string", "enum": ["constructive", "neutral", "weak"] },
-        "signal": { "type": "string", "enum": ["green", "yellow", "red"] }
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "level": { "type": "string", "enum": ["constructive", "neutral", "weak", "unknown"] },
+        "signal": { "type": "string", "enum": ["green", "yellow", "red", "unknown"] }
       },
       "required": ["score", "signal"]
     },
     "strategy_stance": {
-      "type": "string",
-      "enum": ["offensive", "balanced", "defensive"],
+      "type": ["string", "null"],
+      "enum": ["offensive", "balanced", "defensive", null],
       "description": "建议策略姿态"
+    },
+    "data_quality": {
+      "type": "object",
+      "properties": {
+        "flags": { "type": "array", "items": { "type": "string" } },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
     },
     "regime": {
       "type": "object",

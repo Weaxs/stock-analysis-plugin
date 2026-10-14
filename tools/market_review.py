@@ -10,6 +10,7 @@ tmp_path).
 
 import argparse
 import json
+import math
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -17,9 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _subproc import command_timeout, utf8_stdio
 from _subproc import run_tool as _run_tool
-from _subproc import utf8_stdio
 from signal_tracker import _append_record, _load_records, _store_lock
+
+
+def _index_change(row):
+    value = row.get("change_pct") if isinstance(row, dict) else None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
 
 
 def calc_temperature(stats: dict, indices: list) -> dict:
@@ -37,7 +43,7 @@ def calc_temperature(stats: dict, indices: list) -> dict:
             weights.append(0.45)
 
     if indices and isinstance(indices, list):
-        changes = [idx.get("change_pct") for idx in indices if idx.get("change_pct") is not None]
+        changes = [value for row in indices if (value := _index_change(row)) is not None]
         if changes:
             avg_change = sum(changes) / len(changes)
             index_score = max(0, min(100, 50 + avg_change * 12))
@@ -54,7 +60,7 @@ def calc_temperature(stats: dict, indices: list) -> dict:
             weights.append(0.20)
 
     if not scores:
-        return {"score": 50, "level": "neutral", "signal": "yellow"}
+        return {"score": None, "level": "unknown", "signal": "unknown"}
 
     total_weight = sum(weights)
     temperature = sum(s * w for s, w in zip(scores, weights)) / total_weight
@@ -69,8 +75,8 @@ def calc_temperature(stats: dict, indices: list) -> dict:
     return {"score": round(temperature, 1), "level": level, "signal": signal}
 
 
-def _signal_to_stance(signal: str) -> str:
-    return {"green": "offensive", "yellow": "balanced", "red": "defensive"}.get(signal, "balanced")
+def _signal_to_stance(signal: str) -> str | None:
+    return {"green": "offensive", "yellow": "balanced", "red": "defensive"}.get(signal)
 
 
 def review_market(market: str = "A") -> dict:
@@ -100,10 +106,7 @@ def review_market(market: str = "A") -> dict:
     results = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
-            # stats fans out to a full-market snapshot — screener gives the same path 240s
-            # (screener.fetch_snapshot); the default 30s would silently degrade the
-            # temperature to the neutral 50 fallback on a weak network.
-            key: executor.submit(_run_tool, script, args, 240 if key == "stats" else 30)
+            key: executor.submit(_run_tool, script, args, command_timeout(script, args))
             for key, (script, args) in tasks.items()
         }
         for key, future in futures.items():
@@ -113,6 +116,22 @@ def review_market(market: str = "A") -> dict:
                 results[key] = None
 
     temperature = calc_temperature(results.get("stats"), results.get("indices"))
+    warnings = [
+        f"{key} data unavailable"
+        for key, value in results.items()
+        if not value
+        or (isinstance(value, dict) and "error" in value)
+        or (key == "indices" and isinstance(value, list) and any(_index_change(row) is None for row in value))
+        or (key == "sectors" and isinstance(value, dict) and not value.get("top") and not value.get("bottom"))
+        or (
+            isinstance(value, list)
+            and any(
+                isinstance(row, dict) and ("error" in row or row.get("note") == "data unavailable") for row in value
+            )
+        )
+    ]
+    if temperature["score"] is None:
+        warnings.append("Insufficient market data to determine temperature or strategy stance")
 
     output = {
         "market": market,
@@ -124,6 +143,8 @@ def review_market(market: str = "A") -> dict:
         "regime": results.get("regime"),
         "temperature": temperature,
         "strategy_stance": _signal_to_stance(temperature["signal"]),
+        "warnings": warnings,
+        "data_quality": {"flags": ["partial_data"] if warnings else [], "limitations": warnings},
     }
     return output
 
