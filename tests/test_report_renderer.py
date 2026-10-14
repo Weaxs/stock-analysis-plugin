@@ -13,6 +13,30 @@ MARKET_SCHEMA = PROJECT_ROOT / "schemas" / "market_review_schema.json"
 
 
 class TestRender:
+    def test_missing_technical_direction_is_not_bearish(self):
+        for template in ("brief", "full"):
+            result = report_renderer.render("stock", template, {"stock_name": "Test", "stock_code": "AAPL"})
+            assert "（看空）" not in result["content"]
+
+    def test_unknown_risk_is_not_rendered_as_a_clear_check(self):
+        report = {
+            "stock_name": "Test",
+            "stock_code": "AAPL",
+            "risk_screening": {
+                "risk_level": "unknown",
+                "risk_score": None,
+                "veto_buy": None,
+                "data_complete": False,
+                "flags": [],
+                "warnings": ["valuation risk data unavailable"],
+            },
+        }
+        for template in ("brief", "full"):
+            result = report_renderer.render("stock", template, report)
+            assert "数据不完整" in result["content"]
+            assert "无显著风险标记" not in result["content"]
+            assert "None/100" not in result["content"]
+
     def test_stock_brief(self):
         report = {
             "stock_name": "贵州茅台",

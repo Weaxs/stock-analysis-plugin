@@ -1,6 +1,63 @@
 from unittest.mock import patch
 
+from tools import risk_screening
 from tools.risk_screening import _safe_float, check_news_risks, compute_risk
+
+
+def test_unavailable_sources_are_not_low_risk(monkeypatch):
+    monkeypatch.setattr(risk_screening, "_run_tool", lambda *a, **kw: {"error": "unavailable"})
+    monkeypatch.setattr(
+        risk_screening, "check_lockup", lambda *a: {"upcoming_30d": [], "flags": [], "available": False}
+    )
+    result = risk_screening.screen_risk("600519")
+    assert result["risk_level"] == "unknown"
+    assert result["risk_score"] is None
+    assert result["veto_buy"] is None
+    assert result["warnings"]
+    assert result["data_complete"] is False
+
+
+def test_death_cross_uses_technical_cross_field(monkeypatch):
+    monkeypatch.setattr(
+        risk_screening,
+        "_run_tool",
+        lambda *a, **kw: {"signal_score": 50, "macd": {"signal": "bearish", "cross": "death_cross"}},
+    )
+    assert any(f["description"] == "MACD死叉" for f in risk_screening.check_technical("600519")["flags"])
+
+
+def test_lockups_today_are_included_and_provider_is_bounded(monkeypatch):
+    from datetime import datetime
+
+    import pandas as pd
+
+    def fetch(**kwargs):
+        return pd.DataFrame({"解禁日期": [datetime.now().strftime("%Y-%m-%d")]})
+
+    monkeypatch.setattr("akshare.stock_restricted_release_queue_em", fetch)
+
+    def run(script, args, timeout):
+        assert (script, args, timeout) == ("risk_screening.py", ["lockup", "600519"], 25)
+        return risk_screening._fetch_lockup(args[1])
+
+    monkeypatch.setattr(risk_screening, "_run_tool", run)
+    result = risk_screening.check_lockup("600519")
+    assert result["upcoming_30d"] == [datetime.now().strftime("%Y-%m-%d")]
+    assert result["available"] is True
+
+
+def test_lockup_subprocess_timeout_is_unavailable(monkeypatch):
+    import subprocess
+
+    calls = []
+
+    def timeout(command, **kwargs):
+        calls.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    assert risk_screening.check_lockup("600519")["available"] is False
+    assert calls == [25]
 
 
 class TestSafeFloat:
@@ -120,7 +177,12 @@ class TestCheckNewsRisksArgv:
 
         mock_run.side_effect = fake_run
         result = check_news_risks("600519", "贵州茅台")
-        assert [k for k in result if k != "flags"] == ["insider", "earnings", "regulatory", "industry"]
+        assert [k for k in result if k not in ("flags", "available")] == [
+            "insider",
+            "earnings",
+            "regulatory",
+            "industry",
+        ]
         assert result["flags"] == []
 
     @patch("tools.risk_screening._run_tool")

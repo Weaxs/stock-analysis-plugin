@@ -54,7 +54,9 @@ def _get_index_kline(market: str) -> list:
 def _compute_indicators(klines: list) -> dict:
     import numpy as np
 
-    closes = np.array([float(k["close"]) for k in klines if k.get("close") is not None])
+    df = pd.DataFrame(klines).reindex(columns=["close", "high", "low"]).apply(pd.to_numeric, errors="coerce")
+    df = df[np.isfinite(df).all(axis=1) & (df > 0).all(axis=1)]
+    closes = df["close"].to_numpy()
     if len(closes) < 20:
         return {}
 
@@ -65,8 +67,8 @@ def _compute_indicators(klines: list) -> dict:
     ma60 = float(ma_series(close_s, 60).iloc[-1]) if len(closes) >= 60 else float(np.mean(closes))
     close = float(closes[-1])
 
-    highs = np.array([float(k["high"]) for k in klines if k.get("high") is not None])
-    lows = np.array([float(k["low"]) for k in klines if k.get("low") is not None])
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
 
     tr_values = []
     for i in range(-min(14, len(closes) - 1), 0):
@@ -226,6 +228,8 @@ def main():
     if args.command == "detect":
         result = detect_regime(args.market)
         print(json.dumps(result, ensure_ascii=False, default=str))
+        if "error" in result:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

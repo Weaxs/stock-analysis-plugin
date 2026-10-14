@@ -1,8 +1,12 @@
 """Tests for tools/signal_tracker.py — the JSONL signal outcome store."""
 
 import json
+import subprocess
+import sys
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -44,6 +48,38 @@ def mock_run_tool(monkeypatch):
 
 
 class TestRecord:
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"entry_price": 0},
+            {"entry_price": float("nan")},
+            {"target_price": -1},
+            {"stop_price": float("inf")},
+            {"horizon_days": 0},
+            {"horizon_days": 1.5},
+            {"date": "2026-02-30"},
+            {"date": "2026-9-1"},
+            {"direction": "hold"},
+            {"source": {"bad": True}},
+        ],
+    )
+    def test_invalid_signal_is_not_persisted(self, store, overrides):
+        assert "error" in st.cmd_record(_rec_args(store, **overrides))
+        assert not store.exists()
+
+    def test_append_after_missing_final_newline(self, store):
+        first = st.cmd_record(_rec_args(store))
+        store.write_bytes(store.read_bytes().rstrip(b"\n"))
+        second = st.cmd_record(_rec_args(store, symbol="000001"))
+        summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
+        assert {r["id"] for r in summary["records"]} == {first["id"], second["id"]}
+
+    def test_record_refuses_corrupt_store(self, store):
+        store.write_text('{"truncated":\n', encoding="utf-8")
+        original = store.read_bytes()
+        assert "error" in st.cmd_record(_rec_args(store))
+        assert store.read_bytes() == original
+
     def test_explicit_entry_price_no_quote_call(self, store, mock_run_tool):
         rec = st.cmd_record(_rec_args(store))
         assert rec["status"] == "open"
@@ -109,6 +145,7 @@ class TestEvaluate:
         today would miss the whole evaluation window)."""
         self._record(store, mock_run_tool, date="2026-05-21", horizon_days=5)
         mock_run_tool.return_value = [
+            _bar("2026-05-21", 10, 10, 10),
             _bar("2026-05-22", 12.5, 9.9, 12.1),  # target hit the day after recording
             _bar("2026-09-17", 8.0, 7.0, 7.5),  # stale deep-loss bar must not matter
         ]
@@ -121,7 +158,7 @@ class TestEvaluate:
 
     def test_stop_hit(self, store, mock_run_tool):
         self._record(store, mock_run_tool)
-        mock_run_tool.return_value = [_bar("2026-09-02", 10.2, 8.9, 9.1)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 10.2, 8.9, 9.1)]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         r = result["results"][0]
         assert r["outcome"] == "stop_hit"
@@ -129,13 +166,14 @@ class TestEvaluate:
 
     def test_same_day_target_and_stop_is_conservative_stop(self, store, mock_run_tool):
         self._record(store, mock_run_tool)
-        mock_run_tool.return_value = [_bar("2026-09-02", 12.5, 8.5, 11.0)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 8.5, 11.0)]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         assert result["results"][0]["outcome"] == "stop_hit"
 
     def test_timeout_profit(self, store, mock_run_tool):
         self._record(store, mock_run_tool, target_price=None, stop_price=None)
         mock_run_tool.return_value = [
+            _bar("2026-09-01", 10, 10, 10),
             _bar("2026-09-02", 10.2, 9.9, 10.1),
             _bar("2026-09-03", 10.3, 10.0, 10.2),
             _bar("2026-09-04", 10.6, 10.1, 10.5),
@@ -148,14 +186,16 @@ class TestEvaluate:
 
     def test_timeout_loss(self, store, mock_run_tool):
         self._record(store, mock_run_tool, target_price=None, stop_price=None)
-        mock_run_tool.return_value = [_bar(f"2026-09-0{d}", 10.1, 9.4, 9.5) for d in (2, 3, 4)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10)] + [
+            _bar(f"2026-09-0{d}", 10.1, 9.4, 9.5) for d in (2, 3, 4)
+        ]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         assert result["results"][0]["outcome"] == "timeout_loss"
         assert result["results"][0]["return_pct"] == -5.0
 
     def test_insufficient_bars_stays_open(self, store, mock_run_tool):
         self._record(store, mock_run_tool)
-        mock_run_tool.return_value = [_bar("2026-09-02", 10.5, 9.9, 10.2)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 10.5, 9.9, 10.2)]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         assert result["closed"] == 0 and result["still_open"] == 1
         assert result["results"][0]["outcome"] == "open"
@@ -169,9 +209,26 @@ class TestEvaluate:
         assert result["results"][0]["outcome"] == "skipped_no_data"
         assert st._load_records(store)[0]["status"] == "open"
 
+    def test_history_missing_record_date_is_not_settled(self, store, mock_run_tool):
+        self._record(store, mock_run_tool, date="2020-01-01", horizon_days=1)
+        mock_run_tool.return_value = [_bar("2026-09-01", 21, 19, 20)]
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert result["results"][0]["outcome"] == "skipped_no_data"
+        assert result["closed"] == 0
+        assert st._load_records(store)[0]["status"] == "open"
+
+    @pytest.mark.parametrize("bad", [None, float("nan"), "bad"])
+    def test_incomplete_price_bar_does_not_record_a_false_win(self, store, mock_run_tool, bad):
+        self._record(store, mock_run_tool, horizon_days=1)
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, bad, 12.1)]
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert result["closed"] == 0
+        assert result["results"][0]["outcome"] == "skipped_no_data"
+        assert st._load_records(store)[0]["status"] == "open"
+
     def test_sell_mirror(self, store, mock_run_tool):
         self._record(store, mock_run_tool, direction="sell", target_price=9.0, stop_price=11.0)
-        mock_run_tool.return_value = [_bar("2026-09-02", 10.2, 8.9, 9.1)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 10.2, 8.9, 9.1)]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         r = result["results"][0]
         assert r["outcome"] == "target_hit"
@@ -179,7 +236,7 @@ class TestEvaluate:
 
     def test_sell_stop_hit(self, store, mock_run_tool):
         self._record(store, mock_run_tool, direction="sell", target_price=9.0, stop_price=11.0)
-        mock_run_tool.return_value = [_bar("2026-09-02", 11.1, 9.9, 10.8)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 11.1, 9.9, 10.8)]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         r = result["results"][0]
         assert r["outcome"] == "stop_hit"
@@ -188,17 +245,69 @@ class TestEvaluate:
     def test_symbol_filter(self, store, mock_run_tool):
         self._record(store, mock_run_tool)
         self._record(store, mock_run_tool, symbol="000001")
-        mock_run_tool.return_value = [_bar("2026-09-02", 12.5, 10.0, 12.1)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10.0, 12.1)]
         result = st.cmd_evaluate(Namespace(symbol="000001", store=str(store)))
         assert result["evaluated"] == 1
         assert result["results"][0]["symbol"] == "000001"
 
     def test_atomic_write_leaves_no_tmp(self, store, mock_run_tool):
         self._record(store, mock_run_tool)
-        mock_run_tool.return_value = [_bar("2026-09-02", 12.5, 10.0, 12.1)]
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10.0, 12.1)]
         st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         assert store.exists()
         assert not (store.parent / (store.name + ".tmp")).exists()
+
+    def test_record_during_evaluation_is_preserved(self, store, mock_run_tool):
+        original = self._record(store, mock_run_tool)
+        added = []
+
+        def fetch(*args, **kwargs):
+            added.append(st.cmd_record(_rec_args(store, symbol="000001")))
+            return [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10.0, 12.1)]
+
+        mock_run_tool.side_effect = fetch
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
+        assert result["closed"] == 1
+        assert {r["id"] for r in summary["records"]} == {original["id"], added[0]["id"]}
+        assert summary["summary"]["open"] == 1
+
+    @pytest.mark.parametrize("outer_bars", [None, [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10, 12)]])
+    def test_overlapping_evaluators_return_the_persisted_outcome(self, store, mock_run_tool, outer_bars):
+        self._record(store, mock_run_tool)
+        calls = 0
+
+        def fetch(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+                return outer_bars
+            return [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 10, 8.5, 9)]
+
+        mock_run_tool.side_effect = fetch
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
+        assert result["results"][0]["outcome"] == summary["records"][0]["outcome"] == "stop_hit"
+        assert result["results"][0]["return_pct"] == -10
+        assert result["closed"] == 1
+        assert result["still_open"] == 0
+
+    def test_corrupt_store_is_not_silently_rewritten(self, store, mock_run_tool):
+        self._record(store, mock_run_tool)
+        with store.open("a", encoding="utf-8") as stream:
+            stream.write('{"truncated":\n')
+        original = store.read_bytes()
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10.0, 12.1)]
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert "error" in result
+        assert store.read_bytes() == original
+
+    def test_incomplete_signal_is_clean_error(self, store, mock_run_tool):
+        store.write_text('{"id":"x","status":"open"}\n', encoding="utf-8")
+        original = store.read_bytes()
+        assert "error" in st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert store.read_bytes() == original
 
 
 class TestSummary:
@@ -214,9 +323,9 @@ class TestSummary:
         st.cmd_record(_rec_args(store, source="hot-theme", symbol="300750"))
         # close #1 target_hit (+20), close #2 timeout_loss (-10), keep #3 open
         mock_run_tool.side_effect = [
-            [_bar("2026-09-02", 12.5, 10.0, 12.1)],
-            [_bar(f"2026-09-0{d}", 10.1, 9.5, 9.0) for d in (2, 3, 4)],
-            [_bar("2026-09-02", 10.5, 9.9, 10.2)],
+            [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10.0, 12.1)],
+            [_bar("2026-09-01", 10, 10, 10)] + [_bar(f"2026-09-0{d}", 10.1, 9.5, 9.0) for d in (2, 3, 4)],
+            [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 10.5, 9.9, 10.2)],
         ]
         st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         result = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
@@ -279,3 +388,37 @@ def test_main_error_exits_nonzero(store, mock_run_tool, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert "error" in out
+
+
+def test_concurrent_cli_records_are_complete(store):
+    script = Path(__file__).resolve().parents[1] / "tools" / "signal_tracker.py"
+
+    def record(index):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "record",
+                "AAPL",
+                "--direction",
+                "buy",
+                "--entry-price",
+                "10",
+                "--note",
+                "信号" * 2000 + str(index),
+                "--store",
+                str(store),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        written = list(pool.map(record, range(6)))
+    summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
+    assert summary["summary"]["total"] == 6
+    assert {r["id"]: r["note"] for r in summary["records"]} == {r["id"]: r["note"] for r in written}

@@ -153,6 +153,9 @@ jobs:
       - name: Run host↔python round-trip tests
         run: pytest tests/e2e/test_host_to_python.py -v
 
+      - name: Signal store and analysis regressions
+        run: pytest tests/test_signal_tracker.py tests/test_gather.py tests/test_watchlist.py tests/test_watchlist_context.py -q
+
       - name: Pi host real subprocess round-trip
         run: npx tsx tests/e2e/test_pi_e2e.ts
 

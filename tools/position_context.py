@@ -6,6 +6,7 @@ Not a portfolio system. Stateless: user passes cost/quantity/stops each call.
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,13 +49,28 @@ def analyze_position(
     stop_loss: float | None = None,
     take_profit: float | None = None,
 ) -> dict:
+    for field, value in (
+        ("cost", cost),
+        ("quantity", quantity),
+        ("stop_loss", stop_loss),
+        ("take_profit", take_profit),
+    ):
+        if value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
+            return {"symbol": symbol, "error": f"{field} must be finite and positive"}
     quote = _run_json("stock_data.py", ["quote", symbol]) or {}
     tech = _run_json("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"]) or {}
 
-    price = quote.get("price")
+    price = quote.get("price") if isinstance(quote, dict) and "error" not in quote else None
     if price is None:
         return {"symbol": symbol, "error": "cannot fetch current price"}
-    price = float(price)
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return {"symbol": symbol, "error": "current price must be finite and positive"}
+    if not math.isfinite(price) or price <= 0:
+        return {"symbol": symbol, "error": "current price must be finite and positive"}
+    if not isinstance(tech, dict):
+        tech = {}
 
     pnl_per_share = price - cost
     pnl_pct = (pnl_per_share / cost * 100) if cost else 0.0
@@ -133,6 +149,8 @@ def main():
     )
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

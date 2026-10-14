@@ -31,6 +31,7 @@ const pluginRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-root-"));
 const installedPython = venvPythonPath(pluginRoot);
 mkdirSync(dirname(installedPython), { recursive: true });
 writeFileSync(installedPython, "");
+mkdirSync(join(pluginRoot, "tools"));
 
 const fakeApi = {
   rootDir: pluginRoot,
@@ -343,6 +344,7 @@ if (renderTool) {
 }
 
 assert(execCalls.every((call) => call.bin === installedPython), "plugin tools must use installed root venv");
+assert(execCalls.every((call) => dirname(call.script) === join(pluginRoot, "tools")), "plugin tools must use installed root payload");
 rmSync(pluginRoot, { recursive: true, force: true });
 
 const hkRankingTool = tools.find(t => t.name === "get_dividends")!;

@@ -7,11 +7,14 @@
 {% if risk_screening and risk_screening.veto_buy %}
 ⚠️ **一票否决** — 风险筛查触发，建议谨慎。
 {% endif %}
+{% if risk_screening and (risk_screening.data_complete is sameas false or risk_screening.risk_level == 'unknown') %}
+⚠️ **数据不完整** — 当前风险筛查不能判定为低风险。
+{% endif %}
 
 {% set dp = data_perspective or {} -%}
 {% set pp = dp.price_position or {} -%}
 {% set ts = dp.trend_status or {} -%}
-- 📈 **趋势：** {{ ts.ma_alignment or '-' }}{% if ts.is_bullish is not none %}（{{ '看多' if ts.is_bullish else '看空' }}）{% endif %}
+- 📈 **趋势：** {{ ts.ma_alignment or '-' }}{% if ts.is_bullish is boolean %}（{{ '看多' if ts.is_bullish else '看空' }}）{% endif %}
 - 💰 **价位：** 现价 {{ m.fmt_num(pp.current_price) }} | 支撑 {{ m.fmt_num(pp.support_level) }} | 压力 {{ m.fmt_num(pp.resistance_level) }}
 
 {% set bp = battle_plan or {} -%}

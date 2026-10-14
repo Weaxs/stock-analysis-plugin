@@ -1,4 +1,34 @@
+import pytest
+
 from tools import alert_rules
+
+
+@pytest.mark.parametrize(
+    "bad_rule",
+    [
+        {"type": "price_above", "value": "bad"},
+        {"type": "price_above"},
+        {"type": ["price_above"], "value": 10},
+        {"type": "price_above", "value": float("nan")},
+        {"type": "risk_level_at_least", "value": ["high"]},
+        {"type": "risk_level_at_least", "value": "critical"},
+        {"type": "anomaly", "value": ""},
+    ],
+)
+def test_bad_rules_do_not_crash_or_disable_valid_siblings(monkeypatch, bad_rule):
+    monkeypatch.setattr(
+        alert_rules,
+        "_run_json",
+        lambda script, *a, **kw: {
+            "stock_data.py": QUOTE,
+            "risk_screening.py": RISK,
+            "anomaly_detect.py": ANOM,
+        }.get(script),
+    )
+    result = alert_rules.check_rules("AAPL", [bad_rule, {"type": "price_above", "value": 90}])
+    assert "error" in result["evaluated"][0]
+    assert result["evaluated"][1]["triggered"] is True
+
 
 QUOTE = {"price": 100, "change_pct": 2.5}
 TECH = {"volume": {"volume_ratio": 3.2}}
@@ -59,6 +89,23 @@ class TestCheckRule:
 
 
 class TestCheckRules:
+    def test_error_sources_are_unavailable_not_negative_results(self, monkeypatch):
+        monkeypatch.setattr(
+            alert_rules, "_run_json", lambda script, *a, **kw: QUOTE if script == "stock_data.py" else {"error": "down"}
+        )
+        result = alert_rules.check_rules(
+            "AAPL",
+            [
+                {"type": "price_below", "value": 110},
+                {"type": "volume_ratio_above", "value": 2},
+                {"type": "anomaly", "value": "macd_golden_cross"},
+                {"type": "risk_veto"},
+            ],
+        )
+        assert result["hits"][0]["rule"] == "price_below"
+        assert all("error" in item for item in result["evaluated"][1:])
+        assert len(result["meta"]["warnings"]) == 3
+
     def test_only_fetches_needed(self, monkeypatch):
         calls = []
 

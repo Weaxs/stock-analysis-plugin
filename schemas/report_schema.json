@@ -48,9 +48,9 @@
       "type": "object",
       "description": "风险筛查结果（来自 screen_risk）",
       "properties": {
-        "risk_level": { "type": "string", "enum": ["low", "medium", "high"] },
-        "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "veto_buy": { "type": "boolean" },
+        "risk_level": { "type": "string", "enum": ["low", "medium", "high", "unknown"] },
+        "risk_score": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+        "veto_buy": { "type": ["boolean", "null"] },
         "flags": {
           "type": "array",
           "items": {

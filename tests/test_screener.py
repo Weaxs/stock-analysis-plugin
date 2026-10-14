@@ -18,6 +18,29 @@ from tools.screener import (
 
 
 class TestMergeFilters:
+    def test_cli_invalid_filter_exits_nonzero(self, monkeypatch, capsys):
+        import sys
+
+        monkeypatch.setattr(screener, "load_config", lambda *a: {"filters": {"pe_max": "bad"}})
+        monkeypatch.setattr(sys, "argv", ["screener.py", "screen", "--config", "unused"])
+        with pytest.raises(SystemExit) as exc:
+            screener.main()
+        assert exc.value.code == 1
+        assert "error" in json.loads(capsys.readouterr().out)
+
+    @pytest.mark.parametrize("filters", [{"price_max": 10}, {"pe_max": "bad"}, {"pe_max": float("nan")}])
+    def test_invalid_filters_are_clean_errors(self, monkeypatch, filters):
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: [{"symbol": "AAPL", "price": 100, "pe": 50}])
+        monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+        assert "error" in screen("US", top=20, config={"filters": filters})
+
+    def test_explicit_unavailable_filter_is_not_claimed_as_applied(self, monkeypatch):
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: [{"symbol": "AAPL", "price": 100, "change_pct": 1}])
+        monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+        result = screen("US", top=20, config={"filters": {"pe_max": 10}})
+        assert "error" in result
+        assert "pe" in result["error"]
+
     def test_defaults(self):
         result = merge_filters(None)
         assert result == DEFAULT_FILTERS

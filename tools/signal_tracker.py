@@ -10,9 +10,12 @@ host decides when to record and when to evaluate.
 """
 
 import argparse
+import contextlib
 import json
+import math
 import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -31,26 +34,108 @@ def _store_path(args) -> Path:
     return Path(args.store) if args.store else _default_store()
 
 
-def _load_records(store: Path) -> list:
+def _validate_signal(record):
+    if not isinstance(record, dict) or any(
+        not isinstance(record.get(field), str) or not record[field] for field in ("id", "symbol", "record_date")
+    ):
+        raise ValueError("Invalid signal identity/date")
+    if record.get("status") not in ("open", "closed") or record.get("direction") not in ("buy", "sell"):
+        raise ValueError("Invalid signal status/direction")
+    if record.get("source") is not None and not isinstance(record["source"], str):
+        raise ValueError("Signal source must be a string")
+    if record.get("entry_price") is None or any(
+        isinstance(record.get(field), bool)
+        or not isinstance(record[field], (int, float))
+        or not math.isfinite(record[field])
+        or record[field] <= 0
+        for field in ("entry_price", "target_price", "stop_price")
+        if record.get(field) is not None
+    ):
+        raise ValueError("Signal prices must be finite and positive")
+    horizon = record.get("horizon_days")
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon <= 0:
+        raise ValueError("Signal horizon_days must be a positive integer")
+    try:
+        date = datetime.strptime(record["record_date"], "%Y-%m-%d")
+    except ValueError as e:
+        raise ValueError("Signal date must be YYYY-MM-DD") from e
+    if date.strftime("%Y-%m-%d") != record["record_date"]:
+        raise ValueError("Signal date must be YYYY-MM-DD")
+
+
+@contextlib.contextmanager
+def _store_lock(store: Path):
+    # Lock a separate file: replacing the JSONL must not replace the lock inode.
+    store.parent.mkdir(parents=True, exist_ok=True)
+    with store.with_name(store.name + ".lock").open("a+b") as lock:
+        if sys.platform == "win32":
+            import msvcrt
+
+            if lock.seek(0, os.SEEK_END) == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _load_records(store: Path, strict: bool = False) -> list:
     if not store.exists():
         return []
     records = []
-    for line in store.read_text(encoding="utf-8").splitlines():
+    for number, line in enumerate(store.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
         if line:
             try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
+                record = json.loads(line)
+            except json.JSONDecodeError as e:
+                if strict:
+                    raise ValueError(f"Invalid signal JSON at line {number}; store left unchanged") from e
                 continue
+            if strict:
+                try:
+                    _validate_signal(record)
+                except ValueError as e:
+                    raise ValueError(f"Invalid signal record at line {number}; store left unchanged: {e}") from e
+            records.append(record)
     return records
 
 
 def _save_records(store: Path, records: list):
-    """Atomic rewrite: write <store>.tmp, then os.replace onto the store."""
+    """Atomic rewrite; caller holds the store lock."""
     store.parent.mkdir(parents=True, exist_ok=True)
-    tmp = store.parent / (store.name + ".tmp")
-    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
-    os.replace(tmp, store)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=store.parent, delete=False) as stream:
+            tmp = Path(stream.name)
+            stream.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+        os.replace(tmp, store)
+    finally:
+        if tmp:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+
+
+def _append_record(store: Path, record: dict):
+    """Append one complete JSON line; caller holds the store lock."""
+    payload = (json.dumps(record, ensure_ascii=False, default=str, allow_nan=False) + "\n").encode("utf-8")
+    with store.open("a+b") as stream:
+        if stream.seek(0, os.SEEK_END):
+            stream.seek(-1, os.SEEK_END)
+            if stream.read(1) != b"\n":
+                stream.write(b"\n")
+        stream.write(payload)
 
 
 def cmd_record(args):
@@ -78,10 +163,11 @@ def cmd_record(args):
     }
     store = _store_path(args)
     try:
-        store.parent.mkdir(parents=True, exist_ok=True)
-        with store.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError as e:
+        _validate_signal(record)
+        with _store_lock(store):
+            _load_records(store, strict=True)
+            _append_record(store, record)
+    except (OSError, ValueError) as e:
         return {"error": str(e)}
     return record
 
@@ -135,9 +221,26 @@ def _kline_count(rec: dict) -> int:
     return min(max(horizon + 40, elapsed + 15), 800)
 
 
+def _valid_bar(bar) -> bool:
+    if not isinstance(bar, dict):
+        return False
+    try:
+        date = datetime.strptime(bar["date"], "%Y-%m-%d")
+    except (KeyError, TypeError, ValueError):
+        return False
+    return date.strftime("%Y-%m-%d") == bar["date"] and all(
+        isinstance(bar.get(key), (int, float)) and math.isfinite(bar[key]) and bar[key] > 0
+        for key in ("high", "low", "close")
+    )
+
+
 def cmd_evaluate(args):
     store = _store_path(args)
-    records = _load_records(store)
+    try:
+        with _store_lock(store):
+            records = _load_records(store, strict=True)
+    except (OSError, ValueError) as e:
+        return {"error": str(e)}
     results = []
     evaluated = closed = 0
     changed = False
@@ -152,7 +255,12 @@ def cmd_evaluate(args):
             "stock_data.py",
             ["kline", rec["symbol"], "--period", "daily", "--count", str(_kline_count(rec))],
         )
-        if not isinstance(bars, list):
+        if (
+            not isinstance(bars, list)
+            or not bars
+            or any(not _valid_bar(bar) for bar in bars)
+            or min(str(b.get("date", ""))[:10] for b in bars) > rec["record_date"]
+        ):
             entry.update({"outcome": "skipped_no_data", "return_pct": None, "exit_date": None})
         else:
             ev = _evaluate_bars(rec, bars)
@@ -172,20 +280,35 @@ def cmd_evaluate(args):
                         "return_pct": ret,
                     }
                 )
-                closed += 1
                 changed = True
                 entry.update({"outcome": outcome, "return_pct": ret, "exit_date": exit_date})
         results.append(entry)
-    if changed:
+    if results:
         try:
-            _save_records(store, records)
-        except OSError as e:
+            updates = {r["id"]: r for r in records if r.get("status") == "closed"}
+            with _store_lock(store):
+                current = _load_records(store, strict=True)
+                merged = [updates.get(r["id"], r) if r.get("status") == "open" else r for r in current]
+                if changed:
+                    _save_records(store, merged)
+                persisted = {r["id"]: r for r in merged}
+                for entry in results:
+                    rec = persisted[entry["id"]]
+                    if rec.get("status") == "closed":
+                        entry.update({key: rec.get(key) for key in ("outcome", "return_pct", "exit_date")})
+                        closed += 1
+        except (OSError, ValueError) as e:
             return {"error": str(e)}
     return {"evaluated": evaluated, "closed": closed, "still_open": evaluated - closed, "results": results}
 
 
 def cmd_summary(args):
-    records = _load_records(_store_path(args))
+    store = _store_path(args)
+    try:
+        with _store_lock(store):
+            records = _load_records(store, strict=True)
+    except (OSError, ValueError) as e:
+        return {"error": str(e)}
     filtered = records
     if args.source:
         filtered = [r for r in filtered if r.get("source") == args.source]

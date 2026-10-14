@@ -7,6 +7,8 @@ description: 策略回测：定义或读取 AlphaEvo YAML 策略，回测收益�
 
 开始前读取[短线交易决策框架](../stock-analysis/references/short-term-trading.md)的风险单位和回测约束。回测用于反证策略，不把样本内收益包装成预测。
 
+解读回测时，`period` 是实际取得的数据期间，`requested_period` 保留用户请求，`warnings` 提示两者差异。年化收益按实际期间计算；覆盖不完整时明确说明，不能声称完成了完整请求期间的验证。买入预算包含佣金，`position.size` 为 0..1 的资金比例。
+
 ## 工作流程
 
 ### 第一步：策略定义

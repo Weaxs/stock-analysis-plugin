@@ -112,6 +112,8 @@ def main():
         result["archived"] = save_review(report)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

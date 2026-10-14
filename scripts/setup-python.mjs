@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,14 +14,14 @@ const venvDir = join(pkgDir, ".venv");
 const venvPython = venvPythonPath(pkgDir);
 const requirements = join(pkgDir, "tools", "requirements.txt");
 
-function run(cmd) {
-  execSync(cmd, { stdio: "inherit", timeout: 1_800_000 });
+function run(bin, args) {
+  execFileSync(bin, args, { stdio: "inherit", timeout: 1_800_000 });
 }
 
 function findPython() {
   for (const name of ["python3", "python"]) {
     try {
-      const ver = execSync(`${name} --version`, { stdio: "pipe" }).toString().trim();
+      const ver = execFileSync(name, ["--version"], { stdio: "pipe" }).toString().trim();
       const match = ver.match(/(\d+)\.(\d+)/);
       if (match && (parseInt(match[1]) > 3 || (parseInt(match[1]) === 3 && parseInt(match[2]) >= 10))) {
         return name;
@@ -42,10 +42,10 @@ try {
   }
 
   if (!existsSync(venvDir)) {
-    run(`${python} -m venv "${venvDir}"`);
+    run(python, ["-m", "venv", venvDir]);
   }
 
-  run(`"${venvPython}" -m pip install -q -r "${requirements}"`);
+  run(venvPython, ["-m", "pip", "install", "-q", "-r", requirements]);
 } catch (err) {
   console.warn(
     `\n[pi-stock-analysis] Python setup failed: ${err.message}\n` +

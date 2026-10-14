@@ -53,6 +53,7 @@ export default definePluginEntry({
   register(api) {
     // OpenClaw executes a captured copy of the JS bundle; the venv stays in the installed plugin root.
     const repoRoot = api.rootDir || fallbackRoot;
+    const runtimeToolsDir = existsSync(join(repoRoot, "tools")) ? join(repoRoot, "tools") : toolsDir;
     const pythonBin = () => {
       const venvPython = join(repoRoot, venvBin);
       if (existsSync(venvPython)) return venvPython;
@@ -63,7 +64,7 @@ export default definePluginEntry({
       return isWin ? "python" : "python3";
     };
     const runPy = (script: string, args: string[]) =>
-      executor(pythonBin(), [join(toolsDir, script), ...args]);
+      executor(pythonBin(), [join(runtimeToolsDir, script), ...args]);
     // --- Data Tools ---
 
     api.registerTool({
@@ -631,7 +632,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "screen_stocks",
       description:
-        "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强",
+        "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强。显式筛选条件缺少数据时报error，filters_applied只列实际执行的条件",
       parameters: Type.Object({
         market: Type.Optional(
           Type.Union(
@@ -667,7 +668,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "run_backtest",
       description:
-        "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal",
+        "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算",
       parameters: Type.Object({
         strategy: Type.String({ description: "策略YAML文件路径" }),
         symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
@@ -976,7 +977,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "screen_risk",
       description:
-        "A股风险专项筛查 — 检查估值、技术预警、解禁、减持、业绩预警、监管和行业政策，返回风险评级和 veto_buy。新闻搜索命中是待核实线索，不是已证实风险",
+        "A股风险专项筛查 — 检查估值、技术预警、解禁、减持、业绩预警、监管和行业政策，返回风险评级和 veto_buy。新闻搜索命中是待核实线索，不是已证实风险。data_complete和warnings标明覆盖；数据不足时risk_level=unknown，risk_score或veto_buy可为null，不能视为低风险",
       parameters: Type.Object({
         symbol: Type.String({ description: "A股股票代码，如 600519" }),
         name: Type.Optional(
@@ -1255,7 +1256,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "check_alert_rules",
       description:
-        "无状态告警规则检查 — 传入规则数组，返回当前是否触发。规则类型：price_below/price_above/change_pct_above/change_pct_below/volume_ratio_above/anomaly/risk_veto/risk_level_at_least。不做调度不存历史",
+        "无状态告警规则检查 — 传入规则数组，返回当前是否触发。规则类型：price_below/price_above/change_pct_above/change_pct_below/volume_ratio_above/anomaly/risk_veto/risk_level_at_least。不做调度不存历史。依赖数据不可用时evaluated条目含error，meta.warnings提示缺失，triggered=false不代表检查成功",
       parameters: Type.Object({
         symbol: Type.String({ description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" }),
         rules: Type.Array(
@@ -1317,7 +1318,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "evaluate_signals",
       description:
-        "评估到期信号：拉取记录日之后的日K，判定 target_hit/stop_hit/timeout 并计算收益，回写存储。记录建议用 record_signal，胜率复盘用 get_signal_summary",
+        "评估到期信号：拉取记录日之后的日K，判定 target_hit/stop_hit/timeout 并计算收益，回写存储。记录建议用 record_signal，胜率复盘用 get_signal_summary。历史K线未覆盖记录日时skipped_no_data并保持未结算，不能用较新行情代替",
       parameters: Type.Object({
         symbol: Type.Optional(
           Type.String({ description: "股票代码（可选，只评估该股的信号）" })

@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +20,7 @@ def _safe_float(val) -> float | None:
         return None
     try:
         v = float(val)
-        return v if v == v else None  # NaN check
+        return v if math.isfinite(v) else None
     except (ValueError, TypeError):
         return None
 
@@ -29,9 +30,12 @@ def _safe_float(val) -> float | None:
 
 def check_valuation(symbol: str) -> dict:
     quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
+    if not isinstance(quote, dict) or "error" in quote:
+        quote = {}
     pe = _safe_float(quote.get("pe"))
     pb = _safe_float(quote.get("pb"))
-    result = {"pe": pe, "pb": pb, "status": "normal", "flags": []}
+    available = pe is not None or pb is not None
+    result = {"pe": pe, "pb": pb, "status": "normal" if available else "unknown", "flags": [], "available": available}
 
     if pe is not None:
         if pe < 0:
@@ -91,14 +95,15 @@ def check_valuation(symbol: str) -> dict:
 
 def check_technical(symbol: str) -> dict:
     ta = _run_tool("technical.py", ["analyze", symbol])
-    result = {"flags": []}
+    result = {"flags": [], "available": False}
 
-    if not ta or "error" in ta:
+    if not isinstance(ta, dict) or not ta or "error" in ta:
         return result
 
     signal = ta.get("buy_signal", "")
     score = _safe_float(ta.get("signal_score"))
-    trend = ta.get("trend", {}).get("overall", "")
+    result["available"] = score is not None
+    trend = (ta.get("trend") or {}).get("overall", "")
 
     if signal in ("STRONG_SELL",):
         result["flags"].append(
@@ -130,7 +135,7 @@ def check_technical(symbol: str) -> dict:
         )
 
     macd = ta.get("macd", {})
-    if macd.get("signal") == "death_cross":
+    if macd.get("cross") == "death_cross":
         result["flags"].append(
             {"category": "technical", "severity": "medium", "description": "MACD死叉", "source": "data"}
         )
@@ -145,15 +150,27 @@ def check_technical(symbol: str) -> dict:
 
 
 def check_lockup(symbol: str) -> dict:
-    result = {"upcoming_30d": [], "flags": []}
+    result = _run_tool("risk_screening.py", ["lockup", symbol], timeout=25)
+    return (
+        result
+        if isinstance(result, dict) and "error" not in result
+        else {"upcoming_30d": [], "flags": [], "available": False}
+    )
+
+
+def _fetch_lockup(symbol: str) -> dict:
+    result = {"upcoming_30d": [], "flags": [], "available": False}
     try:
         import akshare as ak
 
         df = ak.stock_restricted_release_queue_em(symbol=symbol)
-        if df is None or df.empty:
+        if df is None:
+            return result
+        result["available"] = True
+        if df.empty:
             return result
 
-        now = datetime.now()
+        now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         cutoff = now + timedelta(days=30)
 
         date_col = None
@@ -180,7 +197,7 @@ def check_lockup(symbol: str) -> dict:
                     }
                 )
     except Exception:
-        pass
+        result["available"] = False
     return result
 
 
@@ -195,7 +212,7 @@ def check_news_risks(symbol: str, name: str = "") -> dict:
         "regulatory": f"{search_name} 处罚 违规 监管 立案",
         "industry": f"{search_name} 行业政策 监管 限制",
     }
-    result = {"flags": []}
+    result = {"flags": [], "available": True}
     # four independent search_intel subprocesses — fan out concurrently (same
     # ThreadPoolExecutor pattern as gather._run_all); iterating `futures` in
     # declaration order keeps result keys and flags stably ordered
@@ -209,8 +226,10 @@ def check_news_risks(symbol: str, name: str = "") -> dict:
             items = []
             if isinstance(data, list):
                 items = data
-            elif isinstance(data, dict) and "results" in data:
+            elif isinstance(data, dict) and "error" not in data and isinstance(data.get("results"), list):
                 items = data["results"]
+            else:
+                result["available"] = False
 
             result[cat] = items
             if items:
@@ -265,7 +284,7 @@ def screen_risk(symbol: str, name: str = "") -> dict:
     checks = {}
 
     val = check_valuation(symbol)
-    checks["valuation"] = {"pe": val["pe"], "pb": val["pb"], "status": val["status"]}
+    checks["valuation"] = {k: val[k] for k in ("pe", "pb", "status", "available")}
     all_flags.extend(val["flags"])
 
     tech = check_technical(symbol)
@@ -273,11 +292,12 @@ def screen_risk(symbol: str, name: str = "") -> dict:
         "buy_signal": tech.get("buy_signal"),
         "signal_score": tech.get("signal_score"),
         "trend": tech.get("trend"),
+        "available": tech["available"],
     }
     all_flags.extend(tech["flags"])
 
     lockup = check_lockup(symbol)
-    checks["lockup"] = {"upcoming_30d": lockup["upcoming_30d"]}
+    checks["lockup"] = {"upcoming_30d": lockup["upcoming_30d"], "available": lockup["available"]}
     all_flags.extend(lockup["flags"])
 
     news = check_news_risks(symbol, name)
@@ -285,12 +305,16 @@ def screen_risk(symbol: str, name: str = "") -> dict:
     all_flags.extend(news["flags"])
 
     risk = compute_risk(all_flags)
+    missing = [key for key, value in checks.items() if not value.get("available")]
+    complete = not missing
     return {
         "symbol": symbol,
         "name": name,
-        "risk_level": risk["risk_level"],
-        "risk_score": risk["risk_score"],
-        "veto_buy": risk["veto_buy"],
+        "risk_level": "unknown" if missing and risk["risk_level"] == "low" else risk["risk_level"],
+        "risk_score": risk["risk_score"] if all_flags or complete else None,
+        "veto_buy": risk["veto_buy"] if risk["veto_buy"] or complete else None,
+        "data_complete": complete,
+        "warnings": [f"{key} risk data unavailable or incomplete" for key in missing],
         "flags": all_flags,
         "checks": checks,
     }
@@ -303,6 +327,8 @@ def main():
     p_screen = sub.add_parser("screen")
     p_screen.add_argument("symbol")
     p_screen.add_argument("--name", default="")
+    p_lockup = sub.add_parser("lockup", help="Internal bounded lockup query")
+    p_lockup.add_argument("symbol")
 
     args = parser.parse_args()
     if not args.command:
@@ -312,6 +338,8 @@ def main():
     if args.command == "screen":
         result = screen_risk(args.symbol, args.name)
         print(json.dumps(result, ensure_ascii=False, default=str))
+    elif args.command == "lockup":
+        print(json.dumps(_fetch_lockup(args.symbol), ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":
