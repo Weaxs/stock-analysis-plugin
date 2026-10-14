@@ -18,10 +18,13 @@ def parse_json_response(content):
 def evidence_at(case, path):
     value = case["tools"]
     source = as_of = None
-    for key in path.split("."):
+    parts = path.split(".")
+    for index, key in enumerate(parts):
         if isinstance(value, dict):
             source = value.get("source", value.get("snapshot_source", source))
             as_of = value.get("data_as_of", as_of)
+            if index > 0 and index == len(parts) - 1 and key not in value:
+                return None, source, as_of
         value = value[int(key)] if isinstance(value, list) else value[key]
     return value, source, as_of
 
@@ -98,7 +101,7 @@ def check_report(case, report, *, review=None):
                 raise ValueError(f"value must match {value!r}")
             cited.add(path)
         except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
-            failures.append(f"Unsupported or incorrect evidence claim at evidence[{index}]: {exc}")
+            failures.append(f"Unsupported or incorrect evidence claim at evidence[{index}] {evidence!r}: {exc}")
     if not set(case["required_paths"]) <= cited:
         failures.append("Missing key evidence citations")
     quote = case["tools"].get("get_quote", {})
@@ -121,7 +124,28 @@ def review_report(client, model, case, report, *, request_context=None, tool_cal
     response = client.chat.completions.create(
         model=model,
         timeout=120,
-        response_format={"type": "json_object"},
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_review",
+                    "description": "提交独立审稿的正式结论",
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            **{
+                                key: {"type": "boolean"}
+                                for key in ("facts_supported", "limitations_honest", "conclusion_calibrated")
+                            },
+                            "issues": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["facts_supported", "limitations_honest", "conclusion_calibrated", "issues"],
+                    },
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "submit_review"}},
         messages=[
             {
                 "role": "system",
@@ -137,7 +161,7 @@ def review_report(client, model, case, report, *, request_context=None, tool_cal
                     "限制说明必须真实：未知行情不能冒充实时，冲突不能当一致，3笔交易的样本胜率"
                     "不能声称样本充足或预测长期胜率。flags或低置信度标签不能抵消相反的正文断言。"
                     "如事实错误、限制不诚实、结论过度外推或无法核实，应拒绝通过并列出具体问题。"
-                    "仅输出JSON对象，包含facts_supported、limitations_honest、conclusion_calibrated"
+                    "必须调用submit_review提交正式结论，包含facts_supported、limitations_honest、conclusion_calibrated"
                     "三个boolean，以及issues字符串数组。只有三项均正确且无问题时issues才为空。"
                 ),
             },
@@ -158,4 +182,17 @@ def review_report(client, model, case, report, *, request_context=None, tool_cal
             },
         ],
     )
-    return parse_json_response(response.choices[0].message.content)
+    calls = response.choices[0].message.tool_calls
+    if not calls or len(calls) != 1 or calls[0].function.name != "submit_review":
+        raise ValueError("Reviewer must submit exactly one formal verdict")
+    verdict = json.loads(calls[0].function.arguments)
+    criteria = ("facts_supported", "limitations_honest", "conclusion_calibrated")
+    if (
+        not isinstance(verdict, dict)
+        or set(verdict) != {*criteria, "issues"}
+        or any(not isinstance(verdict[key], bool) for key in criteria)
+        or not isinstance(verdict["issues"], list)
+        or not all(isinstance(issue, str) for issue in verdict["issues"])
+    ):
+        raise ValueError("Reviewer verdict must match its declared schema")
+    return verdict

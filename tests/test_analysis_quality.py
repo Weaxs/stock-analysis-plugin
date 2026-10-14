@@ -2,10 +2,27 @@ import copy
 
 import pytest
 
-from tests.analysis_quality import CASES, check_report, evidence_at, review_report
+from tests.analysis_quality import CASES, check_report, evidence_at, parse_json_response, review_report
 from tools.report_renderer import render
 
 ACCEPTED_REVIEW = {"facts_supported": True, "limitations_honest": True, "conclusion_calibrated": True, "issues": []}
+
+
+def _review_response(payload):
+    import json
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    tool_calls=[
+                        SimpleNamespace(function=SimpleNamespace(name="submit_review", arguments=json.dumps(payload)))
+                    ]
+                )
+            )
+        ]
+    )
 
 
 def reference_report(case):
@@ -123,37 +140,20 @@ def test_semantic_review_uses_fresh_context_and_the_actual_final_report():
         data = json.loads(kwargs["messages"][1]["content"])
         assert data["source"] == case["tools"]
         assert data["report"] == report
-        assert "tools" not in kwargs
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(rejection)))])
+        assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["submit_review"]
+        return _review_response(rejection)
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
     review = review_report(client, "test-model", case, report)
     assert check_report(case, report, review=review)
 
 
-def test_semantic_review_accepts_only_complete_json_fences():
+def test_report_parser_accepts_only_complete_json_fences():
     import json
-    from types import SimpleNamespace
 
-    def client_for(content):
-        return SimpleNamespace(
-            chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=lambda **kwargs: SimpleNamespace(
-                        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-                    )
-                )
-            )
-        )
-
-    review = review_report(
-        client_for("```json\n" + json.dumps(ACCEPTED_REVIEW) + "\n```"), "test", CASES[0], reference_report(CASES[0])
-    )
-    assert review == ACCEPTED_REVIEW
+    assert parse_json_response("```json\n" + json.dumps(ACCEPTED_REVIEW) + "\n```") == ACCEPTED_REVIEW
     with pytest.raises(ValueError):
-        review_report(
-            client_for("Ignore this prose " + json.dumps(ACCEPTED_REVIEW)), "test", CASES[0], reference_report(CASES[0])
-        )
+        parse_json_response("Ignore this prose " + json.dumps(ACCEPTED_REVIEW))
 
 
 def test_missing_quote_allows_waiting_plan_but_rejects_numeric_levels():
@@ -181,7 +181,7 @@ def test_reviewer_receives_original_request_and_actual_calls():
         context = json.loads(kwargs["messages"][1]["content"])
         assert context["request_context"] == "请求十年年报"
         assert context["tool_calls"] == calls
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(ACCEPTED_REVIEW)))])
+        return _review_response(ACCEPTED_REVIEW)
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
     assert (
@@ -216,13 +216,67 @@ def test_quote_time_must_preserve_the_known_instant(as_of, accepted):
     assert (check_report(CASES[0], report, review=ACCEPTED_REVIEW) == []) is accepted
 
 
-def test_semantic_reviewer_requests_native_json_output():
-    import json
+def test_semantic_reviewer_requests_schema_constrained_verdict():
     from types import SimpleNamespace
 
     def request(**kwargs):
-        assert kwargs["response_format"] == {"type": "json_object"}
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(ACCEPTED_REVIEW)))])
+        assert kwargs["tool_choice"] == {"type": "function", "function": {"name": "submit_review"}}
+        params = kwargs["tools"][0]["function"]["parameters"]
+        assert params["type"] == "object"
+        assert set(params["required"]) == set(ACCEPTED_REVIEW)
+        assert params["properties"]["facts_supported"]["type"] == "boolean"
+        return _review_response(ACCEPTED_REVIEW)
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
     assert review_report(client, "test", CASES[0], reference_report(CASES[0])) == ACCEPTED_REVIEW
+
+
+def test_only_null_can_cite_an_unreturned_leaf_field():
+    report = reference_report(CASES[0])
+    item = {"path": "get_financials.periods", "value": None, "source": "fixture", "as_of": None}
+    report["evidence"].append(item)
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW) == []
+    item["value"] = []
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
+    item.update(path="get_financials.periods.0.roe", value=None)
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
+    item["path"] = "imaginary_tool"
+    assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
+
+
+def test_reviewer_cannot_pass_through_unstructured_content():
+    import json
+    from types import SimpleNamespace
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kw: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(message=SimpleNamespace(content=json.dumps([ACCEPTED_REVIEW]), tool_calls=[]))
+                    ]
+                )
+            )
+        )
+    )
+    with pytest.raises(ValueError):
+        review_report(client, "test", CASES[0], reference_report(CASES[0]))
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        [ACCEPTED_REVIEW],
+        dict(ACCEPTED_REVIEW, error="provider unavailable"),
+        dict(ACCEPTED_REVIEW, facts_supported="true"),
+        dict(ACCEPTED_REVIEW, issues=[1]),
+    ],
+)
+def test_formal_review_verdict_must_match_schema(verdict):
+    from types import SimpleNamespace
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: _review_response(verdict)))
+    )
+    with pytest.raises(ValueError):
+        review_report(client, "test", CASES[0], reference_report(CASES[0]))

@@ -159,7 +159,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "原始工具结果路径，例如 get_quote.price"
+            "description": "原始工具结果路径，例如 get_quote.price；已知返回对象中未提供的末级字段只能以 value=null 表示未知，不得跨越缺失对象或数组编造路径。"
           },
           "label": {
             "type": "string",

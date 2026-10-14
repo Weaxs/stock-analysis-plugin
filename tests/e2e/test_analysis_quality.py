@@ -41,7 +41,8 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
         "path不含调用参数，例如get_financials.periods.0.roe；来源及时间未返回时必须填null，不用工具名或方法名代替来源。"
         "as_of只引用结果中的data_as_of并保留完整时间及其时区；report_date是财报报告期，要单独引用value，不能替代as_of。"
         "错误证据也保留原始字符串，例如value='provider unavailable'，不能加error:前缀。"
-        "只能引用实际返回的字段，未知现价时可以给等待数据的文字计划，不能编造数值价位。"
+        "可引用已知返回对象中未提供的末级字段，但value必须为null并标注未知，不能编成空数组、字符串或数值。"
+        "不能跨越不存在的对象或数组编造路径。未知现价时可以给等待数据的文字计划，不能编造数值价位。"
         "报告需核对所有返回的现价、数据时间、财务报告期及ROE（包括历史periods），有回测时引用total_trades和win_rate。"
         f"\nSkill:\n{skill}\nReport schema:\n{schema}"
     )
