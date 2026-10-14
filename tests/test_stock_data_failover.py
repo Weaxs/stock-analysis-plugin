@@ -22,6 +22,7 @@ from tools.stock_data import (
     _fuzzy_match_sector,
     _kline_akshare,
     _kline_alphavantage,
+    _kline_baostock,
     _kline_finnhub,
     _kline_longbridge,
     _kline_sina,
@@ -67,6 +68,67 @@ from tools.stock_data import (
     sector_constituents_a,
     snapshot_a,
 )
+
+
+@pytest.mark.parametrize(
+    "period,key",
+    [
+        ("daily", "Time Series (Daily)"),
+        ("weekly", "Weekly Adjusted Time Series"),
+        ("monthly", "Monthly Adjusted Time Series"),
+    ],
+)
+def test_alphavantage_prices_use_adjusted_close(monkeypatch, period, key):
+    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
+    before = {
+        "1. open": "400",
+        "2. high": "440",
+        "3. low": "360",
+        "4. close": "400",
+        "5. adjusted close": "100",
+        "6. volume": "1000",
+    }
+    after = {**before, "1. open": "100", "2. high": "110", "3. low": "90", "4. close": "100"}
+    monkeypatch.setattr(
+        "requests.get", lambda *a, **kw: MagicMock(json=lambda: {key: {"2026-01-01": before, "2026-01-02": after}})
+    )
+    rows = _kline_alphavantage("AAPL", period, 2)
+    assert [(r["open"], r["high"], r["low"], r["close"]) for r in rows] == [(100, 110, 90, 100)] * 2
+
+
+def test_baostock_volume_uses_a_share_lots(monkeypatch):
+    result = MagicMock(error_code="0", fields=["date", "open", "high", "low", "close", "volume", "amount", "pctChg"])
+    result.next.side_effect = [True, False]
+    result.get_row_data.return_value = ["2026-01-01", "10", "11", "9", "10", "10000", "100000", "0"]
+    monkeypatch.setattr("baostock.login", lambda: None)
+    monkeypatch.setattr("baostock.logout", lambda: None)
+    monkeypatch.setattr("baostock.query_history_k_data_plus", lambda *a, **kw: result)
+    assert _kline_baostock("600519", "daily", 1)[0]["volume"] == 100
+
+
+def test_alphavantage_large_window_requests_full_history(monkeypatch):
+    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
+    requested = []
+
+    def fetch(*args, **kwargs):
+        requested.append(kwargs["params"])
+        return MagicMock(
+            json=lambda: {
+                "Time Series (Daily)": {
+                    "2026-01-01": {
+                        "1. open": "10",
+                        "2. high": "11",
+                        "3. low": "9",
+                        "4. close": "10",
+                        "5. adjusted close": "10",
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr("requests.get", fetch)
+    _kline_alphavantage("AAPL", "daily", 250)
+    assert requested[0]["outputsize"] == "full"
 
 
 @pytest.fixture(autouse=True)
@@ -707,6 +769,7 @@ class TestKlineAlphavantage:
                         "2. high": "152.0",
                         "3. low": "148.0",
                         "4. close": "151.0",
+                        "5. adjusted close": "151.0",
                         "6. volume": "50000",
                     },
                     "2026-05-18": {
@@ -714,6 +777,7 @@ class TestKlineAlphavantage:
                         "2. high": "151.0",
                         "3. low": "147.0",
                         "4. close": "150.0",
+                        "5. adjusted close": "150.0",
                         "6. volume": "45000",
                     },
                 }

@@ -642,13 +642,25 @@ def analyze_multi(symbol: str, period: str, count: int, periods: list) -> dict:
 
 
 def analyze(symbol: str, period: str = "daily", count: int = 120) -> dict:
-    records = fetch_kline(symbol, period, count)
+    return analyze_records(symbol, fetch_kline(symbol, period, count), period)
+
+
+def analyze_records(symbol: str, records: list, period: str = "daily") -> dict:
     if isinstance(records, dict) and "error" in records:
         return records
-    if not records:
+    if not isinstance(records, list) or not records:
         return {"error": "No kline data returned"}
+    if any(not isinstance(row, dict) for row in records):
+        return {"error": "Invalid kline rows"}
 
     df = to_dataframe(records)
+    required = ["date", "close", "high", "low", "volume"]
+    if any(field not in df for field in required):
+        return {"error": "Missing kline fields"}
+    if df["date"].isna().any() or not np.isfinite(df[required[1:]]).all().all():
+        return {"error": "Invalid kline values"}
+    if (df[["close", "high", "low"]] <= 0).any().any() or (df["volume"] < 0).any():
+        return {"error": "Kline prices must be positive and volume nonnegative"}
     if len(df) < 30:
         return {"error": f"Insufficient data: {len(df)} rows (need at least 30)"}
 
@@ -731,6 +743,8 @@ def main():
     else:
         result = {"error": f"Unknown command: {args.command}"}
     print(json.dumps(result, ensure_ascii=False, default=str))
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

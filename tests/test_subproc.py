@@ -2,7 +2,32 @@ import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tools._subproc import find_python, run_tool
+
+
+@pytest.mark.parametrize(
+    "module,handler,argv",
+    [
+        ("backtest", "run_backtest", ["run", "unused", "AAPL"]),
+        ("alert_rules", "check_rules", ["check", "AAPL", "--rules", "[]"]),
+        ("report_renderer", "render", ["stock", "--input-b64", "e30="]),
+        ("market_regime", "detect_regime", ["detect", "US"]),
+        ("stock_data", "cmd_quote", ["quote", "AAPL"]),
+    ],
+)
+def test_cli_errors_have_nonzero_status(monkeypatch, capsys, module, handler, argv):
+    import importlib
+    import json
+
+    tool = importlib.import_module(f"tools.{module}")
+    monkeypatch.setattr(tool, handler, lambda *a, **kw: {"error": "unavailable"})
+    monkeypatch.setattr(sys, "argv", [module + ".py", *argv])
+    with pytest.raises(SystemExit) as exc:
+        tool.main()
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {"error": "unavailable"}
 
 
 class TestRunToolArgv:

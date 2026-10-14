@@ -136,6 +136,14 @@ class TestReviewMarket:
 
 
 class TestReviewArchive:
+    def test_append_repairs_missing_final_newline(self, tmp_path):
+        store = tmp_path / "reviews.jsonl"
+        store.write_text('{"date":"2026-10-13"}', encoding="utf-8")
+        assert mr.save_review({"date": "2026-10-14"}, store)["saved"]
+        history = mr.cmd_history(Namespace(limit=10, store=str(store)))
+        assert history["count"] == 2
+        assert history["records"][0]["date"] == "2026-10-14"
+
     """The JSONL review archive: render_market_report --save writes, history reads."""
 
     def test_save_review_appends_jsonl(self, tmp_path):

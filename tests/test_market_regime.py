@@ -87,6 +87,12 @@ class TestClassifyRegime:
 
 
 class TestComputeIndicators:
+    def test_missing_ohlc_rows_are_not_misaligned(self, make_kline_data):
+        klines = make_kline_data(30)
+        for row in klines[:-4]:
+            row["low"] = None
+        assert _compute_indicators(klines) == {}
+
     def test_sufficient_data(self, make_kline_data):
         klines = make_kline_data(80, "up")
         ind = _compute_indicators(klines)

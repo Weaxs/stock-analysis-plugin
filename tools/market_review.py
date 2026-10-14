@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
 from _subproc import utf8_stdio
-from signal_tracker import _load_records
+from signal_tracker import _append_record, _load_records, _store_lock
 
 
 def calc_temperature(stats: dict, indices: list) -> dict:
@@ -145,10 +145,9 @@ def save_review(report: dict, store: Path | None = None) -> dict:
     """Append one review report object to the JSONL archive (side effect of render --save)."""
     store = store or _default_store()
     try:
-        store.parent.mkdir(parents=True, exist_ok=True)
-        with store.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(report, ensure_ascii=False, default=str) + "\n")
-    except OSError as e:
+        with _store_lock(store):
+            _append_record(store, report)
+    except (OSError, ValueError) as e:
         return {"error": str(e)}
     return {"saved": True, "date": report.get("review_date") or report.get("date")}
 
@@ -156,7 +155,9 @@ def save_review(report: dict, store: Path | None = None) -> dict:
 def cmd_history(args) -> dict:
     """Recent archived reviews, newest first. Empty store -> clean empty list."""
     try:
-        records = _load_records(Path(args.store) if args.store else _default_store())
+        store = Path(args.store) if args.store else _default_store()
+        with _store_lock(store):
+            records = _load_records(store)
     except (OSError, UnicodeDecodeError) as e:
         # store is a directory / not UTF-8 — same clean-error contract as save_review
         return {"error": str(e)}

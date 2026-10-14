@@ -16,6 +16,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import json_safe, run_tool, utf8_stdio
+from stock_data import detect_market
 from technical import bollinger_series, ema_series, ma_series, macd_series, rsi_series
 
 # --------------- Strategy Loading ---------------
@@ -67,7 +68,7 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
     if start and end:
         d0 = datetime.strptime(start, "%Y-%m-%d")
         d1 = datetime.strptime(end, "%Y-%m-%d")
-        count = max((d1 - d0).days + 60, 300)
+        count = max((datetime.now() - d0).days + 60, (d1 - d0).days + 60, 300)
 
     # run_tool gives venv-python + a bounded timeout + None on any failure
     # (non-zero exit, empty/invalid stdout); callers turn that into clean JSON.
@@ -251,7 +252,11 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
 
 
 def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> dict:
-    market = "A" if re.match(r"^\d{6}$", symbol) else "OTHER"
+    if not math.isfinite(capital) or capital <= 0:
+        raise ValueError("capital must be finite and positive")
+    if not np.isfinite(df["close"]).all() or (df["close"] <= 0).any():
+        raise ValueError("backtest prices must be finite and positive")
+    market = detect_market(symbol)
     lot_size = 100 if market == "A" else 1
     sim_cfg = strategy.get("simulation", {})
     slippage = float(sim_cfg.get("slippage", 0.001))
@@ -268,6 +273,8 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
     exit_ = strategy.get("exit", {})
     position_cfg = strategy.get("position", {})
     size_frac = float(position_cfg.get("size", 1.0))
+    if not 0 <= size_frac <= 1:
+        raise ValueError("position.size must be a fraction in [0, 1]")
     stop_loss = float(exit_.get("stop_loss", -0.10))
     take_profit = float(exit_.get("take_profit", 0.50))
     ts_val = exit_.get("trailing_stop")
@@ -297,7 +304,7 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
             if hit:
                 buy_price = price * (1 + slippage)
                 buy_amount = cash * size_frac
-                shares = int(buy_amount / buy_price / lot_size) * lot_size
+                shares = int(buy_amount / (buy_price * (1 + commission)) / lot_size) * lot_size
                 if shares <= 0:
                     continue
                 cost = shares * buy_price * (1 + commission)
@@ -417,7 +424,7 @@ def compute_metrics(trades: list, equity_curve: list, initial: float, final: flo
         years = 1
     annual_return = (1 + total_return) ** (1 / max(years, 0.01)) - 1 if total_return > -1 else total_return
 
-    equities = pd.Series([e["equity"] for e in equity_curve], dtype=float)
+    equities = pd.Series([initial, *[e["equity"] for e in equity_curve]], dtype=float)
     peak = equities.cummax()
     dd = (equities - peak) / peak
     max_drawdown = float(dd.min()) if len(dd) > 0 else 0
@@ -653,6 +660,13 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     if len(df) < 30:
         return {"error": f"Insufficient data: {len(df)} rows (need at least 30)"}
 
+    requested_period = f"{start} to {end}"
+    actual_start = df["date"].iloc[0].strftime("%Y-%m-%d")
+    actual_end = df["date"].iloc[-1].strftime("%Y-%m-%d")
+    warnings = []
+    if actual_start != start or actual_end != end:
+        warnings.append(f"Actual data covers {actual_start} to {actual_end}; requested {requested_period}")
+    start, end = actual_start, actual_end
     sim = simulate(df, strategy, capital, symbol)
     final = sim["final_equity"]
     metrics = compute_metrics(sim["trades"], sim["equity_curve"], capital, final, start, end)
@@ -661,6 +675,8 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         "strategy": strategy.get("name", "unnamed"),
         "symbol": symbol,
         "period": f"{start} to {end}",
+        "requested_period": requested_period,
+        "warnings": warnings,
         "initial_capital": capital,
         "final_capital": final,
         "costs": sim["costs"],
@@ -837,6 +853,8 @@ def main():
         sys.exit(1)
 
     print(json.dumps(json_safe(result), ensure_ascii=False, default=str))
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

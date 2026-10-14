@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -207,6 +208,7 @@ def _kline_baostock(symbol: str, period: str, count: int) -> list:
     for c in ["open", "high", "low", "close", "volume"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["volume"] /= 100  # Baostock uses shares; the A-share CLI contract uses lots.
     keep = [c for c in ["date", "open", "high", "low", "close", "volume", "turnover", "change_pct"] if c in df.columns]
     df = df[keep].tail(count)
     return [_clean_row(r) for r in df.to_dict("records")]
@@ -876,7 +878,7 @@ def _kline_alphavantage(symbol: str, period: str, count: int) -> list:
             "function": fn_map.get(period, fn_map["daily"]),
             "symbol": symbol,
             "apikey": api_key,
-            "outputsize": "compact",
+            "outputsize": "full" if count > 100 else "compact",
         },
         timeout=20,
     )
@@ -890,14 +892,19 @@ def _kline_alphavantage(symbol: str, period: str, count: int) -> list:
 
     rows = []
     for date_str, vals in sorted(ts.items()):
+        close = float(vals["4. close"])
+        adjusted = float(vals.get("5. adjusted close", "nan"))
+        if not math.isfinite(close) or not math.isfinite(adjusted) or close <= 0 or adjusted <= 0:
+            raise ValueError("alphavantage returned invalid adjustment prices")
+        factor = adjusted / close
         rows.append(
             _clean_row(
                 {
                     "date": date_str,
-                    "open": float(vals["1. open"]),
-                    "high": float(vals["2. high"]),
-                    "low": float(vals["3. low"]),
-                    "close": float(vals["4. close"]),
+                    "open": float(vals["1. open"]) * factor,
+                    "high": float(vals["2. high"]) * factor,
+                    "low": float(vals["3. low"]) * factor,
+                    "close": adjusted,
                     "volume": int(vals.get("6. volume", vals.get("5. volume", 0))),
                 }
             )
@@ -3307,6 +3314,8 @@ def main():
     with contextlib.redirect_stdout(sys.stderr):
         result = dispatch[args.command](args)
     output(result)
+    if isinstance(result, dict) and "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

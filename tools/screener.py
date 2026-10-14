@@ -314,20 +314,21 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
 
 
 def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict:
+    if config is not None and (not isinstance(config, dict) or not isinstance(config.get("filters", {}), dict)):
+        return {"error": "config and filters must be objects", "market": market}
     filters = merge_filters(config)
+    supported = set(DEFAULT_FILTERS) | {"dividend_yield_min", "dividend_yield_max"}
+    for key, value in filters.items():
+        if key not in supported:
+            return {"error": f"Unsupported filter: {key}", "market": market}
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+            return {"error": f"{key} must be a finite number", "market": market}
     dividend_requested = any(k.startswith("dividend_yield_") for k in filters) or (config or {}).get("sort_by") in (
         "dividend_yield",
         "dividend_score",
     )
     if dividend_requested and market not in ("A", "HK"):
         return {"error": "dividend screening currently covers A/HK only", "market": market}
-    for key in ("dividend_yield_min", "dividend_yield_max"):
-        if key in filters and (
-            isinstance(filters[key], bool)
-            or not isinstance(filters[key], (int, float))
-            or not np.isfinite(filters[key])
-        ):
-            return {"error": f"{key} must be a finite number in percent units", "market": market}
     raw = fetch_snapshot(market)
     if isinstance(raw, dict) and "error" in raw:
         return raw
@@ -378,6 +379,11 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
                 "error": "dividend data unavailable; requested dividend criterion was not applied",
                 "market": market,
             }
+    explicit = (config or {}).get("filters") or {}
+    missing = [key for key in explicit if key.rsplit("_", 1)[0] not in df]
+    if missing:
+        return {"error": f"Requested filter data unavailable: {', '.join(missing)}", "market": market}
+    applied_filters = {key: value for key, value in filters.items() if key.rsplit("_", 1)[0] in df}
     df = apply_filters(df, filters)
     filtered_count = len(df)
 
@@ -387,7 +393,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "total_stocks": total,
             "filtered_count": 0,
             "returned_count": 0,
-            "filters_applied": filters,
+            "filters_applied": applied_filters,
             "candidates": [],
             "market_sentiment": sentiment,
             "l2_enabled": l2_enabled,
@@ -450,7 +456,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         "total_stocks": total,
         "filtered_count": filtered_count,
         "returned_count": len(candidates),
-        "filters_applied": filters,
+        "filters_applied": applied_filters,
         "candidates": candidates,
         "market_sentiment": sentiment,
         "l2_enabled": l2_enabled,
@@ -478,6 +484,8 @@ def main():
     config = load_config(args.config) if args.config else None
     result = screen(args.market, args.top, config, l2=args.l2)
     print(json.dumps(result, ensure_ascii=False, default=str))
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

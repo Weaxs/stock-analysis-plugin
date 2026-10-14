@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "stock-analysis-setup-"));
+const root = mkdtempSync(join(tmpdir(), "stock-analysis-setup-$STOCK_SETUP_LITERAL-"));
 try {
   mkdirSync(join(root, "scripts"));
   mkdirSync(join(root, "tools"));
@@ -16,6 +16,7 @@ try {
   });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /Python setup failed/);
+  assert(existsSync(join(root, ".venv")), "venv must be created under the literal package path");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -3,6 +3,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import tools.technical as technical_mod
 from tools.technical import (
@@ -392,7 +393,9 @@ class TestMultiPeriodAnalysis:
 
     def test_cli_invalid_periods_prints_error(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, "argv", ["technical.py", "analyze", "600519", "--periods", "hourly"])
-        technical_mod.main()
+        with pytest.raises(SystemExit) as exc:
+            technical_mod.main()
+        assert exc.value.code == 1
         out = json.loads(capsys.readouterr().out)
         assert "error" in out
         assert "hourly" in out["error"]

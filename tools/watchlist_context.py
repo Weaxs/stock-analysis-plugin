@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import run_tool as _run_json  # noqa: E402
 from _subproc import utf8_stdio
 from stock_data import detect_market  # noqa: E402
-from watchlist import analyze_watchlist  # noqa: E402
+from watchlist import analyze_watchlist, has_analysis_data  # noqa: E402
 
 
 def _suggest_next_tools(market: str, trend: str, anomalies: list, risk_level: str) -> list:
@@ -39,7 +39,7 @@ def _suggest_next_tools(market: str, trend: str, anomalies: list, risk_level: st
 
 
 def _build_item(symbol: str, data: dict | None) -> dict:
-    if not data:
+    if not has_analysis_data(data):
         return {"symbol": symbol, "error": "no data"}
 
     tech = data.get("technical") or {}
@@ -52,7 +52,7 @@ def _build_item(symbol: str, data: dict | None) -> dict:
     score = tech.get("signal_score")
     trend = (tech.get("trend") or {}).get("overall") or "unknown"
     risk_level = risk.get("risk_level", "unknown")
-    veto = bool(risk.get("veto_buy", False))
+    veto = risk.get("veto_buy")
     buy_signal = tech.get("buy_signal")
     market = detect_market(symbol)
 
@@ -79,6 +79,8 @@ def _build_item(symbol: str, data: dict | None) -> dict:
 
 def build_context(symbols: list[str], include_market_review: bool = False, workers: int = 3) -> dict:
     raw = analyze_watchlist(symbols, workers=workers)
+    if "error" in raw:
+        return raw
     results = raw.get("results", {})
 
     items = []
@@ -148,6 +150,8 @@ def main():
     result = build_context(codes, include_market_review=args.include_market_review, workers=args.workers)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

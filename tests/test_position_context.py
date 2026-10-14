@@ -1,4 +1,36 @@
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
 from tools import position_context
+
+
+def test_cli_invalid_position_exits_nonzero():
+    script = Path(__file__).resolve().parents[1] / "tools" / "position_context.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "analyze", "AAPL", "--cost", "0", "--quantity", "1"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert "error" in json.loads(result.stdout)
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize("price", [0, -1, float("nan"), float("inf"), "bad"])
+def test_invalid_quote_is_clean_error(monkeypatch, price):
+    monkeypatch.setattr(position_context, "_run_json", lambda *a, **kw: {"price": price})
+    assert "error" in position_context.analyze_position("AAPL", cost=100, quantity=10)
+
+
+@pytest.mark.parametrize("overrides", [{"cost": 0}, {"quantity": -1}, {"stop_loss": float("nan")}])
+def test_invalid_position_is_clean_error(monkeypatch, overrides):
+    monkeypatch.setattr(position_context, "_run_json", lambda *a, **kw: {"price": 100})
+    inputs = {"cost": 100, "quantity": 10, **overrides}
+    assert "error" in position_context.analyze_position("AAPL", **inputs)
 
 
 class TestRiskLevel:

@@ -156,6 +156,21 @@ class TestComputeMetrics:
 
 
 class TestDiagnose:
+    def test_backtest_reports_actual_data_period(self, monkeypatch, make_kline_data):
+        frame = pd.DataFrame(make_kline_data(40))
+        frame["date"] = pd.date_range("2025-09-01", periods=40, freq="B")
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: frame)
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a: {"entry": {"conditions": []}})
+        result = backtest.run_backtest("unused", "AAPL", "2025-01-01", "2025-12-31", 1000)
+        assert result["period"] == "2025-09-01 to 2025-10-24"
+        assert result["requested_period"] == "2025-01-01 to 2025-12-31"
+        assert result["warnings"]
+
+    def test_initial_loss_is_included_in_drawdown(self):
+        curve = [{"date": "2026-01-02", "equity": 99}, {"date": "2026-01-03", "equity": 99}]
+        metrics = compute_metrics([], curve, 100, 99, "2026-01-01", "2026-01-03")
+        assert metrics["max_drawdown"] == -0.01
+
     def test_good_strategy(self):
         metrics = {
             "win_rate": 0.65,
@@ -542,10 +557,30 @@ class TestTrailingStop:
 
 
 class TestStampTax:
+    @pytest.mark.parametrize("size", [-1, 1.1, float("nan")])
+    def test_position_fraction_cannot_create_borrowed_cash(self, size):
+        with pytest.raises(ValueError, match="position.size"):
+            backtest.simulate(_df_from_closes([10, 10]), {"position": {"size": size}}, 1000, "AAPL")
+
+    @pytest.mark.parametrize("symbol", ["600519", "sh600519", "sz000001"])
+    def test_a_share_aliases_use_same_lot_size(self, symbol):
+        strategy = {"entry": _ALWAYS_ENTRY, "simulation": {"slippage": 0, "commission": 0}}
+        sim = backtest.simulate(_df_from_closes([10, 10]), strategy, 1500, symbol)
+        assert sim["trades"][0]["shares"] == 100
+
+    def test_full_position_includes_buy_commission_in_budget(self):
+        strategy = {
+            "entry": _ALWAYS_ENTRY,
+            "position": {"size": 1},
+            "simulation": {"slippage": 0, "commission": 0.0015},
+        }
+        sim = backtest.simulate(_df_from_closes([10, 10, 10]), strategy, 100, "AAPL")
+        assert sim["trades"][0]["shares"] == 9
+        assert sim["trades"][0]["amount"] <= 100
+
     def test_stamp_tax_deducted_from_sell_proceeds_only(self):
         # Entry at close 10 (bar 1), take-profit at close 12 (bar 3, +20%).
-        # slippage 0 keeps the arithmetic exact: buy 100k shares at 10 → cost 1,001,000
-        # (commission only); sell gross 1,200,000 → proceeds = gross × (1 − 0.001 − 0.0005).
+        # One million covers 99,900 shares plus commission; sell tax applies only at exit.
         df = _df_from_closes([10, 10, 11, 12])
         strategy = {
             "entry": _ALWAYS_ENTRY,
@@ -557,11 +592,12 @@ class TestStampTax:
         buys = [t for t in sim["trades"] if t["type"] == "buy"]
         sells = [t for t in sim["trades"] if t["type"] == "sell"]
         assert len(buys) == 1 and len(sells) == 1
-        assert buys[0]["amount"] == 1001000.0  # stamp tax never touches the buy side
+        assert buys[0]["shares"] == 99900
+        assert buys[0]["amount"] == 999999.0  # stamp tax never touches the buy side
         assert sells[0]["price"] == 12.0
-        assert sells[0]["amount"] == 100000 * 12 * (1 - 0.001 - 0.0005)
-        assert sim["costs"]["commission_paid"] == pytest.approx(1000 + 1200)
-        assert sim["costs"]["stamp_tax_paid"] == pytest.approx(600)
+        assert sells[0]["amount"] == 1197001.8
+        assert sim["costs"]["commission_paid"] == pytest.approx(2197.8)
+        assert sim["costs"]["stamp_tax_paid"] == pytest.approx(599.4)
 
     def test_default_stamp_tax_zero_matches_explicit_zero(self):
         # No simulation block must behave exactly like stamp_tax: 0 with default rates.

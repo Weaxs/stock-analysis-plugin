@@ -7,6 +7,21 @@ from tools.watchlist import analyze_watchlist
 
 
 class TestAnalyzeWatchlist:
+    @pytest.mark.parametrize("workers", [0, -1, 1.5])
+    @patch("tools.watchlist.gather_analysis", return_value=None)
+    def test_invalid_workers_is_clean_error(self, mock_gather, workers):
+        assert "error" in analyze_watchlist(["AAPL"], workers=workers)
+
+    @pytest.mark.parametrize(
+        "data", [None, {}, {"quote": None, "kline": [], "technical": {"error": "down"}}, {"quote": {"price": None}}]
+    )
+    @patch("tools.watchlist.gather_analysis")
+    def test_empty_or_error_results_count_as_failed(self, mock_gather, data):
+        mock_gather.return_value = data
+        result = analyze_watchlist(["AAPL"])
+        assert result["summary"] == {"total": 1, "success": 0, "failed": 1}
+        assert result["results"]["AAPL"] == data
+
     @patch("tools.watchlist.gather_analysis")
     def test_all_success(self, mock_gather):
         mock_gather.return_value = {"quote": {"price": 100}, "kline": []}
@@ -45,15 +60,15 @@ class TestAnalyzeWatchlist:
 
     @patch("tools.watchlist.gather_analysis")
     def test_single_stock(self, mock_gather):
-        mock_gather.return_value = {"technical": {"score": 85}}
+        mock_gather.return_value = {"technical": {"signal_score": 85}}
         result = analyze_watchlist(["300750"])
         assert result["summary"]["total"] == 1
         assert result["summary"]["success"] == 1
-        assert result["results"]["300750"] == {"technical": {"score": 85}}
+        assert result["results"]["300750"] == {"technical": {"signal_score": 85}}
 
     @patch("tools.watchlist.gather_analysis")
     def test_workers_param(self, mock_gather):
-        mock_gather.return_value = {"data": 1}
+        mock_gather.return_value = {"quote": {"price": 100}}
         result = analyze_watchlist(["600519", "000001", "300750"], workers=1)
         assert result["summary"]["success"] == 3
 

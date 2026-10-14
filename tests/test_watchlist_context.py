@@ -1,4 +1,25 @@
+import pytest
+
 from tools import watchlist_context
+
+
+@pytest.mark.parametrize("workers", [0, -1, 1.5])
+def test_invalid_workers_is_clean_error(workers, monkeypatch):
+    monkeypatch.setattr("watchlist.gather_analysis", lambda *a, **kw: None)
+    assert "error" in watchlist_context.build_context(["AAPL"], workers=workers)
+
+
+def test_all_failed_analysis_is_not_a_successful_context(monkeypatch):
+    monkeypatch.setattr(
+        watchlist_context,
+        "analyze_watchlist",
+        lambda *a, **kw: {"results": {"AAPL": {"quote": None, "kline": [], "technical": {"error": "down"}}}},
+    )
+    monkeypatch.setattr(watchlist_context, "_run_json", lambda *a, **kw: None)
+    result = watchlist_context.build_context(["AAPL"])
+    assert result["summary"]["success"] == 0
+    assert result["summary"]["failed"] == 1
+    assert "error" in result["items"][0]
 
 
 class TestSuggestNextTools:

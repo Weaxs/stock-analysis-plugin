@@ -26,13 +26,13 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 ### 第一步：采集数据
 
-运行数据采集脚本（并行获取 quote/kline/technical/financials/capital_flow/news/risk/regime 共 8 项数据）：
+运行数据采集脚本（并行采集行情、K 线、财务、资金、筹码、新闻、舆情、风险和大盘状态；技术指标复用本次 K 线计算）：
 
 ```bash
 python3 scripts/gather.py <symbol>
 ```
 
-解析返回的 JSON 数据。如果某个字段为 `null`，表示该数据获取失败，基于可用数据继续分析。
+解析返回的 JSON 数据。如果某个字段为 `null` 或包含 `error`，表示该数据不可用，基于可用数据继续分析。大盘状态按股票所属市场查询；日/韩/台市场暂不支持，标明缺失，不能套用 A 股状态。
 
 解读实时行情前先调 `get_trading_phase` 确认该市场当前盘中阶段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），避免把休市时的静态快照当作盘中信号解读。
 
@@ -66,7 +66,7 @@ python3 scripts/gather.py <symbol>
 
 **风险筛查**：
 - 7维度风险标记（估值极端/技术预警/解禁到期/内部人减持/业绩预警/监管处罚/行业政策）
-- 风险评级（low/medium/high）和一票否决（veto_buy）
+- 风险评级（low/medium/high/unknown）和一票否决（veto_buy）；查看 data_complete、warnings，unknown 或 null 表示缺少数据，不能据此判定低风险或已通过检查
 - 如果 veto_buy=true，必须在报告中醒目提示
 
 ### 第三步：渲染研报

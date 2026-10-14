@@ -51,6 +51,22 @@ class TestRun:
 
 
 class TestGatherAnalysis:
+    @pytest.mark.parametrize("symbol,market", [("600519", "A"), ("00700.HK", "HK"), ("AAPL", "US")])
+    @patch("tools.gather._run")
+    def test_regime_uses_stock_market(self, mock_run, symbol, market):
+        def fetch(script, args, **kwargs):
+            return json.dumps({"market": args[1] if len(args) > 1 else "A"}) if script == "market_regime.py" else None
+
+        mock_run.side_effect = fetch
+        assert gather_analysis(symbol)["regime"]["market"] == market
+
+    @pytest.mark.parametrize("symbol", ["7203.T", "005930.KS", "2330.TW"])
+    @patch("tools.gather._run")
+    def test_unsupported_regime_is_explicit(self, mock_run, symbol):
+        mock_run.return_value = None
+        assert "error" in gather_analysis(symbol)["regime"]
+        assert all(c.args[0] != "market_regime.py" for c in mock_run.call_args_list)
+
     @patch("tools.gather._run")
     def test_returns_all_keys(self, mock_run):
         mock_run.return_value = '{"data": "value"}'
@@ -166,11 +182,42 @@ class TestGatherAnalysis:
     def test_parses_json_results(self, mock_run):
         mock_run.return_value = '{"score": 85}'
         result = gather_analysis("600519")
-        for v in result.values():
-            assert v == {"score": 85}
+        assert result["quote"] == {"score": 85}
+        assert result["kline"] == {"score": 85}
+        assert "error" in result["technical"]
 
 
 class TestGatherTechnical:
+    @patch("tools.gather._run")
+    def test_zero_prices_are_not_an_analysis(self, mock_run, make_kline_data):
+        records = make_kline_data(n=40)
+        for row in records:
+            row.update(close=0, high=0, low=0, open=0)
+        mock_run.return_value = json.dumps(records, default=str)
+        assert "error" in gather_technical("AAPL")["technical"]
+
+    @patch("tools.gather._run")
+    def test_malformed_bars_do_not_drop_other_results(self, mock_run):
+        def fetch(script, args, **kwargs):
+            return json.dumps([{"date": "2026-01-01", "close": 10}] * 40) if args[0] == "kline" else '{"price": 10}'
+
+        mock_run.side_effect = fetch
+        result = gather_technical("AAPL", with_quote=True)
+        assert result["quote"] == {"price": 10}
+        assert "error" in result["technical"]
+
+    @pytest.mark.parametrize("gatherer", [gather_technical, gather_analysis, gather_fundamental])
+    @patch("tools.gather._run")
+    def test_indicators_use_the_returned_bars(self, mock_run, make_kline_data, gatherer):
+        records = make_kline_data(n=60)
+        payload = json.dumps(records, default=str)
+        mock_run.side_effect = lambda script, args, **kw: payload if args[0] == "kline" else None
+        result = gatherer("AAPL")
+        assert result["technical"]["latest"]["close"] == records[-1]["close"]
+        assert result["technical"]["data_points"] == 60
+        assert result["technical"]["symbol"] == "AAPL"
+        assert all(c.args[0] != "technical.py" for c in mock_run.call_args_list)
+
     @patch("tools.gather._run")
     def test_default_params(self, mock_run):
         mock_run.return_value = '{"data": 1}'
@@ -185,25 +232,12 @@ class TestGatherTechnical:
         result = gather_technical("AAPL", with_quote=True)
         assert "quote" in result
 
+    @pytest.mark.parametrize("symbol,count", [("600519", 30), ("AAPL", 90)])
     @patch("tools.gather._run")
-    def test_custom_kline_count(self, mock_run):
+    def test_custom_kline_count(self, mock_run, symbol, count):
         mock_run.return_value = None
-        gather_technical("600519", kline_count=30)
-        calls = mock_run.call_args_list
-        kline_call = [c for c in calls if c[0][0] == "stock_data.py" and "kline" in c[0][1]]
-        assert "--count" in kline_call[0][0][1]
-        count_idx = kline_call[0][0][1].index("--count")
-        assert kline_call[0][0][1][count_idx + 1] == "30"
-
-    @patch("tools.gather._run")
-    def test_kline_count_90(self, mock_run):
-        mock_run.return_value = None
-        gather_technical("AAPL", kline_count=90)
-        calls = mock_run.call_args_list
-        technical_call = [c for c in calls if c[0][0] == "technical.py"]
-        assert "--count" in technical_call[0][0][1]
-        count_idx = technical_call[0][0][1].index("--count")
-        assert technical_call[0][0][1][count_idx + 1] == "90"
+        gather_technical(symbol, kline_count=count)
+        mock_run.assert_called_once_with("stock_data.py", ["kline", symbol, "--period", "daily", "--count", str(count)])
 
 
 class TestGatherScreen:
@@ -271,6 +305,14 @@ class TestMain:
 
 
 class TestGatherFundamental:
+    @pytest.mark.parametrize("symbol", ["AAPL", "00700.HK", "7203.T"])
+    @patch("tools.gather._run")
+    def test_non_a_market_does_not_receive_chinese_sectors(self, mock_run, symbol):
+        mock_run.return_value = None
+        result = gather_fundamental(symbol)
+        assert "error" in result["sector_rankings"]
+        assert not any(c.args[1][0] == "sector_rankings" for c in mock_run.call_args_list)
+
     @patch("tools.gather._run")
     def test_returns_all_keys(self, mock_run):
         mock_run.return_value = '{"data": "value"}'

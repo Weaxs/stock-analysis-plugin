@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import json_safe, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
+from technical import analyze_records  # noqa: E402
 
 
 # gather fans out the heavier CLIs, so the default timeout stays 60s; raw stdout
@@ -32,36 +33,41 @@ def _parse_json(raw: str | None):
         return raw
 
 
-def _run_all(tasks: dict) -> dict:
+def _run_all(tasks: dict, symbol: str) -> dict:
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = {pool.submit(_run, script, args): key for key, (script, args) in tasks.items()}
-        return {key: _parse_json(f.result()) for f, key in futures.items()}
+        result = {key: _parse_json(f.result()) for f, key in futures.items()}
+    result["technical"] = analyze_records(symbol, result["kline"]) if result["kline"] is not None else None
+    return result
 
 
 def gather_analysis(symbol: str) -> dict:
+    market = detect_market(symbol)
     tasks = {
         "quote": ("stock_data.py", ["quote", symbol]),
         "kline": ("stock_data.py", ["kline", symbol, "--period", "daily", "--count", "120"]),
-        "technical": ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "120"]),
         "financials": ("stock_data.py", ["financials", symbol]),
         "capital_flow": ("stock_data.py", ["capital_flow", symbol]),
         "chip_distribution": ("stock_data.py", ["chip_distribution", symbol]),
         "news": ("search_intel.py", ["search", _news_query(symbol)]),
         "social_sentiment": ("search_intel.py", ["sentiment", symbol]),
         "risk": ("risk_screening.py", ["screen", symbol]),
-        "regime": ("market_regime.py", ["detect"]),
     }
-    return _run_all(tasks)
+    if market in ("A", "HK", "US"):
+        tasks["regime"] = ("market_regime.py", ["detect", market])
+    result = _run_all(tasks, symbol)
+    if market not in ("A", "HK", "US"):
+        result["regime"] = {"error": f"Market regime unavailable for {market}"}
+    return result
 
 
 def gather_technical(symbol: str, kline_count: int = 120, with_quote: bool = False) -> dict:
     tasks = {
         "kline": ("stock_data.py", ["kline", symbol, "--period", "daily", "--count", str(kline_count)]),
-        "technical": ("technical.py", ["analyze", symbol, "--period", "daily", "--count", str(kline_count)]),
     }
     if with_quote:
         tasks["quote"] = ("stock_data.py", ["quote", symbol])
-    return _run_all(tasks)
+    return _run_all(tasks, symbol)
 
 
 def gather_screen(market: str = "A", top: int = 20, config: str | None = None) -> dict:
@@ -73,16 +79,20 @@ def gather_screen(market: str = "A", top: int = 20, config: str | None = None) -
 
 
 def gather_fundamental(symbol: str) -> dict:
+    market = detect_market(symbol)
     tasks = {
         "quote": ("stock_data.py", ["quote", symbol]),
         "kline": ("stock_data.py", ["kline", symbol, "--period", "daily", "--count", "60"]),
-        "technical": ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"]),
         "financials": ("stock_data.py", ["financials", symbol]),
         "news": ("search_intel.py", ["search", _news_query(symbol)]),
         "stock_info": ("stock_data.py", ["stock_info", symbol]),
-        "sector_rankings": ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"]),
     }
-    return _run_all(tasks)
+    if market == "A":
+        tasks["sector_rankings"] = ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"])
+    result = _run_all(tasks, symbol)
+    if market != "A":
+        result["sector_rankings"] = {"error": f"Sector rankings unavailable for {market}"}
+    return result
 
 
 def main():

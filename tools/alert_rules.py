@@ -6,6 +6,7 @@ Does NOT store history, does NOT push, does NOT schedule. Host agent decides whe
 
 import argparse
 import json
+import math
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -31,8 +32,14 @@ RULE_TYPES = {
 def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> dict | None:
     rtype = rule.get("type")
     value = rule.get("value")
-    if rtype not in RULE_TYPES:
+    if not isinstance(rtype, str) or rtype not in RULE_TYPES:
         return {"rule": rtype, "triggered": False, "error": f"unknown rule type: {rtype}"}
+    if rtype in ("price_below", "price_above", "change_pct_above", "change_pct_below", "volume_ratio_above"):
+        try:
+            if isinstance(value, bool) or not math.isfinite(float(value)):
+                raise ValueError
+        except (ValueError, TypeError):
+            return {"rule": rtype, "triggered": False, "error": "Rule value must be a finite number"}
 
     price = quote.get("price")
     change_pct = quote.get("change_pct")
@@ -90,6 +97,8 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
                 "message": f"量比 {ratio} 超过 {value}",
             }
     elif rtype == "anomaly":
+        if not isinstance(value, str) or not value:
+            return {"rule": rtype, "triggered": False, "error": "Anomaly type must be a nonempty string"}
         # value is an anomaly type string, e.g. "macd_golden_cross"
         anomalies = (anom or {}).get("anomalies", [])
         for a in anomalies:
@@ -106,6 +115,8 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
             return {"rule": rtype, "triggered": True, "severity": "high", "message": "风险筛查触发一票否决"}
     elif rtype == "risk_level_at_least":
         order = {"low": 0, "medium": 1, "high": 2}
+        if not isinstance(value, str) or value not in order:
+            return {"rule": rtype, "triggered": False, "error": "Risk threshold must be low/medium/high"}
         cur = order.get((risk or {}).get("risk_level"))
         want = order.get(value)
         if cur is not None and want is not None and cur >= want:
@@ -122,7 +133,7 @@ def _check_rule(rule: dict, quote: dict, tech: dict, anom: dict, risk: dict) -> 
 
 
 def check_rules(symbol: str, rules: list[dict]) -> dict:
-    if not rules:
+    if not isinstance(rules, list) or not rules or any(not isinstance(rule, dict) for rule in rules):
         return {"symbol": symbol, "error": "no rules provided"}
 
     needs_tech = any(r.get("type") == "volume_ratio_above" for r in rules)
@@ -141,6 +152,9 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         futures = {key: pool.submit(_run_json, script, args) for key, (script, args) in jobs.items()}
         fetched = {key: future.result() for key, future in futures.items()}
+    fetched = {
+        key: value if isinstance(value, dict) and "error" not in value else None for key, value in fetched.items()
+    }
     quote = fetched["quote"] or {}
     tech = fetched.get("tech")
     anom = fetched.get("anom")
@@ -153,13 +167,25 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
         warnings.append("technical analysis fetch failed — volume_ratio rules cannot fire")
     if needs_anom and not anom:
         warnings.append("anomaly fetch failed — anomaly rules cannot fire")
-    if needs_risk and not risk:
+    if needs_risk and (not risk or risk.get("data_complete") is False or risk.get("risk_level") == "unknown"):
         warnings.append("risk screening fetch failed — risk rules cannot fire")
 
     hits = []
     evaluated = []
     for rule in rules:
-        result = _check_rule(rule, quote, tech, anom, risk)
+        rtype = rule.get("type")
+        missing = (
+            (rtype in ("price_below", "price_above") and quote.get("price") is None)
+            or (rtype in ("change_pct_below", "change_pct_above") and quote.get("change_pct") is None)
+            or (rtype == "volume_ratio_above" and (tech or {}).get("volume", {}).get("volume_ratio") is None)
+            or (rtype == "anomaly" and not isinstance((anom or {}).get("anomalies"), list))
+            or (rtype == "risk_veto" and (risk or {}).get("veto_buy") is None)
+            or (rtype == "risk_level_at_least" and (risk or {}).get("risk_level") not in ("low", "medium", "high"))
+        )
+        if missing:
+            result = {"rule": rtype, "triggered": False, "error": "Required source data unavailable"}
+        else:
+            result = _check_rule(rule, quote, tech, anom, risk)
         if result is None:
             evaluated.append({"rule": rule.get("type"), "triggered": False})
         else:
@@ -214,6 +240,8 @@ def main():
     result = check_rules(args.symbol, rules)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
+    if "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
