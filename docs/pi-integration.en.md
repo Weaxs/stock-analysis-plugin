@@ -54,6 +54,14 @@ Project-level extensions are only available within that project's Pi Agent sessi
 
 ## Verifying the Installation
 
+Pi 1.2.0 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 67 tools directly exposed.
+
+If search is registered but inactive, the plugin enables it and confirms activation before deferring stock tools. Missing, restricted, or unavailable search keeps the tools directly exposed. Disabling search during a session restores the stock tools before the next model request and removes the discovery guidance.
+
+The plugin preserves Pi's restored active tools across reloads. If an SDK reload does not emit `session_start`, initialization runs before the next model request.
+
+Use English keywords or exact tool names such as `get_quote`, `get_financials`, `screen_stocks`, and `run_backtest`: the current native ranker does not tokenize Chinese. The plugin supplies this guidance to the model only when discovery is enabled. Loaded tools remain active for the session, so the active set can grow during long conversations.
+
 After starting Pi Agent, type:
 
 ```
@@ -69,85 +77,6 @@ Get the real-time quote for AAPL
 ```
 
 The agent should call the `get_quote` tool and return market data.
-
-## How It Works
-
-### Extension Entry Point
-
-Pi Agent locates the entry file via the `pi.extensions` field in `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./pi/index.ts"]
-  }
-}
-```
-
-Pi Agent loads TypeScript extensions using [jiti](https://github.com/nicolo-ribaudo/jiti) — no build step required.
-
-### Tool Registration
-
-`pi/index.ts` exports a function that receives the `ExtensionAPI` object and registers 67 tools via `pi.registerTool()`:
-
-```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-export default (pi: ExtensionAPI) => {
-  pi.registerTool({
-    name: "get_kline",
-    description: "Fetch stock OHLCV candlestick data...",
-    parameters: {
-      type: "object",
-      properties: { /* ... */ },
-      required: ["symbol"],
-    },
-    async execute(_toolCallId, { symbol, period = "daily", count = 60 }) {
-      const result = await pi.exec(python, [`${toolsDir}/stock_data.py`, "kline", symbol, "--period", period, "--count", String(count)]);
-      return { content: [{ type: "text", text: result.stdout }], details: {} };
-    },
-  });
-  // ... 47 more tools
-};
-```
-
-Each tool's `execute` method calls the corresponding Python CLI script via `pi.exec(python, argv)` (argv array form, no shell) and returns Pi 0.83's `AgentToolResult` shape: `{ content: [{ type: "text", text }], details: {} }` with the JSON payload in `content`.
-
-### Skill Registration
-
-Skills are registered via the `resources_discover` event:
-
-```typescript
-pi.on("resources_discover", () => ({
-  skillPaths: [
-    `${__dirname}/../skills/stock-analysis/SKILL.md`,
-    `${__dirname}/../skills/stock-screener/SKILL.md`,
-    // ...
-  ],
-}));
-```
-
-The `pi.skills` field in `package.json` also declares the skill list for static discovery:
-
-```json
-{
-  "pi": {
-    "skills": [
-      "./skills/stock-analysis/SKILL.md",
-      "./skills/stock-screener/SKILL.md"
-    ]
-  }
-}
-```
-
-### Python Environment
-
-At runtime, the extension prefers the local `.venv/bin/python3`, falling back to system `python3`:
-
-```typescript
-const venvPython = `${__dirname}/../.venv/bin/python3`;
-const python = existsSync(venvPython) ? venvPython : "python3";
-```
 
 ## Environment Variables
 

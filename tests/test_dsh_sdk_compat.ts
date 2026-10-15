@@ -31,3 +31,5 @@ assert.deepEqual(validateJsonSchemaValue(comparison.parameters, {
   companies: [{symbol: "AAPL", period: "2025", metrics: [{name: "roe", value: null, unit: "percent", basis: "annual"}]}],
 }), [], "nullable nested metrics must compile in the actual dsh SDK");
 assert(validateJsonSchemaValue(comparison.parameters, {companies: [{symbol: "AAPL"}]}).length > 0);
+
+await import("./test_dsh_discovery.js");

@@ -54,6 +54,14 @@ npm install
 
 ## 验证加载
 
+最新稳定版 Pi 1.2.0 支持原生按需工具发现。插件在 `session_start` 检查 `tool_search` 的 exposure 元数据及活动工具 API：具备这些能力时，将股票工具设为 `deferred` 并启用原生搜索，保留其他插件的活动工具；旧宿主保持原来的 67 工具全量暴露，无需升级才能继续使用。
+
+新版中搜索已注册但未激活时，插件会尝试启用并确认成功后再隐藏股票工具；未加载搜索扩展、被宿主限制或无法启用时保持全量暴露。会话中途关闭搜索时，下次模型请求前恢复全部股票工具，并停止发送搜索指引。
+
+插件保留 Pi 已恢复的活动工具集合，重载后不清除已发现工具；SDK 重载未触发 `session_start` 时，会在下次模型请求前完成初始化。
+
+搜索器目前不对中文分词，因此使用英文关键词或确切工具名搜索，例如 `get_quote`、`get_financials`、`screen_stocks`、`run_backtest`。插件会在启用发现时向模型提供这条说明。SDK 若未加载原生工具搜索扩展，也会保留全量暴露。命中工具加载后留在当前会话活动集合中，长会话的集合会逐渐扩大。
+
 启动 Pi Agent 后，输入：
 
 ```
@@ -69,85 +77,6 @@ npm install
 ```
 
 Agent 应会调用 `get_quote` 工具并返回行情数据。
-
-## 工作原理
-
-### Extension 入口
-
-Pi Agent 通过 `package.json` 中的 `pi.extensions` 字段定位入口文件：
-
-```json
-{
-  "pi": {
-    "extensions": ["./pi/index.ts"]
-  }
-}
-```
-
-Pi Agent 使用 [jiti](https://github.com/nicolo-ribaudo/jiti) 加载 TypeScript Extension，无需编译步骤。
-
-### 工具注册
-
-`pi/index.ts` 导出一个函数，接收 `ExtensionAPI` 对象，通过 `pi.registerTool()` 注册 67 个工具：
-
-```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-export default (pi: ExtensionAPI) => {
-  pi.registerTool({
-    name: "get_kline",
-    description: "获取股票K线数据...",
-    parameters: {
-      type: "object",
-      properties: { /* ... */ },
-      required: ["symbol"],
-    },
-    async execute(_toolCallId, { symbol, period = "daily", count = 60 }) {
-      const result = await pi.exec(python, [`${toolsDir}/stock_data.py`, "kline", symbol, "--period", period, "--count", String(count)]);
-      return { content: [{ type: "text", text: result.stdout }], details: {} };
-    },
-  });
-  // ... 其余 47 个工具
-};
-```
-
-每个工具的 `execute` 方法通过 `pi.exec(python, argv)`（argv 数组形式，不经 shell）调用对应的 Python CLI 脚本，并按 Pi 0.83 的 `AgentToolResult` 契约返回 `{ content: [{ type: "text", text }], details: {} }`（JSON 文本放在 content 里）。
-
-### Skill 注册
-
-通过 `resources_discover` 事件注册 20 个 SKILL.md：
-
-```typescript
-pi.on("resources_discover", () => ({
-  skillPaths: [
-    `${__dirname}/../skills/stock-analysis/SKILL.md`,
-    `${__dirname}/../skills/stock-screener/SKILL.md`,
-    // ...
-  ],
-}));
-```
-
-同时 `package.json` 的 `pi.skills` 字段也声明了 Skill 列表，用于静态发现：
-
-```json
-{
-  "pi": {
-    "skills": [
-      "./skills/stock-analysis/SKILL.md",
-      "./skills/stock-screener/SKILL.md"
-    ]
-  }
-}
-```
-
-### Python 环境
-
-工具执行时优先使用插件目录下的 `.venv/bin/python3`，如不存在则 fallback 到系统 `python3`：
-
-```typescript
-const venvPython = `${__dirname}/../.venv/bin/python3`;
-const python = existsSync(venvPython) ? venvPython : "python3";
-```
 
 ## 环境变量配置
 

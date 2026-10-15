@@ -298,6 +298,23 @@ def test_existing_evidence_cannot_drop_known_provenance():
     assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
 
 
+def test_warning_evidence_inherits_parent_provenance():
+    case = next(case for case in CASES if case["id"] == "conflicting_data")
+    report = reference_report(case)
+    warning = {
+        "path": "get_financials.warnings.0",
+        "label": "财务结果警告",
+        "value": case["tools"]["get_financials"]["warnings"][0],
+        "source": None,
+        "as_of": None,
+    }
+    report["evidence"].append(warning)
+    failures = check_report(case, report, review=ACCEPTED_REVIEW)
+    assert len(failures) == 1 and "source/as_of expected 'fixture'/None" in failures[0]
+    warning["source"] = "fixture"
+    assert check_report(case, report, review=ACCEPTED_REVIEW) == []
+
+
 def test_reference_report_does_not_invent_a_missing_stock_name():
     case = next(case for case in CASES if case["id"] == "missing")
     assert reference_report(case)["stock_name"] == "未知"

@@ -167,13 +167,14 @@
           },
           "value": {},
           "source": {
+            "description": "引用已返回字段时，沿 path 继承最近父对象的 source（该键缺失时用 snapshot_source）；子对象来源覆盖祖先，显式 null 保持未知。数组项和警告字符串同样继承，不能仅因叶子没有 source 就填 null；整条路径未提供来源时才填 null。",
             "type": [
               "string",
               "null"
             ]
           },
           "as_of": {
-            "description": "仅引用工具结果中的 data_as_of，保留完整时间与时区；缺失为 null。report_date 是报告期，不能代替此时间。",
+            "description": "引用已返回字段时，沿 path 继承最近父对象的 data_as_of，子对象值（包括显式 null）覆盖祖先；数组项同样继承。整条路径均缺失时为 null，保留完整时间与时区。report_date 是报告期，不能代替此时间。",
             "type": [
               "string",
               "null"

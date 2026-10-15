@@ -70,6 +70,8 @@ npm install @weaxs/stock-analysis-plugin
 
 Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
 
+新版 Pi（已核验 1.2.0）提供原生 `tool_search` 时，插件自动启用按需工具发现，67 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。检索使用英文关键词或工具名，例如 `get_quote`、`get_financials`。
+
 ### Hermes Agent Plugin
 
 ```bash
@@ -105,6 +107,8 @@ dsh --profile <你的profile>
 ```
 
 作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 67 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+
+新版 dsh 的原生函数调用模式默认通过 `stock_tool_search` 按 Agent 搜索、加载所需工具，支持中文关键词或工具名；旧接口、搜索入口不可用时保留全量暴露。可设置 `toolDiscovery: false` 关闭，配置与 PTC 模式边界见下方接入文档。
 
 详见 [`dsh/README.md`](dsh/README.md)。
 
@@ -694,8 +698,6 @@ python3 tools/sec_edgar.py holdings 0001067983 --mode manager
 ```
 
 首次下载当前 SEC 包约 100 MB；ZIP 按周缓存，CUSIP 反查结果按天缓存，流式扫描不解压整个持仓表、不增加数据库依赖。返回 `report_date`（持仓日期）、`filing_window_end`（公开申报窗口截止）、`cusip_evidence`（原文映射依据），不把文件披露窗口当作持仓日期。`mapping_complete=false` 表示最近十份结构化 13D/G 可能未覆盖所有证券类别或 CUSIP 变更；缺映射直接报错，不做名称模糊匹配。`complete_for_mapped_cusips` 仅在该报告期没有未解决申报链时为 true，不代表实时全部股东。期权与本金持仓在 `positions` 保留，`shares` 合计只计无 PUT/CALL 的 SH 股票。不能将跨机构合计当作已去重的全市场持股。
-
-来源格式与实測依据见 [#51 数据研究](docs/research/issue-51-reverse-holdings.md)。
 
 13F CLI 预算为 300 秒，宿主另留 30 秒接收输出；其他命令按共享预算表执行。机构查询优先寻找最新已知报告期的原始 13F：较新修订对应的原始版未找到时明确报错，历史分片仍未完全检索时返回 `history_truncated` 与警告。发行人 CUSIP 查询会跳过不可访问/无效 XML，继续核对后续原文；没有任何可验证映射时才报缺失。
 

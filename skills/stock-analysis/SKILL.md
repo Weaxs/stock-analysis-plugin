@@ -5,6 +5,10 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 # 综合股票分析
 
+在启用原生工具发现的 Pi 中，所需工具尚未暴露时，先用 `tool_search` 搜索确切工具名或英文关键词，再按本文流程调用；其搜索器目前不对中文分词。旧 Pi 或其他宿主按当前实际提供的工具直接执行。
+
+在 dsh 提供 `stock_tool_search` 且所需工具尚未暴露时，先搜索中文功能关键词或确切工具名，加载后按原名调用；搜索不执行分析。没有发现入口时直接使用当前提供的工具。
+
 美股机构研究调用 `get_us_holdings(cik, mode=auto)`：有当前或已检索历史 13F 时返回机构组合，否则按发行人 CIK 反查机构；也可显式选 `manager/issuer`，如 Berkshire `0001067983` 查组合、Apple `0000320193` 用 `issuer` 查机构。发行人映射仅使用核对 CIK 的官方 13D/G CUSIP，不做名称猜测；无映射直接报缺失。首次下载约 100 MB，后续缓存，共享 CLI 查询预算 300 秒（宿主另留退出余量）。读取 `report_date/filing_window_end/cusip_evidence`，区分持仓日期与披露窗口；修订重述替换、新增补充，缺基础版或未知修订时总量 null，并计入 `unresolved_manager_count`。`mapping_complete=false` 表示不能保证涵盖所有类别或变更，`complete_for_mapped_cusips` 只表示已映射证券在公开数据窗口的申报链完整性，不能称实时全部股东。期权/本金在 `positions` 单列，不能把跨机构持股简单合计成去重比例。机构组合查询仍返回最新已知报告期的原始 13F 与修订链接，缺少对应原始版时明确报错；`history_truncated=true` 时不能将旧记录当作已完整检索。存在修订先读原文，不能自动推断变化。
 
 美股内部人研究调用 `get_insider_trades(symbol, days=90, top=10)`，需设置含真实联系邮箱的 `SEC_USER_AGENT`。`days` 按申报日期过滤，`top` 限制文件数；只将代码 P/S 视作买卖信号，授予、行权、赠与等保留原始代码和脚注，衍生品单列。Form 4/A 与原申报勿重复计算，检查截断和失败提示；`screen_risk` 仍仅支持 A 股。
@@ -76,7 +80,7 @@ python3 scripts/gather.py <symbol>
 ### 第三步：渲染研报
 
 1. 按 [报告 schema](../../schemas/report_schema.json) 构建结构化报告。
-2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。 来源只使用结果中的 source/snapshot_source，不能用工具名或策略方法名代替；原始字段未提供来源或时间时填 null；as_of 只引用结果中的 data_as_of，保留完整时间及其时区。report_date 是财报报告期，应单独引用 value，不能当成披露日期或 data_as_of。证据 path 不含调用参数，例如 get_financials.periods.0.roe；股票名称未返回时 stock_name 填“未知”，不能凭常识补名；已知返回对象中未提供的末级字段可用 value=null 表示未知，其 source/as_of 可填 null，若填写则必须来自已知父对象；不能编成空数组、字符串或数值，不能跨缺失对象或数组编造路径；错误 value 保留原始字符串，不加 error: 前缀。请求的期间或文件路径不证明实际数据覆盖期或文件内容，需与实际返回数据区分。
+2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。 来源与时间沿证据 path 继承最近父对象的 source（该键缺失时用 snapshot_source）和 data_as_of，子对象的对应值（包括显式 null）覆盖祖先；数组项及 warnings 字符串同样继承，不能仅因叶子字段没有来源就填 null。整条路径均未提供对应元数据时才填 null，不能用工具名或策略方法名代替来源；as_of 保留完整数据时间及其时区。report_date 是财报报告期，应单独引用 value，不能当成披露日期或 data_as_of。证据 path 不含调用参数，例如 get_financials.periods.0.roe；股票名称未返回时 stock_name 填“未知”，不能凭常识补名；已知返回对象中未提供的末级字段可用 value=null 表示未知，其 source/as_of 可填 null，若填写则必须来自已知父对象；不能编成空数组、字符串或数值，不能跨缺失对象或数组编造路径；错误 value 保留原始字符串，不加 error: 前缀。请求的期间或文件路径不证明实际数据覆盖期或文件内容，需与实际返回数据区分。
    同时填写 `data_quality.flags/limitations`：关键数据缺失用 `partial_data`，明确过期行情用 `stale_quote`，同期间同口径来源冲突用 `conflicting_data`，回测/信号样本不足用 `insufficient_sample`。出现这些限制时降低置信度，不能给出 strong_buy；没有有效现价时不编造数值交易计划。数据完整时 flags 为空数组，限制仍按实际模拟条件说明。
 3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
