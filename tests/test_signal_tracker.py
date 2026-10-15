@@ -521,3 +521,67 @@ def test_batch_deadline_returns_and_persists_completed_results(store, mock_run_t
     summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
     assert summary["summary"]["closed"] == 3
     assert summary["summary"]["open"] == 2
+
+
+def test_deadline_retry_reaches_signals_after_slow_failures(store, mock_run_tool, monkeypatch):
+    for symbol in ("BAD1", "BAD2", "BAD3", "AAPL"):
+        st.cmd_record(_rec_args(store, symbol=symbol))
+    elapsed = 0
+    calls = []
+    monkeypatch.setattr(st.time, "monotonic", lambda: elapsed)
+
+    def fetch(script, args, timeout, **kwargs):
+        nonlocal elapsed
+        calls.append(args[1])
+        if args[1].startswith("BAD"):
+            elapsed += timeout
+            return None
+        return [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 13, 10, 12)]
+
+    mock_run_tool.side_effect = fetch
+    args = Namespace(symbol=None, store=str(store))
+    first = st.cmd_evaluate(args)
+    assert first["deferred"] == 1
+    assert first["closed"] == 0
+    assert calls == ["BAD1", "BAD2", "BAD3"]
+    calls.clear()
+    second = st.cmd_evaluate(args)
+    assert calls[0] == "AAPL"
+    assert second["closed"] == 1
+    saved = {rec["symbol"]: rec for rec in st._load_records(store, strict=True)}
+    assert set(saved) == {"BAD1", "BAD2", "BAD3", "AAPL"}
+    assert saved["AAPL"]["status"] == "closed"
+    assert saved["AAPL"]["outcome"] == "target_hit"
+    assert all(saved[symbol]["status"] == "open" for symbol in ("BAD1", "BAD2", "BAD3"))
+
+
+def test_retry_queue_preserves_closed_filtered_and_concurrently_added_records(store, mock_run_tool, monkeypatch):
+    signals = [st.cmd_record(_rec_args(store, symbol="AAPL", note=f"signal-{i}")) for i in range(4)]
+    other = st.cmd_record(_rec_args(store, symbol="MSFT"))
+    closed = st.cmd_record(_rec_args(store, symbol="GOOG"))
+    mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 13, 10, 12)]
+    st.cmd_evaluate(Namespace(symbol="GOOG", store=str(store)))
+    before = st._load_records(store, strict=True)
+    elapsed = 0
+    added = []
+    monkeypatch.setattr(st.time, "monotonic", lambda: elapsed)
+
+    def fetch(script, args, timeout, **kwargs):
+        nonlocal elapsed
+        if not added:
+            added.append(st.cmd_record(_rec_args(store, symbol="TSLA")))
+        elapsed += timeout
+        return None
+
+    mock_run_tool.side_effect = fetch
+    result = st.cmd_evaluate(Namespace(symbol="AAPL", store=str(store)))
+    assert result["closed"] == 0
+    assert result["deferred"] == 1
+    saved = st._load_records(store, strict=True)
+    assert [rec["id"] for rec in saved[:4]] == [signals[3]["id"], *(rec["id"] for rec in signals[:3])]
+    assert saved[4] == other
+    assert saved[5] == before[5]
+    assert saved[5]["id"] == closed["id"]
+    assert saved[5]["status"] == "closed"
+    assert saved[6] == added[0]
+    assert {rec["id"] for rec in saved} == {rec["id"] for rec in [*before, *added]}

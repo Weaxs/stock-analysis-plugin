@@ -374,7 +374,7 @@ position:
   max_positions: 1
 ```
 
-行情 JSON 保留原有数组/字典形状，添加 `source`、UTC `fetched_at` 和 `data_as_of`。采集时间不是报价时间，提供方未给时间时为 null；K 线 data_as_of 是该条的日期标签，周/月线标签不是实际末次成交时间；`as_of_basis=trading_calendar` 表示交易日历推断。A 股复权口径延续 qfq/none；其他市场按来源标为 total_return/qfq/unknown，不把 unknown 当已验证复权。
+行情 JSON 保留原有数组/字典形状，添加 `source`、UTC `fetched_at` 和 `data_as_of`。采集时间不是报价时间，提供方未给时间时为 null；仅提供交易日时保留 YYYY-MM-DD，不补造具体时刻；K 线 data_as_of 是该条的日期标签，周/月线标签不是实际末次成交时间；`as_of_basis=trading_calendar` 表示交易日历推断。A 股复权口径延续 qfq/none；其他市场按来源标为 total_return/qfq/unknown，不把 unknown 当已验证复权。
 
 其他可用键：
 
@@ -676,7 +676,7 @@ python3 tools/sec_edgar.py holdings 0001067983 --mode manager
 
 真实模型评测同时要求结构化证据检查与独立上下文的结论审稿通过：审稿检查正文事实、限制说明是否诚实，以及是否过度外推。未运行审稿、结果缺失或模糊都不能算通过；报告自行声明通过不被采信。另有人工核对的正确报告及两类反例用于验证审稿器（正确引用但正文捏造现价、3笔交易却保证长期胜率）。空回答也失败。离线渲染和规则检查不代表真实模型通过，也不证明策略未来有效。信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
 
-信号结算仅在价格口径可核实时进行：原始价格可直接比较；复权日线需记录日 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录。
+信号结算仅在价格口径可核实时进行：原始价格可直接比较；复权日线需记录日 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
 
 市场复盘数据不足时温度/姿态为 null，信号 unknown，data_quality.limitations 说明限制。自选股异动采集失败时 anomaly_status=unavailable、anomaly_count=null，保留警告并计入 summary.partial，不能当成无异常。
 

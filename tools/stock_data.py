@@ -293,6 +293,13 @@ def _gbk_var_payload(content: bytes) -> str:
     return content.decode("gbk", errors="replace").split('="', 1)[-1].rsplit('"', 1)[0]
 
 
+def _unix_quote_time(value) -> str | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        with contextlib.suppress(ValueError, OverflowError, OSError):
+            return datetime.fromtimestamp(value, timezone.utc).isoformat()
+    return None
+
+
 def _quote_time(value: str, fmt: str) -> str | None:
     try:
         return datetime.strptime(value, fmt).replace(tzinfo=timezone(timedelta(hours=8))).isoformat()
@@ -862,11 +869,15 @@ def _quote_longbridge(symbol: str) -> dict:
         raise ValueError(f"longbridge returned no quote for {symbol}")
 
     q = quotes[0]
+    timestamp = getattr(q, "timestamp", None)
     prev_close = float(q.prev_close) if q.prev_close else None
     price = float(q.last_done) if q.last_done else None
     return _clean_row(
         {
             "symbol": symbol,
+            "data_as_of": timestamp.isoformat()
+            if isinstance(timestamp, datetime) and timestamp.utcoffset() is not None
+            else None,
             "name": getattr(q, "symbol", symbol),
             "price": price,
             "change": (price - prev_close) if price and prev_close else None,
@@ -963,9 +974,13 @@ def _quote_alphavantage(symbol: str) -> dict:
     if not gq:
         raise ValueError(f"alphavantage quote failed for {symbol}")
 
+    trading_day = None
+    with contextlib.suppress(ValueError, TypeError):
+        trading_day = date.fromisoformat(gq.get("07. latest trading day")).isoformat()
     return _clean_row(
         {
             "symbol": symbol,
+            "data_as_of": trading_day,
             "price": float(gq.get("05. price", 0)),
             "change": float(gq.get("09. change", 0)),
             "change_pct": float(gq.get("10. change percent", "0").rstrip("%")),
@@ -1131,15 +1146,10 @@ def _quote_yfinance(symbol: str) -> dict:
     info = t.info
     if not info or "regularMarketPrice" not in info:
         raise ValueError(f"No data for {symbol}")
-    quoted_at = None
-    timestamp = info.get("regularMarketTime")
-    if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and timestamp > 0:
-        with contextlib.suppress(ValueError, OverflowError, OSError):
-            quoted_at = datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
     return _clean_row(
         {
             "symbol": symbol,
-            "data_as_of": quoted_at,
+            "data_as_of": _unix_quote_time(info.get("regularMarketTime")),
             "name": info.get("shortName"),
             "price": info.get("regularMarketPrice") or info.get("currentPrice"),
             "change": info.get("regularMarketChange"),
@@ -1171,6 +1181,7 @@ def _quote_finnhub(symbol: str) -> dict:
     return _clean_row(
         {
             "symbol": symbol,
+            "data_as_of": _unix_quote_time(q.get("t")),
             "price": q["c"],
             "change": q["d"],
             "change_pct": q["dp"],
@@ -1261,8 +1272,12 @@ def cmd_quote(args):
                 from trading_calendar import market_phase
 
                 info = market_phase("CN" if market == "A" else market)
-                quoted = datetime.fromisoformat(result["data_as_of"])
-                if quoted.tzinfo and quoted.astimezone(ZoneInfo(info["timezone"])).date().isoformat() < info["date"]:
+                value = result["data_as_of"]
+                quoted_day = date.fromisoformat(value) if len(value) == 10 else None
+                quoted = datetime.fromisoformat(value)
+                if quoted.tzinfo:
+                    quoted_day = quoted.astimezone(ZoneInfo(info["timezone"])).date()
+                if quoted_day and quoted_day.isoformat() < info["date"]:
                     result["stale"] = True
                     result["note"] = "Provider quote predates the current market date"
             except (ValueError, KeyError, TypeError, OSError):

@@ -3232,3 +3232,114 @@ def test_sina_retains_provider_date_and_time(mock_get):
     fields[0], fields[3], fields[30], fields[31] = "测试", "10", "2026-10-14", "15:34:59"
     mock_get.return_value = MagicMock(content=('var hq_str_sh600519="' + ",".join(fields) + '";').encode("gbk"))
     assert _quote_sina("600519")["data_as_of"] == "2026-10-14T15:34:59+08:00"
+
+
+@pytest.mark.parametrize(
+    "timestamp,expected",
+    [
+        (1600000000, "2020-09-13T12:26:40+00:00"),
+        (None, None),
+        (0, None),
+        (True, None),
+        (float("inf"), None),
+        ("bad", None),
+    ],
+)
+def test_finnhub_quote_keeps_provider_time_through_cli(monkeypatch, mock_yfinance, mock_finnhub, timestamp, expected):
+    from tools import stock_data
+
+    mock_yfinance.Ticker.side_effect = ValueError("fixture unavailable")
+    monkeypatch.setenv("FINNHUB_API_KEY", "fixture")
+    mock_finnhub.Client.return_value.quote.return_value = {
+        "c": 100,
+        "d": 1,
+        "dp": 1,
+        "h": 101,
+        "l": 99,
+        "o": 99,
+        "pc": 99,
+        "t": timestamp,
+    }
+    monkeypatch.setattr(
+        "trading_calendar.market_phase",
+        lambda market: {"phase": "trading", "date": "2026-10-14", "timezone": "America/New_York"},
+    )
+    result = stock_data.cmd_quote(Namespace(symbol="AAPL"))
+    assert result["price"] == 100
+    assert result["source"] == "finnhub"
+    assert result["data_as_of"] == expected
+    if expected:
+        assert result["as_of"] == expected
+        assert result["stale"] is True
+        assert result["as_of_basis"] == "provider"
+
+
+@pytest.mark.parametrize(
+    "trading_day,expected",
+    [("2020-09-11", "2020-09-11"), ("2026-10-14", "2026-10-14"), (None, None), ("bad", None), ("2020-02-30", None)],
+)
+def test_alphavantage_quote_keeps_date_precision_through_cli(monkeypatch, mock_yfinance, trading_day, expected):
+    from tools import stock_data
+
+    mock_yfinance.Ticker.side_effect = ValueError("fixture unavailable")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("LONGBRIDGE_APP_KEY", raising=False)
+    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "fixture")
+    with patch(
+        "requests.get",
+        return_value=MagicMock(
+            json=lambda: {"Global Quote": {"05. price": "100", "07. latest trading day": trading_day}}
+        ),
+    ):
+        monkeypatch.setattr(
+            "trading_calendar.market_phase",
+            lambda market: {"phase": "trading", "date": "2026-10-14", "timezone": "America/New_York"},
+        )
+        result = stock_data.cmd_quote(Namespace(symbol="AAPL"))
+    assert result["price"] == 100
+    assert result["source"] == "alphavantage"
+    assert result["data_as_of"] == expected
+    if expected:
+        assert result["as_of"] == expected
+        assert result.get("stale", False) is (trading_day < "2026-10-14")
+        assert result["as_of_basis"] == "provider"
+
+
+@pytest.mark.parametrize(
+    "stamp,expected",
+    [("2020-09-11T16:00:00-04:00", "2020-09-11T16:00:00-04:00"), ("2020-09-11T16:00:00", None), (None, None)],
+)
+def test_longbridge_quote_keeps_aware_time_through_cli(monkeypatch, mock_yfinance, stamp, expected):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from tools import stock_data
+
+    mock_yfinance.Ticker.side_effect = ValueError("fixture unavailable")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    for key in ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"):
+        monkeypatch.setenv(key, "fixture")
+    quote = SimpleNamespace(
+        symbol="AAPL",
+        last_done=100,
+        prev_close=99,
+        volume=1000,
+        high=101,
+        low=99,
+        open=99,
+        timestamp=datetime.fromisoformat(stamp) if stamp else None,
+    )
+    sdk = MagicMock(QuoteContext=MagicMock(return_value=SimpleNamespace(quote=lambda symbols: [quote])))
+    with patch.dict(sys.modules, {"longport": MagicMock(), "longport.openapi": sdk}):
+        monkeypatch.setattr(
+            "trading_calendar.market_phase",
+            lambda market: {"phase": "trading", "date": "2026-10-14", "timezone": "America/New_York"},
+        )
+        result = stock_data.cmd_quote(Namespace(symbol="AAPL"))
+    assert result["price"] == 100
+    assert result["source"] == "longbridge"
+    assert result["data_as_of"] == expected
+    if expected:
+        assert result["as_of"] == expected
+        assert result["stale"] is True
+        assert result["as_of_basis"] == "provider"
