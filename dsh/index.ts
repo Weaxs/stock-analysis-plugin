@@ -14,6 +14,7 @@ import {
 // Type-only import: pulls in the `Context.skills` service augmentation.
 import type {} from "@deepseek-ai/dsh-skill";
 import { venvPythonPath } from "../scripts/venv-python.mjs";
+import { registerToolDiscovery } from "./discovery.js";
 
 // Indirected so tests can replace the executor without touching node:child_process.
 type Executor = (bin: string, argv: string[]) => Promise<string>;
@@ -123,7 +124,11 @@ function registerSkills(ctx: Context) {
 export const name = "stock-analysis";
 export const inject = ["tools", "skills"];
 
-export function apply(ctx: Context) {
+export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
+  if (config.toolDiscovery !== undefined && typeof config.toolDiscovery !== "boolean") {
+    throw new TypeError("toolDiscovery must be a boolean");
+  }
+  const previousTools = new Set(ctx.tools.schemas?.().map(tool => tool.name));
   ctx.tools.register(
     pyTool({
       name: "get_announcements",
@@ -2076,4 +2081,7 @@ export function apply(ctx: Context) {
   }));
 
   registerSkills(ctx);
+  if (config.toolDiscovery !== false) {
+    registerToolDiscovery(ctx, new Set(ctx.tools.schemas?.().filter(tool => !previousTools.has(tool.name)).map(tool => tool.name)));
+  }
 }

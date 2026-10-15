@@ -12,6 +12,8 @@ declare module "pi-agent" {
 
   interface ToolDefinition {
     name: string;
+    exposure?: "direct" | "deferred";
+    defaultActive?: boolean;
     description: string;
     parameters: Record<string, unknown>;
     execute(
@@ -38,6 +40,9 @@ declare module "pi-agent" {
   interface ExtensionAPI {
     exec(command: string, args?: string[], options?: { timeout?: number }): Promise<ExecResult>;
     registerTool(tool: ToolDefinition): void;
+    getAllTools?(): { name: string; exposure?: string }[];
+    getActiveTools?(): string[];
+    setActiveTools?(names: string[]): void;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on(event: string, handler: (...args: any[]) => any): void;
   }

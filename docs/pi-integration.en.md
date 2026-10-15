@@ -54,6 +54,14 @@ Project-level extensions are only available within that project's Pi Agent sessi
 
 ## Verifying the Installation
 
+Pi 1.2.0 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 67 tools directly exposed.
+
+If search is registered but inactive, the plugin enables it and confirms activation before deferring stock tools. Missing, restricted, or unavailable search keeps the tools directly exposed. Disabling search during a session restores the stock tools before the next model request and removes the discovery guidance.
+
+The plugin preserves Pi's restored active tools across reloads. If an SDK reload does not emit `session_start`, initialization runs before the next model request.
+
+Use English keywords or exact tool names such as `get_quote`, `get_financials`, `screen_stocks`, and `run_backtest`: the current native ranker does not tokenize Chinese. The plugin supplies this guidance to the model only when discovery is enabled. Loaded tools remain active for the session, so the active set can grow during long conversations.
+
 After starting Pi Agent, type:
 
 ```

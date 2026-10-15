@@ -97,6 +97,7 @@ const EXPECTED_SKILLS = [
 
 interface ToolRegistration {
   name: string;
+  defaultActive?: boolean;
   description: string;
   parameters: Record<string, unknown>;
   execute?: Function;
@@ -274,4 +275,59 @@ await registeredTools.find(t => t.name === "screen_stocks")!.execute!("budget", 
 assert(timeouts.at(-1) === 1860000, "screen host must cover all L2 worker waves");
 await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("budget", {cik: "320193"});
 assert(timeouts.at(-1) === 330000, "holdings host must cover cold download budget");
+if (failures) process.exit(1);
+
+// The same plugin uses native discovery when available and stays eager otherwise.
+for (const mode of ["legacy", "legacy-metadata", "native", "no-search", "search-blocked"] as const) {
+  const tools = new Map<string, ToolRegistration & { exposure?: string }>();
+  tools.set("read", {name: "read", description: "Read files", parameters: {}});
+  tools.set("other_plugin", {name: "other_plugin", description: "Other plugin", parameters: {}});
+  if (mode === "native" || mode === "search-blocked") tools.set("tool_search", {
+    name: "tool_search", description: "Discover tools", parameters: {}, exposure: "model-only",
+  });
+  if (mode === "legacy-metadata") tools.set("tool_search", {
+    name: "tool_search", description: "Older search extension", parameters: {},
+  });
+  let active = ["read", "other_plugin"];
+  const handlers = new Map<string, Function>();
+  const host = {
+    ...mockPi,
+    registerTool(tool: ToolRegistration & {exposure?: string}) {
+      const previous = tools.get(tool.name);
+      tools.set(tool.name, tool);
+      if (!tool.exposure && tool.defaultActive !== false && (!previous || previous.exposure === "deferred" || previous.defaultActive === false) && !active.includes(tool.name)) active.push(tool.name);
+    },
+    on(event: string, handler: Function) { handlers.set(event, handler); },
+    ...(mode === "legacy" ? {} : {
+      getAllTools: () => [...tools.values()],
+      getActiveTools: () => [...active],
+      setActiveTools: (names: string[]) => { active = mode === "search-blocked" ? names.filter(name => name !== "tool_search") : names; },
+    }),
+  };
+  extensionModule.default(host);
+  await handlers.get("session_start")?.({}, {});
+  if (mode === "native") {
+    assert(EXPECTED_TOOLS.every(name => tools.get(name)?.exposure === "deferred"), "native Pi: stock tools must be deferred");
+    assert(JSON.stringify(active.slice().sort()) === JSON.stringify(["other_plugin", "read", "tool_search"]), "native Pi: only search is activated, other tools are preserved");
+    const hint = await handlers.get("before_agent_start")?.({}, {});
+    assert(hint?.message?.content.includes("English") && hint.message.content.includes("tool_search"), "native Pi: tell the model how to discover Chinese-described tools");
+    const quote = tools.get("get_quote")!;
+    active.push("get_quote"); // Native tool_search loads a matching registered definition.
+    await quote.execute!("discovery", {symbol: "600519"});
+    assert(calls.at(-1)?.includes("600519") === true, "native Pi: discovered quote still calls the Python CLI");
+    await handlers.get("session_start")?.({}, {});
+    assert(active.includes("get_quote"), "native Pi: repeated startup must preserve loaded tools");
+    extensionModule.default(host); // Reload creates a fresh extension factory and preserves host activity.
+    await handlers.get("session_start")?.({}, {});
+    assert(active.includes("get_quote"), "native Pi: reloading the extension must preserve loaded tools");
+    assert(!active.includes("run_backtest"), "native Pi: reload must not expose unloaded tools");
+    active = active.filter(name => name !== "tool_search");
+    const disabledHint = await handlers.get("before_agent_start")?.({}, {});
+    assert(EXPECTED_TOOLS.every(name => active.includes(name) && !tools.get(name)?.exposure), "native Pi: disabling search restores all stock tools");
+    assert(!disabledHint, "native Pi: disabled search must not leave discovery instructions");
+  } else {
+    assert(EXPECTED_TOOLS.every(name => active.includes(name) && !tools.get(name)?.exposure), `${mode}: preserve all stock tools`);
+    assert(!handlers.get("before_agent_start") || !(await handlers.get("before_agent_start")!({}, {})), `${mode}: no unavailable discovery instructions`);
+  }
+}
 if (failures) process.exit(1);
