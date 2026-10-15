@@ -29,3 +29,5 @@
 {% if intel.risk_alerts -%}
 ⚠️ **风险：** {{ intel.risk_alerts | join('；') }}
 {% endif %}
+
+{% include "stock_analysis/_evidence.md.j2" %}

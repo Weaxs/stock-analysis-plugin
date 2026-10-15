@@ -26,6 +26,8 @@ node_modules/
 !package-lock.json
 !tsconfig.json
 !schemas/**/*.json
+!tools/cli_budgets.json
+!tests/fixtures/analysis_quality.json
 !openclaw/openclaw.plugin.json
 !strategies/**/*.yaml
 

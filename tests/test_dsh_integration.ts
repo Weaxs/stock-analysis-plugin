@@ -381,6 +381,13 @@ assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.s
 await tools.find(t => t.name === "get_us_holdings")!.execute({cik: "0000320193", mode: "issuer"}, {});
 assert(JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["holdings", "0000320193", "--mode", "issuer"]), "issuer mode must reach CLI");
 
+const evidencePayload = JSON.stringify({price: 100, source: "fixture", fetched_at: "2026-10-14T00:00:00+00:00", data_as_of: null});
+mod.__setExecutor(async () => evidencePayload);
+const evidenceTool = tools.find(t => t.name === "get_quote")!;
+const evidenceResult = await evidenceTool.execute({symbol: "600519"}, {});
+assert(evidenceResult === evidencePayload, "quote evidence must pass through unchanged");
+assert(evidenceTool.output.render({}, evidenceResult)[0].text === evidencePayload, "render must preserve quote evidence");
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

@@ -99,6 +99,8 @@ const registeredTools: ToolRegistration[] = [];
 let skillPaths: string[] = [];
 
 const calls: string[][] = [];
+const timeouts: (number | undefined)[] = [];
+let stdoutPayload = "{}";
 const mockPi = {
   registerTool(config: ToolRegistration & { execute: Function }) {
     registeredTools.push({
@@ -114,7 +116,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[]) => { calls.push(args); return { stdout: "{}", exitCode: 0 }; },
+  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); timeouts.push(options?.timeout); return { stdout: stdoutPayload, exitCode: 0 }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -244,4 +246,14 @@ assert(!calls[calls.length-1].includes("--include-full-holdings"), "full report 
 await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("issuer", {cik: "0000320193", mode: "issuer"});
 assert(JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["holdings", "0000320193", "--mode", "issuer"]), "issuer mode must reach CLI");
 
+if (failures) process.exit(1);
+
+stdoutPayload = JSON.stringify({price: 100, source: "fixture", fetched_at: "2026-10-14T00:00:00+00:00", data_as_of: null});
+const quoteEvidence = await registeredTools.find(t => t.name === "get_quote")!.execute!("evidence", {symbol: "600519"});
+assert(quoteEvidence.content[0].text === stdoutPayload, "quote evidence must pass through unchanged");
+assert(timeouts.at(-1) === 150000, "quote host budget must leave 30 seconds for CLI exit");
+await registeredTools.find(t => t.name === "screen_stocks")!.execute!("budget", {market: "A"});
+assert(timeouts.at(-1) === 1860000, "screen host must cover all L2 worker waves");
+await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("budget", {cik: "320193"});
+assert(timeouts.at(-1) === 330000, "holdings host must cover cold download budget");
 if (failures) process.exit(1);

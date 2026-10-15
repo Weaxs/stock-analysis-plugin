@@ -22,6 +22,45 @@ def test_all_failed_analysis_is_not_a_successful_context(monkeypatch):
     assert "error" in result["items"][0]
 
 
+@pytest.mark.parametrize(
+    "anomaly_result", [None, {"error": "Command timed out after 60s", "error_code": "timeout"}, {}]
+)
+def test_unavailable_anomalies_are_partial_context_with_quote_preserved(monkeypatch, anomaly_result):
+    monkeypatch.setattr(
+        watchlist_context,
+        "analyze_watchlist",
+        lambda *a, **kw: {"results": {"AAPL": {"quote": {"name": "Apple", "price": 200}}}},
+    )
+    monkeypatch.setattr(watchlist_context, "_run_json", lambda *a, **kw: anomaly_result)
+    result = watchlist_context.build_context(["AAPL"])
+    item = result["items"][0]
+    assert item["price"] == 200
+    assert item["name"] == "Apple"
+    assert "error" not in item
+    assert item["anomaly_count"] is None
+    assert item["anomaly_status"] == "unavailable"
+    assert item["anomaly_error"]
+    assert item["warnings"]
+    assert result["summary"]["success"] == 0
+    assert result["summary"]["partial"] == 1
+    assert result["summary"]["failed"] == 0
+    assert result["meta"]["warnings"]
+
+
+def test_successful_empty_anomalies_are_a_complete_context(monkeypatch):
+    monkeypatch.setattr(
+        watchlist_context,
+        "analyze_watchlist",
+        lambda *a, **kw: {"results": {"AAPL": {"quote": {"price": 200}}}},
+    )
+    monkeypatch.setattr(watchlist_context, "_run_json", lambda *a, **kw: {"anomalies": []})
+    result = watchlist_context.build_context(["AAPL"])
+    assert result["items"][0]["anomaly_status"] == "ok"
+    assert result["items"][0]["anomaly_count"] == 0
+    assert result["summary"]["success"] == 1
+    assert result["summary"]["partial"] == 0
+
+
 class TestSuggestNextTools:
     def test_a_share_bullish_adds_capital_flow(self):
         tools = watchlist_context._suggest_next_tools("A", "bullish", [], "low")

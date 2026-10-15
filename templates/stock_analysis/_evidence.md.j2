@@ -1,0 +1,11 @@
+{% if data_quality or evidence %}
+
+### 本次数据与限制
+
+{% for item in evidence or [] %}
+- **{{ item.label or '数据依据' }}：** {{ item.value if item.value is not none else '未知' }}（来源：{{ item.source or '未标明' }}；数据时间：{{ item.as_of or '未知' }}）
+{% endfor %}
+{% for limitation in (data_quality or {}).limitations or [] %}
+- {{ limitation }}
+{% endfor %}
+{% endif %}

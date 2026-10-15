@@ -8,15 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import json_safe, run_tool, utf8_stdio  # noqa: E402
+from _subproc import command_timeout, json_safe, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
 from technical import analyze_records  # noqa: E402
 
 
-# gather fans out the heavier CLIs, so the default timeout stays 60s; raw stdout
-# wanted here (parsing is _parse_json's job); def keeps timeout kw-passable.
-def _run(script, args, timeout=60):
-    return run_tool(script, args, timeout=timeout, parse_json=False)
+def _run(script, args, timeout=None):
+    return run_tool(script, args, timeout=timeout, parse_json=False, preserve_errors=True)
 
 
 def _news_query(symbol: str) -> str:
@@ -74,7 +72,7 @@ def gather_screen(market: str = "A", top: int = 20, config: str | None = None) -
     args = ["screen", "--market", market, "--top", str(top)]
     if config:
         args += ["--config", config]
-    raw = _run("screener.py", args, timeout=120)
+    raw = _run("screener.py", args, timeout=command_timeout("screener.py", args))
     return {"screen_results": _parse_json(raw)}
 
 

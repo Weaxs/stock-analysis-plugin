@@ -1,0 +1,151 @@
+[
+  {
+    "id": "complete",
+    "tools": {
+      "get_quote": {
+        "symbol": "600519",
+        "price": 100,
+        "source": "fixture",
+        "data_as_of": "2026-10-14T15:00:00+08:00",
+        "stale": false
+      },
+      "get_financials": {
+        "report_date": "2026-06-30",
+        "roe": 0.15,
+        "source": "fixture"
+      }
+    },
+    "required_flags": [],
+    "required_paths": [
+      "get_quote.price",
+      "get_financials.report_date"
+    ],
+    "reference_conclusion": "本次报价100元，财务报告期为2026-06-30；基于现有资料暂时观察。",
+    "reference_limitations": [
+      "仅核对所提供的行情与财务资料，未据此预测收益。"
+    ]
+  },
+  {
+    "id": "missing",
+    "tools": {
+      "get_quote": {
+        "error": "provider unavailable"
+      },
+      "get_financials": {
+        "error": "provider unavailable"
+      }
+    },
+    "required_flags": [
+      "partial_data"
+    ],
+    "required_paths": [],
+    "reference_conclusion": "行情和财务资料缺失，无法核实价位与基本面，暂不提出数值买卖计划。",
+    "reference_limitations": [
+      "行情与财务数据源不可用，本次判断依据不足。"
+    ]
+  },
+  {
+    "id": "stale",
+    "tools": {
+      "get_quote": {
+        "symbol": "600519",
+        "price": 80,
+        "source": "fixture",
+        "data_as_of": "2026-10-09T15:00:00+08:00",
+        "stale": true
+      },
+      "get_financials": {
+        "report_date": "2026-06-30",
+        "roe": 0.15,
+        "source": "fixture"
+      }
+    },
+    "required_flags": [
+      "stale_quote"
+    ],
+    "required_paths": [
+      "get_quote.price",
+      "get_quote.data_as_of"
+    ],
+    "reference_conclusion": "报价80元来自2026-10-09，不能当作2026-10-14的实时入场依据。",
+    "reference_limitations": [
+      "报价已经过期，需要重新取得有效行情。"
+    ]
+  },
+  {
+    "id": "conflicting_data",
+    "tools": {
+      "get_quote": {
+        "symbol": "600519",
+        "price": 100,
+        "source": "fixture",
+        "data_as_of": "2026-10-14T15:00:00+08:00"
+      },
+      "get_financials": {
+        "report_date": "2026-06-30",
+        "roe": 0.15,
+        "snapshot_source": "fixture",
+        "periods": [
+          {
+            "report_date": "2026-06-30",
+            "roe": 22,
+            "units": "percent",
+            "source": "annual-fixture"
+          }
+        ],
+        "warnings": [
+          "Two sources report inconsistent ROE for the same period and basis"
+        ]
+      }
+    },
+    "required_flags": [
+      "conflicting_data"
+    ],
+    "required_paths": [
+      "get_financials.report_date",
+      "get_financials.roe",
+      "get_financials.periods.0.report_date",
+      "get_financials.periods.0.roe"
+    ],
+    "reference_conclusion": "同一报告期ROE的0.15与22%来源值冲突，需核实后再判断盈利质量。",
+    "reference_limitations": [
+      "ROE口径与来源不一致，不能拼接成同一财务结论。"
+    ]
+  },
+  {
+    "id": "insufficient_sample",
+    "tools": {
+      "get_quote": {
+        "symbol": "600519",
+        "price": 100,
+        "source": "fixture",
+        "data_as_of": "2026-10-14T15:00:00+08:00"
+      },
+      "run_backtest": {
+        "symbol": "600519",
+        "metrics": {
+          "total_trades": 3,
+          "win_rate": 1,
+          "total_return": 0.1
+        },
+        "execution": {
+          "model": "next_open",
+          "limitations": [
+            "Queue priority not simulated"
+          ]
+        }
+      }
+    },
+    "required_flags": [
+      "insufficient_sample"
+    ],
+    "required_paths": [
+      "run_backtest.metrics.total_trades",
+      "run_backtest.metrics.win_rate"
+    ],
+    "reference_conclusion": "回测仅3笔交易，样本不足，100%的样本胜率不能推断未来胜率。",
+    "reference_limitations": [
+      "交易样本过少，回测未模拟排队优先级，不能保证长期收益。"
+    ]
+  }
+]

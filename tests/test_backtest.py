@@ -78,7 +78,7 @@ class TestCheckCondition:
 
     def test_out_of_bounds(self):
         s = pd.Series([10, 20])
-        assert check_condition(s, ">", 5, 0) is False
+        assert check_condition(s, ">", 5, -1) is False
         assert check_condition(s, ">", 5, 10) is False
 
     def test_equals(self):
@@ -481,6 +481,7 @@ class TestTrailingStop:
         # Peak close 14 at bar 5; trail level = 14 * (1 - 0.08) = 12.88, bar 6 close 12.6 triggers.
         df = _df_from_closes([10, 10, 11, 12, 13, 14, 12.6])
         strategy = {
+            "simulation": {"execution": "same_close"},
             "entry": _ALWAYS_ENTRY,
             "exit": {"stop_loss": -0.5, "take_profit": 5.0, "trailing_stop": 0.08},
             "position": {"size": 1.0},
@@ -495,6 +496,7 @@ class TestTrailingStop:
     def test_no_trailing_stop_key_holds_through_dip(self):
         df = _df_from_closes([10, 10, 11, 12, 13, 14, 12.6, 12.0, 11.0])
         strategy = {
+            "simulation": {"execution": "same_close"},
             "entry": _ALWAYS_ENTRY,
             "exit": {"stop_loss": -0.5, "take_profit": 5.0},
             "position": {"size": 1.0},
@@ -506,6 +508,7 @@ class TestTrailingStop:
         # Bar 3 close 8 is both below the fixed stop (-20% vs entry) and the 8% trail from peak 14.
         df = _df_from_closes([10, 10, 14, 8, 9, 9])
         strategy = {
+            "simulation": {"execution": "same_close"},
             "entry": _ALWAYS_ENTRY,
             "exit": {"stop_loss": -0.10, "take_profit": 5.0, "trailing_stop": 0.08},
             "position": {"size": 1.0},
@@ -524,6 +527,7 @@ class TestTrailingStop:
         # holding — any such close would have fired tp on that earlier bar.)
         df = _df_from_closes([100, 100, 110, 130])
         strategy = {
+            "simulation": {"execution": "same_close"},
             "entry": _ALWAYS_ENTRY,
             "exit": {"stop_loss": -0.5, "take_profit": 0.20, "trailing_stop": 0.08},
             "position": {"size": 1.0},
@@ -541,6 +545,7 @@ class TestTrailingStop:
         # there (120 <= 150*0.9); a correctly reset peak (120) does not.
         df = _df_from_closes([100, 100, 150, 95, 100, 120, 125, 110])
         strategy = {
+            "simulation": {"execution": "same_close"},
             "entry": _ALWAYS_ENTRY,
             "exit": {"stop_loss": -0.5, "take_profit": 5.0, "trailing_stop": 0.10},
             "position": {"size": 1.0},
@@ -564,7 +569,7 @@ class TestStampTax:
 
     @pytest.mark.parametrize("symbol", ["600519", "sh600519", "sz000001"])
     def test_a_share_aliases_use_same_lot_size(self, symbol):
-        strategy = {"entry": _ALWAYS_ENTRY, "simulation": {"slippage": 0, "commission": 0}}
+        strategy = {"entry": _ALWAYS_ENTRY, "simulation": {"execution": "same_close", "slippage": 0, "commission": 0}}
         sim = backtest.simulate(_df_from_closes([10, 10]), strategy, 1500, symbol)
         assert sim["trades"][0]["shares"] == 100
 
@@ -586,7 +591,7 @@ class TestStampTax:
             "entry": _ALWAYS_ENTRY,
             "exit": {"stop_loss": -0.5, "take_profit": 0.20},
             "position": {"size": 1.0},
-            "simulation": {"slippage": 0.0, "commission": 0.001, "stamp_tax": 0.0005},
+            "simulation": {"execution": "same_close", "slippage": 0.0, "commission": 0.001, "stamp_tax": 0.0005},
         }
         sim = backtest.simulate(df, strategy, 1000000, "600000")
         buys = [t for t in sim["trades"] if t["type"] == "buy"]
@@ -761,3 +766,107 @@ class TestBenchmark:
         strat = backtest.load_strategy(str(yaml_path))
         assert strat["benchmark"] == "000300"
         assert strat["entry"]["conditions"][0]["value"] == 0.5
+
+
+class TestNextOpenExecution:
+    def test_signal_waits_for_next_open_and_reports_signal_date(self):
+        df = _df_from_closes([10, 11, 12, 13])
+        df["open"] = [10, 10, 20, 25]
+        result = backtest.simulate(
+            df,
+            {
+                "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 10}]},
+                "simulation": {"commission": 0, "slippage": 0},
+            },
+            1000,
+            "AAPL",
+        )
+        buy = result["trades"][0]
+        assert buy["date"] == "2024-01-03"
+        assert buy["signal_date"] == "2024-01-02"
+        assert buy["price"] == 20
+        assert buy["shares"] == 50
+        assert result["execution"]["model"] == "next_open"
+
+    def test_last_bar_signal_cannot_trade_in_the_past(self):
+        strategy = {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 15}]}}
+        assert backtest.simulate(_df_from_closes([10, 10, 20]), strategy, 1000, "AAPL")["trades"] == []
+
+    def test_zero_volume_defers_order_and_keeps_equity_dates(self):
+        df = _df_from_closes([10, 11, 12, 13])
+        df.loc[2, "volume"] = 0
+        sim = backtest.simulate(
+            df, {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 10}]}}, 1000, "AAPL"
+        )
+        assert sim["trades"][0]["date"] == "2024-01-04"
+        assert sim["trades"][0]["signal_date"] == "2024-01-02"
+        assert len(sim["equity_curve"]) == 3
+
+    def test_explicit_locked_limit_blocks_buy(self):
+        df = _df_from_closes([9, 10.5, 11, 12])
+        df.loc[2, "limit_up"] = 11
+        sim = backtest.simulate(
+            df, {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 10}]}}, 10000, "600519"
+        )
+        assert sim["trades"][0]["date"] == "2024-01-04"
+        assert sim["execution"]["blocked_orders"] == 1
+        assert len(sim["equity_curve"]) == 3
+
+    def test_next_open_requires_valid_open(self):
+        df = _df_from_closes([10, 10, 10])
+        df.loc[2, "open"] = float("nan")
+        with pytest.raises(ValueError, match="open"):
+            backtest.simulate(
+                df, {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 10}]}}, 1000, "AAPL"
+            )
+
+
+def test_next_open_rejects_duplicate_dates():
+    df = _df_from_closes([10, 10, 12])
+    df.loc[2, "date"] = df.loc[1, "date"]
+    with pytest.raises(ValueError, match="dates"):
+        backtest.simulate(df, {"entry": _ALWAYS_ENTRY}, 10000, "600519")
+
+
+def test_blocked_exit_keeps_original_signal_and_fills_at_later_open():
+    df = _df_from_closes([10, 10, 12, 10, 9])
+    df.loc[2, "open"] = 10
+    df.loc[3, "limit_down"] = 10
+    strategy = {"entry": _ALWAYS_ENTRY, "exit": {"take_profit": 0.2}, "simulation": {"slippage": 0, "commission": 0}}
+    result = backtest.simulate(df, strategy, 10000, "600519")
+    sell = next(trade for trade in result["trades"] if trade["type"] == "sell")
+    assert sell["signal_date"] == "2024-01-03"
+    assert sell["date"] == "2024-01-05"
+    assert sell["price"] == 9
+    assert sell["pnl"] == -1000
+    assert result["execution"]["blocked_orders"] == 1
+
+
+def test_next_open_trailing_peak_uses_held_closes_after_gap_entry():
+    df = _df_from_closes([10, 11, 12, 13])
+    df.loc[2, ["open", "high"]] = 20
+    strategy = {
+        "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 10}]},
+        "exit": {"stop_loss": -0.9, "take_profit": 10, "trailing_stop": 0.1},
+        "simulation": {"slippage": 0, "commission": 0},
+    }
+    result = backtest.simulate(df, strategy, 1000, "AAPL")
+    assert result["trades"][0]["price"] == 20
+    assert [trade for trade in result["trades"] if trade["type"] == "sell"] == []
+
+
+def test_first_close_signal_executes_at_second_day_open():
+    result = backtest.simulate(
+        _df_from_closes([10, 11, 12]),
+        {"entry": _ALWAYS_ENTRY, "simulation": {"commission": 0, "slippage": 0}},
+        1000,
+        "AAPL",
+    )
+    assert result["trades"][0]["signal_date"] == "2024-01-01"
+    assert result["trades"][0]["date"] == "2024-01-02"
+    assert result["trades"][0]["price"] == 11
+
+
+def test_cross_condition_does_not_read_last_bar_as_previous_first_bar():
+    assert backtest.check_condition(pd.Series([10, 9]), "cross_above", 9.5, 0) is False
+    assert backtest.check_condition(pd.Series([10, 9]), ">", 9.5, 0) is True

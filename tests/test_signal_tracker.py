@@ -32,7 +32,7 @@ def _rec_args(store, **over):
 
 
 def _bar(date, high, low, close):
-    return {"date": date, "open": close, "high": high, "low": low, "close": close}
+    return {"date": date, "open": close, "high": high, "low": low, "close": close, "adjusted": "none"}
 
 
 @pytest.fixture
@@ -337,7 +337,14 @@ class TestSummary:
         assert s["timeout_loss"] == 1
         assert s["win_rate"] == 50.0
         assert s["avg_return_pct"] == 5.0
-        assert result["by_source"]["dragon-head"] == {"closed": 2, "wins": 1, "win_rate": 50.0}
+        assert result["by_source"]["dragon-head"] == {
+            "closed": 2,
+            "wins": 1,
+            "win_rate": 50.0,
+            "avg_return_pct": 5.0,
+            "return_samples": 2,
+            "sample_warning": "Small observational sample; not strategy validation",
+        }
 
     def test_filters(self, store, mock_run_tool):
         st.cmd_record(_rec_args(store, source="a"))
@@ -422,3 +429,95 @@ def test_concurrent_cli_records_are_complete(store):
     summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
     assert summary["summary"]["total"] == 6
     assert {r["id"]: r["note"] for r in summary["records"]} == {r["id"]: r["note"] for r in written}
+
+
+@pytest.mark.parametrize("missing_return", [None, float("nan"), True])
+def test_source_summary_reports_return_sample_without_inventing_missing_returns(tmp_path, missing_return):
+    from argparse import Namespace
+
+    from tools import signal_tracker
+
+    store = tmp_path / "signals.jsonl"
+    rows = []
+    for idx, ret in enumerate((10, -4, missing_return)):
+        rows.append(
+            {
+                "id": str(idx),
+                "symbol": "AAPL",
+                "record_date": "2024-01-02",
+                "status": "closed",
+                "direction": "buy",
+                "entry_price": 100,
+                "horizon_days": 10,
+                "source": "strategy-v1",
+                "outcome": "timeout_profit" if idx == 0 else "timeout_loss",
+                "return_pct": ret,
+            }
+        )
+    store.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    result = signal_tracker.cmd_summary(Namespace(store=str(store), source=None, symbol=None, status="all"))
+    group = result["by_source"]["strategy-v1"]
+    assert result["summary"]["avg_return_pct"] == 3
+    assert group["avg_return_pct"] == 3
+    assert group["return_samples"] == 2
+    assert group["sample_warning"]
+
+
+@pytest.mark.parametrize("basis", ["qfq", "total_return", "unknown", None])
+def test_unverified_price_basis_never_closes_original_price_signal(store, mock_run_tool, basis):
+    st.cmd_record(_rec_args(store, entry_price=100, stop_price=90, target_price=120))
+    bars = [_bar("2026-09-01", 50, 50, 50), _bar("2026-09-02", 51, 50, 51)]
+    for bar in bars:
+        if basis is None:
+            bar.pop("adjusted", None)
+        else:
+            bar["adjusted"] = basis
+    mock_run_tool.return_value = bars
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert result["closed"] == 0
+    assert result["results"][0]["outcome"] == "skipped_price_basis"
+    assert (
+        st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))["records"][0]["status"]
+        == "open"
+    )
+
+
+def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, entry_price=100, stop_price=90, target_price=120, horizon_days=1))
+    bars = [_bar("2026-09-01", 50, 50, 50), _bar("2026-09-02", 51, 50, 51)]
+    for bar, factor in zip(bars, [0.5, 1]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 2
+    saved = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))["records"][0]
+    assert saved["entry_price"] == 100
+    assert saved["exit_price"] == 102
+    assert saved["evaluation_price_basis"]["factor"] == 0.5
+
+
+def test_batch_deadline_returns_and_persists_completed_results(store, mock_run_tool, monkeypatch):
+    for symbol in ["600519", "000001", "300001", "600000", "000002"]:
+        st.cmd_record(_rec_args(store, symbol=symbol))
+    elapsed = 0
+    monkeypatch.setattr(st.time, "monotonic", lambda: elapsed)
+
+    def fetch(*args, timeout, **kwargs):
+        nonlocal elapsed
+        elapsed += min(80, timeout)
+        if timeout < 80:
+            return None
+        return [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 13, 10, 12)]
+
+    mock_run_tool.side_effect = fetch
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert elapsed == 270
+    assert result["closed"] == 3
+    assert result["deferred"] == 1
+    assert result["still_open"] == 2
+    assert result["complete"] is False
+    assert result["warnings"]
+    summary = st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))
+    assert summary["summary"]["closed"] == 3
+    assert summary["summary"]["open"] == 2

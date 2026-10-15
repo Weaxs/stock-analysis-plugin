@@ -350,3 +350,22 @@ def test_cold_issuer_lookup_has_time_for_valid_200_second_download(monkeypatch):
     monkeypatch.setattr(hermes_tools.subprocess, "run", run)
     result = json.loads(hermes_tools.get_us_holdings({"cik": "320193", "mode": "issuer"}))
     assert result["query_type"] == "issuer"
+
+
+@pytest.mark.parametrize(
+    "script,argv,expected",
+    [
+        ("stock_data.py", ["quote", "600519"], 150),
+        ("screener.py", ["screen"], 1860),
+        ("sec_edgar.py", ["holdings", "320193"], 330),
+    ],
+)
+def test_host_budgets_and_evidence_relay(monkeypatch, script, argv, expected):
+    payload = '{"source":"fixture","price":100,"fetched_at":"2026-10-14T00:00:00+00:00","data_as_of":null}'
+
+    def run(command, **kwargs):
+        assert kwargs["timeout"] == expected
+        return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
+
+    monkeypatch.setattr(hermes_tools.subprocess, "run", run)
+    assert hermes_tools._run(script, argv) == payload

@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools._subproc import command_timeout
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 
@@ -23,7 +25,7 @@ def _find_python() -> str:
 def _run(script: str, argv: list) -> str:
     # argv list: 参数原样进子进程，不经 shell（Windows 同理）
     python = _find_python()
-    timeout = 300 if script == "sec_edgar.py" and argv[:1] == ["holdings"] else 120
+    timeout = command_timeout(script, argv) + 30
     try:
         result = subprocess.run(
             [python, TOOLS_DIR / script, *map(str, argv)],

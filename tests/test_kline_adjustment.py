@@ -39,6 +39,7 @@ def test_daily_failover_adjusts_all_prices_before_returning(monkeypatch):
     assert [row["volume"] for row in rows] == [900, 1000]
     assert [row["turnover"] for row in rows] == [19800, 11000]
     assert all(row["adjusted"] == "qfq" for row in rows)
+    assert [row["adjustment_factor"] for row in rows] == [0.5, 1]
 
 
 @pytest.mark.parametrize("period,freq", [("weekly", "week"), ("monthly", "month")])
@@ -136,10 +137,10 @@ def test_missing_or_invalid_factors_fail_over_without_using_raw_prices(monkeypat
     stock_data._kline_sina.side_effect = None
     stock_data._kline_sina.return_value = [{"close": 22}]
     rows = stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1))
-    assert rows == [{"close": 11, "adjusted": "qfq"}]
+    assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 11, "adjusted": "qfq"}]
     stock_data._kline_sina.assert_not_called()
     # The winning adjusted source stays preferred on the next call.
-    assert stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1)) == rows
+    assert stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1))[0]["close"] == rows[0]["close"]
     assert stock_data._kline_baostock.call_count == 2
 
 
@@ -164,7 +165,7 @@ def test_index_keeps_raw_points_and_reports_adjustment(monkeypatch, symbol):
     stock_data._kline_tencent.side_effect = None
     stock_data._kline_tencent.return_value = [{"close": 3000}]
     rows = stock_data.cmd_kline(Namespace(symbol=symbol, period="daily", count=1))
-    assert rows == [{"close": 3000, "adjusted": "none"}]
+    assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 3000, "adjusted": "none"}]
 
 
 def test_all_adjusted_sources_down_returns_json_error(monkeypatch):
@@ -180,7 +181,7 @@ def test_prefixed_stock_uses_stock_adjustment_chain():
     stock_data._kline_akshare.side_effect = None
     stock_data._kline_akshare.return_value = [{"close": 11}]
     rows = stock_data.cmd_kline(Namespace(symbol="sh600519", period="daily", count=1))
-    assert rows == [{"close": 11, "adjusted": "qfq"}]
+    assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 11, "adjusted": "qfq"}]
     stock_data._kline_akshare.assert_called_once_with("600519", "daily", 1)
 
 
@@ -190,5 +191,5 @@ def test_etf_skips_tushare_stock_prices(monkeypatch):
     stock_data._kline_efinance.side_effect = None
     stock_data._kline_efinance.return_value = [{"close": 3}]
     rows = stock_data.cmd_kline(Namespace(symbol="510300", period="daily", count=1))
-    assert rows == [{"close": 3, "adjusted": "qfq"}]
+    assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 3, "adjusted": "qfq"}]
     post.assert_not_called()

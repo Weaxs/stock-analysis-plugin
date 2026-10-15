@@ -34,6 +34,7 @@
   "files": [
     "pi/",
     "tools/**/*.py",
+    "tools/cli_budgets.json",
     "tools/requirements.txt",
     "skills/",
     "schemas/",

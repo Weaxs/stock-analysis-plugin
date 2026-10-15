@@ -281,9 +281,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 | 工具 | 说明 |
 |------|------|
-| `screen_stocks` | 全市场多因子筛选（市场情绪调节，可选 L2 量化增强） |
+| `screen_stocks` | 全市场多因子筛选（可选 L2；factor_coverage 展示缺失因子、覆盖度、实际权重及 L2 effective_scores） |
 | `screen_risk` | 风险因子筛查 |
-| `run_backtest` | YAML 策略回测 |
+| `run_backtest` | YAML 策略回测，默认收盘信号于次日开盘成交，execution 返回模型与限制 |
 | `detect_market_regime` | 市场状态检测（牛/熊/震荡） |
 | `get_market_review` | 市场日度复盘数据 |
 | `get_review_history` | 复盘归档历史（最近 N 条，最新在前，用于纵向对比） |
@@ -320,8 +320,8 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `check_alert_rules` | 无状态检查价格、涨跌幅、异动和风险规则 |
 | `record_signal` | 记录 AI 分析建议信号（本地 JSONL 持久化） |
 | `evaluate_signals` | 评估到期信号（target_hit/stop_hit/timeout 结算） |
-| `get_signal_summary` | 信号胜率汇总（按 source/symbol/status 过滤） |
-| `render_stock_report` | 将结构化个股报告渲染为 Markdown |
+| `get_signal_summary` | 信号胜率及分来源平均收益、有效收益样本数与小样本提示（按 source/symbol/status 过滤） |
+| `render_stock_report` | 将结构化个股报告渲染为 Markdown，展示 evidence 与 data_quality 限制 |
 | `render_market_report` | 将结构化市场复盘渲染为 Markdown（save=true 时归档到本地 JSONL） |
 
 批量自选股分析和摘要的 `success` 表示至少获取了有效行情价格、K 线收盘价或技术评分；全部关键数据失败时计入 `failed`，部分结果仍保留。采集脚本复用返回的 K 线计算技术指标，并按股票所属市场查询大盘状态；日/韩/台市场状态暂不可用，非 A 股板块榜单也暂不可用，均会明确返回错误。
@@ -374,10 +374,13 @@ position:
   max_positions: 1
 ```
 
+行情 JSON 保留原有数组/字典形状，添加 `source`、UTC `fetched_at` 和 `data_as_of`。采集时间不是报价时间，提供方未给时间时为 null；K 线 data_as_of 是该条的日期标签，周/月线标签不是实际末次成交时间；`as_of_basis=trading_calendar` 表示交易日历推断。A 股复权口径延续 qfq/none；其他市场按来源标为 total_return/qfq/unknown，不把 unknown 当已验证复权。
+
 其他可用键：
 
 - `exit.trailing_stop`：移动止损，价格自持仓期间最高收盘价回撤达到该比例即卖出（如 `0.08` = 峰值回撤 8% 触发）；与 `stop_loss` 同时设置时先判固定止损。
 - `benchmark`（顶层）：基准对比标的代码（如 `"sh000300"` 沪深300；指数代码必须带 sh/sz 交易所前缀，裸 6 位数字会被当作个股），设置后回测结果附带 `benchmark` 块（基准买入持有收益与 `excess_return` 超额收益）。
+- `simulation.execution`：默认 `next_open`，前日收盘信号、次日开盘加滑点成交；显式 `same_close` 复现旧收盘成交假设。交易同时返回 signal_date/date。零成交量阻止成交；一字板限制只在输入提供同口径历史 limit_up/limit_down 时执行。`execution` 列出阻止成交次数、未成交订单及限制；止损是收盘信号，未模拟盘口排队、部分成交、结算和市场冲击。
 - `simulation`（顶层）：交易成本。`slippage`（滑点，买卖双边，默认 0.001）、`commission`（佣金，买卖双边，默认 0.0015）、`stamp_tax`（印花税，仅卖出收取，默认 0；A股为 0.0005，各市场税率不同且会调整，按当下实际费率填写）。费率均须在 [0, 1) 区间，越界报错。回测结果附带 `costs` 块（实际生效费率与实付费用合计 `commission_paid`/`stamp_tax_paid`）。
 
 ### 可用指标
@@ -657,4 +660,24 @@ python3 tools/sec_edgar.py holdings 0001067983 --mode manager
 
 来源格式与实測依据见 [#51 数据研究](docs/research/issue-51-reverse-holdings.md)。
 
-Hermes 的 `get_us_holdings` 子进程预算为 300 秒，允许首次下载批量包；其他 CLI 仍为 120 秒。机构查询优先寻找最新已知报告期的原始 13F：较新修订对应的原始版未找到时明确报错，历史分片仍未完全检索时返回 `history_truncated` 与警告。发行人 CUSIP 查询会跳过不可访问/无效 XML，继续核对后续原文；没有任何可验证映射时才报缺失。
+13F CLI 预算为 300 秒，宿主另留 30 秒接收输出；其他命令按共享预算表执行。机构查询优先寻找最新已知报告期的原始 13F：较新修订对应的原始版未找到时明确报错，历史分片仍未完全检索时返回 `history_truncated` 与警告。发行人 CUSIP 查询会跳过不可访问/无效 XML，继续核对后续原文；没有任何可验证映射时才报缺失。
+
+## 分析可靠性验证
+
+命令预算集中于 `tools/cli_budgets.json`：通用采集默认 120 秒、市场快照 240 秒、选股 top 须为正整数，预算按候选数及 6 个 worker 的批次计算（默认 20 个候选为 1830 秒）、13F 300 秒；技术分析、市场状态、回测和风险筛查按实际嵌套调用另留预算；四个宿主额外留 30 秒接收 CLI 输出。综合采集保留安全 JSON 错误及 error_code（timeout/empty_output/invalid_json/process_failed/tool_error），不会把失败当成有效空数据。
+
+最终报告的固定证据案例覆盖完整、缺失、过期、同口径冲突及样本不足：
+
+```bash
+.venv/bin/python -m pytest tests/test_analysis_quality.py -q
+# 需要 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL；只调用模型，数据源使用固定夹具
+.venv/bin/python -m pytest tests/e2e/test_analysis_quality.py -m integration_llm -v
+```
+
+真实模型评测同时要求结构化证据检查与独立上下文的结论审稿通过：审稿检查正文事实、限制说明是否诚实，以及是否过度外推。未运行审稿、结果缺失或模糊都不能算通过；报告自行声明通过不被采信。另有人工核对的正确报告及两类反例用于验证审稿器（正确引用但正文捏造现价、3笔交易却保证长期胜率）。空回答也失败。离线渲染和规则检查不代表真实模型通过，也不证明策略未来有效。信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
+
+信号结算仅在价格口径可核实时进行：原始价格可直接比较；复权日线需记录日 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录。
+
+市场复盘数据不足时温度/姿态为 null，信号 unknown，data_quality.limitations 说明限制。自选股异动采集失败时 anomaly_status=unavailable、anomaly_count=null，保留警告并计入 summary.partial，不能当成无异常。
+
+L1 与 L2 综合分均在排序前按可用因子重新归一化；缺失或非有限因子不作零分处理，因子组内部也仅平均有效输入。factor_coverage.ratio 保留原始权重覆盖率，effective_weights 是实际归一化后的权重，高分仍需结合覆盖率判断。

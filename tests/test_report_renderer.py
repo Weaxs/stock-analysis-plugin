@@ -210,3 +210,17 @@ if __name__ == "__main__":
 
     r = subprocess.run([sys.executable, "-m", "pytest", __file__, "-q"], cwd=os.path.dirname(os.path.dirname(__file__)))
     sys.exit(r.returncode)
+
+
+def test_unknown_market_temperature_renders_honest_limitations():
+    report = {
+        "market": "A",
+        "review_date": "2026-10-14",
+        "temperature": {"score": None, "level": "unknown", "signal": "unknown"},
+        "strategy_stance": None,
+        "data_quality": {"flags": ["partial_data"], "limitations": ["市场行情采集失败，无法确定温度"]},
+    }
+    result = report_renderer.render("market", "full", report)
+    assert "error" not in result
+    assert "市场行情采集失败，无法确定温度" in result["content"]
+    assert "均衡" not in result["content"]

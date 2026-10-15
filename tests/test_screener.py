@@ -436,10 +436,11 @@ class TestNonFiniteSanitization:
     json.dumps would otherwise emit bare NaN/Infinity tokens that strict JSON
     parsers in the host adapters reject."""
 
-    def test_all_empty_factor_column_yields_none_scores(self, monkeypatch):
+    @pytest.mark.parametrize("missing_volume", [None, float("inf")])
+    def test_missing_factor_leg_preserves_remaining_usable_scores(self, monkeypatch, missing_volume):
         snapshot = _snapshot()
         for row in snapshot:
-            row["volume"] = None  # all-empty unfiltered factor column (liquidity leg)
+            row["volume"] = missing_volume
         monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
         monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
         result = screen("A", 20, None)
@@ -447,11 +448,9 @@ class TestNonFiniteSanitization:
         for c in result["candidates"]:
             for value in c["scores"].values():
                 assert value is None or (isinstance(value, (int, float)) and np.isfinite(value))
-            # liquidity is NaN-driven here (all-empty volume) → sanitized away,
-            # and it poisons composite/final downstream
-            assert c["scores"]["liquidity"] is None
-            assert c["scores"]["composite"] is None
-            assert c["scores"]["final"] is None
+            assert c["scores"]["liquidity"] == {"AAA": 100, "BBB": 50, "CCC": 0}[c["symbol"]]
+            assert c["scores"]["composite"] is not None
+            assert c["scores"]["final"] is not None
         # the whole payload must be strict-JSON serializable (allow_nan=False)
         json.dumps(result, allow_nan=False)
 
@@ -567,3 +566,109 @@ def test_hk_dividend_factor_normalizes_hk_symbols_and_preserves_basis(monkeypatc
     assert result["candidates"][0]["dividend_yield"] == 5
     assert result["dividend_factor"]["yield_basis"] == "HKEX fiscal-year ratio"
     assert calls[0]["market"] == "HK"
+
+
+def test_l2_coverage_exposes_missing_groups_and_actual_weights(monkeypatch):
+    _patch_screen(monkeypatch)
+    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+    result = screen("A", 20, None, l2=True)
+    candidate = result["candidates"][0]
+    coverage = candidate["factor_coverage"]
+    assert coverage["available"] == ["value", "liquidity"]
+    assert set(coverage["missing"]) == {"quality", "growth", "momentum", "moneyflow", "low_volatility"}
+    assert coverage["ratio"] == 0.25
+    assert coverage["effective_weights"] == {"value": 0.6, "liquidity": 0.4}
+    assert candidate["scores"]["final"] == 100
+
+
+def test_l2_missing_financials_do_not_receive_constant_quality_score(monkeypatch, make_kline_data):
+    _patch_screen(monkeypatch)
+    kline = make_kline_data(n=2)
+
+    def fetch(args, **kwargs):
+        if args[0] == "kline":
+            return kline
+        if args[0] == "fundamental_context" and args[1] == "AAA":
+            return {"profitability": {"roe": 0.15}}
+        return {"error": "unavailable"}
+
+    monkeypatch.setattr(screener, "_fetch_json", fetch)
+    candidates = {c["symbol"]: c for c in screen("A", 20, None, l2=True)["candidates"]}
+    assert candidates["AAA"]["scores"]["quality"] == 50.0
+    bbb = candidates["BBB"]
+    assert "quality" not in bbb["scores"]
+    assert "quality" in bbb["factor_coverage"]["missing"]
+    assert bbb["factor_coverage"]["available"] == ["value", "liquidity", "momentum"]
+    assert bbb["factor_coverage"]["ratio"] == 0.45
+
+
+def test_no_factor_data_is_unknown_instead_of_zero_score(monkeypatch):
+    _patch_screen(monkeypatch)
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"symbol": "TEST", "price": 10}])
+    for l2 in (False, True):
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+        candidate = screen("A", 20, None, l2=l2)["candidates"][0]
+        assert candidate["scores"]["value"] is None
+        assert candidate["scores"]["final"] is None
+        assert candidate["factor_coverage"]["available"] == []
+        assert candidate["factor_coverage"]["effective_weights"] == {}
+
+
+def test_l2_fetch_can_finish_after_old_thirty_second_limit(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    def run(command, **kwargs):
+        if kwargs["timeout"] < 90:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout='{"roe":0.2}')
+
+    monkeypatch.setattr("tools._subproc.subprocess.run", run)
+    assert screener._fetch_json(["financials", "AAPL"]) == {"roe": 0.2}
+
+
+def test_l2_final_is_explainable_from_returned_effective_scores(monkeypatch):
+    _patch_screen(monkeypatch)
+    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {"ret_20d": 0 if symbol == "AAA" else 20})
+    result = screen("A", 20, None, l2=True)
+    for candidate in result["candidates"]:
+        coverage = candidate["factor_coverage"]
+        scores = coverage["effective_scores"]
+        weights = coverage["effective_weights"]
+        assert scores.keys() == weights.keys()
+        reconstructed = (
+            sum(scores[group] * weights[group] for group in scores) * result["market_sentiment"]["multiplier"]
+        )
+        assert round(reconstructed, 1) == candidate["scores"]["final"]
+    aaa = next(c for c in result["candidates"] if c["symbol"] == "AAA")
+    assert aaa["factor_coverage"]["effective_scores"]["momentum"] == 0
+    assert aaa["scores"]["momentum"] == 100  # L1 reference is kept for compatibility
+
+
+@pytest.mark.parametrize("top", [-1, 0, True, 1.5])
+def test_invalid_top_fails_before_collecting(monkeypatch, top):
+    from tools import screener
+
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a, **kw: pytest.fail("invalid top reached data source"))
+    assert "error" in screener.screen("A", top, None, l2=True)
+
+
+def test_l1_missing_factors_do_not_count_as_zero_before_ranking(monkeypatch):
+    from tools import screener
+
+    monkeypatch.setattr(
+        screener,
+        "fetch_snapshot",
+        lambda market: [
+            {"symbol": "AAA", "price": 10, "change_pct": 1, "volume": 100},
+            {"symbol": "BBB", "price": 10, "change_pct": 5, "volume": 500},
+        ],
+    )
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    result = screener.screen("US", 1, None)
+    best = result["candidates"][0]
+    assert best["symbol"] == "BBB"
+    assert best["scores"]["composite"] == 100
+    assert best["scores"]["final"] == 100
+    assert best["scores"]["value"] is None
+    assert best["factor_coverage"]["effective_weights"] == {"momentum": 0.5, "liquidity": 0.5}

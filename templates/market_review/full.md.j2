@@ -4,6 +4,13 @@
 {% set t = temperature or {} -%}
 **温度：** {{ m.signal_emoji(t.signal) }} {{ m.fmt_num(t.score, 1) }}/100　|　**信号灯：** {{ m.signal_label(t.signal) }}　|　**策略姿态：** {{ m.stance_label(strategy_stance) }}
 
+{% if data_quality and data_quality.limitations -%}
+**数据限制：**
+{% for limitation in data_quality.limitations %}
+- {{ limitation }}
+{% endfor %}
+{%- endif %}
+
 {% if regime and (regime.regime_cn or regime.regime) -%}
 > **市场阶段：** {{ regime.regime_cn or regime.regime }}{% if regime.confidence is not none %}（置信度 {{ m.fmt_num(regime.confidence) }}）{% endif %}{% if regime.recommended_skills %}　|　**推荐策略：** {{ regime.recommended_skills | join('、') }}{% endif %}
 {%- endif %}

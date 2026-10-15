@@ -124,7 +124,70 @@
         "action_checklist": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "risk_warning": { "type": "array", "items": { "type": "string" } }
+    "risk_warning": { "type": "array", "items": { "type": "string" } },
+    "data_quality": {
+      "type": "object",
+      "properties": {
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "partial_data",
+              "stale_quote",
+              "conflicting_data",
+              "insufficient_sample"
+            ]
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "flags",
+        "limitations"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "原始工具结果路径，例如 get_quote.price；已知返回对象中未提供的末级字段只能以 value=null 表示未知，其 source/as_of 可为 null，若填写必须来自父对象；不得跨越缺失对象或数组编造路径。"
+          },
+          "label": {
+            "type": "string",
+            "description": "读者可理解的指标名"
+          },
+          "value": {},
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "description": "仅引用工具结果中的 data_as_of，保留完整时间与时区；缺失为 null。report_date 是报告期，不能代替此时间。",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "value",
+          "source",
+          "as_of"
+        ]
+      }
+    }
   },
   "required": ["stock_name", "stock_code", "analysis_date", "sentiment_score",
                 "decision_type", "confidence", "core_conclusion"]
