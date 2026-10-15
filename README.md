@@ -541,7 +541,7 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 | `OPENAI_API_KEY` | Secret | 对应的 API key |
 | `OPENAI_MODEL` | Variable 或 Secret | 支持 tool calling 的模型 ID |
 
-`e2e-llm` 也使用这三项配置，Hermes（含报告质量评测）和 Pi 通过两个 matrix 作业并行运行，互不因失败而取消；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
+`e2e-llm` 也使用这三项配置，Hermes（含报告质量评测）、Pi、OpenClaw 和 dsh 通过四个 matrix 作业并行运行，互不因失败而取消；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
 
 ## 项目结构
 
