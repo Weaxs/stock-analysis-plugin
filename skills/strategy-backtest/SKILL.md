@@ -9,6 +9,10 @@ description: 策略回测：定义或读取 AlphaEvo YAML 策略，回测收益�
 
 解读回测时，`period` 是实际取得的数据期间，`requested_period` 保留用户请求，`warnings` 提示两者差异。年化收益按实际期间计算；覆盖不完整时明确说明，不能声称完成了完整请求期间的验证。买入预算包含佣金，`position.size` 为 0..1 的资金比例。
 
+## 无状态分析扩展
+
+滚动样本外、参数敏感性或跨标的验证时，MUST 读取[无状态研究工具](../stock-analysis/references/stateless-analysis.md)的 validate_backtest 分支。复用 get_kline，传完整OHLCV和事先确定的DSL候选；样本内sensitivity不等于样本外验证。
+
 ## 工作流程
 
 ### 第一步：策略定义

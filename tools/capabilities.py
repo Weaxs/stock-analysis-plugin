@@ -18,6 +18,14 @@ ALL_MARKETS = ["A", "HK", "US", "JP", "KR", "TW"]
 
 # tool_name -> {markets: [supported markets], reason: str for unsupported}
 TOOL_MATRIX = {
+    # Explicit-input analytics; data acquisition retains each provider's market limits.
+    "compare_stocks": {"markets": ALL_MARKETS, "reason": None},
+    "analyze_disclosure_changes": {"markets": ALL_MARKETS, "reason": None},
+    "analyze_portfolio_risk": {"markets": ALL_MARKETS, "reason": None},
+    "calculate_position_size": {"markets": ALL_MARKETS, "reason": None},
+    "analyze_event_study": {"markets": ALL_MARKETS, "reason": None},
+    "validate_backtest": {"markets": ALL_MARKETS, "reason": None},
+    "compare_analysis_snapshots": {"markets": ALL_MARKETS, "reason": None},
     "get_announcements": {"markets": ["A"], "reason": "cninfo A-share disclosures only"},
     "get_us_holdings": {"markets": ["US"], "reason": "SEC manager holdings or verified issuer-CUSIP reverse lookup"},
     "get_insider_trades": {"markets": ["US"], "reason": "SEC issuer Form 4 only"},

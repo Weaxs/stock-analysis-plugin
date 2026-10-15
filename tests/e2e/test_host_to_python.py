@@ -141,3 +141,24 @@ class TestHermesE2E:
         result = json.loads(result_raw)
         assert "meta" in result
         assert result["meta"]["provider"] == "diagnostics"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "compare_stocks",
+            "analyze_disclosure_changes",
+            "analyze_portfolio_risk",
+            "calculate_position_size",
+            "analyze_event_study",
+            "validate_backtest",
+            "compare_analysis_snapshots",
+        ],
+    )
+    def test_stateless_analysis_round_trip(self, hermes_ctx, name):
+        fixtures = json.loads((PROJECT_ROOT / "tests/fixtures/stateless_analysis.json").read_text(encoding="utf-8"))
+        result = json.loads(hermes_ctx.handlers[name](fixtures[name]["args"]))
+        assert "error" not in result
+        if name == "calculate_position_size":
+            assert result["quantity"] == 200
+        if name == "validate_backtest":
+            assert len(result["datasets"][0]["folds"]) == 1

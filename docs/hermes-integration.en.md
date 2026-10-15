@@ -130,7 +130,7 @@ def register(ctx):
 
 ### Tool Definitions (Schema)
 
-`hermes/schemas.py` defines the JSON Schema for all 51 tools, each containing `name`, `description`, and `parameters`:
+`hermes/schemas.py` defines the JSON Schema for all 67 tools, each containing `name`, `description`, and `parameters`:
 
 ```python
 TOOL_SCHEMAS = [
@@ -298,7 +298,7 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # Plugin manifest
-│   ├── schemas.py        # JSON Schema definitions for 51 tools
+│   ├── schemas.py        # JSON Schema definitions for 67 tools
 │   └── tools.py          # 51 handlers calling CLI via subprocess
 └── tools/                # Python CLI tools
 ```

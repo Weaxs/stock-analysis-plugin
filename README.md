@@ -32,7 +32,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **60 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
+- **67 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
@@ -93,7 +93,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 60 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
+OpenClaw Gateway 启动后自动加载并注册 67 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -104,7 +104,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 60 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 67 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 详见 [`dsh/README.md`](dsh/README.md)。
 
@@ -332,6 +332,43 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 选股的 `filters_applied` 只列实际执行的条件，显式条件缺少数据时报错。回测的 `period` 是实际数据期间，`requested_period` 保留请求期间，`warnings` 提示覆盖差异；买入预算包含佣金，年化收益和回撤按实际数据及初始资金计算。
 
+### 无状态研究与风险计算
+
+| 工具 | 说明 |
+|------|------|
+| `compare_stocks` | 比较显式输入的同行指标；检查单位、期间和口径，仅对可比数值排序 |
+| `analyze_disclosure_changes` | 比较新旧公告正文与财务指标，返回来源、变更行号和增长率限制 |
+| `analyze_portfolio_risk` | 一次性持仓的集中度、行业/币种敞口、价格盈亏、止损情景与可选相关性 |
+| `calculate_position_size` | 按现金、风险预算、费用、滑点和交易单位计算本次可买数量 |
+| `analyze_event_study` | 事件前一交易日收盘至各窗口的股票/基准收益差，标明缺失和重叠样本 |
+| `validate_backtest` | 复用现有引擎，滚动训练选候选、样本外验证，比较参数及多个标的 |
+| `compare_analysis_snapshots` | 比较调用方传入的快照，区分新增、删除、变化、数据失效和恢复 |
+
+这些工具不保存自选股、账户或分析历史，也不提供调度/通知。现有数据工具采集行情和财务，宿主传入本次持仓、正文或快照；[完整输入约定与解读工作流](skills/stock-analysis/references/stateless-analysis.md)供四个宿主共用。
+
+大输入经权限受限的临时 JSON 文件传给 Python，调用结束后清理，避免 Windows 命令行长度限制；CLI 也支持 stdin 和 `--input` 文件。公告正文由宿主读取：PDF/OCR 不包含在本次扩展中，只有标题或链接不能声称已读全文。
+
+例如仓位预算（所有金额同币种，lot_size 由用户或交易规则确认）：
+
+```json
+{
+  "equity": 100000, "cash": 20000,
+  "entry_price": 100, "stop_price": 95,
+  "risk_fraction": 0.01, "lot_size": 100,
+  "fee_rate": 0.001, "slippage_rate": 0.001
+}
+```
+
+将上述 JSON 保存为 `input.json` 后运行：
+
+```bash
+python tools/stateless_analysis.py position_size --input input.json
+```
+
+对应宿主工具是 `calculate_position_size`。其余 CLI 子命令依次为 `peers/disclosure/portfolio/event_study/robustness/snapshot`。事件研究可直接传 `symbol/benchmark/start_date/end_date/event_dates`；回测验证可传 `symbols/start_date/end_date/strategies`，由 Python 复用行情接口，避免模型重新抄写历史 K 线。显式价格/datasets 模式仍支持离线计算，两种模式互斥。
+
+跨币种组合必须提供显式汇率；价格盈亏不含历史汇兑损益。稳健性工具仅支持 next_open、每窗口重新从现金开始，样本内敏感性不等于样本外表现。
+
 ## 策略回测 DSL
 
 策略以 YAML 格式定义，支持参数化和条件组合：
@@ -504,27 +541,27 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 | `OPENAI_API_KEY` | Secret | 对应的 API key |
 | `OPENAI_MODEL` | Variable 或 Secret | 支持 tool calling 的模型 ID |
 
-`e2e-llm` 也使用这三项配置；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
+`e2e-llm` 也使用这三项配置，Hermes（含报告质量评测）、Pi、OpenClaw 和 dsh 通过四个 matrix 作业并行运行，互不因失败而取消；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
 
 ## 项目结构
 
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 60 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 67 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   60 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   67 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×60
+│   └── index.ts                     #   definePluginEntry + registerTool ×67
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×60
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×67
 │
 ├── tools/                           # 共享 Python CLI 工具
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪

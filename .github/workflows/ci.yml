@@ -147,6 +147,12 @@ jobs:
       - name: dsh current SDK compatibility
         run: npx tsx tests/test_dsh_sdk_compat.ts
 
+      - name: LLM host adapters (offline)
+        run: npx tsx tests/test_llm_hosts.ts
+
+      - name: Large JSON input transport and cleanup
+        run: npx tsx tests/test_json_input.ts
+
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
 
@@ -154,7 +160,7 @@ jobs:
         run: pytest tests/e2e/test_host_to_python.py -v
 
       - name: Signal store and analysis regressions
-        run: pytest tests/test_signal_tracker.py tests/test_gather.py tests/test_watchlist.py tests/test_watchlist_context.py -q
+        run: pytest tests/test_signal_tracker.py tests/test_gather.py tests/test_watchlist.py tests/test_watchlist_context.py tests/test_stateless_analysis.py -q
 
       - name: Pi host real subprocess round-trip
         run: npx tsx tests/e2e/test_pi_e2e.ts
@@ -172,6 +178,10 @@ jobs:
     # block the release path (see publish.yml).
     continue-on-error: true
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [hermes, pi, openclaw, dsh]
     timeout-minutes: 20
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
@@ -193,16 +203,18 @@ jobs:
         run: node scripts/ci-resolve-llm-host.mjs
 
       - name: Install Python dependencies
+        if: matrix.host == 'hermes'
         run: |
           pip install -r tools/requirements.txt
           pip install -r requirements-dev.txt
 
-      # Full npm ci (postinstall builds .venv) — the Pi LLM flow spawns tools
-      # through it.
+      # Full npm ci builds .venv for the TypeScript host adapters.
       - name: Install Node dependencies
+        if: matrix.host != 'hermes'
         run: npm ci
 
       - name: E2E — Hermes LLM flow
+        if: matrix.host == 'hermes'
         env:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -214,7 +226,8 @@ jobs:
           fi
           pytest tests/e2e/test_hermes_llm.py tests/e2e/test_analysis_quality.py -m integration_llm -v
 
-      - name: E2E — Pi LLM flow
+      - name: E2E — ${{ matrix.host }} LLM flow
+        if: matrix.host != 'hermes'
         env:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -224,7 +237,7 @@ jobs:
             echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
-          npx tsx tests/e2e/test_pi_llm.ts
+          npx tsx tests/e2e/test_host_llm.ts ${{ matrix.host }}
 
   e2e-host:
     # Real-host smoke: install the plugin into the actual pi / openclaw /

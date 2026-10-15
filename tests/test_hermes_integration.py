@@ -26,6 +26,13 @@ def test_wheel_declares_all_shared_runtime_dependencies():
 
 EXPECTED_TOOLS = sorted(
     [
+        "compare_stocks",
+        "analyze_disclosure_changes",
+        "analyze_portfolio_risk",
+        "calculate_position_size",
+        "analyze_event_study",
+        "validate_backtest",
+        "compare_analysis_snapshots",
         "get_announcements",
         "get_us_holdings",
         "get_insider_trades",
@@ -161,6 +168,40 @@ def test_tool_schemas_valid():
         assert "parameters" in schema, f"{tool['name']}: schema missing parameters"
         assert schema["parameters"]["type"] == "object", f"{tool['name']}: parameters.type != object"
         assert callable(tool["handler"]), f"{tool['name']}: handler not callable"
+
+
+def test_stateless_inputs_reach_cli_and_transport_is_removed(monkeypatch):
+    fixtures = json.loads((Path(__file__).parent / "fixtures/stateless_analysis.json").read_text(encoding="utf-8"))
+    captured = []
+
+    def execute(script, argv):
+        path = Path(argv[2])
+        captured.append((script, argv[0], path, json.loads(path.read_text(encoding="utf-8"))))
+        return '{"ok":true}'
+
+    monkeypatch.setattr(hermes_tools, "_run", execute)
+    for name, fixture in fixtures.items():
+        result = getattr(hermes_tools, name)(fixture["args"])
+        script, command, path, payload = captured[-1]
+        assert script == "stateless_analysis.py"
+        assert command == fixture["command"]
+        assert payload == fixture["args"]
+        assert not path.exists()
+        assert json.loads(result) == {"ok": True}
+
+
+def test_stateless_transport_removed_after_failure(monkeypatch):
+    paths = []
+
+    def execute(script, argv):
+        paths.append(Path(argv[2]))
+        raise RuntimeError("private input must not be echoed")
+
+    monkeypatch.setattr(hermes_tools, "_run", execute)
+    result = hermes_tools.compare_analysis_snapshots({"previous": {}, "current": {}})
+    assert "error" in json.loads(result)
+    assert "private input" not in result
+    assert not paths[0].exists()
 
 
 def test_skills_match_expected():

@@ -20,5 +20,7 @@
   "watchlist_context.py:build": 30,
   "l2_batch": 360,
   "l2_workers": 6,
-  "watchlist_item": 480
+  "watchlist_item": 480,
+  "stateless_analysis.py:event_study": 300,
+  "stateless_analysis.py:robustness": 660
 }

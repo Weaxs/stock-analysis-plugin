@@ -2,6 +2,7 @@ import base64
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from tools._subproc import command_timeout
@@ -534,3 +535,42 @@ def get_insider_trades(args: dict, **kwargs) -> str:
     return _run(
         "sec_edgar.py", ["insider_trades", args["symbol"], "--days", args.get("days", 90), "--top", args.get("top", 10)]
     )
+
+
+def _run_analysis(command: str, args: dict) -> str:
+    try:
+        with tempfile.TemporaryDirectory(prefix="stock-analysis-") as directory:
+            path = Path(directory) / "input.json"
+            path.write_text(json.dumps(args, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+            path.chmod(0o600)
+            return _run("stateless_analysis.py", [command, "--input", str(path)])
+    except Exception:
+        return json.dumps({"error": "Analysis input transport failed"})
+
+
+def compare_stocks(args: dict, **kwargs) -> str:
+    return _run_analysis("peers", args)
+
+
+def analyze_disclosure_changes(args: dict, **kwargs) -> str:
+    return _run_analysis("disclosure", args)
+
+
+def analyze_portfolio_risk(args: dict, **kwargs) -> str:
+    return _run_analysis("portfolio", args)
+
+
+def calculate_position_size(args: dict, **kwargs) -> str:
+    return _run_analysis("position_size", args)
+
+
+def analyze_event_study(args: dict, **kwargs) -> str:
+    return _run_analysis("event_study", args)
+
+
+def validate_backtest(args: dict, **kwargs) -> str:
+    return _run_analysis("robustness", args)
+
+
+def compare_analysis_snapshots(args: dict, **kwargs) -> str:
+    return _run_analysis("snapshot", args)

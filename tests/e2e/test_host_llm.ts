@@ -1,67 +1,27 @@
-// Layer 3 e2e: LLM → tool_use → Pi's subprocess executor → answer.
+// Layer 3 e2e: LLM → tool_use → Pi / OpenClaw / dsh adapter → real Python → answer.
 //
-// Same agentic loop as tests/e2e/test_hermes_llm.py but exercises Pi's
-// subprocess-based tool executor. Only meaningful difference vs Hermes is
+// Same agentic loop as tests/e2e/test_hermes_llm.py but exercises the TypeScript
+// host-specific tool executors. Only meaningful difference vs Hermes is
 // the tool-call path — the LLM prompt/protocol is identical.
 //
 // Requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
 
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import { createJiti } from "jiti";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { resolvePython } from "../../scripts/venv-python.mjs";
+import { loadLLMHost } from "./llm-host.js";
 import OpenAI from "openai";
 
-const execFileAsync = promisify(execFile);
+const host = process.argv[2] ?? "pi";
+if (!["pi", "openclaw", "dsh"].includes(host)) throw new Error("Expected pi, openclaw or dsh");
 
 const apiKey = process.env.OPENAI_API_KEY;
 const baseURL = process.env.OPENAI_BASE_URL;
 const MODEL = process.env.OPENAI_MODEL || "";
 if (!apiKey || !baseURL || !MODEL) {
-  console.log("OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping Pi LLM e2e");
+  console.log(`OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping ${host} LLM e2e`);
   process.exit(0);
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(here, "..", "..");
-const python = resolvePython(repoRoot);
-
-// --- Load Pi and capture tool registrations -------------------------------
-
-interface ToolResult {
-  content: { type: string; text: string }[];
-  details: unknown;
-}
-interface Registered {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<ToolResult>;
-}
-const registered: Registered[] = [];
-
-const mockPi = {
-  registerTool(cfg: Registered) {
-    registered.push(cfg);
-  },
-  on() {},
-  exec: async (cmd: string, args: string[] = []) => {
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    return { stdout, stderr, code: 0, killed: false };
-  },
-};
-
-const jiti = createJiti(fileURLToPath(import.meta.url));
-const mod = (await jiti.import("../../pi/index.ts")) as {
-  default: (pi: unknown) => void;
-};
-mod.default(mockPi);
-
-console.log(`Pi LLM e2e (python: ${python}, model: ${MODEL})`);
+const registered = await loadLLMHost(host);
+console.log(`${host} LLM e2e (model: ${MODEL})`);
 
 // --- OpenAI-compatible client --------------------------------------------
 
@@ -238,4 +198,4 @@ if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);
 }
-console.log("\nAll Pi LLM e2e checks passed");
+console.log(`\nAll ${host} LLM e2e checks passed`);

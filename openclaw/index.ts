@@ -1,3 +1,4 @@
+import { withJsonInput } from "../scripts/json-input.mjs";
 import { commandTimeout } from "../scripts/cli-timeout.mjs";
 import { existsSync } from "node:fs";
 import * as cp from "node:child_process";
@@ -66,6 +67,190 @@ export default definePluginEntry({
     };
     const runPy = (script: string, args: string[]) =>
       executor(pythonBin(), [join(runtimeToolsDir, script), ...args]);
+    api.registerTool({
+      name: "compare_stocks",
+      description: "无状态同行指标比较：先用现有财务/行情工具取数，再传companies；仅相同unit/basis/period可排序，缺失不填零，不生成买卖综合分。",
+      parameters: Type.Object({
+        companies: Type.Array(Type.Object({
+          symbol: Type.String({"description": "唯一股票代码"}),
+          period: Type.String({"description": "统一可比期间；财务用报告期，估值用估值日"}),
+          metrics: Type.Array(Type.Object({
+            name: Type.String({"description": "指标名，如pe/roe/net_income"}),
+            value: Type.Union([Type.Number(), Type.Null()], {"description": "有限数值；缺失为null"}),
+            unit: Type.String({"description": "精确单位，如multiple/percent/fraction/CNY/USD"}),
+            basis: Type.String({"description": "口径，如TTM/annual/consolidated；区分累计与单季"}),
+            source: Type.Optional(Type.String({"description": "原始证据URL或字段路径"})),
+          }, {"additionalProperties": false}), {"description": "结构化指标，单位、口径明确，缺失不填零"}),
+        }, {"additionalProperties": false}), {"description": "2..30家公司，调用方确认可比性"}),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["peers", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "analyze_disclosure_changes",
+      description: "无状态公告财报比较：传新旧正文及指标，返回变更行号、来源与财务变化；负/零基数增长率为null。不下载PDF、不代替经济解读。",
+      parameters: Type.Object({
+        previous: Type.Object({
+          text: Type.String({"description": "已核实正文，最多200000字符；保留换行，PDF需宿主提取"}),
+          source: Type.String({"description": "原文URL或文档标识"}),
+          period: Type.String({"description": "报告期，如2025年度"}),
+          metrics: Type.Array(Type.Object({
+            name: Type.String({"description": "指标名，如pe/roe/net_income"}),
+            value: Type.Union([Type.Number(), Type.Null()], {"description": "有限数值；缺失为null"}),
+            unit: Type.String({"description": "精确单位，如multiple/percent/fraction/CNY/USD"}),
+            basis: Type.String({"description": "口径，如TTM/annual/consolidated；区分累计与单季"}),
+            source: Type.Optional(Type.String({"description": "原始证据URL或字段路径"})),
+          }, {"additionalProperties": false}), {"description": "结构化指标，单位、口径明确，缺失不填零"}),
+        }, {"additionalProperties": false}),
+        current: Type.Object({
+          text: Type.String({"description": "已核实正文，最多200000字符；保留换行，PDF需宿主提取"}),
+          source: Type.String({"description": "原文URL或文档标识"}),
+          period: Type.String({"description": "报告期，如2025年度"}),
+          metrics: Type.Array(Type.Object({
+            name: Type.String({"description": "指标名，如pe/roe/net_income"}),
+            value: Type.Union([Type.Number(), Type.Null()], {"description": "有限数值；缺失为null"}),
+            unit: Type.String({"description": "精确单位，如multiple/percent/fraction/CNY/USD"}),
+            basis: Type.String({"description": "口径，如TTM/annual/consolidated；区分累计与单季"}),
+            source: Type.Optional(Type.String({"description": "原始证据URL或字段路径"})),
+          }, {"additionalProperties": false}), {"description": "结构化指标，单位、口径明确，缺失不填零"}),
+        }, {"additionalProperties": false}),
+        max_changes: Type.Optional(Type.Number({"description": "变化上限1..100，默认30"})),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["disclosure", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "analyze_portfolio_risk",
+      description: "无状态现货多头组合风险：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏和止损情景。缺汇率报错；不保存账户。",
+      parameters: Type.Object({
+        positions: Type.Array(Type.Object({
+          symbol: Type.String({"description": "唯一代码，重复持仓先汇总"}),
+          quantity: Type.Number({"description": "正持仓数量"}),
+          price: Type.Number({"description": "正现价"}),
+          currency: Type.String({"description": "持仓币种，如CNY/USD/HKD"}),
+          cost: Type.Optional(Type.Number({"description": "同币种正成本价，可选"})),
+          stop_price: Type.Optional(Type.Number({"description": "同币种正止损价，可选"})),
+          sector: Type.Optional(Type.String({"description": "统一行业分类，可选"})),
+          as_of: Type.Optional(Type.String({"description": "实际估值时点，建议ISO8601"})),
+        }, {"additionalProperties": false}), {"description": "1..100个现货多头持仓"}),
+        base_currency: Type.String({"description": "基准币种"}),
+        cash: Type.Number({"description": "基准币种现金，非负"}),
+        fx_rates: Type.Optional(Type.Array(Type.Object({
+          currency: Type.String({"description": "唯一非基准币种"}),
+          rate: Type.Number({"description": "一单位该币种对应多少基准币种，正数"}),
+        }, {"additionalProperties": false}), {"description": "显式现价汇率；基准币种隐含1，不得重复"})),
+        histories: Type.Optional(Type.Array(Type.Object({
+          symbol: Type.String({"description": "对应唯一持仓股票"}),
+          prices: Type.Array(Type.Object({
+            date: Type.String({"description": "YYYY-MM-DD，唯一日期"}),
+            close: Type.Number({"description": "正有限收盘价"}),
+          }, {"additionalProperties": false}), {"description": "完整日K收盘序列，2..20000条，不得跨股票或混用复权口径"}),
+        }, {"additionalProperties": false}), {"description": "可选历史，共同日期本币价格收益相关性，不计汇率"})),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["portfolio", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "calculate_position_size",
+      description: "无状态多头仓位预算：同币种金额，按现金/风险预算/最大仓位/交易单位取最小数量，双边费用和滑点参与止损情景；不执行交易。",
+      parameters: Type.Object({
+        equity: Type.Number({"description": "总权益，正数"}),
+        cash: Type.Number({"description": "可用现金，0..equity"}),
+        entry_price: Type.Number({"description": "计划入场价，正数"}),
+        stop_price: Type.Number({"description": "正止损价，低于入场价"}),
+        risk_fraction: Type.Number({"description": "单笔风险占权益比例0..1，如0.01"}),
+        lot_size: Type.Number({"description": "正整数交易单位，用户确认，不猜港股每手数量"}),
+        max_position_fraction: Type.Optional(Type.Number({"description": "本次买入最大资金占比0..1，默认1；已有同股持仓先扣减额度"})),
+        fee_rate: Type.Optional(Type.Number({"description": "每边比例费用0..0.1，默认0；不含未提供税费/最低收费"})),
+        slippage_rate: Type.Optional(Type.Number({"description": "每边滑点0..0.1，默认0"})),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["position_size", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "analyze_event_study",
+      description: "无状态事件研究：提供同市场股票及基准完整价格、事件日期；事件前一交易日收盘为基点，计算交易日窗口收益差。缺窗口/基准为null，标注重叠，不推断因果。",
+      parameters: Type.Object({
+        prices: Type.Optional(Type.Array(Type.Object({
+          date: Type.String({"description": "YYYY-MM-DD，唯一日期"}),
+          close: Type.Number({"description": "正有限收盘价"}),
+        }, {"additionalProperties": false}), {"description": "完整日K收盘序列，2..20000条，不得跨股票或混用复权口径"})),
+        benchmark_prices: Type.Optional(Type.Array(Type.Object({
+          date: Type.String({"description": "YYYY-MM-DD，唯一日期"}),
+          close: Type.Number({"description": "正有限收盘价"}),
+        }, {"additionalProperties": false}), {"description": "完整日K收盘序列，2..20000条，不得跨股票或混用复权口径"})),
+        event_dates: Type.Array(Type.String({"description": "YYYY-MM-DD，盘后公告传下一交易日"}), {"description": "1..100个唯一事件日"}),
+        price_basis: Type.Optional(Type.String({"description": "仅显式prices模式必需；代码模式报告实际提供方标记，缺失为unknown，须核实"})),
+        horizons: Type.Optional(Type.Array(Type.Number({"description": "0=事件日，1=下一交易日；整数0..250"}), {"description": "1..20个窗口，默认0/1/5/10/20"})),
+        start_date: Type.Optional(Type.String({"description": "代码模式必需，YYYY-MM-DD，包含事件前基准日或训练窗口"})),
+        end_date: Type.Optional(Type.String({"description": "代码模式必需，YYYY-MM-DD，晚于start_date"})),
+        symbol: Type.Optional(Type.String({"description": "股票代码；与benchmark/start_date/end_date一起直接取数，和prices模式互斥"})),
+        benchmark: Type.Optional(Type.String({"description": "同市场基准代码；与symbol一起使用"})),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["event_study", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "validate_backtest",
+      description: "无状态回测稳健性：输入历史OHLCV和完整候选DSL；滚动训练选参数、后续不重叠窗口验证，列出全部样本内敏感性及跨标的结果。仅next_open，不自动优化或保存。",
+      parameters: Type.Object({
+        datasets: Type.Optional(Type.Array(Type.Object({
+          symbol: Type.String({"description": "唯一股票代码"}),
+          price_basis: Type.String({"description": "已核实复权/原始价格口径"}),
+          bars: Type.Array(Type.Object({
+            date: Type.String({"description": "YYYY-MM-DD"}),
+            open: Type.Number({"description": "有限OHLCV；价格为正、volume非负"}),
+            high: Type.Number({"description": "有限OHLCV；价格为正、volume非负"}),
+            low: Type.Number({"description": "有限OHLCV；价格为正、volume非负"}),
+            close: Type.Number({"description": "有限OHLCV；价格为正、volume非负"}),
+            volume: Type.Number({"description": "有限OHLCV；价格为正、volume非负"}),
+          }, {"additionalProperties": false}), {"description": "日期递增完整OHLCV，每组最多2000条，至少train_bars+test_bars"}),
+        }, {"additionalProperties": false}), {"description": "1..5个标的，复用get_kline取数"})),
+        strategies: Type.Array(Type.Object({
+          name: Type.String({"description": "唯一候选名"}),
+          strategy: Type.Object({}, {"additionalProperties": true, "description": "完整既有YAML DSL对应JSON，允许parameters引用；仅next_open"}),
+        }, {"additionalProperties": false}), {"description": "1..5个预先确定的候选，禁止测试结果回调参数"}),
+        train_bars: Type.Optional(Type.Number({"description": "训练交易日数30..1000，默认126"})),
+        test_bars: Type.Optional(Type.Number({"description": "测试交易日数30..1000，默认63"})),
+        capital: Type.Optional(Type.Number({"description": "每窗口初始资金，默认1000000"})),
+        start_date: Type.Optional(Type.String({"description": "代码模式必需，YYYY-MM-DD，包含事件前基准日或训练窗口"})),
+        end_date: Type.Optional(Type.String({"description": "代码模式必需，YYYY-MM-DD，晚于start_date"})),
+        symbols: Type.Optional(Type.Array(Type.String(), {"description": "1..5个唯一股票代码，配合start_date/end_date直接取数；和datasets互斥"})),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["robustness", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "compare_analysis_snapshots",
+      description: "无状态快照比较：传新旧JSON，返回JSON Pointer及新增/删除/变化/失效/恢复；不保存快照。数组整体比较，调用前按symbol对齐。",
+      parameters: Type.Object({
+        previous: Type.Object({}, {"additionalProperties": true, "description": "JSON对象，详见共享Skill与README"}),
+        current: Type.Object({}, {"additionalProperties": true, "description": "JSON对象，详见共享Skill与README"}),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["snapshot", "--input", path])));
+      },
+    });
+
     // --- Data Tools ---
 
     api.registerTool({
