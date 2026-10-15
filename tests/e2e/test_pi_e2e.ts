@@ -1,3 +1,4 @@
+import { readFileSync as readAnalysisFixture } from "node:fs";
 // Layer 1 e2e: Pi host → real Python subprocess → JSON round-trip.
 // Complements test_pi_integration.ts (which mocks the executor).
 //
@@ -116,6 +117,16 @@ console.log(`Pi e2e host→python round-trip (python: ${python})`);
   assert(out.meta?.provider === "diagnostics", "diagnose: meta.provider");
   assert(Array.isArray(out.markets), "diagnose: markets array");
   console.log("  OK: diagnose_data_sources");
+}
+
+
+const analysisFixtures = JSON.parse(readAnalysisFixture(new URL("../fixtures/stateless_analysis.json", import.meta.url), "utf8")) as Record<string, {args: Record<string, unknown>}>;
+for (const [name, fixture] of Object.entries(analysisFixtures)) {
+  const out = await callTool(name, fixture.args);
+  assert(!out.error, `${name}: real CLI failed`);
+  if (name === "calculate_position_size") assert(out.quantity === 200, "position size: cash/risk constraints");
+  if (name === "validate_backtest") assert(out.datasets?.[0]?.folds?.length === 1, "robustness: one actual fold");
+  console.log(`  OK: ${name}`);
 }
 
 if (failures > 0) {

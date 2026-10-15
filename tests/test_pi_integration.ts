@@ -1,8 +1,15 @@
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { createJiti } from "jiti";
 
 const EXPECTED_TOOLS = [
+  "compare_stocks",
+  "analyze_disclosure_changes",
+  "analyze_portfolio_risk",
+  "calculate_position_size",
+  "analyze_event_study",
+  "validate_backtest",
+  "compare_analysis_snapshots",
   "get_announcements",
   "get_us_holdings",
   "get_insider_trades",
@@ -98,6 +105,7 @@ interface ToolRegistration {
 const registeredTools: ToolRegistration[] = [];
 let skillPaths: string[] = [];
 
+const analysisInputCalls: {path: string; input: unknown}[] = [];
 const calls: string[][] = [];
 const timeouts: (number | undefined)[] = [];
 let stdoutPayload = "{}";
@@ -116,7 +124,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); timeouts.push(options?.timeout); return { stdout: stdoutPayload, exitCode: 0 }; },
+  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("stateless_analysis.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, exitCode: 0 }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -237,6 +245,16 @@ assert(hkArgs[hkArgs.indexOf("--market")+1] === "HK", "HK ranking market must re
 await registeredTools.find(t => t.name === "get_earnings_calendar")!.execute!("hk", {symbol: "0700.HK"});
 hkArgs = calls[calls.length-1];
 assert(hkArgs[hkArgs.indexOf("--report-date")+1] === "", "HK calendar must allow omitted report_date");
+
+const analysisFixtures = JSON.parse(readFileSync(new URL("./fixtures/stateless_analysis.json", import.meta.url), "utf8")) as Record<string, {command: string; args: Record<string, unknown>}>;
+for (const [name, fixture] of Object.entries(analysisFixtures)) {
+  await registeredTools.find(t => t.name === name)!.execute!("stateless", fixture.args);
+  const captured = analysisInputCalls.at(-1)!;
+  assert(JSON.stringify(captured.input) === JSON.stringify(fixture.args), `${name}: input must reach CLI unchanged`);
+  assert(!existsSync(captured.path), `${name}: temporary input must be removed`);
+  assert(calls.at(-1)![1] === fixture.command, `${name}: wrong CLI command`);
+}
+
 if (failures) process.exit(1);
 
 await registeredTools.find(t => t.name === "get_etf_details")!.execute!("full", {symbol: "510300", include_full_holdings: true});

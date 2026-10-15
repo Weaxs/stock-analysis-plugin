@@ -9,6 +9,10 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 美股内部人研究调用 `get_insider_trades(symbol, days=90, top=10)`，需设置含真实联系邮箱的 `SEC_USER_AGENT`。`days` 按申报日期过滤，`top` 限制文件数；只将代码 P/S 视作买卖信号，授予、行权、赠与等保留原始代码和脚注，衍生品单列。Form 4/A 与原申报勿重复计算，检查截断和失败提示；`screen_risk` 仍仅支持 A 股。
 
+## 无状态分析扩展
+
+当用户要求同行比较、组合风险、仓位预算或新旧分析比较时，MUST 读取[无状态研究工具](references/stateless-analysis.md)，分别使用 compare_stocks、analyze_portfolio_risk、calculate_position_size、compare_analysis_snapshots。所有用户状态均由本次输入提供。
+
 ## 意图路由表
 
 快速问答先判断意图，按下表走最短调用链；完整综合研判走下方执行流程（gather 采集管线），不受此表限制。单工具可答的问题按各工具描述中的适用场景选择，本表不再重复。

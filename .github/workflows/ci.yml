@@ -147,6 +147,9 @@ jobs:
       - name: dsh current SDK compatibility
         run: npx tsx tests/test_dsh_sdk_compat.ts
 
+      - name: Large JSON input transport and cleanup
+        run: npx tsx tests/test_json_input.ts
+
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
 
@@ -154,7 +157,7 @@ jobs:
         run: pytest tests/e2e/test_host_to_python.py -v
 
       - name: Signal store and analysis regressions
-        run: pytest tests/test_signal_tracker.py tests/test_gather.py tests/test_watchlist.py tests/test_watchlist_context.py -q
+        run: pytest tests/test_signal_tracker.py tests/test_gather.py tests/test_watchlist.py tests/test_watchlist_context.py tests/test_stateless_analysis.py -q
 
       - name: Pi host real subprocess round-trip
         run: npx tsx tests/e2e/test_pi_e2e.ts

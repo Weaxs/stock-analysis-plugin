@@ -5,6 +5,10 @@ description: 成长质量分析：用多期收入、利润、现金流和盈利�
 
 # 成长质量分析
 
+## 无状态分析扩展
+
+财报前后期变化或同行验证时，MUST 读取[无状态研究工具](../stock-analysis/references/stateless-analysis.md)中的同行和公告财报比较，使用 compare_stocks/analyze_disclosure_changes 整理同口径指标与正文证据，再解释经济含义。
+
 ## 输入数据说明
 
 先运行：

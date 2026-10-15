@@ -63,7 +63,14 @@
       "get_dividends",
       "get_announcements",
       "get_us_holdings",
-      "get_insider_trades"
+      "get_insider_trades",
+      "compare_stocks",
+      "analyze_disclosure_changes",
+      "analyze_portfolio_risk",
+      "calculate_position_size",
+      "analyze_event_study",
+      "validate_backtest",
+      "compare_analysis_snapshots"
     ]
   },
   "activation": {

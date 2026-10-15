@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -55,6 +55,7 @@ const fakeTypebox = {
     }),
     String: (opts?: unknown) => ({ __typebox: "string", opts }),
     Number: (opts?: unknown) => ({ __typebox: "number", opts }),
+    Null: () => ({ __typebox: "null" }),
     Boolean: (opts?: unknown) => ({ __typebox: "boolean", opts }),
     Optional: (schema: unknown) => ({ __typebox: "optional", schema }),
     Union: (schemas: unknown[], opts?: unknown) => ({
@@ -73,6 +74,7 @@ const fakeTypebox = {
 
 // --- Capture execFile calls without actually spawning Python --------------
 
+const analysisInputCalls: {path: string; input: unknown}[] = [];
 const execCalls: { bin: string; script: string; args: string[] }[] = [];
 
 const jiti = createJiti(fileURLToPath(import.meta.url), {
@@ -93,6 +95,7 @@ const mod = await jiti.import("../openclaw/index.ts") as {
 
 mod.__setExecutor(async (bin, argv) => {
   const [scriptPath, ...rest] = argv;
+  if (scriptPath.endsWith("stateless_analysis.py")) { const path = rest[rest.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); }
   execCalls.push({ bin, script: scriptPath, args: rest });
   return `mock:${scriptPath}`;
 });
@@ -174,6 +177,14 @@ if (failures === 0) {
 console.log("Tool execute() smoke test:");
 
 const sampleArgs: Record<string, Record<string, unknown>> = {
+  "compare_stocks": {"companies": [{"symbol": "AAPL", "period": "2025", "metrics": [{"name": "pe", "value": 20, "unit": "multiple", "basis": "TTM"}]}, {"symbol": "MSFT", "period": "2025", "metrics": [{"name": "pe", "value": 30, "unit": "multiple", "basis": "TTM"}]}]},
+  "analyze_disclosure_changes": {"previous": {"text": "利润下降", "source": "fixture:old", "period": "2024", "metrics": []}, "current": {"text": "利润增长", "source": "fixture:new", "period": "2025", "metrics": []}},
+  "analyze_portfolio_risk": {"positions": [{"symbol": "AAPL", "price": 100, "quantity": 10, "currency": "USD"}], "base_currency": "USD", "cash": 100},
+  "calculate_position_size": {"equity": 100000, "cash": 20000, "entry_price": 100, "stop_price": 95, "risk_fraction": 0.01, "lot_size": 100},
+  "analyze_event_study": {"prices": [{"date": "2026-01-02", "close": 100}, {"date": "2026-01-05", "close": 110}], "benchmark_prices": [{"date": "2026-01-02", "close": 100}, {"date": "2026-01-05", "close": 100}], "event_dates": ["2026-01-05"], "price_basis": "adjusted", "horizons": [0]},
+  "validate_backtest": {"datasets": [], "strategies": []},
+  "compare_analysis_snapshots": {"previous": {"价格": 10}, "current": {"价格": 12}},
+
   get_announcements: { symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80 },
   get_us_holdings: { cik: "0001067983" },
   get_insider_trades: { symbol: "AAPL", days: 30, top: 2 },
@@ -372,6 +383,16 @@ await tools.find(t => t.name === "get_insider_trades")!.execute("disclosure", {s
 assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["insider_trades", "AAPL", "--days", "30", "--top", "2"]), "get_insider_trades: argv mismatch");
 await tools.find(t => t.name === "get_us_holdings")!.execute("issuer", {cik: "0000320193", mode: "issuer"});
 assert(JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["holdings", "0000320193", "--mode", "issuer"]), "issuer mode must reach CLI");
+
+
+const analysisFixtures = JSON.parse(readFileSync(new URL("./fixtures/stateless_analysis.json", import.meta.url), "utf8")) as Record<string, {command: string; args: Record<string, unknown>}>;
+for (const [name, fixture] of Object.entries(analysisFixtures)) {
+  await tools.find(t => t.name === name)!.execute("stateless", fixture.args);
+  const captured = analysisInputCalls.at(-1)!;
+  assert(JSON.stringify(captured.input) === JSON.stringify(fixture.args), `${name}: input must reach CLI unchanged`);
+  assert(!existsSync(captured.path), `${name}: temporary input must be removed`);
+  assert(execCalls.at(-1)!.args[0] === fixture.command, `${name}: wrong CLI command`);
+}
 
 const evidencePayload = JSON.stringify({price: 100, source: "fixture", fetched_at: "2026-10-14T00:00:00+00:00", data_as_of: null});
 mod.__setExecutor(async () => evidencePayload);
