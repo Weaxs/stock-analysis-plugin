@@ -328,7 +328,18 @@ def cmd_evaluate(args):
             with _store_lock(store):
                 current = _load_records(store, strict=True)
                 merged = [updates.get(r["id"], r) if r.get("status") == "open" else r for r in current]
-                if changed:
+                if deferred:
+                    attempted = {entry["id"] for entry in results}
+                    positions = [
+                        i
+                        for i, rec in enumerate(merged)
+                        if rec.get("status") == "open" and (not args.symbol or rec.get("symbol") == args.symbol)
+                    ]
+                    # Keep closed/unselected records in place; give unattempted signals the next turn.
+                    queued = sorted((merged[i] for i in positions), key=lambda rec: rec["id"] in attempted)
+                    for i, rec in zip(positions, queued):
+                        merged[i] = rec
+                if changed or deferred:
                     _save_records(store, merged)
                 persisted = {r["id"]: r for r in merged}
                 for entry in results:
