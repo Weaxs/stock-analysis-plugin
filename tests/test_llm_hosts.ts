@@ -25,3 +25,8 @@ for (const host of ["pi", "openclaw", "dsh"]) {
   console.log(`${host}: LLM tool schemas and real Python dispatch passed`);
 }
 await assert.rejects(loadLLMHost("unknown"), /Expected pi, openclaw or dsh/);
+
+const piTools = await loadLLMHost("pi");
+const invalidMarket = await piTools.find(tool => tool.name === "get_market_capabilities")!
+  .execute("invalid-market", {market: "INVALID"});
+assert.equal(JSON.parse(invalidMarket.content[0].text).error, "Python command returned no JSON");

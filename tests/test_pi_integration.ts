@@ -110,6 +110,7 @@ const analysisInputCalls: {path: string; input: unknown}[] = [];
 const calls: string[][] = [];
 const timeouts: (number | undefined)[] = [];
 let stdoutPayload = "{}";
+let processKilled = false;
 const mockPi = {
   registerTool(config: ToolRegistration & { execute: Function }) {
     registeredTools.push({
@@ -125,7 +126,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("stateless_analysis.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, exitCode: 0 }; },
+  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("stateless_analysis.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : 0, killed: processKilled }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -256,6 +257,16 @@ for (const [name, fixture] of Object.entries(analysisFixtures)) {
   assert(calls.at(-1)![1] === fixture.command, `${name}: wrong CLI command`);
 }
 
+if (failures) process.exit(1);
+
+stdoutPayload = "";
+processKilled = true;
+const timedOut = await registeredTools.find(tool => tool.name === "parse_stock_list")!.execute!("timeout", {text: "AAPL"});
+assert(JSON.parse(timedOut.content[0].text).error === "Python command timed out", "Pi timeout must produce a JSON error");
+processKilled = false;
+const emptyOutput = await registeredTools.find(tool => tool.name === "parse_stock_list")!.execute!("empty-output", {text: "AAPL"});
+assert(JSON.parse(emptyOutput.content[0].text).error === "Python command returned no JSON", "Pi empty stdout must produce a JSON error");
+stdoutPayload = "{}";
 if (failures) process.exit(1);
 
 await registeredTools.find(t => t.name === "get_etf_details")!.execute!("full", {symbol: "510300", include_full_holdings: true});

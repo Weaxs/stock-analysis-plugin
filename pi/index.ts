@@ -58,8 +58,13 @@ export default (pi: ExtensionAPI) => {
   const venvPython = `${baseDir}/.venv/${isWin ? "Scripts/python.exe" : "bin/python3"}`;
   // Fallback: on Windows "python3" is usually the Microsoft Store stub — prefer "python".
   const python = existsSync(venvPython) ? venvPython : isWin ? "python" : "python3";
-  const py = (script: string, args: string[]) =>
-    pi.exec(python, [`${toolsDir}/${script}`, ...args], { timeout: commandTimeout(script, args) });
+  const py = async (script: string, args: string[]) => {
+    const result = await pi.exec(python, [`${toolsDir}/${script}`, ...args], { timeout: commandTimeout(script, args) });
+    if (result.killed || !result.stdout.trim()) {
+      return {...result, stdout: JSON.stringify({error: result.killed ? "Python command timed out" : "Python command returned no JSON"})};
+    }
+    return result;
+  };
   const asText = (text: string) => ({
     content: [{ type: "text" as const, text }],
     details: {},

@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
@@ -27,15 +26,16 @@ export async function loadLLMHost(host: string): Promise<RegisteredTool[]> {
 
   if (host === "pi") {
     const plugin = await jiti.import("../../pi/index.ts") as { default: (api: unknown) => void };
-    const exec = promisify(execFile);
     plugin.default({
       registerTool,
       on() {},
       async exec(cmd: string, args: string[] = [], options?: { timeout?: number }) {
-        const { stdout, stderr } = await exec(cmd, args, {
-          maxBuffer: 32 * 1024 * 1024, timeout: options?.timeout,
+        // Pi resolves process failures as exit data instead of rejecting with a command-bearing exception.
+        return new Promise(resolve => {
+          execFile(cmd, args, {maxBuffer: 32 * 1024 * 1024, timeout: options?.timeout}, (error, stdout, stderr) => {
+            resolve({stdout, stderr, code: typeof error?.code === "number" ? error.code : error ? 1 : 0, killed: Boolean(error?.killed)});
+          });
         });
-        return { stdout, stderr, code: 0, killed: false };
       },
     });
   } else if (host === "openclaw") {
