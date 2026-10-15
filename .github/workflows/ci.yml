@@ -175,6 +175,10 @@ jobs:
     # block the release path (see publish.yml).
     continue-on-error: true
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [hermes, pi]
     timeout-minutes: 20
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
@@ -196,6 +200,7 @@ jobs:
         run: node scripts/ci-resolve-llm-host.mjs
 
       - name: Install Python dependencies
+        if: matrix.host == 'hermes'
         run: |
           pip install -r tools/requirements.txt
           pip install -r requirements-dev.txt
@@ -203,9 +208,11 @@ jobs:
       # Full npm ci (postinstall builds .venv) — the Pi LLM flow spawns tools
       # through it.
       - name: Install Node dependencies
+        if: matrix.host == 'pi'
         run: npm ci
 
       - name: E2E — Hermes LLM flow
+        if: matrix.host == 'hermes'
         env:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -218,6 +225,7 @@ jobs:
           pytest tests/e2e/test_hermes_llm.py tests/e2e/test_analysis_quality.py -m integration_llm -v
 
       - name: E2E — Pi LLM flow
+        if: matrix.host == 'pi'
         env:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL || vars.OPENAI_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
