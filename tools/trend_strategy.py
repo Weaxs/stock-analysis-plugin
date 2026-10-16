@@ -317,14 +317,25 @@ def unique_object(pairs):
     return result
 
 
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ValueError(message)
+
+
 def main():
     utf8_stdio()
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = Parser(description=__doc__)
     parser.add_argument(
         "action", nargs="?", choices=["fetch"], help="Fetch prices from stock codes; omit only for offline snapshots"
     )
     parser.add_argument("--input", required=True, help="Internal UTF-8 request JSON or offline snapshot file")
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except ValueError:
+        print(
+            json.dumps({"error": "Invalid command arguments; use --help for usage", "error_code": "invalid_arguments"})
+        )
+        return 1
     try:
         path = Path(args.input)
         info = path.stat()

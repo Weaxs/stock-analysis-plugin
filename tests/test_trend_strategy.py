@@ -363,3 +363,25 @@ def test_hk_cutoff_waits_for_closing_auction_on_full_and_half_days(at, expected)
     from tools.trend_strategy import latest_closed_date
 
     assert latest_closed_date("HK", now=at) == expected
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["fetch"],
+        ["unknown", "--input", "unused.json"],
+        ["fetch", "--input", "unused.json", "--unexpected", "private-value"],
+    ],
+)
+def test_cli_argument_errors_return_safe_json(argv):
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parents[1] / "tools/trend_strategy.py"), *argv],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["error_code"] == "invalid_arguments"
+    assert payload["error"]
+    assert result.stderr == ""
+    assert "private-value" not in result.stdout
