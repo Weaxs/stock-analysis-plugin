@@ -2,6 +2,7 @@ name: stock-analysis
 version: 0.1.0
 description: "Stock analysis, screening, and strategy backtesting across A/HK/US/JP/KR/TW markets"
 provides_tools:
+  - analyze_trend_strategy
   - compare_stocks
   - analyze_disclosure_changes
   - analyze_portfolio_risk

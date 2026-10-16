@@ -4,6 +4,7 @@ import { createJiti } from "jiti";
 
 const EXPECTED_TOOLS = [
   "compare_stocks",
+  "analyze_trend_strategy",
   "analyze_disclosure_changes",
   "analyze_portfolio_risk",
   "calculate_position_size",
@@ -126,7 +127,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("stateless_analysis.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : 0, killed: processKilled }; },
+  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : 0, killed: processKilled }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -202,6 +203,14 @@ if (missingSkills.length === 0 && extraSkills.length === 0) {
   console.log(`  OK: ${skillNames.length} skills registered`);
 }
 
+
+const nativeTrendRequest = {symbols: ["AAPL", "MSFT"], held_symbols: ["AAPL"], slots: 2};
+await registeredTools.find(t => t.name === "analyze_trend_strategy")!.execute!("monthly_trend", nativeTrendRequest);
+const nativeTrendInput = analysisInputCalls.at(-1)!;
+assert(calls.at(-1)![0].endsWith("trend_strategy.py") && calls.at(-1)![1] === "fetch", "monthly_trend: native request command");
+assert(JSON.stringify(nativeTrendInput.input) === JSON.stringify(nativeTrendRequest), "monthly_trend: symbols/state reach Python");
+assert(!existsSync(nativeTrendInput.path), "monthly_trend: remove internal transport file");
+assert(timeouts.at(-1) === 690000, "monthly_trend: bounded batch fetch timeout");
 
 // Disclosure tools forward every option unchanged to the shared Python CLI.
 await registeredTools.find(t => t.name === "get_announcements")!.execute!("disclosure", {symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80});
@@ -341,4 +350,12 @@ for (const mode of ["legacy", "legacy-metadata", "native", "no-search", "search-
     assert(!handlers.get("before_agent_start") || !(await handlers.get("before_agent_start")!({}, {})), `${mode}: no unavailable discovery instructions`);
   }
 }
+if (failures) process.exit(1);
+
+const temperaturePayload = readFileSync(new URL("./fixtures/trend_temperature.json", import.meta.url), "utf8");
+stdoutPayload = temperaturePayload;
+const temperatureTool = registeredTools.find(t => t.name === "get_technical_analysis")!;
+const temperatureResult = await temperatureTool.execute!("temperature", {symbol: "TEST"});
+assert(temperatureResult.content[0].text === temperaturePayload, "technical analysis must preserve experimental temperature metadata");
+assert(temperatureTool.description.includes("实验性") && temperatureTool.description.includes("非星球指标") && temperatureTool.description.includes("validation_status=not_validated") && temperatureTool.description.includes("direction") && temperatureTool.description.includes("trend_horizons"), "temperature provenance must reach the model");
 if (failures) process.exit(1);

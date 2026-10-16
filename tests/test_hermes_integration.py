@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -12,6 +13,18 @@ import yaml
 import hermes.tools as hermes_tools
 from hermes import register
 from hermes.schemas import TOOL_SCHEMAS
+
+
+def test_technical_analysis_preserves_independent_temperature(monkeypatch):
+    payload = (Path(__file__).parent / "fixtures/trend_temperature.json").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        hermes_tools.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload)
+    )
+    assert hermes_tools.get_technical_analysis({"symbol": "TEST"}) == payload
+    description = next(schema["description"] for schema in TOOL_SCHEMAS if schema["name"] == "get_technical_analysis")
+    assert "实验性" in description and "非星球指标" in description
+    assert "validation_status=not_validated" in description and "direction" in description
+    assert "trend_horizons" in description
 
 
 def test_wheel_declares_all_shared_runtime_dependencies():
@@ -27,6 +40,7 @@ def test_wheel_declares_all_shared_runtime_dependencies():
 EXPECTED_TOOLS = sorted(
     [
         "compare_stocks",
+        "analyze_trend_strategy",
         "analyze_disclosure_changes",
         "analyze_portfolio_risk",
         "calculate_position_size",
@@ -410,3 +424,28 @@ def test_host_budgets_and_evidence_relay(monkeypatch, script, argv, expected):
 
     monkeypatch.setattr(hermes_tools.subprocess, "run", run)
     assert hermes_tools._run(script, argv) == payload
+
+
+def test_monthly_trend_native_request_real_cli_roundtrip():
+    result = json.loads(hermes_tools.analyze_trend_strategy({"symbols": ["600036", "AAPL"]}))
+    assert result["error_code"] == "invalid_request"
+    schema = next(row for row in TOOL_SCHEMAS if row["name"] == "analyze_trend_strategy")
+    assert schema["parameters"]["required"] == ["symbols"]
+    assert "input_file" not in schema["parameters"]["properties"]
+    assert "not_validated" in schema["description"]
+
+
+def test_monthly_trend_native_request_transport_is_removed(monkeypatch):
+    seen = []
+    payload = {"symbols": ["AAPL", "MSFT"], "held_symbols": ["AAPL"]}
+
+    def run(script, argv):
+        path = Path(argv[-1])
+        seen.append(path)
+        assert script == "trend_strategy.py" and argv[:2] == ["fetch", "--input"]
+        assert json.loads(path.read_text()) == payload
+        return '{"transport":"ok"}'
+
+    monkeypatch.setattr(hermes_tools, "_run", run)
+    assert json.loads(hermes_tools.analyze_trend_strategy(payload)) == {"transport": "ok"}
+    assert not seen[0].exists()

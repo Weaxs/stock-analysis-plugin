@@ -468,7 +468,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     pyTool({
       name: "get_technical_analysis",
       description:
-        "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
+        "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位；附 trend_temperature（ema_atr_v1，实验性EMA差/ATR描述；direction为均线方向；validation_status=not_validated，非星球指标，七档不作入场依据；另附 trend_horizons：21/63/252根日K月度动量，建议count=360，非概率、未验证）；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
       parameters: {
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
         period: {
@@ -781,11 +781,53 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
+  ctx.tools.register(defineTool({
+    name: "analyze_trend_strategy",
+    description: "月度右侧趋势策略：直接传同市场A/HK/US股票代码，自动获取日K，输出月度新入/持有/退出与逆波动预算。as_of默认最近已收盘交易日，持仓可选且不保存，不自动下单；跨样本仍not_validated。",
+    parameters: {
+  "symbols": {
+    "type": "array",
+    "items": {
+      "type": "string"
+    },
+    "description": "同一市场的完整股票池，1..100只；A如600036，HK如0700.HK，US如AAPL",
+    "required": true
+  },
+  "as_of": {
+    "type": "string",
+    "description": "可选已收盘截止日期YYYY-MM-DD，默认该市场最近已收盘交易日"
+  },
+  "held_symbols": {
+    "type": "array",
+    "items": {
+      "type": "string"
+    },
+    "description": "可选，as_of时真实持股代码，必须在股票池中；省略代表初始空仓，不保存账户"
+  },
+  "pending_exit_symbols": {
+    "type": "array",
+    "items": {
+      "type": "string"
+    },
+    "description": "可选，真实持股中此前已锁定且未成交的退出代码"
+  },
+  "slots": {
+    "type": "number",
+    "description": "可选固定容量K，默认ceil(N/3)，不得小于真实持股数量"
+  }
+},
+    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
+    async execute(params) {
+      return withJsonInput(params, (path: string) =>
+        runPy("trend_strategy.py", ["fetch", "--input", path]));
+    },
+  }));
+
   ctx.tools.register(
     pyTool({
       name: "run_backtest",
       description:
-        "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算。默认前日收盘信号、次日开盘成交；YAML simulation.execution=same_close可复现旧假设。execution返回模型、阻止成交次数和未模拟约束；零成交量及带历史限价的一字板不成交。",
+        "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算。默认前日收盘信号、次日开盘成交；YAML simulation.execution=same_close可复现旧假设。execution返回模型、阻止成交次数和未模拟约束；零成交量及带历史限价的一字板不成交。支持 monthly_momentum：月初首根有效日K收盘观察过去period根对数收益，次日开盘；长周期需预热。",
       parameters: {
         strategy: { type: "string", required: true, description: "策略YAML文件路径" },
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },

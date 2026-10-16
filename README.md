@@ -32,7 +32,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **67 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
+- **68 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
 - **20 个 Skills** — 综合分析、全市场选股、策略回测 + 17 个策略方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
@@ -70,7 +70,7 @@ npm install @weaxs/stock-analysis-plugin
 
 Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
 
-新版 Pi（已核验 1.2.0）提供原生 `tool_search` 时，插件自动启用按需工具发现，67 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。检索使用英文关键词或工具名，例如 `get_quote`、`get_financials`。
+新版 Pi（已核验 1.2.0）提供原生 `tool_search` 时，插件自动启用按需工具发现，68 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。检索使用英文关键词或工具名，例如 `get_quote`、`get_financials`。
 
 ### Hermes Agent Plugin
 
@@ -95,7 +95,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 67 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
+OpenClaw Gateway 启动后自动加载并注册 68 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -106,7 +106,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 67 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 68 个 tool + 20 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 新版 dsh 的原生函数调用模式默认通过 `stock_tool_search` 按 Agent 搜索、加载所需工具，支持中文关键词或工具名；旧接口、搜索入口不可用时保留全量暴露。可设置 `toolDiscovery: false` 关闭，配置与 PTC 模式边界见下方接入文档。
 
@@ -274,12 +274,21 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 | 工具 | 说明 |
 |------|------|
-| `get_technical_analysis` | 全面技术指标分析（MA/MACD/RSI/BOLL/KDJ；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent） |
+| `analyze_trend_strategy` | 月度右侧趋势策略：单市场股票池筛选、真实旧仓保持/退出与逆波动新仓预算；直接传股票代码、自动取行情，无持仓存储，仍为not_validated |
+| `get_technical_analysis` | 全面技术指标分析（MA/MACD/RSI/BOLL/KDJ；附实验性 trend_horizons 多期限月度趋势及独立趋势温度 trend_temperature；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent） |
 | `analyze_pattern` | K 线形态识别 |
 | `calculate_ma` | 多周期均线计算 |
 | `get_volume_analysis` | 量价分析 |
 | `evaluate_signal` | 历史信号胜率回测 |
 | `detect_anomaly` | 当日技术、量价与资金异动扫描 |
+
+`trend_temperature` 是独立研究基线 `ema_atr_v1`：`(EMA20-EMA60)/ATR14`，ATR 使用包含跳空的真实波幅简单均值。附分数、EMA差方向 `direction`、七档研究标签、前一期信息、数据日期和价格口径；`validation_status=not_validated`，真实股票试验未支持默认温度交易映射。方向按零轴计算，“平”标签不代表零方向；默认需 60 根预热，零 ATR 或坏行情返回不可用。±0.5/±1.5/±3 的分档尚未校准，不是趋势动物公式、肥尾指标、上涨概率或自动买卖信号，也不修改原综合评分。无需个人持仓存储；[公式、边界及回测说明](skills/bull-trend/references/trend-temperature.md)。
+
+月度右侧趋势策略，通过 `analyze_trend_strategy(symbols, ...)` 调用：月初200日线上行入场、真实旧仓优先、63日波动预算；[输入格式与完整规则](skills/bull-trend/references/monthly-trend-strategy.md)。扩展及历史样本尚未通过完整效果门槛；直接提供股票代码即可自动取日K，输出信号与预算计划；实际成交/股数和共享资金回测另行核实，不自动保存持仓或下单。
+
+趋势研究另返回 `trend_horizons`（daily、建议count=360）：21/63/252根日K过去对数收益，在月初首根有效日K收盘观察并保持；显示期限组成、方向及观察日期，不强凑七档。与回测 `monthly_momentum` 共用计算，仍为 `not_validated`；[方法、预热与验证局限](skills/bull-trend/references/trend-horizons.md)。
+
+市场只约束新开仓的三期限实验可运行 [market_trend.py](skills/bull-trend/scripts/market_trend.py)，输入带预热的个股/同市场宽基daily OHLCV JSON，复用同一Python核心。月度入场、次日开盘、已有持仓按个股趋势退出；不会自动保存持仓或下单。[使用与当前验证边界](skills/bull-trend/references/trend-horizons.md#市场环境入场实验)。
 
 ### 筛选与回测
 
@@ -434,6 +443,8 @@ position:
 | `volume_ratio` | 量比 | 是（默认 5） |
 | `price_change` | 涨跌幅（%） | 否 |
 | `bollinger_position` | 布林带位置（0=下轨, 1=上轨） | 是（默认 20） |
+| `trend_score` | 独立实验趋势强度，默认 (EMA20−EMA60)/ATR14；fast_period/slow_period 控制 EMA | period 为 ATR 根数（默认 14） |
+| `monthly_momentum` | 月初首根有效日K收盘观察过去 period 根对数收益，保持到下一观察；零成交量不计根数 | 是（默认63，要求正整数） |
 | `close` / `volume` | 收盘价 / 成交量 | 否 |
 
 ### 可用运算符
@@ -552,20 +563,20 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 67 个工具 + 20 个 skill
+│   └── index.ts                     #   注册 68 个工具 + 20 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   67 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   68 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×67
+│   └── index.ts                     #   definePluginEntry + registerTool ×68
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×67
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×68
 │
 ├── tools/                           # 共享 Python CLI 工具
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪

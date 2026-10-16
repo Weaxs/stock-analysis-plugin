@@ -22,5 +22,6 @@
   "l2_workers": 6,
   "watchlist_item": 480,
   "stateless_analysis.py:event_study": 300,
-  "stateless_analysis.py:robustness": 660
+  "stateless_analysis.py:robustness": 660,
+  "trend_strategy.py:fetch": 660
 }

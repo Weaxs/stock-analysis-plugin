@@ -30,6 +30,168 @@ def _make_volume(values: list) -> pd.Series:
     return pd.Series(values, dtype=float)
 
 
+def test_analysis_includes_independent_experimental_temperature(make_kline_data):
+    result = technical_mod.analyze_records("600519", make_kline_data(120))
+    temperature = result["trend_temperature"]
+    assert temperature["model"] == "ema_atr_v1"
+    assert temperature["experimental"] is True
+    assert temperature["score"] > 0
+    assert temperature["state"] in ("温", "热", "沸")
+    assert temperature["as_of"] == result["latest"]["date"]
+    assert "buy_signal" in result and "trend" in result
+
+
+@pytest.mark.parametrize(("step", "direction"), [(0.1, "up"), (-0.1, "down"), (0, "flat")])
+def test_temperature_separates_direction_from_unvalidated_display(make_kline_data, step, direction):
+    bars = make_kline_data(120, base=200)
+    for i, row in enumerate(bars):
+        close = 200 + step * i
+        row.update(open=close, close=close, high=close + 40, low=close - 40)
+    result = technical_mod.analyze_records("TEST", bars)["trend_temperature"]
+    assert result["state"] == "平"
+    assert result["direction"] == direction
+    assert result["previous_direction"] == direction
+    assert result["validation_status"] == "not_validated"
+
+
+def test_analysis_reports_monthly_horizons_without_inventing_seven_levels(make_kline_data):
+    bars = make_kline_data(360)
+    for i, row in enumerate(bars):
+        close = 100 + i
+        row.update(open=close, close=close, high=close + 1, low=close - 1)
+    result = technical_mod.analyze_records("TEST", bars)["trend_horizons"]
+    assert result["model"] == "monthly_momentum_21_63_252_v1"
+    assert result["positive_count"] == 3 and result["negative_count"] == 0
+    assert result["direction"] == "up"
+    assert result["validation_status"] == "not_validated"
+    assert result["decision_as_of"] <= result["as_of"]
+    assert "state" not in result
+    assert [component["period"] for component in result["components"]] == [21, 63, 252]
+    assert all(component["log_return"] > 0 for component in result["components"])
+
+
+def test_monthly_horizons_require_history_at_observation_not_only_at_latest_bar(make_kline_data):
+    unavailable = technical_mod.analyze_records("TEST", make_kline_data(253))["trend_horizons"]
+    assert unavailable["positive_count"] is None and unavailable["direction"] is None
+    assert unavailable["unavailable_reason"] == "insufficient_history_at_monthly_observation"
+    ready = technical_mod.analyze_records("TEST", make_kline_data(270))["trend_horizons"]
+    assert ready["direction"] == "up"
+    assert ready["decision_as_of"] == "2025-01-01"
+
+
+def test_monthly_horizons_flat_is_observed_zero_returns_and_weekly_is_unsupported(make_kline_data):
+    bars = make_kline_data(360)
+    for row in bars:
+        row.update(open=100, close=100, high=101, low=99)
+    result = technical_mod.analyze_records("TEST", bars)["trend_horizons"]
+    assert result["neutral_count"] == 3 and result["direction"] == "flat"
+    assert result["unavailable_reason"] is None
+    weekly = technical_mod.analyze_records("TEST", bars, period="weekly")["trend_horizons"]
+    assert weekly["direction"] is None and weekly["unavailable_reason"] == "requires_daily_bars"
+
+
+def test_monthly_horizons_decision_date_skips_zero_volume_month_open(make_kline_data):
+    bars = make_kline_data(360)
+    for row in bars:
+        if row["date"].strftime("%Y-%m-%d") in ("2025-05-01", "2025-05-02"):
+            row["volume"] = 0
+    result = technical_mod.analyze_records("TEST", bars)["trend_horizons"]
+    assert result["decision_as_of"] == "2025-05-05"
+    assert result["direction"] == "up"
+
+
+@pytest.mark.parametrize(
+    ("direction", "half_range", "state"),
+    [(1, 1, "沸"), (1, 5, "热"), (1, 10, "温"), (1, 40, "平"), (-1, 10, "凉"), (-1, 5, "寒"), (-1, 1, "冻")],
+)
+def test_temperature_seven_states_follow_direction_and_normalized_spread(make_kline_data, direction, half_range, state):
+    bars = make_kline_data(120, base=200)
+    for i, row in enumerate(bars):
+        close = 200 + direction * i
+        row.update(open=close, close=close, high=close + half_range, low=close - half_range)
+    result = technical_mod.analyze_records("TEST", bars)["trend_temperature"]
+    assert result["state"] == state
+    assert result["unavailable_reason"] is None
+
+
+def test_temperature_scaling_invariance_and_price_reflection(make_kline_data):
+    bars = make_kline_data(120)
+    original = technical_mod.analyze_records("TEST", bars)["trend_temperature"]
+    scaled = [{**row, **{key: row[key] * 100 for key in ("open", "high", "low", "close")}} for row in bars]
+    reflected = [
+        {
+            **row,
+            "open": 1000 - row["open"],
+            "close": 1000 - row["close"],
+            "high": 1000 - row["low"],
+            "low": 1000 - row["high"],
+        }
+        for row in bars
+    ]
+    assert technical_mod.analyze_records("TEST", scaled)["trend_temperature"]["score"] == pytest.approx(
+        original["score"]
+    )
+    opposite = technical_mod.analyze_records("TEST", reflected)["trend_temperature"]
+    assert opposite["score"] == pytest.approx(-original["score"])
+
+
+@pytest.mark.parametrize("count", [30, 59, 60, 61])
+def test_temperature_warmup_does_not_invent_previous_state(make_kline_data, count):
+    result = technical_mod.analyze_records("TEST", make_kline_data(count))["trend_temperature"]
+    assert (result["score"] is None) == (count < 60)
+    assert (result["previous_state"] is None) == (count <= 60)
+    if count <= 60:
+        assert result["transition"] is None
+        assert result["previous_direction"] is None
+    if count < 60:
+        assert result["state"] is None and result["unavailable_reason"] == "insufficient_history"
+        assert result["direction"] is None
+
+
+def test_zero_atr_is_unavailable_and_json_safe(make_kline_data):
+    bars = make_kline_data(120)
+    for row in bars:
+        row.update(open=100, high=100, low=100, close=100)
+    result = technical_mod.analyze_records("TEST", bars)["trend_temperature"]
+    assert result["score"] is None and result["state"] is None
+    assert result["unavailable_reason"] == "zero_or_nonfinite_atr_or_score"
+    json.dumps(result, allow_nan=False)
+
+
+def test_temperature_transition_uses_immediately_previous_bar(make_kline_data):
+    bars = make_kline_data(120, base=200)
+    for i, row in enumerate(bars):
+        row.update(open=200 + i, close=200 + i, high=201 + i, low=199 + i)
+    bars[-1].update(high=10000, low=1)
+    result = technical_mod.analyze_records("TEST", bars)["trend_temperature"]
+    assert result["previous_state"] == "沸" and result["state"] == "平"
+    assert result["transition"] == "沸→平"
+    assert result["previous_as_of"] == bars[-2]["date"].strftime("%Y-%m-%d")
+
+
+@pytest.mark.parametrize("invalid", ["duplicate_date", "inconsistent_range"])
+def test_temperature_rejects_bad_history_without_breaking_legacy_analysis(make_kline_data, invalid):
+    bars = make_kline_data(120)
+    if invalid == "duplicate_date":
+        bars[-1]["date"] = bars[-2]["date"]
+    else:
+        bars[-1]["low"] = bars[-1]["high"] + 1
+    result = technical_mod.analyze_records("TEST", bars)
+    assert "trend" in result
+    assert result["trend_temperature"]["state"] is None
+    assert result["trend_temperature"]["unavailable_reason"]
+
+
+def test_temperature_rejects_mixed_adjustment_basis(make_kline_data):
+    bars = make_kline_data(120)
+    for row in bars:
+        row["adjusted"] = "qfq"
+    bars[-1]["adjusted"] = "none"
+    result = technical_mod.analyze_records("TEST", bars)["trend_temperature"]
+    assert result["state"] is None
+    assert "adjustment" in result["unavailable_reason"]
+
+
 class TestToDataframe:
     def test_basic(self):
         records = [
@@ -311,6 +473,20 @@ class TestParsePeriodsArg:
 
 
 class TestMultiPeriodAnalysis:
+    def test_temperature_summaries_preserve_each_period_data_provenance(self, monkeypatch, make_kline_data):
+        def fake_run(script, args, **kw):
+            period = args[args.index("--period") + 1]
+            bars = make_kline_data(120 if period == "daily" else 113)
+            return [{**row, "adjusted": "qfq" if period == "daily" else "none"} for row in bars]
+
+        monkeypatch.setattr(technical_mod, "run_tool", fake_run)
+        result = technical_mod.analyze_multi("TEST", "daily", 120, ["daily", "weekly"])
+        daily, weekly = result["multi_period"]["periods"]
+        assert daily["trend_temperature_as_of"] == "2024-06-14"
+        assert weekly["trend_temperature_as_of"] == "2024-06-05"
+        assert daily["trend_temperature_price_basis"] == "qfq"
+        assert weekly["trend_temperature_price_basis"] == "none"
+
     def test_analyze_default_has_no_multi_period(self, monkeypatch, make_kline_data):
         monkeypatch.setattr(technical_mod, "run_tool", lambda *a, **kw: make_kline_data(120))
         result = technical_mod.analyze("600519")
@@ -328,6 +504,10 @@ class TestMultiPeriodAnalysis:
         assert daily["trend_overall"] == result["trend"]["overall"]
         assert daily["ma_arrangement"] == result["moving_averages"]["ma_arrangement"]
         assert daily["macd_signal"] == result["macd"]["signal"]
+        assert daily["trend_temperature_state"] == result["trend_temperature"]["state"]
+        assert daily["trend_temperature_direction"] == result["trend_temperature"]["direction"]
+        assert daily["trend_temperature_validation_status"] == "not_validated"
+        assert daily["trend_score"] == result["trend_temperature"]["score"]
         assert daily["rsi_signal"] == result["rsi"]["signal"]
         assert "moving_averages" not in daily
         assert "signals" not in daily

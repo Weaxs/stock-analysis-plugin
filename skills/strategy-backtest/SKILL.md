@@ -5,6 +5,8 @@ description: 策略回测：定义或读取 AlphaEvo YAML 策略，回测收益�
 
 # 策略回测与优化
 
+生成股票池月度右侧趋势计划时，先读 [月度右侧趋势策略](../bull-trend/references/monthly-trend-strategy.md)，直接以股票代码调用 `analyze_trend_strategy(symbols, ...)` 自动取行情，无需用户准备文件。这是整池信号/预算分析；共享资金历史绩效仍依据冻结研究，MUST NOT 用单股YAML或信号计划冒充组合回测。报告尚未通过跨样本效果验证的边界。
+
 开始前读取[短线交易决策框架](../stock-analysis/references/short-term-trading.md)的风险单位和回测约束。回测用于反证策略，不把样本内收益包装成预测。
 
 解读回测时，`period` 是实际取得的数据期间，`requested_period` 保留用户请求，`warnings` 提示两者差异。年化收益按实际期间计算；覆盖不完整时明确说明，不能声称完成了完整请求期间的验证。买入预算包含佣金，`position.size` 为 0..1 的资金比例。
@@ -57,6 +59,12 @@ position:
 ```
 
 **可用指标**：rsi, ma, ema, macd_dif, macd_dea, macd, volume_ratio, price_change, bollinger_position, close, volume
+
+`monthly_momentum` 是共享核心的月度观察对数收益：`period` 默认63，支持21/63/252等正整数；月初首根正成交量日K收盘计算并保持到下次月度观察，次日开盘才可能成交。零成交量记录不计回溯根数。MUST 读取 [多期限月度趋势](../bull-trend/references/trend-horizons.md)，不能把单期限YAML等同三子策略组合。需要在观察日已有period+1根有效日K；默认回测起点会截断输入历史，不能据此声称提前完成预热。三期限同资金起点的完整研究复现使用参考里的研究脚本。
+
+独立趋势强度可用 `trend_score`，默认 `(EMA20-EMA60)/ATR14`，ATR 为真实波幅简单平均。`fast_period/slow_period/period` 分别控制快 EMA、慢 EMA、ATR，要求正整数且快线小于慢线；默认 60 根预热，预热或零 ATR 不触发条件。解释七档显示、初始化与样本外验证前 MUST 读取 [独立趋势温度](../bull-trend/references/trend-temperature.md)。它不是星球温度或肥尾信号，原固定止损/止盈默认值仍生效。
+
+该字段的 `validation_status=not_validated`。已有真实股票试验未支持默认温度入场规则；MUST NOT 自行补出“温转热买、降温卖”或零轴规则作为推荐策略。用户指定规则时可运行研究回测，但 MUST 同时报基准、成本、回撤及验证局限。
 
 **可用运算符**：`>`, `<`, `>=`, `<=`, `==`, `cross_above`, `cross_below`
 
@@ -150,3 +158,5 @@ python3 tools/backtest.py run <path.yaml> <symbol> --start <date> --end <date>
 参考 `{baseDir}/strategies/examples/` 目录中的示例：
 - `rsi_oversold.yaml` — RSI 超卖反弹
 - `ma_crossover.yaml` — 均线金叉
+
+市场环境只限制新开仓的三期限月度实验，使用 [bull-trend参考](../bull-trend/references/trend-horizons.md#市场环境入场实验) 与 `../bull-trend/scripts/market_trend.py`，输入两份带预热的daily OHLCV JSON。普通单期限YAML不会自动提供该组合或市场数据；未知市场历史禁止新入，市场转弱不冒充个股退出。初始投资时不能把预热虚拟信号当实际持仓。

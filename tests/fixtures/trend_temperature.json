@@ -1,0 +1,41 @@
+{
+  "symbol": "TEST",
+  "period": "daily",
+  "trend_temperature": {
+    "model": "ema_atr_v1",
+    "experimental": true,
+    "validation_status": "not_validated",
+    "direction": "up",
+    "previous_direction": "up",
+    "score": 1.6,
+    "state": "热",
+    "previous_state": "温",
+    "transition": "温→热"
+  },
+  "trend_horizons": {
+    "model": "monthly_momentum_21_63_252_v1",
+    "experimental": true,
+    "validation_status": "not_validated",
+    "direction": "up",
+    "positive_count": 2,
+    "negative_count": 1,
+    "neutral_count": 0,
+    "decision_as_of": "2026-09-01",
+    "as_of": "2026-09-30",
+    "components": [
+      {
+        "period": 21,
+        "log_return": 0.02
+      },
+      {
+        "period": 63,
+        "log_return": 0.1
+      },
+      {
+        "period": 252,
+        "log_return": -0.03
+      }
+    ],
+    "unavailable_reason": null
+  }
+}

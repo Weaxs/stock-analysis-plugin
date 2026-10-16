@@ -47,6 +47,182 @@ def ema_series(close: pd.Series, period: int) -> pd.Series:
     return close.ewm(span=period, adjust=False).mean()
 
 
+def _trend_prices(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    if "date" not in df or "close" not in df:
+        raise ValueError("monthly_momentum requires date and close")
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("monthly_momentum dates must be valid, unique and increasing")
+    close = pd.to_numeric(df["close"], errors="coerce")
+    if not np.isfinite(close).all() or (close <= 0).any():
+        raise ValueError("monthly_momentum requires finite positive close prices")
+    if "adjusted" in df and df["adjusted"].fillna("unknown").astype(str).nunique() > 1:
+        raise ValueError("monthly_momentum requires a consistent adjustment basis")
+    if "volume" in df:
+        volume = pd.to_numeric(df["volume"], errors="coerce")
+        if not np.isfinite(volume).all() or (volume < 0).any():
+            raise ValueError("monthly_momentum requires finite nonnegative volume")
+        close, dates = close[volume > 0], dates[volume > 0]
+    return close, dates
+
+
+def monthly_momentum_series(df: pd.DataFrame, period: int = 63) -> pd.Series:
+    """Past log return observed on each month's first visible close, then held; never a price forecast."""
+    if isinstance(period, bool) or not isinstance(period, int) or period < 1:
+        raise ValueError("monthly_momentum requires a positive integer period")
+    close, dates = _trend_prices(df)
+    month = dates.dt.to_period("M")
+    first_bar = month.ne(month.shift())
+    return (np.log(close) - np.log(close.shift(period))).where(first_bar).reindex(df.index).ffill()
+
+
+def monthly_market_entry_series(
+    df: pd.DataFrame, market: pd.DataFrame, period: int = 63, *, activation: pd.Timestamp | None = None
+) -> pd.Series:
+    """Monthly entry permission; a weak market never cancels an existing positive stock trend."""
+    momentum = monthly_momentum_series(df, period)
+    _, dates = _trend_prices(df)
+    market_close, market_dates = _trend_prices(market)
+    context = pd.DataFrame({"date": market_dates, "allowed": market_close > ma_series(market_close, 200)})
+    known = pd.merge_asof(pd.DataFrame({"date": dates}), context, on="date", direction="backward")
+    allowed = pd.Series(known.allowed.to_numpy(), index=dates.index).reindex(df.index).eq(True)
+    months = dates.dt.to_period("M")
+    observe = months.ne(months.shift()).reindex(df.index).eq(True)
+    active = pd.to_datetime(df.date).ge(activation) if activation is not None else pd.Series(True, index=df.index)
+    if activation is not None:
+        observe |= pd.to_datetime(df.date).eq(activation)
+    permission = ((momentum > 0) & allowed).astype("boolean").where(observe & active, pd.NA)
+    return permission.ffill().where(active & momentum.notna(), pd.NA)
+
+
+def calc_trend_horizons(df: pd.DataFrame, period: str = "daily") -> dict:
+    result = {
+        "model": "monthly_momentum_21_63_252_v1",
+        "experimental": True,
+        "validation_status": "not_validated",
+        "as_of": str(df["date"].iloc[-1].date()),
+        "history_start": str(df["date"].iloc[0].date()),
+        "price_basis": str(df["adjusted"].iloc[-1])
+        if "adjusted" in df and pd.notna(df["adjusted"].iloc[-1])
+        else "unknown",
+        "decision_as_of": None,
+        "positive_count": None,
+        "negative_count": None,
+        "neutral_count": None,
+        "direction": None,
+        "components": [],
+        "unavailable_reason": None,
+        "warnings": [
+            "Descriptive past-return directions, not probabilities or an automatic allocation. "
+            "Observed at each month's first visible daily close; any trade uses a later open. "
+            "Need 253 closes at the monthly observation; verify the observation bar is closed. "
+            "No stable cross-market trading advantage has been established."
+        ],
+    }
+    if period != "daily":
+        result["unavailable_reason"] = "requires_daily_bars"
+        return result
+    try:
+        for horizon in (21, 63, 252):
+            value = monthly_momentum_series(df, horizon).iloc[-1]
+            result["components"].append({"period": horizon, "log_return": float(value) if np.isfinite(value) else None})
+    except ValueError as exc:
+        result["unavailable_reason"] = str(exc)
+        return result
+    dates = df.loc[df["volume"] > 0, "date"] if "volume" in df else df["date"]
+    month = dates.dt.to_period("M")
+    if not dates.empty:
+        result["decision_as_of"] = str(dates.loc[month.ne(month.shift())].iloc[-1].date())
+    values = [component["log_return"] for component in result["components"]]
+    if any(value is None for value in values):
+        result["unavailable_reason"] = "insufficient_history_at_monthly_observation"
+        return result
+    positive = sum(value > 0 for value in values)
+    negative = sum(value < 0 for value in values)
+    result.update(positive_count=positive, negative_count=negative, neutral_count=3 - positive - negative)
+    result["direction"] = (
+        "up" if positive >= 2 else "down" if negative >= 2 else "flat" if not positive + negative else "mixed"
+    )
+    return result
+
+
+def trend_score_series(df: pd.DataFrame, fast: int = 20, slow: int = 60, atr_period: int = 14) -> pd.Series:
+    """Causal EMA spread / SMA true range; an independent, uncalibrated research baseline."""
+    if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in (fast, slow, atr_period)) or fast >= slow:
+        raise ValueError("trend_score requires positive integer periods and fast_period < slow_period")
+    if any(field not in df for field in ("high", "low", "close")):
+        raise ValueError("trend_score requires high, low and close")
+    prices = df[["high", "low", "close"]].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(prices).all().all() or (prices <= 0).any().any():
+        raise ValueError("trend_score requires finite positive prices")
+    high, low, close = prices["high"], prices["low"], prices["close"]
+    if ((low > close) | (close > high)).any():
+        raise ValueError("trend_score requires low <= close <= high")
+    if "date" in df:
+        dates = pd.to_datetime(df["date"], errors="coerce")
+        if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+            raise ValueError("trend_score dates must be valid, unique and increasing")
+    if "adjusted" in df and df["adjusted"].fillna("unknown").astype(str).nunique() > 1:
+        raise ValueError("trend_score requires a consistent adjustment basis")
+    previous = close.shift(1)
+    true_range = pd.concat([high - low, (high - previous).abs(), (low - previous).abs()], axis=1).max(
+        axis=1, skipna=False
+    )
+    atr = true_range.rolling(atr_period).mean()
+    score = (ema_series(close, fast) - ema_series(close, slow)) / atr.replace(0, np.nan)
+    return score.where(np.arange(len(df)) >= max(slow, atr_period + 1) - 1).replace([np.inf, -np.inf], np.nan)
+
+
+def calc_trend_temperature(df: pd.DataFrame) -> dict:
+    thresholds = [0.5, 1.5, 3.0]
+    result = {
+        "model": "ema_atr_v1",
+        "experimental": True,
+        "validation_status": "not_validated",
+        "parameters": {"fast_period": 20, "slow_period": 60, "atr_period": 14, "atr_method": "sma_true_range"},
+        "thresholds": thresholds,
+        "price_basis": str(df["adjusted"].iloc[-1])
+        if "adjusted" in df and pd.notna(df["adjusted"].iloc[-1])
+        else "unknown",
+        "history_start": str(df["date"].iloc[0].date()),
+        "score": None,
+        "state": None,
+        "direction": None,
+        "previous_score": None,
+        "previous_state": None,
+        "previous_direction": None,
+        "transition": None,
+        "as_of": str(df["date"].iloc[-1].date()),
+        "previous_as_of": str(df["date"].iloc[-2].date()) if len(df) > 1 else None,
+        "unavailable_reason": None,
+        "warnings": [
+            "Independent research baseline, not Trend Animal temperature or a Taleb fat-tail metric. "
+            "Thresholds are uncalibrated, not probabilities or automatic trade signals. "
+            "State labels are not entry rules; direction is only the EMA-spread sign. "
+            "EMA initialization depends on the supplied history; periods count bars, not calendar days. "
+            "Verify the latest bar is closed and the OHLC adjustment basis is consistent."
+        ],
+    }
+    try:
+        scores = trend_score_series(df)
+    except ValueError as exc:
+        result["unavailable_reason"] = str(exc)
+        return result
+    for prefix, idx in (("", -1), ("previous_", -2)):
+        if len(scores) < abs(idx) or not np.isfinite(scores.iloc[idx]):
+            continue
+        value = float(scores.iloc[idx])
+        magnitude = sum(abs(value) > threshold for threshold in thresholds)
+        result[f"{prefix}score"] = value
+        result[f"{prefix}direction"] = "up" if value > 0 else "down" if value < 0 else "flat"
+        result[f"{prefix}state"] = (("平", "温", "热", "沸") if value >= 0 else ("平", "凉", "寒", "冻"))[magnitude]
+    if result["score"] is None:
+        result["unavailable_reason"] = "insufficient_history" if len(df) < 60 else "zero_or_nonfinite_atr_or_score"
+    elif result["previous_state"] is not None and result["previous_state"] != result["state"]:
+        result["transition"] = f"{result['previous_state']}→{result['state']}"
+    return result
+
+
 def macd_series(close: pd.Series) -> tuple:
     """Full (dif, dea, macd) series: dif = EMA12-EMA26, dea = EMA9(dif), macd = 2*(dif-dea)."""
     dif = ema_series(close, 12) - ema_series(close, 26)
@@ -599,6 +775,14 @@ def _period_summary(result: dict) -> dict:
     return {
         "period": result["period"],
         "trend_overall": result["trend"]["overall"],
+        "trend_score": result["trend_temperature"]["score"],
+        "trend_temperature_state": result["trend_temperature"]["state"],
+        "trend_temperature_direction": result["trend_temperature"]["direction"],
+        "trend_temperature_validation_status": result["trend_temperature"]["validation_status"],
+        "trend_temperature_as_of": result["trend_temperature"]["as_of"],
+        "trend_temperature_price_basis": result["trend_temperature"]["price_basis"],
+        "trend_temperature_unavailable_reason": result["trend_temperature"]["unavailable_reason"],
+        "trend_horizons": result["trend_horizons"],
         "ma_arrangement": result["moving_averages"]["ma_arrangement"],
         "macd_signal": result["macd"]["signal"],
         "rsi_signal": result["rsi"]["signal"],
@@ -697,6 +881,8 @@ def analyze_records(symbol: str, records: list, period: str = "daily") -> dict:
         "volume": vol_data,
         "support_resistance": sr_data,
         "trend": trend_data,
+        "trend_temperature": calc_trend_temperature(df),
+        "trend_horizons": calc_trend_horizons(df, period),
         "bias": bias_data,
         "signal_score": score_data["signal_score"],
         "buy_signal": score_data["buy_signal"],
