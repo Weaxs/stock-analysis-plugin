@@ -468,7 +468,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     pyTool({
       name: "get_technical_analysis",
       description:
-        "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位；附 trend_temperature（ema_atr_v1，实验性EMA差/ATR描述；direction为均线方向；validation_status=not_validated，非星球指标，七档不作入场依据；另附 trend_horizons：21/63/252根日K月度动量，建议count=360，非概率、未验证）；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
+        "获取股票技术面分析（MA/MACD/RSI/BOLL/KDJ/成交量等指标 + 100分综合评分 + 6级买卖信号 + 趋势/偏离度/支撑压力位；附 trend_temperature（实验性EMA差/ATR描述；direction为均线方向；validation_status=not_validated，非星球指标，七档不作入场依据；另附 trend_horizons：21/63/252根日K月度动量，建议count=360，非概率、未验证）；多周期共振时 resonance.direction ∈ aligned_bullish/aligned_bearish/divergent）。个股技术面综合判断与买卖时机分析的首选；只要均线数值或自定义周期用 calculate_ma，专问量价用 get_volume_analysis，扫当日异动用 detect_anomaly",
       parameters: {
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
         period: {

@@ -39,7 +39,7 @@ def test_monthly_market_skill_runs_offline_with_explicit_prehistory(tmp_path, ma
     )
     assert run.returncode == 0, run.stderr
     result = json.loads(run.stdout)
-    assert result["model"] == "monthly_momentum_market_entry_v1"
+    assert result["model"] == "monthly_momentum_market_entry"
     assert result["market_symbol"] == "SPY"
     assert result["validation_status"] == "not_validated"
     assert len(result["trades"]) == 3

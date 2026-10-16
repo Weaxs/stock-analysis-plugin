@@ -19,7 +19,7 @@ from _subproc import run_tool, utf8_stdio
 from stock_data import detect_market
 from technical import _trend_prices, ma_series
 
-MODEL = "sma200_risk_budget_v1"
+MODEL = "sma200_risk_budget"
 ALLOCATION = 0.8704
 
 

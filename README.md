@@ -282,7 +282,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `evaluate_signal` | 历史信号胜率回测 |
 | `detect_anomaly` | 当日技术、量价与资金异动扫描 |
 
-`trend_temperature` 是独立研究基线 `ema_atr_v1`：`(EMA20-EMA60)/ATR14`，ATR 使用包含跳空的真实波幅简单均值。附分数、EMA差方向 `direction`、七档研究标签、前一期信息、数据日期和价格口径；`validation_status=not_validated`，真实股票试验未支持默认温度交易映射。方向按零轴计算，“平”标签不代表零方向；默认需 60 根预热，零 ATR 或坏行情返回不可用。±0.5/±1.5/±3 的分档尚未校准，不是趋势动物公式、肥尾指标、上涨概率或自动买卖信号，也不修改原综合评分。无需个人持仓存储；[公式、边界及回测说明](skills/bull-trend/references/trend-temperature.md)。
+`trend_temperature` 是独立趋势温度指标：`(EMA20-EMA60)/ATR14`，ATR 使用包含跳空的真实波幅简单均值。附分数、EMA差方向 `direction`、七档研究标签、前一期信息、数据日期和价格口径；`validation_status=not_validated`，真实股票试验未支持默认温度交易映射。方向按零轴计算，“平”标签不代表零方向；默认需 60 根预热，零 ATR 或坏行情返回不可用。±0.5/±1.5/±3 的分档尚未校准，不是趋势动物公式、肥尾指标、上涨概率或自动买卖信号，也不修改原综合评分。无需个人持仓存储；[公式、边界及回测说明](skills/bull-trend/references/trend-temperature.md)。
 
 月度右侧趋势策略，通过 `analyze_trend_strategy(symbols, ...)` 调用：月初200日线上行入场、真实旧仓优先、63日波动预算；[输入格式与完整规则](skills/bull-trend/references/monthly-trend-strategy.md)。扩展及历史样本尚未通过完整效果门槛；直接提供股票代码即可自动取日K，输出信号与预算计划；实际成交/股数和共享资金回测另行核实，不自动保存持仓或下单。
 

@@ -33,7 +33,7 @@ def _make_volume(values: list) -> pd.Series:
 def test_analysis_includes_independent_experimental_temperature(make_kline_data):
     result = technical_mod.analyze_records("600519", make_kline_data(120))
     temperature = result["trend_temperature"]
-    assert temperature["model"] == "ema_atr_v1"
+    assert temperature["model"] == "ema_atr"
     assert temperature["experimental"] is True
     assert temperature["score"] > 0
     assert temperature["state"] in ("温", "热", "沸")
@@ -60,7 +60,7 @@ def test_analysis_reports_monthly_horizons_without_inventing_seven_levels(make_k
         close = 100 + i
         row.update(open=close, close=close, high=close + 1, low=close - 1)
     result = technical_mod.analyze_records("TEST", bars)["trend_horizons"]
-    assert result["model"] == "monthly_momentum_21_63_252_v1"
+    assert result["model"] == "monthly_momentum"
     assert result["positive_count"] == 3 and result["negative_count"] == 0
     assert result["direction"] == "up"
     assert result["validation_status"] == "not_validated"

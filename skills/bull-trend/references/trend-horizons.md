@@ -1,4 +1,4 @@
-# 多期限月度趋势：monthly_momentum_21_63_252_v1
+# 多期限趋势
 
 通过现有get_technical_analysis请求daily、count=360，读取trend_horizons。模型用21/63/252根日K约代表1/3/12个月，不强凑七档标签，不是星球公式或肥尾预测。
 

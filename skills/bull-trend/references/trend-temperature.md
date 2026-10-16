@@ -1,4 +1,4 @@
-# 独立趋势温度：ema_atr_v1
+# 独立趋势温度
 
 用于用户要求计算趋势温度、寒凉温热状态或复核趋势强度时。调用现有 `get_technical_analysis`，读取 `trend_temperature`；skill 的采集脚本也会在 `technical.trend_temperature` 返回同一结果。无需配置外部温度接口，不保存个人持仓。
 
@@ -52,6 +52,6 @@ EMA 用输入首个收盘价初始化（adjust=False），前收缺失的首根 
 
 理论参考：[Time Series Momentum](https://www.aqr.com/Insights/Research/Journal-Article/Time-Series-Momentum)提供历史收益趋势研究依据，不验证本模型的 20/60/14 参数和阈值；[Taleb κ](https://arxiv.org/html/1802.05495)衡量样本聚合稳定性，不输出趋势方向。
 
-## 后续版本入口
+## 使用入口
 
-当前趋势研究优先使用[多期限月度趋势](trend-horizons.md)的trend_horizons，daily、count=360。这里的ema_atr_v1继续保留供兼容和旧实验复现，不将七档作为默认趋势判断。新模型也尚未通过全部跨市场风险门槛，不是自动入场信号。
+当前趋势研究优先使用[多期限月度趋势](trend-horizons.md)的trend_horizons，daily、count=360。独立趋势温度继续保留供兼容和既有计算复现，不将七档作为默认趋势判断。多期限趋势也尚未通过全部跨市场风险门槛，不是自动入场信号。

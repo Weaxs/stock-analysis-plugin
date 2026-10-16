@@ -516,7 +516,7 @@ def simulate_monthly_market(
         paid += result["costs"]["commission_paid"]
     total = pd.concat(curves, axis=1).sum(axis=1) + capital - sleeve_capital * 3
     return {
-        "model": "monthly_momentum_market_entry_v1",
+        "model": "monthly_momentum_market_entry",
         "validation_status": "not_validated",
         "experimental": True,
         "allocation": allocation,

@@ -27,7 +27,7 @@ def example():
 
 def test_risk_discount_uses_all_pool_sigma_and_never_expands_low_risk():
     result = analyze(example())
-    assert result["model"] == "sma200_risk_budget_v1"
+    assert result["model"] == "sma200_risk_budget"
     assert result["validation_status"] == "not_validated"
     assert result["status"] == "monthly_observation"
     assert result["selected"] == ["BBB", "AAA"]

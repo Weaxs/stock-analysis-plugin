@@ -97,7 +97,7 @@ def monthly_market_entry_series(
 
 def calc_trend_horizons(df: pd.DataFrame, period: str = "daily") -> dict:
     result = {
-        "model": "monthly_momentum_21_63_252_v1",
+        "model": "monthly_momentum",
         "experimental": True,
         "validation_status": "not_validated",
         "as_of": str(df["date"].iloc[-1].date()),
@@ -176,7 +176,7 @@ def trend_score_series(df: pd.DataFrame, fast: int = 20, slow: int = 60, atr_per
 def calc_trend_temperature(df: pd.DataFrame) -> dict:
     thresholds = [0.5, 1.5, 3.0]
     result = {
-        "model": "ema_atr_v1",
+        "model": "ema_atr",
         "experimental": True,
         "validation_status": "not_validated",
         "parameters": {"fast_period": 20, "slow_period": 60, "atr_period": 14, "atr_method": "sma_true_range"},
