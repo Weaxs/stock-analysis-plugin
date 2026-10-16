@@ -141,6 +141,13 @@ console.log("OpenClaw e2e host→python round-trip");
 }
 
 
+// The native symbols request reaches Python and rejects mixed markets before network access.
+{
+  const out = await callTool("analyze_trend_strategy", {symbols: ["600036", "AAPL"]});
+  assert(out.error_code === "invalid_request", "monthly_trend: native symbols reach shared validation");
+  console.log("  OK: analyze_trend_strategy");
+}
+
 const analysisFixtures = JSON.parse(readAnalysisFixture(new URL("../fixtures/stateless_analysis.json", import.meta.url), "utf8")) as Record<string, {args: Record<string, unknown>}>;
 for (const [name, fixture] of Object.entries(analysisFixtures)) {
   const out = await callTool(name, fixture.args);

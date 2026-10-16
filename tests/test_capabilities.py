@@ -89,3 +89,10 @@ class TestShortTermAndSignalTools:
             supported = capabilities.get_capabilities(m)["supported"]
             for tool in self.SIGNAL + ("get_trading_phase",):
                 assert tool in supported, f"{tool} should be supported in {m}"
+
+
+def test_monthly_trend_declares_only_tested_market_scope():
+    for market in ("A", "HK", "US"):
+        assert "analyze_trend_strategy" in capabilities.get_capabilities(market)["supported"]
+    for market in ("JP", "KR", "TW"):
+        assert "analyze_trend_strategy" in {row["tool"] for row in capabilities.get_capabilities(market)["unsupported"]}

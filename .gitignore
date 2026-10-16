@@ -29,6 +29,7 @@ node_modules/
 !tools/cli_budgets.json
 !tests/fixtures/analysis_quality.json
 !tests/fixtures/stateless_analysis.json
+!tests/fixtures/trend_temperature.json
 !openclaw/openclaw.plugin.json
 !strategies/**/*.yaml
 
@@ -66,3 +67,6 @@ dsh/strategies/
 dsh/scripts/
 dsh/*.tgz
 .alma-snapshots/
+
+# Local price snapshots and downloaded source evidence
+outputs/trend-relative-selection-2026-10-16/

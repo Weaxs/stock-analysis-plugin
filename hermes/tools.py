@@ -207,6 +207,10 @@ def screen_stocks(args: dict, **kwargs) -> str:
     return _run("screener.py", argv)
 
 
+def analyze_trend_strategy(args: dict, **kwargs) -> str:
+    return _run_analysis("fetch", args, script="trend_strategy.py")
+
+
 def run_backtest(args: dict, **kwargs) -> str:
     strategy = args["strategy"]
     symbol = args["symbol"]
@@ -537,13 +541,13 @@ def get_insider_trades(args: dict, **kwargs) -> str:
     )
 
 
-def _run_analysis(command: str, args: dict) -> str:
+def _run_analysis(command: str, args: dict, *, script="stateless_analysis.py") -> str:
     try:
         with tempfile.TemporaryDirectory(prefix="stock-analysis-") as directory:
             path = Path(directory) / "input.json"
             path.write_text(json.dumps(args, ensure_ascii=False, allow_nan=False), encoding="utf-8")
             path.chmod(0o600)
-            return _run("stateless_analysis.py", [command, "--input", str(path)])
+            return _run(script, [command, "--input", str(path)])
     except Exception:
         return json.dumps({"error": "Analysis input transport failed"})
 

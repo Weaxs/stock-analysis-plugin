@@ -1,6 +1,6 @@
 ---
 name: bull-trend
-description: 趋势交易：识别中长期趋势，制定入场、持仓和退出规则。用于趋势股持有、规则化趋势策略或肥尾收益分析。
+description: 趋势交易：识别中长期趋势，制定入场、持仓和退出规则。用于趋势温度计算、趋势股持有、规则化趋势策略或肥尾收益分析。
 ---
 
 # 趋势追踪分析
@@ -13,6 +13,10 @@ description: 趋势交易：识别中长期趋势，制定入场、持仓和退�
 
 仅解释肥尾概念时，到此完成；下述流程用于具体标的的趋势分析。
 
+用户要求运行股票池月度右侧趋势策略时，MUST 先读取 [月度右侧趋势策略](references/monthly-trend-strategy.md)，将股票名称解析为代码、按市场分组，直接调用 `analyze_trend_strategy(symbols, ...)` 自动取行情；仅在用户提供时传入真实持股集合，报告动作、原因与新仓预算。MUST 保留 `not_validated` 及跨样本失败边界；用户明确采用的规则可输出条件计划，实际成交和个人持仓由调用方核实。
+
+仅要求解释多期限方向或复核旧温度时，先读取 [多期限月度趋势](references/trend-horizons.md)，调用 `get_technical_analysis` 的 daily、count=360，优先解释 `trend_horizons` 的21/63/252期限组成、方向与观察日期。当前仍为 `not_validated`，MUST 说明交易有效性未被完整验证，MUST NOT 自行转换成交易建议。七档温度或旧模型复核才读取 [独立趋势温度](references/trend-temperature.md)并解释兼容字段 `trend_temperature`；仅用户明确要求七档时展示研究标签，不能把“平”当作零方向。这些都不是趋势动物、肥尾 κ、原综合评分或市场复盘温度；用户自定条件的研究回测仍可运行。
+
 ## 执行流程
 
 ### 1. 采集数据
@@ -24,6 +28,8 @@ python3 scripts/gather.py <symbol>
 ```
 
 确认数据日期、周期和复权口径；120 根日K线用于近期趋势判断。肥尾分支按参考文件另取历史收益，报告实际取得的区间和样本量。
+
+多期限分支报告 `model/validation_status/components/positive_count/negative_count/neutral_count/direction/decision_as_of/as_of/price_basis`；不足月初预热时先解释不可用，不能改用零值。通用采集脚本仍默认120根，不能据它声称已完成252根趋势判断，需另取daily、count=360。旧温度分支报告模型、EMA差方向、分数、日期及口径；七档只按明确请求补充。先确认观察K线收盘，未知价格口径需说明；不把样本不足当中性趋势。
 
 ### 2. 趋势确认
 
@@ -79,3 +85,7 @@ python3 scripts/gather.py <symbol>
 4. 入场/持有/离场建议
 5. 初始风险、保护位和退出触发条件
 6. 数据或成交限制；肥尾分支附计算口径和不确定性
+
+### 市场环境入场实验
+
+用户要求验证宽基右侧条件如何约束趋势入场时，读取[多期限参考中的市场环境实验](references/trend-horizons.md#市场环境入场实验)，准备带足预热的个股/同市场宽基daily OHLCV JSON，再运行 `scripts/market_trend.py`。该脚本调用共享Python核心，输出真实规则的三期限研究结果。MUST 分清初始空仓与已有持仓、观察与成交、开发集与新标的复核；不得拿七档标签代替入场条件，或将通过单次历史门槛称为稳定有效。

@@ -37,10 +37,15 @@ const mockPi = {
   on() {},
   exec: async (cmd: string, args: string[] = []) => {
     // pi/index.ts calls pi.exec(python, [script, ...args]) — argv form, no shell.
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    return { stdout, stderr, code: 0, killed: false };
+    try {
+      const { stdout, stderr } = await execFileAsync(cmd, args, {
+        maxBuffer: 32 * 1024 * 1024,
+      });
+      return { stdout, stderr, code: 0, killed: false };
+    } catch (error: any) {
+      if (typeof error.code !== "number") throw error;
+      return { stdout: error.stdout, stderr: error.stderr, code: error.code, killed: error.killed ?? false };
+    }
   },
 };
 
@@ -119,6 +124,13 @@ console.log(`Pi e2e host→python round-trip (python: ${python})`);
   console.log("  OK: diagnose_data_sources");
 }
 
+
+// The native symbols request reaches Python and rejects mixed markets before network access.
+{
+  const out = await callTool("analyze_trend_strategy", {symbols: ["600036", "AAPL"]});
+  assert(out.error_code === "invalid_request", "monthly_trend: native symbols reach shared validation");
+  console.log("  OK: analyze_trend_strategy");
+}
 
 const analysisFixtures = JSON.parse(readAnalysisFixture(new URL("../fixtures/stateless_analysis.json", import.meta.url), "utf8")) as Record<string, {args: Record<string, unknown>}>;
 for (const [name, fixture] of Object.entries(analysisFixtures)) {

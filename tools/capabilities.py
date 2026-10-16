@@ -18,6 +18,10 @@ ALL_MARKETS = ["A", "HK", "US", "JP", "KR", "TW"]
 
 # tool_name -> {markets: [supported markets], reason: str for unsupported}
 TOOL_MATRIX = {
+    "analyze_trend_strategy": {
+        "markets": ["A", "HK", "US"],
+        "reason": "Monthly trend strategy supports A/HK/US pools only",
+    },
     # Explicit-input analytics; data acquisition retains each provider's market limits.
     "compare_stocks": {"markets": ALL_MARKETS, "reason": None},
     "analyze_disclosure_changes": {"markets": ALL_MARKETS, "reason": None},

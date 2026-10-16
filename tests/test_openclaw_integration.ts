@@ -95,7 +95,7 @@ const mod = await jiti.import("../openclaw/index.ts") as {
 
 mod.__setExecutor(async (bin, argv) => {
   const [scriptPath, ...rest] = argv;
-  if (scriptPath.endsWith("stateless_analysis.py")) { const path = rest[rest.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); }
+  if (scriptPath.endsWith("stateless_analysis.py") || scriptPath.endsWith("trend_strategy.py")) { const path = rest[rest.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); }
   execCalls.push({ bin, script: scriptPath, args: rest });
   return `mock:${scriptPath}`;
 });
@@ -177,6 +177,7 @@ if (failures === 0) {
 console.log("Tool execute() smoke test:");
 
 const sampleArgs: Record<string, Record<string, unknown>> = {
+  analyze_trend_strategy: { symbols: ["AAPL", "MSFT"] },
   "compare_stocks": {"companies": [{"symbol": "AAPL", "period": "2025", "metrics": [{"name": "pe", "value": 20, "unit": "multiple", "basis": "TTM"}]}, {"symbol": "MSFT", "period": "2025", "metrics": [{"name": "pe", "value": 30, "unit": "multiple", "basis": "TTM"}]}]},
   "analyze_disclosure_changes": {"previous": {"text": "利润下降", "source": "fixture:old", "period": "2024", "metrics": []}, "current": {"text": "利润增长", "source": "fixture:new", "period": "2025", "metrics": []}},
   "analyze_portfolio_risk": {"positions": [{"symbol": "AAPL", "price": 100, "quantity": 10, "currency": "USD"}], "base_currency": "USD", "cash": 100},
@@ -377,6 +378,12 @@ assert(!execCalls[execCalls.length-1].args.includes("--include-full-holdings"), 
 // Disclosure tools forward every option unchanged to the shared Python CLI.
 await tools.find(t => t.name === "get_announcements")!.execute("disclosure", {symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80});
 assert(execCalls[execCalls.length - 1].script.endsWith("value_data.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["announcements", "600519", "--category", "inquiry", "--start-date", "2026-01-01", "--end-date", "2026-10-01", "--top", "80"]), "get_announcements: argv mismatch");
+const nativeTrendRequest = {symbols: ["AAPL", "MSFT"], held_symbols: ["AAPL"], slots: 2};
+await tools.find(t => t.name === "analyze_trend_strategy")!.execute("monthly_trend", nativeTrendRequest);
+const nativeTrendInput = analysisInputCalls.at(-1)!;
+assert(execCalls.at(-1)!.script.endsWith("trend_strategy.py") && execCalls.at(-1)!.args[0] === "fetch", "monthly_trend: native request command");
+assert(JSON.stringify(nativeTrendInput.input) === JSON.stringify(nativeTrendRequest), "monthly_trend: symbols/state reach Python");
+assert(!existsSync(nativeTrendInput.path), "monthly_trend: remove internal transport file");
 await tools.find(t => t.name === "get_us_holdings")!.execute("disclosure", {cik: "0001067983"});
 assert(execCalls[execCalls.length - 1].script.endsWith("sec_edgar.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["holdings", "0001067983"]), "get_us_holdings: argv mismatch");
 await tools.find(t => t.name === "get_insider_trades")!.execute("disclosure", {symbol: "AAPL", days: 30, top: 2});
@@ -399,6 +406,13 @@ mod.__setExecutor(async () => evidencePayload);
 const evidenceTool = tools.find(t => t.name === "get_quote")!;
 const evidenceResult = await evidenceTool.execute("evidence", {symbol: "600519"}) as {content: {text: string}[]};
 assert(evidenceResult.content[0].text === evidencePayload, "quote evidence must pass through unchanged");
+
+const temperaturePayload = readFileSync(join(repoRoot, "tests/fixtures/trend_temperature.json"), "utf8");
+mod.__setExecutor(async () => temperaturePayload);
+const temperatureTool = tools.find(t => t.name === "get_technical_analysis")!;
+const temperatureResult = await temperatureTool.execute("temperature", {symbol: "TEST"}) as {content: {text: string}[]};
+assert(temperatureResult.content[0].text === temperaturePayload, "technical analysis must preserve experimental temperature metadata");
+assert(temperatureTool.description.includes("实验性") && temperatureTool.description.includes("非星球指标") && temperatureTool.description.includes("validation_status=not_validated") && temperatureTool.description.includes("direction") && temperatureTool.description.includes("trend_horizons"), "temperature provenance must reach the model");
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

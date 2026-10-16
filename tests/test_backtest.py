@@ -26,6 +26,174 @@ from tools.backtest import (
 )
 
 
+def test_trend_score_uses_true_range_and_masks_warmup(make_kline_data):
+    bars = make_kline_data(4)
+    for row, close in zip(bars, [100, 102, 104, 106], strict=True):
+        row.update(open=close, close=close, high=close + 1, low=close - 1)
+    score = backtest.get_indicator(pd.DataFrame(bars), "trend_score", period=2, fast=2, slow=3)
+    assert score.iloc[:2].isna().all()
+    # Worked example: final EMA2=105.037037..., EMA3=104.25, true-range mean=3.
+    assert score.iloc[-1] == pytest.approx(0.2623456790123457)
+
+
+def test_trend_score_is_causal_and_analysis_uses_identical_formula(make_kline_data):
+    bars = make_kline_data(150)
+    df = pd.DataFrame(bars)
+    full = backtest.get_indicator(df, "trend_score")
+    prefix = backtest.get_indicator(df.iloc[:120], "trend_score")
+    pd.testing.assert_series_equal(full.iloc[:120], prefix)
+    from tools.technical import analyze_records
+
+    analysis = analyze_records("TEST", bars[:120])["trend_temperature"]
+    assert analysis["score"] == prefix.iloc[-1]
+    assert analysis["previous_score"] == prefix.iloc[-2]
+
+
+@pytest.mark.parametrize(("period", "fast", "slow"), [(0, 2, 3), (2, 3, 3), (2, 4, 3), (2, True, 3), (2.5, 2, 3)])
+def test_trend_score_rejects_invalid_periods(make_kline_data, period, fast, slow):
+    with pytest.raises(ValueError, match="positive integer periods"):
+        backtest.get_indicator(pd.DataFrame(make_kline_data(120)), "trend_score", period, fast, slow)
+
+
+@pytest.mark.parametrize("parameter", ["period", "fast_period", "slow_period"])
+@pytest.mark.parametrize("invalid", ["2.5", "invalid"])
+def test_trend_score_conditions_reject_invalid_period_strings(make_kline_data, parameter, invalid):
+    condition = {"indicator": "trend_score", "operator": ">", "value": 0, parameter: invalid}
+    with pytest.raises(ValueError):
+        evaluate_conditions(pd.DataFrame(make_kline_data(120)), [condition], "all", 119, {})
+
+
+def test_trend_score_executes_only_after_close_signal(make_kline_data):
+    bars = make_kline_data(8)
+    for row, close in zip(bars, [100, 102, 104, 106, 108, 110, 112, 114], strict=True):
+        row.update(open=close, close=close, high=close + 1, low=close - 1)
+    strategy = {
+        "entry": {
+            "conditions": [
+                {
+                    "indicator": "trend_score",
+                    "fast_period": 2,
+                    "slow_period": 3,
+                    "period": 2,
+                    "operator": "cross_above",
+                    "value": 0.25,
+                }
+            ]
+        },
+        "exit": {"take_profit": 0.5},
+        "simulation": {"slippage": 0, "commission": 0},
+    }
+    trades = backtest.simulate(pd.DataFrame(bars), strategy, 10000, "AAPL")["trades"]
+    assert len(trades) == 1
+    assert trades[0]["signal_date"] == "2024-01-04"
+    assert trades[0]["date"] == "2024-01-05"
+    assert trades[0]["price"] == 108
+
+
+def test_monthly_momentum_uses_first_visible_close_and_holds_until_next_month(make_kline_data):
+    bars = make_kline_data(80)
+    for i, row in enumerate(bars):
+        row.update(open=100 + i, close=100 + i, high=101 + i, low=99 + i)
+    df = pd.DataFrame(bars)
+    series = backtest.get_indicator(df, "monthly_momentum", period=5)
+    assert series.iloc[:23].isna().all()
+    # Feb 1 is bar 23: close 123 versus close 118 five observations earlier.
+    assert series.iloc[23] == pytest.approx(0.04149973090675284)
+    assert series.iloc[24] == series.iloc[23]
+    pd.testing.assert_series_equal(series.iloc[:45], backtest.get_indicator(df.iloc[:45], "monthly_momentum", period=5))
+
+
+def test_monthly_momentum_fill_follows_observation_close(make_kline_data):
+    bars = make_kline_data(80)
+    for i, row in enumerate(bars):
+        row.update(open=100 + i, close=100 + i, high=101 + i, low=99 + i)
+    strategy = {
+        "entry": {"conditions": [{"indicator": "monthly_momentum", "period": 5, "operator": ">", "value": 0}]},
+        "exit": {"take_profit": 1e9},
+        "simulation": {"slippage": 0, "commission": 0},
+    }
+    trades = backtest.simulate(pd.DataFrame(bars), strategy, 10000, "AAPL")["trades"]
+    assert len(trades) == 1
+    assert trades[0]["signal_date"] == "2024-02-01"
+    assert trades[0]["date"] == "2024-02-02"
+    assert trades[0]["price"] == 124
+
+
+def test_monthly_momentum_does_not_observe_or_count_zero_volume_padding(make_kline_data):
+    bars = make_kline_data(80)
+    for i, row in enumerate(bars):
+        row.update(open=100 + i, close=100 + i, high=101 + i, low=99 + i)
+    bars[23]["volume"] = 0
+    series = backtest.get_indicator(pd.DataFrame(bars), "monthly_momentum", period=5)
+    assert pd.isna(series.iloc[23])
+    assert series.iloc[24] == pytest.approx(0.04959694113937212)
+
+
+@pytest.mark.parametrize("invalid", [0, True, 2.5, "invalid", "2.5"])
+def test_monthly_momentum_conditions_reject_invalid_period(make_kline_data, invalid):
+    condition = {"indicator": "monthly_momentum", "period": invalid, "operator": ">", "value": 0}
+    with pytest.raises(ValueError):
+        evaluate_conditions(pd.DataFrame(make_kline_data(120)), [condition], "all", 119, {})
+
+
+def test_monthly_market_entry_waits_for_observation_and_does_not_force_exit(make_kline_data):
+    bars = make_kline_data(360)
+    market = make_kline_data(360)
+    for i, (row, context) in enumerate(zip(bars, market, strict=True)):
+        row.update(open=100 + i, close=100 + i, high=101 + i, low=99 + i)
+        price = (
+            500 if row["date"] < pd.Timestamp("2025-03-10") else 1000 if row["date"] < pd.Timestamp("2025-04-10") else 1
+        )
+        context.update(open=price, close=price, high=price + 0.1, low=price - 0.1)
+    result = backtest.simulate_monthly_market(
+        pd.DataFrame(bars).assign(date=lambda d: pd.to_datetime(d.date)),
+        pd.DataFrame(market).assign(date=lambda d: pd.to_datetime(d.date)),
+        100000,
+        "AAPL",
+        "2025-03-03",
+        allocation=0.8704,
+    )
+    assert len(result["trades"]) == 3
+    assert {trade["date"] for trade in result["trades"]} == {"2025-04-02"}
+    assert all(trade["type"] == "buy" and trade["signal_date"] == "2025-04-01" for trade in result["trades"])
+    assert all(row["equity"] == 100000 for row in result["equity_curve"] if row["date"] < "2025-04-02")
+    assert result["validation_status"] == "not_validated"
+
+
+def test_simulate_entry_gate_is_aligned_and_rejects_truthy_strings(make_kline_data):
+    df = pd.DataFrame(make_kline_data(35))
+    strategy = {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]}}
+    with pytest.raises(ValueError, match="entry_gate"):
+        backtest.simulate(df, strategy, 10000, "AAPL", entry_gate=pd.Series(["false"] * len(df)))
+    with pytest.raises(ValueError, match="entry_gate"):
+        backtest.simulate(df, strategy, 10000, "AAPL", entry_gate=pd.Series([True] * (len(df) - 1)))
+
+
+def test_monthly_market_does_not_inherit_phantom_warmup_positions(make_kline_data):
+    bars, market = make_kline_data(360), make_kline_data(360)
+    for i, (row, context) in enumerate(zip(bars, market, strict=True)):
+        row.update(open=100 + i, close=100 + i, high=101 + i, low=99 + i)
+        price = 100 + i if row["date"] < pd.Timestamp("2025-02-01") else 1
+        context.update(open=price, close=price, high=price + 0.1, low=price - 0.1)
+    result = backtest.simulate_monthly_market(pd.DataFrame(bars), pd.DataFrame(market), 100000, "AAPL", "2025-03-03")
+    assert result["trades"] == []
+    assert result["final_equity"] == 100000
+
+
+def test_monthly_market_cancels_unfilled_entry_when_next_month_is_weak(make_kline_data):
+    bars, market = make_kline_data(360), make_kline_data(360)
+    for i, (row, context) in enumerate(zip(bars, market, strict=True)):
+        price = 100 + i
+        row.update(open=price, close=price, high=price + 1, low=price - 1)
+        if pd.Timestamp("2025-03-03") <= row["date"] <= pd.Timestamp("2025-04-01"):
+            row.update(high=price, low=price, limit_up=price)
+        market_price = price if row["date"] < pd.Timestamp("2025-03-10") else 1
+        context.update(open=market_price, close=market_price, high=market_price + 0.1, low=market_price - 0.1)
+    result = backtest.simulate_monthly_market(pd.DataFrame(bars), pd.DataFrame(market), 1000000, "600519", "2025-03-03")
+    assert result["trades"] == []
+    assert result["final_equity"] == 1000000
+
+
 class TestComputeRsi:
     def test_uptrend_high_rsi(self):
         close = pd.Series([10 + i * 0.5 for i in range(50)])

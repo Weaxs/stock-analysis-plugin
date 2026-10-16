@@ -17,7 +17,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import json_safe, run_tool, utf8_stdio
 from stock_data import detect_market
-from technical import bollinger_series, ema_series, ma_series, macd_series, rsi_series
+from technical import (
+    bollinger_series,
+    ema_series,
+    ma_series,
+    macd_series,
+    monthly_market_entry_series,
+    monthly_momentum_series,
+    rsi_series,
+    trend_score_series,
+)
 
 # --------------- Strategy Loading ---------------
 
@@ -175,6 +184,10 @@ def get_indicator(
         "macd": lambda: compute_macd_hist(close),
         "ma_diff": lambda: compute_ma_diff(close, period, fast, slow),
         "ema_diff": lambda: compute_ema_diff(close, period, fast, slow),
+        "trend_score": lambda: trend_score_series(
+            df, fast if fast is not None else 20, slow if slow is not None else 60, period if period is not None else 14
+        ),
+        "monthly_momentum": lambda: monthly_momentum_series(df, period if period is not None else 63),
         "volume_ratio": lambda: compute_volume_ratio(df["volume"], period or 5),
         "price_change": lambda: compute_price_change(close),
         "bollinger_position": lambda: compute_bollinger_position(close, period or 20),
@@ -227,9 +240,11 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
     reasons = []
     for cond in conditions:
         ind_name = cond["indicator"]
-        period = _coerce_int(cond.get("period"))
-        fast = _coerce_int(cond.get("fast_period"))
-        slow = _coerce_int(cond.get("slow_period"))
+        parameters = (cond.get("period"), cond.get("fast_period"), cond.get("slow_period"))
+        if ind_name.lower() in ("trend_score", "monthly_momentum"):
+            period, fast, slow = (int(v) if isinstance(v, str) else v for v in parameters)
+        else:
+            period, fast, slow = map(_coerce_int, parameters)
 
         cache_key = f"{ind_name}_{period}_{fast}_{slow}"
         if cache_key not in cache:
@@ -253,7 +268,9 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
 # --------------- Simulation ---------------
 
 
-def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> dict:
+def simulate(
+    df: pd.DataFrame, strategy: dict, capital: float, symbol: str, *, entry_gate: pd.Series | None = None
+) -> dict:
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("capital must be finite and positive")
     if not np.isfinite(df["close"]).all() or (df["close"] <= 0).any():
@@ -261,6 +278,10 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
     dates = pd.to_datetime(df["date"], errors="coerce")
     if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
         raise ValueError("backtest dates must be valid, unique and increasing")
+    if entry_gate is not None:
+        if not entry_gate.index.equals(df.index) or not (entry_gate.isna() | entry_gate.isin([True, False])).all():
+            raise ValueError("entry_gate must contain aligned booleans or unavailable values")
+        entry_gate = entry_gate.fillna(False).astype(bool)
     market = detect_market(symbol)
     lot_size = 100 if market == "A" else 1
     sim_cfg = strategy.get("simulation", {})
@@ -330,6 +351,8 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
             hit, reason = evaluate_conditions(df, entry_conditions, entry_logic, signal_idx, cache)
             if pending:
                 hit, reason, signal_date = True, pending[0], pending[1]
+            if entry_gate is not None and not entry_gate.iloc[signal_idx]:
+                hit, pending = False, None
             if hit and not tradable(row, "buy"):
                 pending = (reason, signal_date)
                 blocked_orders += 1
@@ -461,6 +484,48 @@ def simulate(df: pd.DataFrame, strategy: dict, capital: float, symbol: str) -> d
             "commission_paid": round(commission_paid, 2),
             "stamp_tax_paid": round(stamp_tax_paid, 2),
         },
+    }
+
+
+def simulate_monthly_market(
+    df: pd.DataFrame, market: pd.DataFrame, capital: float, symbol: str, start: str, allocation: float = 1.0
+) -> dict:
+    """Fixed research protocol: three drifting sleeves, market-gated entries and explicit warmup."""
+    if isinstance(allocation, bool) or not math.isfinite(allocation) or not 0 < allocation <= 1:
+        raise ValueError("allocation must be finite and in (0, 1]")
+    if not math.isfinite(capital) or capital <= 0:
+        raise ValueError("capital must be finite and positive")
+    start_date = pd.Timestamp(start)
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    before = dates[(dates < start_date) & (df["volume"] > 0)] if "volume" in df else dates[dates < start_date]
+    if pd.isna(start_date) or before.empty or not (dates >= start_date).any():
+        raise ValueError("start requires both prehistory and evaluation bars")
+    sleeve_capital = math.floor(capital * allocation / 3 * 100) / 100
+    curves, trades, paid = [], [], 0.0
+    for horizon in (21, 63, 252):
+        gate = monthly_market_entry_series(df, market, horizon, activation=before.iloc[-1])
+        condition = {"indicator": "monthly_momentum", "period": horizon, "value": 0}
+        strategy = {
+            "entry": {"conditions": [{**condition, "operator": ">"}]},
+            "exit": {"conditions": [{**condition, "operator": "<"}], "stop_loss": -1, "take_profit": 1e9},
+            "simulation": {"execution": "next_open", "commission": 0.001, "slippage": 0.001, "stamp_tax": 0},
+        }
+        result = simulate(df, strategy, sleeve_capital, symbol, entry_gate=gate)
+        curves.append(pd.Series({row["date"]: row["equity"] for row in result["equity_curve"]}))
+        trades.extend({**trade, "horizon": horizon} for trade in result["trades"])
+        paid += result["costs"]["commission_paid"]
+    total = pd.concat(curves, axis=1).sum(axis=1) + capital - sleeve_capital * 3
+    return {
+        "model": "monthly_momentum_market_entry",
+        "validation_status": "not_validated",
+        "experimental": True,
+        "allocation": allocation,
+        "start": str(start_date.date()),
+        "warmup_start": str(dates.iloc[0].date()),
+        "trades": sorted(trades, key=lambda trade: (trade["date"], trade["horizon"])),
+        "equity_curve": [{"date": date, "equity": round(float(value), 2)} for date, value in total.items()],
+        "final_equity": round(float(total.iloc[-1]), 2),
+        "costs": {"commission": 0.001, "slippage": 0.001, "stamp_tax": 0, "commission_paid": round(paid, 2)},
     }
 
 
