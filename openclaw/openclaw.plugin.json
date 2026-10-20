@@ -71,7 +71,9 @@
       "analyze_event_study",
       "validate_backtest",
       "compare_analysis_snapshots",
-      "analyze_trend_strategy"
+      "analyze_trend_strategy",
+      "calculate_rotation_metrics",
+      "backtest_rotation_allocation"
     ]
   },
   "activation": {

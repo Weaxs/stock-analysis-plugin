@@ -782,6 +782,197 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
   );
 
   ctx.tools.register(defineTool({
+    name: "calculate_rotation_metrics",
+    description: "行业轮动数值复核：输入真实MC-dropout样本和/或历史成交计数，计算集中度和原始配权；不训练模型、不生成买入信号，零历史不补默认值。",
+    parameters: {
+  "prediction_samples": {
+    "type": "array",
+    "description": "1..100组，总样本<=100000；和trade_counts至少提供一项",
+    "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "唯一标的标识",
+          "required": true
+        },
+        "samples": {
+          "type": "array",
+          "description": "2..100000个真实MC-dropout预测；不得用随机数或动量代替",
+          "items": {
+            "type": "number",
+            "description": "同一模型/标的/时间的有限线性输出，不是价格或收益率"
+          },
+          "required": true
+        }
+      }
+    }
+  },
+  "trade_counts": {
+    "type": "array",
+    "description": "1..100条已完成历史成交计数；不得使用决策后的交易",
+    "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "唯一标的标识；代码别名须先统一",
+          "required": true
+        },
+        "buys": {
+          "type": "number",
+          "description": "此前已平仓买入周数，非负整数",
+          "required": true
+        },
+        "wins": {
+          "type": "number",
+          "description": "此前盈利平仓次数，0..buys",
+          "required": true
+        },
+        "streak": {
+          "type": "number",
+          "description": "此前连续盈利交易次数，0..wins",
+          "required": true
+        }
+      }
+    }
+  }
+},
+    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
+    async execute(params) {
+      return withJsonInput(params, (path: string) =>
+        runPy("sector_rotation.py", ["analyze", "--input", path]));
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "backtest_rotation_allocation",
+    description: "行业轮动配权分项回测：代码自动取行情，或传明确币种/复权OHLCV；相同每周全池买卖下比较等权与历史配权。按市场和报价币种独立资金，支持A/HK/US/JP/KR/TW；不是完整论文深度模型或跨币种共享资金回测。",
+    parameters: {
+  "symbols": {
+    "type": "array",
+    "description": "1..20只自动取数，与datasets互斥；任一失败整池停止",
+    "items": {
+      "type": "string",
+      "description": "唯一股票/ETF代码，按插件代码格式"
+    }
+  },
+  "datasets": {
+    "type": "array",
+    "description": "1..20个离线数据集，与symbols互斥；8MiB JSON输入上限",
+    "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "A六位代码/HK如2800.HK/US如XLK/JP如1306.T/KR如069500.KS/TW如0050.TW",
+          "required": true
+        },
+        "currency": {
+          "type": "string",
+          "description": "已核实报价币种三字母代码，不按上市地猜测",
+          "required": true
+        },
+        "price_basis": {
+          "type": "string",
+          "enum": [
+            "qfq",
+            "total_return",
+            "split_adjusted"
+          ],
+          "description": "已核实且一致的复权口径",
+          "required": true
+        },
+        "bars": {
+          "type": "array",
+          "description": "递增唯一daily OHLCV，2..20000行，包含评估前预热；总量<=100000",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "type": "string",
+                "description": "YYYY-MM-DD",
+                "required": true
+              },
+              "open": {
+                "type": "number",
+                "description": "有限正OHLC价格；volume非负",
+                "required": true
+              },
+              "high": {
+                "type": "number",
+                "description": "有限正OHLC价格；volume非负",
+                "required": true
+              },
+              "low": {
+                "type": "number",
+                "description": "有限正OHLC价格；volume非负",
+                "required": true
+              },
+              "close": {
+                "type": "number",
+                "description": "有限正OHLC价格；volume非负",
+                "required": true
+              },
+              "volume": {
+                "type": "number",
+                "description": "有限正OHLC价格；volume非负",
+                "required": true
+              },
+              "adjusted": {
+                "type": "string",
+                "description": "可选逐bar复权标记，存在时必须与price_basis一致"
+              },
+              "source": {
+                "type": "string",
+                "description": "可选行情来源标识，用于数据覆盖报告"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    }
+  },
+  "start_date": {
+    "type": "string",
+    "description": "评估起始YYYY-MM-DD；跨边界周不交易，不能用评估期收益初始化配权",
+    "required": true
+  },
+  "end_date": {
+    "type": "string",
+    "description": "已收盘截止YYYY-MM-DD；不完整末周不成交",
+    "required": true
+  },
+  "history_start_date": {
+    "type": "string",
+    "description": "仅代码模式；默认评估前一年，必须早于start_date"
+  },
+  "warmup_weeks": {
+    "type": "number",
+    "description": "评估前完整历史交易周1..104整数，默认26；不足停止"
+  },
+  "capital": {
+    "type": "number",
+    "description": "每市场/报价币种分组独立初始资金，默认1000000，不是混合池总额"
+  },
+  "cost_per_side": {
+    "type": "number",
+    "description": "每边比例成本0..0.1，默认0.001；买入预算含费用"
+  }
+},
+    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
+    async execute(params) {
+      return withJsonInput(params, (path: string) =>
+        runPy("sector_rotation.py", ["backtest", "--input", path]));
+    },
+  }));
+
+  ctx.tools.register(defineTool({
     name: "analyze_trend_strategy",
     description: "月度右侧趋势策略：直接传同市场A/HK/US股票代码，自动获取日K，输出月度新入/持有/退出与逆波动预算。as_of默认最近已收盘交易日，持仓可选且不保存，不自动下单；跨样本仍not_validated。",
     parameters: {

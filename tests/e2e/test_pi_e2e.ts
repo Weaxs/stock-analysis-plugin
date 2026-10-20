@@ -1,3 +1,4 @@
+import { rotationRequests } from "../fixtures/rotation";
 import { readFileSync as readAnalysisFixture } from "node:fs";
 // Layer 1 e2e: Pi host → real Python subprocess → JSON round-trip.
 // Complements test_pi_integration.ts (which mocks the executor).
@@ -138,6 +139,14 @@ for (const [name, fixture] of Object.entries(analysisFixtures)) {
   assert(!out.error, `${name}: real CLI failed`);
   if (name === "calculate_position_size") assert(out.quantity === 200, "position size: cash/risk constraints");
   if (name === "validate_backtest") assert(out.datasets?.[0]?.folds?.length === 1, "robustness: one actual fold");
+  console.log(`  OK: ${name}`);
+}
+
+for (const [name, args] of Object.entries(rotationRequests)) {
+  const out = await callTool(name, args);
+  assert(!out.error, `${name}: shared rotation CLI failed`);
+  if (name === "calculate_rotation_metrics") assert(out.allocation?.assets?.[0]?.raw_weight === 2.25, "rotation metrics: worked formula");
+  if (name === "backtest_rotation_allocation") assert(Math.abs(out.groups?.[0]?.historical_weight?.final_equity - 730) < 1e-8, "rotation backtest: causal worked example");
   console.log(`  OK: ${name}`);
 }
 

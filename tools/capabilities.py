@@ -18,6 +18,8 @@ ALL_MARKETS = ["A", "HK", "US", "JP", "KR", "TW"]
 
 # tool_name -> {markets: [supported markets], reason: str for unsupported}
 TOOL_MATRIX = {
+    "calculate_rotation_metrics": {"markets": ALL_MARKETS, "reason": None},
+    "backtest_rotation_allocation": {"markets": ALL_MARKETS, "reason": None},
     "analyze_trend_strategy": {
         "markets": ["A", "HK", "US"],
         "reason": "Monthly trend strategy supports A/HK/US pools only",

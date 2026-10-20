@@ -5,6 +5,8 @@ import { createJiti } from "jiti";
 const EXPECTED_TOOLS = [
   "compare_stocks",
   "analyze_trend_strategy",
+  "calculate_rotation_metrics",
+  "backtest_rotation_allocation",
   "analyze_disclosure_changes",
   "analyze_portfolio_risk",
   "calculate_position_size",
@@ -87,6 +89,7 @@ const EXPECTED_SKILLS = [
   "ma-crossover",
   "market-review",
   "one-yang-three-yin",
+  "sector-rotation",
   "shrink-pullback",
   "stock-analysis",
   "stock-screener",
@@ -127,7 +130,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : 0, killed: processKilled }; },
+  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("sector_rotation.py") || args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : 0, killed: processKilled }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -203,6 +206,16 @@ if (missingSkills.length === 0 && extraSkills.length === 0) {
   console.log(`  OK: ${skillNames.length} skills registered`);
 }
 
+
+for (const [name, command] of [["calculate_rotation_metrics", "analyze"], ["backtest_rotation_allocation", "backtest"]]) {
+  const request = name === "calculate_rotation_metrics" ? {trade_counts: [{symbol: "XLK", buys: 4, wins: 3, streak: 2}]} : {symbols: ["XLK", "XLE"], start_date: "2021-01-01", end_date: "2026-01-01"};
+  const tool = registeredTools.find(t => t.name === name)!;
+  await tool.execute!("rotation", request);
+  const transport = analysisInputCalls.at(-1)!;
+  assert(calls.at(-1)![0].endsWith("sector_rotation.py") && calls.at(-1)![1] === command, `${name}: shared core action`);
+  assert(JSON.stringify(transport.input) === JSON.stringify(request), `${name}: all parameters forwarded`);
+  assert(!existsSync(transport.path), `${name}: transport removed`);
+}
 
 const nativeTrendRequest = {symbols: ["AAPL", "MSFT"], held_symbols: ["AAPL"], slots: 2};
 await registeredTools.find(t => t.name === "analyze_trend_strategy")!.execute!("monthly_trend", nativeTrendRequest);

@@ -578,3 +578,11 @@ def validate_backtest(args: dict, **kwargs) -> str:
 
 def compare_analysis_snapshots(args: dict, **kwargs) -> str:
     return _run_analysis("snapshot", args)
+
+
+def calculate_rotation_metrics(args: dict, **kwargs) -> str:
+    return _run_analysis("analyze", args, script="sector_rotation.py")
+
+
+def backtest_rotation_allocation(args: dict, **kwargs) -> str:
+    return _run_analysis("backtest", args, script="sector_rotation.py")
