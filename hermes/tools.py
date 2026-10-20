@@ -1,14 +1,15 @@
 import base64
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from tools._subproc import command_timeout
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
+# Hermes owns the top-level tools package; load our shared helper without shadowing it.
+command_timeout = runpy.run_path(str(TOOLS_DIR / "_subproc.py"))["command_timeout"]
 
 
 def _find_python() -> str:

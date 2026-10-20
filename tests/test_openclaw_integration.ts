@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createJiti } from "jiti";
-import { venvPythonPath } from "../scripts/venv-python.mjs";
+import { pythonEnvironmentRoot, venvPythonPath } from "../scripts/venv-python.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
@@ -30,7 +30,8 @@ let capturedConfig: PluginConfig | null = null;
 
 const tools: ToolDef[] = [];
 const pluginRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-root-"));
-const installedPython = venvPythonPath(pluginRoot);
+writeFileSync(join(pluginRoot, "openclaw.plugin.json"), "{}");
+const installedPython = venvPythonPath(pythonEnvironmentRoot(pluginRoot));
 mkdirSync(dirname(installedPython), { recursive: true });
 writeFileSync(installedPython, "");
 mkdirSync(join(pluginRoot, "tools"));

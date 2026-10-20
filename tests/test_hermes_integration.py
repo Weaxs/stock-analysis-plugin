@@ -15,6 +15,22 @@ from hermes import register
 from hermes.schemas import TOOL_SCHEMAS
 
 
+def test_plugin_loads_when_host_owns_tools_namespace(tmp_path):
+    import sys
+
+    host_tools = tmp_path / "tools"
+    host_tools.mkdir()
+    (host_tools / "__init__.py").write_text("")
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(tmp_path)!r}); import hermes.tools"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_smoke_hook_records_only_tool_name(tmp_path, monkeypatch):
     from tests.e2e.hermes_tool_spy import register as register_spy
 

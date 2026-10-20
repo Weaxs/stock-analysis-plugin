@@ -1,5 +1,6 @@
 import { withJsonInput } from "../scripts/json-input.mjs";
 import { commandTimeout } from "../scripts/cli-timeout.mjs";
+import { pythonEnvironmentRoot, venvPythonPath } from "../scripts/venv-python.mjs";
 import { existsSync } from "node:fs";
 import * as cp from "node:child_process";
 import { promisify } from "node:util";
@@ -71,7 +72,7 @@ export default definePluginEntry({
     const repoRoot = api.rootDir || fallbackRoot;
     const runtimeToolsDir = existsSync(join(repoRoot, "tools")) ? join(repoRoot, "tools") : toolsDir;
     const pythonBin = () => {
-      const venvPython = join(repoRoot, venvBin);
+      const venvPython = venvPythonPath(pythonEnvironmentRoot(repoRoot));
       if (existsSync(venvPython)) return venvPython;
       // In a staged dev checkout, the venv still lives at the repo root.
       const parentVenvPython = join(repoRoot, "..", venvBin);

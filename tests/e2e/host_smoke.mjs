@@ -226,6 +226,12 @@ function smokeHermes() {
   assertCond(/stock-analysis/.test(plugins), "hermes plugins list should show stock-analysis");
   sh(hermes, ["plugins", "enable", "stock-analysis", "--no-allow-tool-override"], { env });
   sh(hermes, ["plugins", "enable", "smoke-tool-spy", "--no-allow-tool-override"], { env });
+  // Enabling plugins selects a PM-owned environment, hiding packages in the bootstrap venv.
+  const runtimePython = sh(python, ["-c", "import hermes_bootstrap; from pathlib import Path; from pm.environments import project_python; print(project_python(Path(__import__('hermes_cli').__file__).parent.parent))"], { env }).trim();
+  sh(runtimePython, ["-m", "ensurepip", "--upgrade"], { env });
+  sh(runtimePython, ["-m", "pip", "install", "--quiet", repoRoot], { env });
+  env.PATH = `${dirname(runtimePython)}${delimiter}${env.PATH}`;
+  sh(runtimePython, ["-c", "import hermes_bootstrap; from hermes_cli.oneshot import _validate_explicit_toolsets; toolsets, error = _validate_explicit_toolsets(['stock-analysis']); assert toolsets == ['stock-analysis'] and error is None, error"], { env });
   retryQA("hermes", (attempt) => {
     writeFileSync(calledToolsLog, "");
     const usageFile = join(WORK, `hermes-usage-${attempt}.json`);
