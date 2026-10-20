@@ -95,7 +95,7 @@ const mod = await jiti.import("../openclaw/index.ts") as {
 
 mod.__setExecutor(async (bin, argv) => {
   const [scriptPath, ...rest] = argv;
-  if (scriptPath.endsWith("stateless_analysis.py") || scriptPath.endsWith("trend_strategy.py")) { const path = rest[rest.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); }
+  if (scriptPath.endsWith("sector_rotation.py") || scriptPath.endsWith("stateless_analysis.py") || scriptPath.endsWith("trend_strategy.py")) { const path = rest[rest.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); }
   execCalls.push({ bin, script: scriptPath, args: rest });
   return `mock:${scriptPath}`;
 });
@@ -178,6 +178,8 @@ console.log("Tool execute() smoke test:");
 
 const sampleArgs: Record<string, Record<string, unknown>> = {
   analyze_trend_strategy: { symbols: ["AAPL", "MSFT"] },
+  calculate_rotation_metrics: {trade_counts: [{symbol: "XLK", buys: 4, wins: 3, streak: 2}]},
+  backtest_rotation_allocation: {symbols: ["XLK", "XLE"], start_date: "2021-01-01", end_date: "2026-01-01"},
   "compare_stocks": {"companies": [{"symbol": "AAPL", "period": "2025", "metrics": [{"name": "pe", "value": 20, "unit": "multiple", "basis": "TTM"}]}, {"symbol": "MSFT", "period": "2025", "metrics": [{"name": "pe", "value": 30, "unit": "multiple", "basis": "TTM"}]}]},
   "analyze_disclosure_changes": {"previous": {"text": "利润下降", "source": "fixture:old", "period": "2024", "metrics": []}, "current": {"text": "利润增长", "source": "fixture:new", "period": "2025", "metrics": []}},
   "analyze_portfolio_risk": {"positions": [{"symbol": "AAPL", "price": 100, "quantity": 10, "currency": "USD"}], "base_currency": "USD", "cash": 100},
@@ -378,6 +380,16 @@ assert(!execCalls[execCalls.length-1].args.includes("--include-full-holdings"), 
 // Disclosure tools forward every option unchanged to the shared Python CLI.
 await tools.find(t => t.name === "get_announcements")!.execute("disclosure", {symbol: "600519", category: "inquiry", start_date: "2026-01-01", end_date: "2026-10-01", top: 80});
 assert(execCalls[execCalls.length - 1].script.endsWith("value_data.py") && JSON.stringify(execCalls[execCalls.length - 1].args) === JSON.stringify(["announcements", "600519", "--category", "inquiry", "--start-date", "2026-01-01", "--end-date", "2026-10-01", "--top", "80"]), "get_announcements: argv mismatch");
+for (const [name, command] of [["calculate_rotation_metrics", "analyze"], ["backtest_rotation_allocation", "backtest"]]) {
+  const request = name === "calculate_rotation_metrics" ? {trade_counts: [{symbol: "XLK", buys: 4, wins: 3, streak: 2}]} : {symbols: ["XLK", "XLE"], start_date: "2021-01-01", end_date: "2026-01-01"};
+  const tool = tools.find(t => t.name === name)!;
+  await tool.execute("rotation", request);
+  const transport = analysisInputCalls.at(-1)!;
+  assert(execCalls.at(-1)!.script.endsWith("sector_rotation.py") && execCalls.at(-1)!.args[0] === command, `${name}: shared core action`);
+  assert(JSON.stringify(transport.input) === JSON.stringify(request), `${name}: all parameters forwarded`);
+  assert(!existsSync(transport.path), `${name}: transport removed`);
+}
+
 const nativeTrendRequest = {symbols: ["AAPL", "MSFT"], held_symbols: ["AAPL"], slots: 2};
 await tools.find(t => t.name === "analyze_trend_strategy")!.execute("monthly_trend", nativeTrendRequest);
 const nativeTrendInput = analysisInputCalls.at(-1)!;

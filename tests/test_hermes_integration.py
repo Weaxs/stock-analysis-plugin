@@ -41,6 +41,8 @@ EXPECTED_TOOLS = sorted(
     [
         "compare_stocks",
         "analyze_trend_strategy",
+        "calculate_rotation_metrics",
+        "backtest_rotation_allocation",
         "analyze_disclosure_changes",
         "analyze_portfolio_risk",
         "calculate_position_size",
@@ -125,6 +127,7 @@ EXPECTED_SKILLS = sorted(
         "ma-crossover",
         "market-review",
         "one-yang-three-yin",
+        "sector-rotation",
         "shrink-pullback",
         "stock-analysis",
         "stock-screener",

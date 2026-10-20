@@ -22,6 +22,7 @@
     "README.md",
     "tools/",
     "skills/",
+    "!skills/**/__pycache__/**",
     "schemas/",
     "templates/",
     "strategies/",
