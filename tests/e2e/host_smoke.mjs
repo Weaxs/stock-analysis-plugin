@@ -252,6 +252,7 @@ assert runtime['base_url'].rstrip('/') == os.environ['OPENAI_BASE_URL'].rstrip('
         "-z", QUESTION,
         "-m", MODEL,
         "--provider", provider,
+        "--reasoning", "low",
         "-t", "stock-analysis",
         "--usage-file", usageFile,
       ],
