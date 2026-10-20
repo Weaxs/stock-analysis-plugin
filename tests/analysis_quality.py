@@ -107,8 +107,9 @@ def check_report(case, report, *, review=None):
             cited.add(path)
         except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
             failures.append(f"Unsupported or incorrect evidence claim at evidence[{index}] {evidence!r}: {exc}")
-    if not set(case["required_paths"]) <= cited:
-        failures.append("Missing key evidence citations")
+    missing_paths = sorted(set(case["required_paths"]) - cited)
+    if missing_paths:
+        failures.append(f"Missing key evidence citations: {', '.join(missing_paths)}")
     quote = case["tools"].get("get_quote", {})
     price = ((report.get("data_perspective") or {}).get("price_position") or {}).get("current_price")
     if price is not None and (quote.get("price") is None or price != quote["price"]):

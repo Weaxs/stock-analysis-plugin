@@ -77,6 +77,22 @@ def test_evaluator_rejects_fake_sources_and_times():
     assert check_report(CASES[0], report, review=ACCEPTED_REVIEW)
 
 
+@pytest.mark.parametrize("missing_path", ["get_quote.price", "get_quote.data_as_of"])
+def test_stale_quote_requires_each_explicit_citation_and_reports_missing_path(missing_path):
+    case = next(case for case in CASES if case["id"] == "stale")
+    report = reference_report(case)
+    report["evidence"] = [item for item in report["evidence"] if item["path"] != missing_path]
+    assert check_report(case, report, review=ACCEPTED_REVIEW) == [f"Missing key evidence citations: {missing_path}"]
+    assert check_report(case, reference_report(case), review=ACCEPTED_REVIEW) == []
+
+
+def test_stale_timestamp_value_cannot_be_replaced_with_analysis_date():
+    case = next(case for case in CASES if case["id"] == "stale")
+    report = reference_report(case)
+    next(item for item in report["evidence"] if item["path"] == "get_quote.data_as_of")["value"] = "2026-10-14"
+    assert check_report(case, report, review=ACCEPTED_REVIEW)
+
+
 @pytest.mark.parametrize("quality", ["invalid", {"flags": 1}, {"flags": [], "limitations": 1}])
 def test_malformed_model_quality_is_a_failed_evaluation(quality):
     report = reference_report(CASES[0])
