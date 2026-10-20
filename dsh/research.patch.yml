@@ -1,0 +1,90 @@
+# Optional overlay for dsh 0.2.1-rc.2 base/headless profiles. Install stock-analysis first.
+- id: tools
+  config:
+    mode: ptc
+- id: ptc-runtime
+  config:
+    executionMode: persistent-in-memory
+- insert:
+    - id: stock-agent-presets
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: stock-research
+    - id: preset-stock-research
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: stock-research
+        name: 股票综合研究
+        plugins: []
+    - id: preset-stock-fundamentals
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: stock-fundamentals
+        name: 股票基本面研究
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                研究基本面、估值与财务质量。先读取 stock-analysis skill，按当前任务指定股票与期间取数。
+                向父任务返回原始工具字段路径、数值、来源、数据日期、币种、口径和缺失限制，区分事实与推断。
+                不生成最终报告、不记录持仓、不外发信息；发现技术或事件问题交回父任务。
+          - id: stock-role
+            name: '@weaxs/dsh-stock-analysis/research-role'
+            config:
+              role: fundamentals
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+    - id: preset-stock-technical
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: stock-technical
+        name: 股票技术与回测研究
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                研究技术结构与策略历史表现。先读取 strategy-backtest 或当前任务指定策略 skill。
+                检查实际数据覆盖、复权、币种、费用、样本外与未来函数，缺失数据不补造。
+                向父任务返回原始字段、来源、数据日期、参数、结果与限制；不将回测结果写成收益承诺。
+                不生成最终报告、不记录持仓、不外发信息。
+          - id: stock-role
+            name: '@weaxs/dsh-stock-analysis/research-role'
+            config:
+              role: technical
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+    - id: preset-stock-events
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: stock-events
+        name: 股票公告与事件研究
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                研究公告、新闻与事件。先读取 event-driven skill，检索原文并核对事件时间与披露时间。
+                向父任务返回事实、引用 URL、原文日期、工具证据路径、互相矛盾的证据与未验证点。
+                搜索摘要不是已核实正文，不能替代结构化行情；不生成最终报告、不记录持仓、不外发信息。
+          - id: stock-role
+            name: '@weaxs/dsh-stock-analysis/research-role'
+            config:
+              role: events
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+    # headless creates its parent without mounting an Agent Preset.
+    - id: stock-research-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: stock_research_subagent
+        agentPreset: stock-fundamentals
+        allowedAgentPresets: [stock-fundamentals, stock-technical, stock-events]

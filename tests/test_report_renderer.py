@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tools import report_renderer
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -114,6 +116,32 @@ class TestRender:
 class TestCLI:
     """End-to-end: run the CLI the way pi/hermes/openclaw do (subprocess + --input-b64)."""
 
+    @pytest.mark.parametrize("kind", ["stock", "market"])
+    @pytest.mark.parametrize("final", [False, True])
+    def test_final_delivery_is_explicit_and_keeps_markdown(self, kind, final):
+        report = (
+            {"stock_name": "Apple", "stock_code": "AAPL"}
+            if kind == "stock"
+            else {
+                "market": "A",
+                "review_date": "2026-10-20",
+                "temperature": {"score": 50, "signal": "yellow"},
+                "strategy_stance": "balanced",
+            }
+        )
+        payload = base64.b64encode(json.dumps(report).encode()).decode()
+        result = subprocess.run(
+            [sys.executable, str(RENDERER_SCRIPT), kind, "--input-b64", payload, *(["--final"] if final else [])],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        output = json.loads(result.stdout)
+        assert output.get("final", False) is final
+        assert output["format"] == "markdown"
+        assert output["content"] == report_renderer.render(kind, "full", report)["content"]
+
     def test_stock_brief_via_subprocess(self):
         report = {
             "stock_name": "贵州茅台",
@@ -201,6 +229,12 @@ class TestMarketSave:
         assert "saved" not in out["archived"]
         assert "error" in out["archived"]
         assert "Traceback" not in out["archived"]["error"]
+
+    def test_failed_archive_does_not_mark_report_final(self, tmp_path, monkeypatch, capsys):
+        out = self._run_main(monkeypatch, capsys, tmp_path, ["--save", "--final"])
+        assert "error" in out["archived"]
+        assert not out.get("final", False)
+        assert out["format"] == "markdown"
 
 
 if __name__ == "__main__":

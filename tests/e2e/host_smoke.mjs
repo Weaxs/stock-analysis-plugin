@@ -18,8 +18,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { venvPythonPath } from "../../scripts/venv-python.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -70,15 +71,15 @@ function retryQA(label, run) {
 }
 
 function findPython() {
-  const candidates = [process.env.SMOKE_PYTHON, "python3.13", "python3.12", "python3.11", "python3"].filter(Boolean);
+  const candidates = [process.env.SMOKE_PYTHON, "python3.14", "python3"].filter(Boolean);
   for (const c of candidates) {
     try {
       const out = execFileSync(c, ["--version"], { stdio: ["ignore", "pipe", "pipe"] }).toString();
       const m = out.match(/(\d+)\.(\d+)/);
-      if (m && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 11))) return c;
+      if (m && Number(m[1]) === 3 && Number(m[2]) === 14) return c;
     } catch { /* try next */ }
   }
-  throw new Error("python >= 3.11 not found (set SMOKE_PYTHON)");
+  throw new Error("Hermes v0.22.2 requires Python 3.14 (set SMOKE_PYTHON)");
 }
 
 // ---------------------------------------------------------------- pi -------
@@ -191,28 +192,42 @@ function smokeOpenclaw() {
 
 // ------------------------------------------------------------- hermes -------
 function smokeHermes() {
-  const venv = join(WORK, "venv");
+  const venv = join(WORK, ".venv");
   sh(findPython(), ["-m", "venv", venv]);
-  const pip = join(venv, "bin", "pip");
-  const hermes = join(venv, "bin", "hermes");
-  sh(pip, ["install", "--quiet", "--upgrade", "pip"]);
-  sh(pip, ["install", "--quiet", "hermes-agent==0.19.0"]);
-  sh(pip, ["install", "--quiet", repoRoot]);
+  const python = venvPythonPath(WORK);
+  const binDir = dirname(python);
+  const hermes = join(binDir, process.platform === "win32" ? "hermes.exe" : "hermes");
+  sh(python, ["-m", "pip", "install", "--quiet", "--upgrade", "pip"]);
+  const source = join(WORK, "hermes-source");
+  sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.22.2", "https://github.com/NousResearch/hermes-agent.git", source]);
+  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "d923a5eb487a17c0a68801bba9ef0f56c81040a8", "Hermes source commit must match verified release");
+  // Official releases reject wheel builds; editable source installs are supported.
+  sh(python, ["-m", "pip", "install", "--quiet", "--editable", source]);
+  sh(python, ["-m", "pip", "install", "--quiet", repoRoot]);
   // handlers shell out to "python3" — make it resolve to this venv, which has
   // the full data-source deps (yfinance etc.) from tools/requirements.txt
-  sh(pip, ["install", "--quiet", "-r", join(repoRoot, "tools", "requirements.txt")]);
+  sh(python, ["-m", "pip", "install", "--quiet", "-r", join(repoRoot, "tools", "requirements.txt")]);
 
-  const plugins = sh(hermes, ["plugins", "list"]);
-  assertCond(/stock-analysis/.test(plugins), "hermes plugins list should show stock-analysis");
-  sh(hermes, ["plugins", "enable", "stock-analysis", "--no-allow-tool-override"]);
-
+  const hermesHome = join(WORK, "hermes-home");
+  const spyDir = join(hermesHome, "plugins", "smoke-tool-spy");
+  mkdirSync(spyDir, { recursive: true });
+  writeFileSync(join(spyDir, "plugin.yaml"), "name: smoke-tool-spy\nversion: 0.1.0\ndescription: Record tool names for smoke QA\n");
+  writeFileSync(join(spyDir, "__init__.py"), readFileSync(join(repoRoot, "tests", "e2e", "hermes_tool_spy.py")));
+  const calledToolsLog = join(WORK, "hermes-called-tools.jsonl");
   const env = {
     ...process.env,
-    PATH: `${join(venv, "bin")}:${process.env.PATH}`,
+    HERMES_HOME: hermesHome,
+    HERMES_SMOKE_TOOL_LOG: calledToolsLog,
+    PATH: `${binDir}${delimiter}${process.env.PATH}`,
     OPENAI_API_KEY: API_KEY,
     OPENAI_BASE_URL: BASE_URL,
   };
+  const plugins = sh(hermes, ["plugins", "list"], { env });
+  assertCond(/stock-analysis/.test(plugins), "hermes plugins list should show stock-analysis");
+  sh(hermes, ["plugins", "enable", "stock-analysis", "--no-allow-tool-override"], { env });
+  sh(hermes, ["plugins", "enable", "smoke-tool-spy", "--no-allow-tool-override"], { env });
   retryQA("hermes", (attempt) => {
+    writeFileSync(calledToolsLog, "");
     const usageFile = join(WORK, `hermes-usage-${attempt}.json`);
     const out = execFileSync(
       hermes,
@@ -225,14 +240,14 @@ function smokeHermes() {
       ],
       { env, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }
     ).toString();
-    // oneshot prints the final response only; tool usage is asserted via the
-    // usage report: a tool round-trip means >= 2 API calls
+    // Auxiliary model calls also count in usage, so require the actual tool hook.
     const usage = JSON.parse(readFileSync(usageFile, "utf-8"));
-    const toolRoundTrip = usage.completed === true && usage.failed === false && usage.api_calls >= 2;
+    const calledGetQuote = readFileSync(calledToolsLog, "utf-8").split("\n").includes(JSON.stringify("get_quote"));
+    const toolRoundTrip = calledGetQuote && usage.completed === true && usage.failed === false;
     const hasNumber = /\d{2,}/.test(out);
     return {
       ok: toolRoundTrip && hasNumber,
-      log: `apiCalls=${usage.api_calls} numeric=${hasNumber} out=${out.trim().slice(0, 60)}`,
+      log: `toolCalled=${calledGetQuote} apiCalls=${usage.api_calls} numeric=${hasNumber} out=${out.trim().slice(0, 60)}`,
       tail: out,
     };
   });

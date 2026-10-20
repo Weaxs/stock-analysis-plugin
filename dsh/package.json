@@ -6,7 +6,10 @@
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./research-role": "./dist/research-role.js",
+    "./research.patch.yml": "./research.patch.yml",
+    "./deepseek-search.patch.yml": "./deepseek-search.patch.yml"
   },
   "dsh": {
     "bundle": {
@@ -18,6 +21,8 @@
   },
   "files": [
     "dist/",
+    "research.patch.yml",
+    "deepseek-search.patch.yml",
     "cordis.patch.yml",
     "README.md",
     "tools/",
@@ -46,7 +51,7 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2"
+    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2 || ^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2 || ^0.2.1-rc.2"
   }
 }

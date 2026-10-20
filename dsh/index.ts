@@ -1442,8 +1442,9 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     pyTool({
       name: "render_stock_report",
       description:
-        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
+        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。默认仅渲染；final=true表示最终回复，支持直出的宿主可原样交付并结束本轮。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
       parameters: {
+        final: { type: "boolean", description: "最终回复标记，默认false；保存附件或继续分析时保持false" },
         report: {
           type: "object",
           additionalProperties: true,
@@ -1459,7 +1460,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
       script: "report_renderer.py",
       argv: (p) => {
         const b64 = Buffer.from(JSON.stringify(p.report), "utf-8").toString("base64");
-        return ["stock", "--template", p.template ?? "full", "--input-b64", b64];
+        return ["stock", "--template", p.template ?? "full", "--input-b64", b64, ...(p.final ? ["--final"] : [])];
       },
     })
   );
@@ -1468,8 +1469,9 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     pyTool({
       name: "render_market_report",
       description:
-        "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history",
+        "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history；final=true仅用于最终回复，保存附件或继续分析时保持false",
       parameters: {
+        final: { type: "boolean", description: "最终回复标记，默认false；保存附件或继续分析时保持false" },
         report: {
           type: "object",
           additionalProperties: true,
@@ -1485,6 +1487,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
       argv: (p) => {
         const b64 = Buffer.from(JSON.stringify(p.report), "utf-8").toString("base64");
         const args = ["market", "--input-b64", b64];
+        if (p.final) args.push("--final");
         if (p.save) args.push("--save");
         return args;
       },

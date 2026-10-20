@@ -372,3 +372,13 @@ const temperatureResult = await temperatureTool.execute!("temperature", {symbol:
 assert(temperatureResult.content[0].text === temperaturePayload, "technical analysis must preserve experimental temperature metadata");
 assert(temperatureTool.description.includes("实验性") && temperatureTool.description.includes("非星球指标") && temperatureTool.description.includes("validation_status=not_validated") && temperatureTool.description.includes("direction") && temperatureTool.description.includes("trend_horizons"), "temperature provenance must reach the model");
 if (failures) process.exit(1);
+
+for (const name of ["render_stock_report", "render_market_report"]) {
+  const tool = registeredTools.find(t => t.name === name)!;
+  assert((tool.parameters as any).properties.final.type === "boolean", `${name}: shared final schema`);
+  for (const final of [false, true]) {
+    await tool.execute!("report", {report: {}, final});
+    assert(calls.at(-1)!.includes("--final") === final, `${name}: final argv`);
+  }
+}
+if (failures) process.exit(1);

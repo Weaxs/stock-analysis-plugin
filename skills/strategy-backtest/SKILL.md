@@ -5,6 +5,8 @@ description: 策略回测：定义或读取 AlphaEvo YAML 策略，回测收益�
 
 # 策略回测与优化
 
+批量研究、子任务分工或报告文件交付时，必须读取[宿主研究与报告交付](../stock-analysis/references/host-workflows.md)，使用当前宿主实际提供的能力。
+
 生成股票池月度右侧趋势计划时，先读 [月度右侧趋势策略](../bull-trend/references/monthly-trend-strategy.md)，直接以股票代码调用 `analyze_trend_strategy(symbols, ...)` 自动取行情，无需用户准备文件。这是整池信号/预算分析；共享资金历史绩效仍依据冻结研究，MUST NOT 用单股YAML或信号计划冒充组合回测。报告尚未通过跨样本效果验证的边界。
 
 开始前读取[短线交易决策框架](../stock-analysis/references/short-term-trading.md)的风险单位和回测约束。回测用于反证策略，不把样本内收益包装成预测。

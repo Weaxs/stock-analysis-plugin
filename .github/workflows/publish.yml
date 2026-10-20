@@ -213,6 +213,10 @@ jobs:
             || { echo "::error::dist/index.js missing from dsh npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
           grep -q "cordis.patch.yml" pack-dry-run.txt \
             || { echo "::error::cordis.patch.yml missing from dsh npm tarball — dsh bundle manifest would dangle"; exit 1; }
+          for file in dist/research-role.js research.patch.yml deepseek-search.patch.yml; do
+            grep -q "$file" pack-dry-run.txt \
+              || { echo "::error::$file missing from dsh npm tarball"; exit 1; }
+          done
           grep -q "LICENSE" pack-dry-run.txt \
             || { echo "::error::LICENSE missing from dsh npm tarball"; exit 1; }
 
@@ -230,7 +234,7 @@ jobs:
         working-directory: dsh
         run: |
           npm pkg set name=dsh-stock-analysis
-          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml README.md
+          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml research.patch.yml README.md
           grep -q 'name: "dsh-stock-analysis"' cordis.patch.yml
           npm publish --access public --provenance
         env:

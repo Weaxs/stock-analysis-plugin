@@ -95,11 +95,13 @@ def main():
     p.add_argument("--template", default="full", choices=["brief", "full"])
     p.add_argument("--input", "-i", default="-", help="JSON file path or '-' for stdin")
     p.add_argument("--input-b64", help="Base64-encoded JSON (avoids shell escaping)")
+    p.add_argument("--final", action="store_true", help="Mark a completed report for final reply delivery by the host")
 
     p2 = sub.add_parser("market", help="Render a market review report")
     p2.add_argument("--input", "-i", default="-", help="JSON file path or '-' for stdin")
     p2.add_argument("--input-b64", help="Base64-encoded JSON (avoids shell escaping)")
     p2.add_argument("--save", action="store_true", help="Append the report object to the review JSONL archive")
+    p2.add_argument("--final", action="store_true", help="Mark a completed report for final reply delivery by the host")
 
     args = parser.parse_args()
     if not args.command:
@@ -110,6 +112,8 @@ def main():
     result = render(args.command, getattr(args, "template", "full"), report)
     if args.command == "market" and args.save and "error" not in result:
         result["archived"] = save_review(report)
+    if args.final and "error" not in result and "error" not in result.get("archived", {}):
+        result["final"] = True
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
     print()
     if "error" in result:
