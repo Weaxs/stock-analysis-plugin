@@ -15,7 +15,7 @@
  *   1. the host actually invoked our get_quote tool (tool-call trace)
  *   2. the final answer contains a number (real data reached the reply)
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -231,30 +231,42 @@ function smokeHermes() {
   sh(runtimePython, ["-m", "ensurepip", "--upgrade"], { env });
   sh(runtimePython, ["-m", "pip", "install", "--quiet", repoRoot], { env });
   env.PATH = `${dirname(runtimePython)}${delimiter}${env.PATH}`;
-  sh(runtimePython, ["-c", "import hermes_bootstrap; from hermes_cli.oneshot import _validate_explicit_toolsets; toolsets, error = _validate_explicit_toolsets(['stock-analysis']); assert toolsets == ['stock-analysis'] and error is None, error"], { env });
+  // openai-api selects Responses; the openai alias honors our Chat Completions proxy.
+  const provider = "openai";
+  sh(runtimePython, ["-c", `
+import hermes_bootstrap, os, sys
+from hermes_cli.oneshot import _validate_explicit_toolsets
+from hermes_cli.runtime_provider import resolve_runtime_provider
+toolsets, error = _validate_explicit_toolsets(['stock-analysis'])
+assert toolsets == ['stock-analysis'] and error is None, error
+runtime = resolve_runtime_provider(requested=sys.argv[1])
+assert runtime['api_mode'] == 'chat_completions', 'smoke requires Chat Completions'
+assert runtime['base_url'].rstrip('/') == os.environ['OPENAI_BASE_URL'].rstrip('/'), 'smoke endpoint mismatch'
+`, provider], { env });
   retryQA("hermes", (attempt) => {
     writeFileSync(calledToolsLog, "");
     const usageFile = join(WORK, `hermes-usage-${attempt}.json`);
-    const out = execFileSync(
+    const processResult = spawnSync(
       hermes,
       [
         "-z", QUESTION,
         "-m", MODEL,
-        "--provider", "openai-api",
+        "--provider", provider,
         "-t", "stock-analysis",
         "--usage-file", usageFile,
       ],
-      { env, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }
-    ).toString();
+      { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    const out = processResult.stdout || "";
     // Auxiliary model calls also count in usage, so require the actual tool hook.
-    const usage = JSON.parse(readFileSync(usageFile, "utf-8"));
+    const usage = existsSync(usageFile) ? JSON.parse(readFileSync(usageFile, "utf-8")) : {};
     const calledGetQuote = readFileSync(calledToolsLog, "utf-8").split("\n").includes(JSON.stringify("get_quote"));
-    const toolRoundTrip = calledGetQuote && usage.completed === true && usage.failed === false;
+    const toolRoundTrip = processResult.status === 0 && calledGetQuote && usage.completed === true && usage.failed === false;
     const hasNumber = /\d{2,}/.test(out);
     return {
       ok: toolRoundTrip && hasNumber,
-      log: `toolCalled=${calledGetQuote} apiCalls=${usage.api_calls} numeric=${hasNumber} out=${out.trim().slice(0, 60)}`,
-      tail: out,
+      log: `exit=${processResult.status} toolCalled=${calledGetQuote} apiCalls=${usage.api_calls} numeric=${hasNumber}`,
+      tail: `${out}\n${processResult.stderr || ""}\n${usage.failure || ""}`.replaceAll(API_KEY, "<REDACTED>"),
     };
   });
 }
