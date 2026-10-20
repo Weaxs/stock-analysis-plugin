@@ -44,7 +44,8 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
         "错误证据也保留原始字符串，例如value='provider unavailable'，不能加error:前缀。"
         "可引用已知返回对象中未提供的末级字段，但value必须为null并标注未知，不能编成空数组、字符串或数值。"
         "不能跨越不存在的对象或数组编造路径。未知现价时可以给等待数据的文字计划，不能编造数值价位。"
-        "报告需核对所有返回的现价、数据时间、财务报告期及ROE（包括历史periods），有回测时引用total_trades和win_rate。"
+        "报告evidence需逐项引用所有返回的现价、数据时间、财务报告期及ROE（包括历史periods），有回测时引用total_trades和win_rate。"
+        "行情price和data_as_of分别作为独立path/value项；as_of元数据不能代替时间字段自身的引用，过期行情也保留原值并说明限制。"
         f"\nSkill:\n{skill}\nReport schema:\n{schema}"
     )
     if "run_backtest" in case["tools"]:
@@ -56,7 +57,7 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
     report = parse_json_response(result["final"])
     review = review_report(client, OPENAI_MODEL, case, report, request_context=prompt, tool_calls=result["tool_calls"])
     failures = check_report(case, report, review=review)
-    assert failures == [], {"failures": failures, "review": review}
+    assert failures == [], {"failures": failures, "review": review, "report": report}
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])

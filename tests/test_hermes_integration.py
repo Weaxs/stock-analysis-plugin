@@ -15,6 +15,71 @@ from hermes import register
 from hermes.schemas import TOOL_SCHEMAS
 
 
+def test_plugin_loads_when_host_owns_tools_namespace(tmp_path):
+    import sys
+
+    host_tools = tmp_path / "tools"
+    host_tools.mkdir()
+    (host_tools / "__init__.py").write_text("")
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(tmp_path)!r}); import hermes.tools"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_smoke_hook_records_only_tool_name(tmp_path, monkeypatch):
+    from tests.e2e.hermes_tool_spy import register as register_spy
+
+    hooks = {}
+    log = tmp_path / "tools.jsonl"
+    monkeypatch.setenv("HERMES_SMOKE_TOOL_LOG", str(log))
+    register_spy(SimpleNamespace(register_hook=lambda name, callback: hooks.update({name: callback})))
+    hooks["post_tool_call"](tool_name="get_quote", args={"secret": "private"}, result='{"price":100.25}', status="ok")
+    assert log.read_text() == '"get_quote"\n'
+
+
+@pytest.mark.parametrize(
+    ("status", "result"),
+    [
+        ("blocked", '{"price":100}'),
+        ("error", '{"price":100}'),
+        ("cancelled", '{"price":100}'),
+        ("ok", '{"error":"provider unavailable"}'),
+        ("ok", "invalid JSON"),
+        ("ok", '{"price":null}'),
+        ("ok", '{"price":true}'),
+        ("ok", '{"price":0}'),
+        ("ok", '{"price":NaN}'),
+    ],
+)
+def test_smoke_hook_rejects_failed_or_unusable_quotes(tmp_path, monkeypatch, status, result):
+    from tests.e2e.hermes_tool_spy import register as register_spy
+
+    hooks = {}
+    log = tmp_path / "tools.jsonl"
+    monkeypatch.setenv("HERMES_SMOKE_TOOL_LOG", str(log))
+    register_spy(SimpleNamespace(register_hook=lambda name, callback: hooks.update({name: callback})))
+    hooks["post_tool_call"](tool_name="get_quote", status=status, result=result)
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("name", ["render_stock_report", "render_market_report"])
+@pytest.mark.parametrize("final", [False, True])
+def test_report_final_flag_reaches_shared_cli(name, final, monkeypatch):
+    calls = []
+    payload = '{"format":"markdown","content":"# report","final":true}'
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or payload)
+    schema = next(s for s in TOOL_SCHEMAS if s["name"] == name)
+    assert schema["parameters"]["properties"]["final"]["type"] == "boolean"
+    assert getattr(hermes_tools, name)({"report": {}, "final": final}) == payload
+    assert calls[0][0] == "report_renderer.py"
+    assert ("--final" in calls[0][1]) is final
+
+
 def test_technical_analysis_preserves_independent_temperature(monkeypatch):
     payload = (Path(__file__).parent / "fixtures/trend_temperature.json").read_text(encoding="utf-8")
     monkeypatch.setattr(

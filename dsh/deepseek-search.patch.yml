@@ -1,0 +1,8 @@
+# Separate opt-in: needs DeepSeek Web API credentials. No change to stock data providers.
+- id: web
+  config:
+    searchProvider: deepseek-search-api
+    fetchProvider: deepseek-fetch-api
+- id: web-deepseek-api
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY

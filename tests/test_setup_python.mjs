@@ -17,6 +17,14 @@ try {
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /Python setup failed/);
   assert(existsSync(join(root, ".venv")), "venv must be created under the literal package path");
+  writeFileSync(join(root, "openclaw.plugin.json"), "{}");
+  const upgrade = spawnSync(process.execPath, [join(root, "scripts/setup-python.mjs")], { encoding: "utf8" });
+  assert.equal(upgrade.status, 1, upgrade.stderr);
+  assert(!existsSync(join(root, ".venv")), "OpenClaw must not capture the Python environment as plugin source");
+  const runtime = join(root, "node_modules", ".stock-analysis-python", ".venv");
+  assert(existsSync(runtime), "existing environment must be preserved under node_modules");
+  const python = join(runtime, process.platform === "win32" ? "Scripts/python.exe" : "bin/python3");
+  assert.equal(spawnSync(python, ["-c", "import sys; assert sys.prefix != sys.base_prefix"]).status, 0);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

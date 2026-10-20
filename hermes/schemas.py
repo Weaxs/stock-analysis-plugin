@@ -1048,10 +1048,11 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "render_stock_report",
-        "description": "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
+        "description": "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。默认仅渲染；final=true表示最终回复，支持直出的宿主可原样交付并结束本轮。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
         "parameters": {
             "type": "object",
             "properties": {
+                "final": {"type": "boolean", "description": "最终回复标记，默认false；保存附件或继续分析时保持false"},
                 "report": {"type": "object", "description": "结构化股票报告 JSON"},
                 "template": {"type": "string", "enum": ["brief", "full"], "description": "模板类型，默认 full"},
             },
@@ -1060,10 +1061,11 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "render_market_report",
-        "description": "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history",
+        "description": "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history；final=true仅用于最终回复，保存附件或继续分析时保持false",
         "parameters": {
             "type": "object",
             "properties": {
+                "final": {"type": "boolean", "description": "最终回复标记，默认false；保存附件或继续分析时保持false"},
                 "report": {"type": "object", "description": "结构化市场复盘"},
                 "save": {"type": "boolean", "description": "是否归档到本地复盘 JSONL 存储，默认 false"},
             },

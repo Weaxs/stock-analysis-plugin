@@ -63,7 +63,7 @@ gather 工具返回以下字段：
 
 ## 输出
 
-按 [市场复盘 schema](../../schemas/market_review_schema.json) 构建报告对象，再调用 `render_market_report`。缺失的市场数据保持为空并在 `risks` 中说明，不用定性文字补齐。
+按 [市场复盘 schema](../../schemas/market_review_schema.json) 构建报告对象，再调用 `render_market_report`。缺失的市场数据保持为空并在 `risks` 中说明，不用定性文字补齐。报告文件/连接器交付或分工研究时，必须读取[宿主研究与报告交付](../stock-analysis/references/host-workflows.md)；本轮仅剩回复时才传 `final=true`，否则保持默认 false。
 
 ## 多市场支持
 

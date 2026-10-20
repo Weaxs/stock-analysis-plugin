@@ -10,6 +10,8 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
 
   interface ToolDefinition<P = unknown> {
     name: string;
+    canDeliverSourceReply?: boolean;
+    catalogMode?: "direct-only";
     description: string;
     parameters: unknown;
     execute(id: string, params: P): Promise<ToolResult>;

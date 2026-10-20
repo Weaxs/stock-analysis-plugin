@@ -1,14 +1,15 @@
 import base64
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from tools._subproc import command_timeout
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
+# Hermes owns the top-level tools package; load our shared helper without shadowing it.
+command_timeout = runpy.run_path(str(TOOLS_DIR / "_subproc.py"))["command_timeout"]
 
 
 def _find_python() -> str:
@@ -360,13 +361,18 @@ def render_stock_report(args: dict, **kwargs) -> str:
     report = args["report"]
     template = args.get("template", "full")
     payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return _run("report_renderer.py", ["stock", "--template", template, "--input-b64", payload])
+    return _run(
+        "report_renderer.py",
+        ["stock", "--template", template, "--input-b64", payload, *(["--final"] if args.get("final") else [])],
+    )
 
 
 def render_market_report(args: dict, **kwargs) -> str:
     report = args["report"]
     payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
     argv = ["market", "--input-b64", payload]
+    if args.get("final"):
+        argv.append("--final")
     if args.get("save"):
         argv.append("--save")
     return _run("report_renderer.py", argv)

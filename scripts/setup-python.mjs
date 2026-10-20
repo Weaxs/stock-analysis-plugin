@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { venvPythonPath } from "./venv-python.mjs";
+import { pythonEnvironmentRoot, venvPythonPath } from "./venv-python.mjs";
 
 // fileURLToPath (not URL.pathname) — the latter yields a bogus "/C:/..." path
 // on Windows, which would put the venv in the wrong place or fail outright.
 const pkgDir = fileURLToPath(new URL("..", import.meta.url));
-const venvDir = join(pkgDir, ".venv");
+const envRoot = pythonEnvironmentRoot(pkgDir);
+const venvDir = join(envRoot, ".venv");
 // Drive pip through the venv's own python (`-m pip`) instead of a pip/pip.exe
 // shim — resolves correctly on both POSIX (bin/python3) and Windows (Scripts/python.exe).
-const venvPython = venvPythonPath(pkgDir);
+const venvPython = venvPythonPath(envRoot);
 const requirements = join(pkgDir, "tools", "requirements.txt");
 
 function run(bin, args) {
@@ -41,6 +42,12 @@ try {
     process.exit(1);
   }
 
+  if (envRoot !== pkgDir && existsSync(join(pkgDir, ".venv"))) {
+    // Preserve installed dependencies; never leave an old environment in captured source.
+    if (existsSync(venvDir)) throw new Error("Both legacy and current Python environments exist; move the legacy .venv outside the plugin package");
+    mkdirSync(envRoot, { recursive: true });
+    renameSync(join(pkgDir, ".venv"), venvDir);
+  }
   if (!existsSync(venvDir)) {
     run(python, ["-m", "venv", venvDir]);
   }

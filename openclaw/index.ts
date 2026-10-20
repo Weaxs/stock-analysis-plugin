@@ -1,5 +1,6 @@
 import { withJsonInput } from "../scripts/json-input.mjs";
 import { commandTimeout } from "../scripts/cli-timeout.mjs";
+import { pythonEnvironmentRoot, venvPythonPath } from "../scripts/venv-python.mjs";
 import { existsSync } from "node:fs";
 import * as cp from "node:child_process";
 import { promisify } from "node:util";
@@ -47,6 +48,20 @@ function asText(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
+function asReport(text: string) {
+  const result = asText(text);
+  try {
+    const report = JSON.parse(text);
+    if (report?.final === true && !Object.hasOwn(report, "error") && report.format === "markdown"
+        && typeof report.content === "string" && report.content.trim()) {
+      return { ...result, details: { sourceReply: { text: report.content } } };
+    }
+  } catch {
+    // Invalid output stays visible to the model and must never end the turn.
+  }
+  return result;
+}
+
 export default definePluginEntry({
   id: "stock-analysis",
   name: "Stock Analysis",
@@ -57,7 +72,7 @@ export default definePluginEntry({
     const repoRoot = api.rootDir || fallbackRoot;
     const runtimeToolsDir = existsSync(join(repoRoot, "tools")) ? join(repoRoot, "tools") : toolsDir;
     const pythonBin = () => {
-      const venvPython = join(repoRoot, venvBin);
+      const venvPython = venvPythonPath(pythonEnvironmentRoot(repoRoot));
       if (existsSync(venvPython)) return venvPython;
       // In a staged dev checkout, the venv still lives at the repo root.
       const parentVenvPython = join(repoRoot, "..", venvBin);
@@ -1385,8 +1400,11 @@ cost_per_side: Type.Optional(Type.Number({"description": "每边比例成本0..0
     api.registerTool({
       name: "render_stock_report",
       description:
-        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。仅渲染，不保存不推送。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
+        "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。默认仅渲染；final=true表示最终回复，支持直出的宿主可原样交付并结束本轮。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
+      canDeliverSourceReply: true,
+      catalogMode: "direct-only",
       parameters: Type.Object({
+        final: Type.Optional(Type.Boolean({ description: "最终回复标记，默认false；保存附件或继续分析时保持false" })),
         report: Type.Object({}, { additionalProperties: true, description: "结构化股票报告 JSON" }),
         template: Type.Optional(
           Type.Union([Type.Literal("brief"), Type.Literal("full")], {
@@ -1402,16 +1420,20 @@ cost_per_side: Type.Optional(Type.Number({"description": "每边比例成本0..0
           params.template ?? "full",
           "--input-b64",
           b64,
+          ...(params.final ? ["--final"] : []),
         ]);
-        return asText(out);
+        return asReport(out);
       },
     });
 
     api.registerTool({
       name: "render_market_report",
       description:
-      "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history",
+      "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history；final=true仅用于最终回复，保存附件或继续分析时保持false",
+      canDeliverSourceReply: true,
+      catalogMode: "direct-only",
       parameters: Type.Object({
+        final: Type.Optional(Type.Boolean({ description: "最终回复标记，默认false；保存附件或继续分析时保持false" })),
         report: Type.Object({}, { additionalProperties: true, description: "结构化市场复盘" }),
         save: Type.Optional(Type.Boolean({ description: "是否归档到本地复盘 JSONL 存储，默认 false" })),
       }),
@@ -1421,9 +1443,10 @@ cost_per_side: Type.Optional(Type.Number({"description": "每边比例成本0..0
           "market",
           "--input-b64",
           b64,
+          ...(params.final ? ["--final"] : []),
           ...(params.save ? ["--save"] : []),
         ]);
-        return asText(out);
+        return asReport(out);
       },
     });
 

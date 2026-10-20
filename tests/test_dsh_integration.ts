@@ -435,6 +435,18 @@ assert(temperatureResult === temperaturePayload, "technical analysis must preser
 assert(temperatureTool.output.render({}, temperatureResult)[0].text === temperaturePayload, "render must preserve temperature metadata");
 assert(temperatureTool.description.includes("实验性") && temperatureTool.description.includes("非星球指标") && temperatureTool.description.includes("validation_status=not_validated") && temperatureTool.description.includes("direction") && temperatureTool.description.includes("trend_horizons"), "temperature provenance must reach the model");
 
+mod.__setExecutor(async (_bin, [script, ...args]) => {
+  execCalls.push({script, args});
+  return "{}";
+});
+for (const name of ["render_stock_report", "render_market_report"]) {
+  const tool = tools.find(t => t.name === name)!;
+  for (const final of [false, true]) {
+    await tool.execute({report: {}, final}, {});
+    assert(execCalls.at(-1)!.args.includes("--final") === final, `${name}: final argv`);
+  }
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

@@ -5,6 +5,8 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 # 综合股票分析
 
+批量研究、子任务分工、网页原文补证或报告文件交付时，必须读取[宿主研究与报告交付](references/host-workflows.md)。最终回复用 renderer 的 `final=true`；仍需保存附件、发送或继续分析时保持默认 false。
+
 在启用原生工具发现的 Pi 中，所需工具尚未暴露时，先用 `tool_search` 搜索确切工具名或英文关键词，再按本文流程调用；其搜索器目前不对中文分词。旧 Pi 或其他宿主按当前实际提供的工具直接执行。
 
 在 dsh 提供 `stock_tool_search` 且所需工具尚未暴露时，先搜索中文功能关键词或确切工具名，加载后按原名调用；搜索不执行分析。没有发现入口时直接使用当前提供的工具。
@@ -82,8 +84,9 @@ python3 scripts/gather.py <symbol>
 1. 按 [报告 schema](../../schemas/report_schema.json) 构建结构化报告。
 2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。 来源与时间沿证据 path 继承最近父对象的 source（该键缺失时用 snapshot_source）和 data_as_of，子对象的对应值（包括显式 null）覆盖祖先；数组项及 warnings 字符串同样继承，不能仅因叶子字段没有来源就填 null。整条路径均未提供对应元数据时才填 null，不能用工具名或策略方法名代替来源；as_of 保留完整数据时间及其时区。report_date 是财报报告期，应单独引用 value，不能当成披露日期或 data_as_of。证据 path 不含调用参数，例如 get_financials.periods.0.roe；股票名称未返回时 stock_name 填“未知”，不能凭常识补名；已知返回对象中未提供的末级字段可用 value=null 表示未知，其 source/as_of 可填 null，若填写则必须来自已知父对象；不能编成空数组、字符串或数值，不能跨缺失对象或数组编造路径；错误 value 保留原始字符串，不加 error: 前缀。请求的期间或文件路径不证明实际数据覆盖期或文件内容，需与实际返回数据区分。
    同时填写 `data_quality.flags/limitations`：关键数据缺失用 `partial_data`，明确过期行情用 `stale_quote`，同期间同口径来源冲突用 `conflicting_data`，回测/信号样本不足用 `insufficient_sample`。出现这些限制时降低置信度，不能给出 strong_buy；没有有效现价时不编造数值交易计划。数据完整时 flags 为空数组，限制仍按实际模拟条件说明。
-3. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
-4. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
+3. 渲染前核对证据清单：行情已返回的 `price` 和 `data_as_of` 必须分别作为 `get_quote.price`、`get_quote.data_as_of` 的独立 evidence 项，保留原始 value；其他证据项的 `as_of` 元数据不能代替时间字段自身的 path/value 引用。报价过期时仍保留原始价格与时间作为历史证据，说明时效限制，等待新报价后再制定当前数值交易计划。
+4. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
+5. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
 
 ## 信号跟踪闭环
 

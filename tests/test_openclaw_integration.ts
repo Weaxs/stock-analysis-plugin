@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createJiti } from "jiti";
-import { venvPythonPath } from "../scripts/venv-python.mjs";
+import { pythonEnvironmentRoot, venvPythonPath } from "../scripts/venv-python.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
@@ -12,6 +12,8 @@ const repoRoot = join(here, "..");
 
 interface ToolDef {
   name: string;
+  canDeliverSourceReply?: boolean;
+  catalogMode?: string;
   description: string;
   parameters: { __typebox: "object"; props: Record<string, unknown> };
   execute: (id: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -28,7 +30,8 @@ let capturedConfig: PluginConfig | null = null;
 
 const tools: ToolDef[] = [];
 const pluginRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-root-"));
-const installedPython = venvPythonPath(pluginRoot);
+writeFileSync(join(pluginRoot, "openclaw.plugin.json"), "{}");
+const installedPython = venvPythonPath(pythonEnvironmentRoot(pluginRoot));
 mkdirSync(dirname(installedPython), { recursive: true });
 writeFileSync(installedPython, "");
 mkdirSync(join(pluginRoot, "tools"));
@@ -425,6 +428,27 @@ const temperatureTool = tools.find(t => t.name === "get_technical_analysis")!;
 const temperatureResult = await temperatureTool.execute("temperature", {symbol: "TEST"}) as {content: {text: string}[]};
 assert(temperatureResult.content[0].text === temperaturePayload, "technical analysis must preserve experimental temperature metadata");
 assert(temperatureTool.description.includes("实验性") && temperatureTool.description.includes("非星球指标") && temperatureTool.description.includes("validation_status=not_validated") && temperatureTool.description.includes("direction") && temperatureTool.description.includes("trend_horizons"), "temperature provenance must reach the model");
+
+for (const name of ["render_stock_report", "render_market_report"]) {
+  const tool = tools.find(t => t.name === name)!;
+  assert(tool.canDeliverSourceReply === true && tool.catalogMode === "direct-only", `${name}: direct final delivery capability`);
+  for (const final of [false, true]) {
+    const payload = JSON.stringify({format: "markdown", content: "# 报告\n价格 100.25\n", ...(final ? {final: true} : {})});
+    mod.__setExecutor(async (_bin, argv) => {
+      assert(argv.includes("--final") === final, `${name}: final flag is explicit`);
+      return payload;
+    });
+    const result: any = await tool.execute("report", {report: {}, final});
+    assert(result.content[0].text === payload, `${name}: preserve raw JSON for old hosts and code mode`);
+    assert(final ? result.details?.sourceReply?.text === "# 报告\n价格 100.25\n" : !result.details?.sourceReply, `${name}: deliver only final Markdown`);
+  }
+  for (const payload of ["invalid-json", "null", '{"final":true,"error":"failed"}', '{"final":true,"format":"markdown","content":"   "}', '{"final":true,"format":"html","content":"<b>report</b>"}', '{"final":true,"format":"markdown","content":"report","error":""}']) {
+    mod.__setExecutor(async () => payload);
+    const result: any = await tool.execute("report", {report: {}, final: true});
+    assert(!result.details?.sourceReply && result.content[0].text === payload, `${name}: invalid/error output cannot end turn`);
+  }
+}
+assert(tools.filter(t => t.canDeliverSourceReply).length === 2, "only renderers may deliver a source reply");
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

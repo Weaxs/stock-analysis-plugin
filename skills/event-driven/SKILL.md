@@ -5,6 +5,8 @@ description: 事件驱动分析：评估公告、业绩、政策、订单或资�
 
 # 事件驱动分析
 
+批量研究、子任务分工或报告文件交付时，必须读取[宿主研究与报告交付](../stock-analysis/references/host-workflows.md)，使用当前宿主实际提供的能力。
+
 ## 无状态分析扩展
 
 历史事件窗口验证或公告原文变化分析时，MUST 读取[无状态研究工具](../stock-analysis/references/stateless-analysis.md)，使用 analyze_event_study/analyze_disclosure_changes。事件日期、盘前盘后、价格窗口和正文覆盖必须核实。
