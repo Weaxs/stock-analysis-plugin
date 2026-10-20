@@ -72,6 +72,7 @@ try {
     const visible = ctx.tools.schemas(handle.agent).map(t => t.name);
     assert(visible.includes(test.present), `${id} required tool`);
     assert(!visible.includes(test.absent), `${id} excludes other role tool`);
+    if (id === "stock-events") assert(visible.includes("get_dividends"), "event-driven dividend calendar workflow is available");
     if (id !== "stock-research") {
       assert(!visible.includes("render_stock_report") && !visible.includes("host_write") && !visible.includes("stock_research_subagent"), `${id} cannot deliver or write`);
       assert(visible.includes("web_search") && visible.includes("web_fetch") && visible.includes("skill"), `${id} retains scoped evidence and methodology tools: ${visible.join(",")}`);

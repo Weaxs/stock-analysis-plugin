@@ -10,7 +10,7 @@ const roles = {
     "get_index_valuation", "get_shareholder_structure", "get_us_holdings", "get_insider_trades", "get_dividends", "compare_stocks"],
   technical: [...common, "get_quote", "get_kline", "get_technical_analysis", "analyze_pattern", "get_volume_analysis",
     "detect_market_regime", "run_backtest", "validate_backtest", "analyze_trend_strategy", "backtest_rotation_allocation"],
-  events: [...common, "get_news", "get_announcements", "get_earnings_calendar", "search_stock_news",
+  events: [...common, "get_news", "get_announcements", "get_earnings_calendar", "get_dividends", "search_stock_news",
     "search_comprehensive_intel", "extract_article", "analyze_disclosure_changes", "analyze_event_study"],
 };
 
