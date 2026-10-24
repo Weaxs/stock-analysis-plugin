@@ -71,11 +71,12 @@ def normalize_stock_code(symbol: str) -> dict:
 
 
 def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> float:
-    """Calculate limit-up or limit-down price with exchange rounding (round-half-up: floor(x*100+0.5)/100)."""
-    import numpy as np
+    """Calculate limit-up or limit-down price with decimal round-half-up."""
+    from decimal import ROUND_HALF_UP, Decimal
 
     sign = 1 if direction == "up" else -1
-    return np.floor(pre_close * (1 + sign * ratio) * 100 + 0.5) / 100.0
+    price = Decimal(str(pre_close)) * (1 + sign * Decimal(str(ratio)))
+    return float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 # Chains that get sticky ordering: the CN free-source chains, where failures are
@@ -260,6 +261,7 @@ def _quote_efinance(symbol: str) -> dict:
             with contextlib.suppress(ValueError, TypeError):
                 val = float(val) if en_key not in ("symbol", "name") else val
         result[en_key] = val
+    result["pe_basis"] = "dynamic"
     return _clean_row(result)
 
 
@@ -328,6 +330,7 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
         "prev_close": _parse_float(f[4]),
         "market_cap": market_cap * 1e8 if market_cap is not None else None,
         "pe": _parse_float(f[39]),
+        "pe_basis": "unknown",
         # Tencent's HK map labels f[47] DY and f[49] WK52_Low; neither is an A-share ratio.
         "pb": None if hk else _parse_float(f[46]),
         "turnover_rate": None if hk else _parse_float(f[38]),
@@ -626,6 +629,9 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
         df = df.rename(columns={f"{c}_qfq": c for c in prices})
     if not df[prices].abs().lt(float("inf")).all().all():
         raise ValueError("tushare returned invalid adjusted prices")
+    df["trade_date"] = pd.to_datetime(df["trade_date"], format="%Y%m%d")
+    if "amount" in df.columns:
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce") * 1000
     col_map = {"trade_date": "date", "vol": "volume", "amount": "turnover", "pct_chg": "change_pct"}
     df = df.rename(columns=col_map)
     df = df.sort_values("date")
@@ -798,7 +804,7 @@ def _kline_finnhub(symbol: str, period: str, count: int) -> list:
         rows.append(
             _clean_row(
                 {
-                    "date": datetime.fromtimestamp(candles["t"][i]).strftime("%Y-%m-%d"),
+                    "date": datetime.fromtimestamp(candles["t"][i], timezone.utc).strftime("%Y-%m-%d"),
                     "open": candles["o"][i],
                     "high": candles["h"][i],
                     "low": candles["l"][i],
@@ -1130,6 +1136,7 @@ def _quote_akshare(symbol: str) -> dict:
             "prev_close": r.get("昨收"),
             "market_cap": r.get("总市值"),
             "pe": r.get("市盈率-动态"),
+            "pe_basis": "dynamic",
             "pb": r.get("市净率"),
             "turnover_rate": r.get("换手率"),
             "volume_ratio": r.get("量比"),
@@ -1161,6 +1168,7 @@ def _quote_yfinance(symbol: str) -> dict:
             "prev_close": info.get("regularMarketPreviousClose"),
             "market_cap": info.get("marketCap"),
             "pe": info.get("trailingPE"),
+            "pe_basis": "trailing",
             "pb": info.get("priceToBook"),
         }
     )
@@ -1566,6 +1574,13 @@ def financials_yf(symbol: str, periods: int = 1, annual: bool = False) -> dict:
             "roe": info.get("returnOnEquity"),
             "debt_to_equity": info.get("debtToEquity"),
             "dividend_yield": info.get("dividendYield"),
+            "snapshot_units": {
+                "pe": "trailing",
+                "roe": "ratio",
+                "profit_margin": "ratio",
+                "debt_to_equity": "percent",
+                "dividend_yield": "ratio",
+            },
         }
     )
     if warnings:
@@ -1703,7 +1718,8 @@ def _snapshot_efinance() -> list:
         "昨收": "prev_close",
     }
     df = df.rename(columns=col_map)
-    keep = [c for c in col_map.values() if c in df.columns]
+    df["pe_basis"] = "dynamic"
+    keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
     return [_clean_row(r) for r in df[keep].to_dict("records")]
 
 
@@ -1815,7 +1831,8 @@ def _snapshot_akshare() -> list:
         "60日涨跌幅": "change_pct_60d",
     }
     df = df.rename(columns=col_map)
-    keep = [c for c in col_map.values() if c in df.columns]
+    df["pe_basis"] = "dynamic"
+    keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
     df = df[keep]
     return [_clean_row(r) for r in df.to_dict("records")]
 
@@ -1837,7 +1854,8 @@ def snapshot_hk() -> list:
             "总市值": "market_cap",
         }
         df = df.rename(columns=col_map)
-        keep = [c for c in col_map.values() if c in df.columns]
+        df["pe_basis"] = "unknown"
+        keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
         return [_clean_row(r) for r in df[keep].to_dict("records")]
     except Exception as e:
         # summary only (type + short message) — never a stack trace or response body
@@ -1860,7 +1878,8 @@ def snapshot_us() -> list:
             "总市值": "market_cap",
         }
         df = df.rename(columns=col_map)
-        keep = [c for c in col_map.values() if c in df.columns]
+        df["pe_basis"] = "unknown"
+        keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
         return [_clean_row(r) for r in df[keep].to_dict("records")]
     except Exception as e:
         return [{"error": f"US snapshot unavailable: {type(e).__name__}: {scrub_secrets(str(e))}"[:200]}]
@@ -2775,6 +2794,7 @@ def cmd_fundamental_context(args):
             quote = quote_a(args.symbol)
             result["valuation"] = {
                 "pe": quote.get("pe"),
+                "pe_basis": quote.get("pe_basis"),
                 "pb": quote.get("pb"),
                 "market_cap": quote.get("market_cap"),
             }

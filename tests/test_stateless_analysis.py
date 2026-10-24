@@ -401,6 +401,24 @@ def test_adjacent_event_returns_are_not_overlapping():
     assert not any(e["overlaps_other_event"] for e in result["events"])
 
 
+def test_event_without_valid_window_does_not_mark_neighbor_as_overlapping():
+    dates = [f"2026-01-{day:02d}" for day in range(1, 13)]
+    prices = [{"date": day, "close": 100} for day in dates]
+    code, result = invoke(
+        "event_study",
+        {
+            "event_dates": ["2026-01-01", "2026-01-02"],
+            "horizons": [0, 5],
+            "price_basis": "adjusted",
+            "prices": prices,
+            "benchmark_prices": prices,
+        },
+    )
+    assert code == 0
+    assert all(window["reason"] for window in result["events"][0]["windows"])
+    assert not any(event["overlaps_other_event"] for event in result["events"])
+
+
 def test_large_input_file_round_trip(tmp_path):
     path = tmp_path / "输入.json"
     path.write_text(

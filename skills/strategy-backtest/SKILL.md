@@ -57,12 +57,14 @@ simulation:
 
 position:
   size: 1.0                   # 仓位比例
-  max_positions: 1            # 最大持仓数
+  max_positions: 1            # 当前仅支持单持仓，其他值明确报错
 ```
 
 **可用指标**：rsi, ma, ema, macd_dif, macd_dea, macd, volume_ratio, price_change, bollinger_position, close, volume
 
-`monthly_momentum` 是共享核心的月度观察对数收益：`period` 默认63，支持21/63/252等正整数；月初首根正成交量日K收盘计算并保持到下次月度观察，次日开盘才可能成交。零成交量记录不计回溯根数。MUST 读取 [多期限月度趋势](../bull-trend/references/trend-horizons.md)，不能把单期限YAML等同三子策略组合。需要在观察日已有period+1根有效日K；默认回测起点会截断输入历史，不能据此声称提前完成预热。三期限同资金起点的完整研究复现使用参考里的研究脚本。
+`rsi` 在预热不足时不可用，连续上涨窗口为 100，全平窗口为中性 50；不可用值不能满足条件或制造交叉。`volume_ratio` 是当根成交量除以前 N 根平均成交量，不包含当根本身。
+
+`monthly_momentum` 是共享核心的月度观察对数收益：`period` 默认63，支持21/63/252等正整数；月初首根正成交量日K收盘计算并保持到下次月度观察，次日开盘才可能成交。零成交量记录不计回溯根数。MUST 读取 [多期限月度趋势](../bull-trend/references/trend-horizons.md)，不能把单期限YAML等同三子策略组合。需要在观察日已有period+1根有效日K；回测保留起点前可得历史用于指标预热，交易和权益仍限于请求区间，提供方历史不足时不能声称完成预热。三期限同资金起点的完整研究复现使用参考里的研究脚本。
 
 独立趋势强度可用 `trend_score`，默认 `(EMA20-EMA60)/ATR14`，ATR 为真实波幅简单平均。`fast_period/slow_period/period` 分别控制快 EMA、慢 EMA、ATR，要求正整数且快线小于慢线；默认 60 根预热，预热或零 ATR 不触发条件。解释七档显示、初始化与样本外验证前 MUST 读取 [独立趋势温度](../bull-trend/references/trend-temperature.md)。它不是星球温度或肥尾信号，原固定止损/止盈默认值仍生效。
 

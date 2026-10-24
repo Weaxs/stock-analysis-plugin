@@ -127,12 +127,13 @@ def _finite(v):
 
 
 def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
-    # Value: lower PE/PB → higher score (inverted)
+    # Value: lower positive PE/PB → higher score; finite non-positive values get the worst score.
     value_parts = []
-    if "pe" in df.columns:
-        value_parts.append(100 - _minmax(df["pe"]))
-    if "pb" in df.columns:
-        value_parts.append(100 - _minmax(df["pb"]))
+    for name in ("pe", "pb"):
+        if name in df.columns:
+            series = df[name]
+            score = 100 - _minmax(series.where(series > 0))
+            value_parts.append(score.mask((series <= 0) & np.isfinite(series), 0))
     if "dividend_yield" in df.columns:
         df["dividend_score"] = _minmax(df["dividend_yield"])
         value_parts.append(df["dividend_score"])

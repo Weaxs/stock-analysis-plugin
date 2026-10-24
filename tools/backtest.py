@@ -72,7 +72,7 @@ def _substitute(s: str, params: dict):
 # --------------- Data Fetching ---------------
 
 
-def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame:
+def fetch_kline(symbol: str, start: str | None, end: str | None, include_warmup: bool = False) -> pd.DataFrame:
     count = 500
     if start and end:
         d0 = datetime.strptime(start, "%Y-%m-%d")
@@ -94,7 +94,7 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
 
-    if start:
+    if start and not include_warmup:
         df = df[df["date"] >= start]
     if end:
         df = df[df["date"] <= end]
@@ -104,16 +104,14 @@ def fetch_kline(symbol: str, start: str | None, end: str | None) -> pd.DataFrame
 # --------------- Indicators ---------------
 #
 # Series math lives in technical.py (ma_series/ema_series/macd_series/rsi_series/
-# bollinger_series); the wrappers below only add backtest-specific NaN defaults
-# (rsi → 50, bollinger position → 0.5) so strategy evaluation never sees NaN.
+# bollinger_series); warmup remains NaN so it cannot create trading conditions.
 
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    return rsi_series(close, period).fillna(50)
+    return rsi_series(close, period)
 
 
-# Pure aliases (identical signatures); the other wrappers below add
-# backtest-specific NaN defaults or pick one leg of the MACD tuple.
+# Pure aliases (identical signatures); the other wrappers below pick one leg of the MACD tuple.
 compute_ma = ma_series
 compute_ema = ema_series
 
@@ -131,8 +129,8 @@ def compute_macd_hist(close: pd.Series) -> pd.Series:
 
 
 def compute_volume_ratio(volume: pd.Series, period: int = 5) -> pd.Series:
-    ma = ma_series(volume, period)
-    return (volume / ma.replace(0, np.nan)).fillna(1)
+    previous_average = ma_series(volume, period).shift(1)
+    return volume / previous_average.replace(0, np.nan)
 
 
 def compute_price_change(close: pd.Series) -> pd.Series:
@@ -142,7 +140,7 @@ def compute_price_change(close: pd.Series) -> pd.Series:
 def compute_bollinger_position(close: pd.Series, period: int = 20) -> pd.Series:
     upper, mid, lower = bollinger_series(close, period)
     width = (upper - lower).replace(0, np.nan)
-    return ((close - lower) / width).fillna(0.5)
+    return (close - lower) / width
 
 
 def _resolve_ma_pair(fast: int | None, slow: int | None, period: int | None, default: tuple) -> tuple:
@@ -269,7 +267,13 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
 
 
 def simulate(
-    df: pd.DataFrame, strategy: dict, capital: float, symbol: str, *, entry_gate: pd.Series | None = None
+    df: pd.DataFrame,
+    strategy: dict,
+    capital: float,
+    symbol: str,
+    *,
+    entry_gate: pd.Series | None = None,
+    start: str | None = None,
 ) -> dict:
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("capital must be finite and positive")
@@ -278,6 +282,13 @@ def simulate(
     dates = pd.to_datetime(df["date"], errors="coerce")
     if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
         raise ValueError("backtest dates must be valid, unique and increasing")
+    first_bar = 1
+    if start is not None:
+        start_date = pd.Timestamp(start)
+        window_bars = np.flatnonzero((dates >= start_date).to_numpy())
+        if pd.isna(start_date) or not len(window_bars):
+            raise ValueError("start must be a valid date within the backtest data")
+        first_bar = max(1, int(window_bars[0]))
     if entry_gate is not None:
         if not entry_gate.index.equals(df.index) or not (entry_gate.isna() | entry_gate.isin([True, False])).all():
             raise ValueError("entry_gate must contain aligned booleans or unavailable values")
@@ -306,10 +317,18 @@ def simulate(
     size_frac = float(position_cfg.get("size", 1.0))
     if not 0 <= size_frac <= 1:
         raise ValueError("position.size must be a fraction in [0, 1]")
+    if position_cfg.get("max_positions", 1) != 1:
+        raise ValueError("position.max_positions must be 1 for the single-position engine")
     stop_loss = float(exit_.get("stop_loss", -0.10))
     take_profit = float(exit_.get("take_profit", 0.50))
     ts_val = exit_.get("trailing_stop")
     trailing_stop = float(ts_val) if ts_val is not None else None
+    if not math.isfinite(stop_loss) or stop_loss >= 0:
+        raise ValueError("exit.stop_loss must be a finite negative fraction")
+    if not math.isfinite(take_profit) or take_profit <= 0:
+        raise ValueError("exit.take_profit must be a finite positive fraction")
+    if trailing_stop is not None and (not math.isfinite(trailing_stop) or not 0 < trailing_stop < 1):
+        raise ValueError("exit.trailing_stop must be a finite fraction in (0, 1)")
 
     entry_conditions = entry.get("conditions", [])
     entry_logic = entry.get("logic", "all")
@@ -339,7 +358,7 @@ def simulate(
             and abs(float(row["high"]) - float(limit)) < 0.005
         )
 
-    for i in range(1, len(df)):
+    for i in range(first_bar, len(df)):
         row = df.iloc[i]
         date_str = str(row["date"].date()) if hasattr(row["date"], "date") else str(row["date"])
         signal_idx = i if execution == "same_close" else i - 1
@@ -560,8 +579,10 @@ def compute_metrics(trades: list, equity_curve: list, initial: float, final: flo
 
     win_rate = len(winning) / total_trades if total_trades else 0
     avg_win = np.mean([t["pnl"] for t in winning]) if winning else 0
-    avg_loss = abs(np.mean([t["pnl"] for t in losing])) if losing else 1
+    avg_loss = abs(np.mean([t["pnl"] for t in losing])) if losing else 0
     pl_ratio = avg_win / avg_loss if avg_loss > 0 else float("inf")
+    if not winning:
+        pl_ratio = float("nan")
 
     avg_days = np.mean([t.get("holding_days", 0) for t in sell_trades]) if sell_trades else 0
 
@@ -655,7 +676,7 @@ def diagnose_advanced(metrics: dict, trades: list, equity_curve: list, strategy:
         1
         for t in sell_trades
         if (t.get("reason") or "").startswith(("stop_loss", "止损触发", "移动止损触发"))
-        or (t.get("pnl_pct", 0) is not None and t.get("pnl_pct", 0) <= stop_loss * 100 + 0.5)
+        or (t.get("pnl_pct", 0) is not None and t.get("pnl_pct", 0) <= stop_loss + 0.005)
     )
     stop_ratio = stop_hits / max(1, len(sell_trades))
 
@@ -779,18 +800,19 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     if not start:
         start = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
 
-    df = fetch_kline(symbol, start, end)
-    if len(df) < 30:
-        return {"error": f"Insufficient data: {len(df)} rows (need at least 30)"}
+    df = fetch_kline(symbol, start, end, True)
+    evaluation = df[(df["date"] >= start) & (df["date"] <= end)]
+    if len(evaluation) < 30:
+        return {"error": f"Insufficient data: {len(evaluation)} rows (need at least 30)"}
 
     requested_period = f"{start} to {end}"
-    actual_start = df["date"].iloc[0].strftime("%Y-%m-%d")
-    actual_end = df["date"].iloc[-1].strftime("%Y-%m-%d")
+    actual_start = evaluation["date"].iloc[0].strftime("%Y-%m-%d")
+    actual_end = evaluation["date"].iloc[-1].strftime("%Y-%m-%d")
     warnings = []
     if actual_start != start or actual_end != end:
         warnings.append(f"Actual data covers {actual_start} to {actual_end}; requested {requested_period}")
     start, end = actual_start, actual_end
-    sim = simulate(df, strategy, capital, symbol)
+    sim = simulate(df, strategy, capital, symbol, start=start)
     final = sim["final_equity"]
     metrics = compute_metrics(sim["trades"], sim["equity_curve"], capital, final, start, end)
 
@@ -825,7 +847,9 @@ def evaluate_result(path: str) -> dict:
     final = data.get("final_capital", initial)
     period = data.get("period", "unknown")
     parts = period.split(" to ") if " to " in period else [period, period]
-    metrics = compute_metrics(trades, curve, initial, final, parts[0], parts[1])
+    metrics = data.get("metrics")
+    if metrics is None:
+        metrics = compute_metrics(trades, curve, initial, final, parts[0], parts[1])
     data["metrics"] = metrics
     data["diagnosis"] = diagnose(metrics)
     return data

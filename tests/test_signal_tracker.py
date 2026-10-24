@@ -497,6 +497,58 @@ def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_t
     assert saved["evaluation_price_basis"]["factor"] == 0.5
 
 
+def test_weekend_quote_settles_against_actual_price_date(store, mock_run_tool):
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-09-04"}
+    rec = st.cmd_record(
+        _rec_args(store, date="2026-09-05", entry_price=None, stop_price=90, target_price=120, horizon_days=1)
+    )
+    assert rec["price_as_of"] == "2026-09-04"
+    bars = [_bar("2026-09-04", 50, 50, 50), _bar("2026-09-07", 51, 50, 51)]
+    for bar, factor in zip(bars, [0.5, 1]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 2
+    saved = st._load_records(store)[0]
+    assert saved["exit_price"] == 102
+    assert saved["evaluation_price_basis"]["factor"] == 0.5
+
+
+def test_legacy_signal_does_not_guess_factor_on_ex_date(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=1))
+    bars = [
+        _bar("2026-08-31", 100, 100, 100),
+        _bar("2026-09-01", 50, 50, 50),
+        _bar("2026-09-02", 51, 50, 51),
+    ]
+    for bar, factor in zip(bars, [1, 0.5, 0.5]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["closed"] == 0
+    assert result["results"][0]["outcome"] == "skipped_price_basis"
+    assert st._load_records(store)[0]["status"] == "open"
+
+
+def test_non_trading_day_uses_prior_bar_when_factor_is_unchanged(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, date="2026-09-05", entry_price=100, stop_price=90, target_price=120, horizon_days=1))
+    bars = [_bar("2026-09-04", 100, 100, 100), _bar("2026-09-07", 101, 100, 101)]
+    for bar in bars:
+        bar.update(adjusted="qfq", adjustment_factor=1)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 1
+    assert st._load_records(store)[0]["evaluation_price_basis"]["factor"] == 1
+
+
 def test_batch_deadline_returns_and_persists_completed_results(store, mock_run_tool, monkeypatch):
     for symbol in ["600519", "000001", "300001", "600000", "000002"]:
         st.cmd_record(_rec_args(store, symbol=symbol))

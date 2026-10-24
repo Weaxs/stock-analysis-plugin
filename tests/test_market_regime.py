@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from tools.market_regime import _compute_indicators, _get_index_kline, classify_regime
+from tools.market_regime import _compute_indicators, _get_index_kline, classify_regime, detect_regime
 from tools.stock_data import detect_market
 from tools.technical import bollinger_series, macd_series, rsi_series
 
@@ -137,8 +137,8 @@ class TestComputeIndicators:
         assert _compute_indicators(klines)["rsi14"] == 100.0
 
     def test_rsi14_flat_bars_is_neutral_not_overbought(self):
-        # 14 flat bars also produce RSI NaN (zero gains AND zero losses) — mapping
-        # that to 100 would misreport a dead-flat tape as an overbought extreme.
+        # Flat windows are explicitly neutral in the shared RSI implementation,
+        # not an overbought extreme or a missing-data fallback.
         klines = [{"close": 10, "high": 10, "low": 10}] * 80
         assert _compute_indicators(klines)["rsi14"] == 50.0
 
@@ -152,3 +152,27 @@ class TestComputeIndicators:
         close = pd.Series([float(k["close"]) for k in klines])
         upper, mid, lower = bollinger_series(close)
         assert ind["boll_width"] == round(float((upper.iloc[-1] - lower.iloc[-1]) / mid.iloc[-1]), 4)
+
+
+class TestDetectRegimeDataQuality:
+    def test_invalid_latest_bar_is_an_error_not_a_stale_quote(self, make_kline_data):
+        klines = make_kline_data(80)
+        klines[-1]["close"] = -5
+        with patch("tools.market_regime._run_tool", return_value=klines):
+            result = detect_regime("US")
+        assert "Latest index bar" in result.get("error", "")
+
+    def test_reports_actual_date_and_dropped_rows(self, make_kline_data):
+        klines = make_kline_data(80)
+        klines[10]["low"] = None
+        with patch("tools.market_regime._run_tool", return_value=klines):
+            result = detect_regime("US")
+        assert result["index"]["as_of"] == klines[-1]["date"].strftime("%Y-%m-%d")
+        assert result["warnings"] == ["Dropped 1 invalid OHLC rows"]
+
+    def test_short_history_does_not_invent_ma60(self, make_kline_data):
+        klines = make_kline_data(30)
+        with patch("tools.market_regime._run_tool", return_value=klines):
+            result = detect_regime("US")
+        assert "error" not in result
+        assert result["indicators"]["above_ma60"] is None

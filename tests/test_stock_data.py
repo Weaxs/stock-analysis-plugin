@@ -94,6 +94,10 @@ class TestCalcLimitPrice:
         result = calc_limit_price(13.57, 0.10, "up")
         assert abs(result - 14.93) < 0.01
 
+    def test_exact_half_cent_uses_decimal_half_up(self):
+        assert calc_limit_price(1.15, 0.10, "up") == 1.27
+        assert calc_limit_price(1.45, 0.30, "down") == 1.02
+
 
 class TestDetectMarketEdgeCases:
     def test_empty_string_falls_back_to_us(self):

@@ -231,12 +231,13 @@ def macd_series(close: pd.Series) -> tuple:
 
 
 def rsi_series(close: pd.Series, period: int) -> pd.Series:
-    """Full RSI series (SMA of gains/losses over `period`). NaN where there were no losses."""
+    """Full RSI series (SMA of gains/losses over `period`)."""
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0).rolling(period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    rsi = (100 - 100 / (1 + rs)).mask((loss == 0) & (gain > 0), 100)
+    return rsi.mask((loss == 0) & (gain == 0), 50)
 
 
 def bollinger_series(close: pd.Series, period: int = 20) -> tuple:
@@ -353,11 +354,13 @@ def calc_kdj(high: pd.Series, low: pd.Series, close: pd.Series) -> dict:
 
 
 def calc_volume(volume: pd.Series) -> dict:
-    vol_ma5 = float(volume.rolling(5).mean().iloc[-1])
-    vol_ma10 = float(volume.rolling(10).mean().iloc[-1])
+    vol_ma5 = float(volume.rolling(5).mean().shift(1).iloc[-1])
+    vol_ma10 = float(volume.rolling(10).mean().shift(1).iloc[-1])
     cur = float(volume.iloc[-1])
-    ratio = cur / vol_ma5 if vol_ma5 > 0 else 0
-    if ratio > 3:
+    ratio = cur / vol_ma5 if np.isfinite(vol_ma5) and vol_ma5 > 0 else None
+    if ratio is None:
+        signal = "insufficient_data"
+    elif ratio > 3:
         signal = "extremely_heavy"
     elif ratio > 2:
         signal = "heavy"
@@ -367,9 +370,9 @@ def calc_volume(volume: pd.Series) -> dict:
         signal = "normal"
     return {
         "current": int(cur),
-        "vol_ma5": round(vol_ma5, 0),
-        "vol_ma10": round(vol_ma10, 0),
-        "volume_ratio": round(ratio, 2),
+        "vol_ma5": round(vol_ma5, 0) if np.isfinite(vol_ma5) else None,
+        "vol_ma10": round(vol_ma10, 0) if np.isfinite(vol_ma10) else None,
+        "volume_ratio": round(ratio, 2) if ratio is not None else None,
         "signal": signal,
     }
 
@@ -411,9 +414,11 @@ def calc_bias(close: pd.Series, ma_data: dict) -> dict:
 
 def calc_volume_direction(close: pd.Series, volume: pd.Series) -> str:
     if len(close) < 2:
-        return "normal"
+        return "insufficient_data"
     price_up = float(close.iloc[-1]) > float(close.iloc[-2])
-    vol_ma5 = float(volume.rolling(5).mean().iloc[-1])
+    vol_ma5 = float(volume.rolling(5).mean().shift(1).iloc[-1])
+    if not np.isfinite(vol_ma5) or vol_ma5 <= 0:
+        return "insufficient_data"
     cur_vol = float(volume.iloc[-1])
     heavy = cur_vol > vol_ma5 * 1.5
     shrink = cur_vol < vol_ma5 * 0.7
@@ -479,15 +484,15 @@ def generate_signal_score(
         reasons.append("短中期趋势偏多")
     elif arrangement == "mixed":
         trend_score = 12
-    elif bear_count >= 2:
-        trend_score = 8
-        risks.append("中长期趋势偏空")
     elif arrangement == "bearish" and bear_count == 3:
         trend_score = 0
         risks.append("均线空头排列，趋势极弱")
     elif arrangement == "bearish":
         trend_score = 4
         risks.append("均线空头排列，不宜做多")
+    elif bear_count >= 2:
+        trend_score = 8
+        risks.append("中长期趋势偏空")
     else:
         trend_score = 12
     score += trend_score
@@ -640,7 +645,9 @@ def generate_signals(
         signals.append("MACD空头排列（DIF < DEA）")
 
     rsi_sig = rsi_data.get("signal", "")
-    if "overbought" in rsi_sig:
+    if rsi_sig == "insufficient_data":
+        signals.append("RSI数据不足，无法判断超买超卖")
+    elif "overbought" in rsi_sig:
         signals.append(f"RSI超买区间（RSI6={rsi_data.get('rsi6')}），注意回调风险")
     elif "oversold" in rsi_sig:
         signals.append(f"RSI超卖区间（RSI6={rsi_data.get('rsi6')}），关注反弹机会")
@@ -663,7 +670,9 @@ def generate_signals(
         signals.append(f"KDJ超卖（J={kdj_data['j']}），关注低位机会")
 
     vs = vol_data.get("signal", "")
-    if "heavy" in vs:
+    if vs == "insufficient_data":
+        signals.append("成交量数据不足，无法判断放量或缩量")
+    elif "heavy" in vs:
         signals.append(f"成交量放大（量比={vol_data['volume_ratio']}），市场关注度高")
     elif vs == "light":
         signals.append(f"缩量交易（量比={vol_data['volume_ratio']}），市场观望情绪浓")

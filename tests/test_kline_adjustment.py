@@ -37,7 +37,8 @@ def test_daily_failover_adjusts_all_prices_before_returning(monkeypatch):
         (10, 12, 9, 11),
     ]
     assert [row["volume"] for row in rows] == [900, 1000]
-    assert [row["turnover"] for row in rows] == [19800, 11000]
+    assert [row["turnover"] for row in rows] == [19_800_000, 11_000_000]
+    assert [row["date"] for row in rows] == ["2026-05-18", "2026-05-19"]
     assert all(row["adjusted"] == "qfq" for row in rows)
     assert [row["adjustment_factor"] for row in rows] == [0.5, 1]
 

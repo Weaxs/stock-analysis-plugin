@@ -33,12 +33,21 @@ class TestTradeCountQuality:
 
 class TestFailureReason:
     def test_stop_loss_heavy(self):
-        trades = [{"type": "sell", "pnl": -100, "pnl_pct": -6.0, "reason": "stop_loss"}] * 5
+        trades = [{"type": "sell", "pnl": -100, "pnl_pct": -0.06, "reason": "stop_loss"}] * 5
         d = diagnose_advanced(_metrics(total_return=-0.1, total_trades=5), trades, [], _strategy(stop_loss=-0.05))
         assert "止损" in d["main_failure_reason"]
 
+    def test_stop_loss_fallback_uses_fraction_pnl(self):
+        trades = [{"type": "sell", "pnl": -100, "pnl_pct": -0.06, "reason": ""}] * 5
+        d = diagnose_advanced(_metrics(total_return=-0.1, total_trades=5), trades, [], _strategy(stop_loss=-0.05))
+        assert d["stop_loss_hit_ratio"] == 1
+        assert "止损" in d["main_failure_reason"]
+        other_exit = [{"type": "sell", "pnl": -100, "pnl_pct": -0.02, "reason": "exit"}] * 5
+        d = diagnose_advanced(_metrics(total_return=-0.1, total_trades=5), other_exit, [], _strategy(stop_loss=-0.05))
+        assert d["stop_loss_hit_ratio"] == 0
+
     def test_low_win_rate(self):
-        trades = [{"type": "sell", "pnl": -100, "pnl_pct": -3.0, "reason": "exit"}] * 5
+        trades = [{"type": "sell", "pnl": -100, "pnl_pct": -0.03, "reason": "exit"}] * 5
         d = diagnose_advanced(_metrics(total_return=-0.1, win_rate=0.2, total_trades=5), trades, [], _strategy())
         assert "胜率" in d["main_failure_reason"]
 
@@ -103,7 +112,7 @@ class TestTrailingStopDiagnostics:
 
 class TestSuggestedParameterChanges:
     def test_loosen_stop_loss(self):
-        trades = [{"type": "sell", "pnl_pct": -6.0, "reason": "stop_loss"}] * 5
+        trades = [{"type": "sell", "pnl_pct": -0.06, "reason": "stop_loss"}] * 5
         d = diagnose_advanced(_metrics(total_return=-0.1, total_trades=5), trades, [], _strategy(stop_loss=-0.05))
         params = [s["parameter"] for s in d["suggested_parameter_changes"]]
         assert "exit.stop_loss" in params

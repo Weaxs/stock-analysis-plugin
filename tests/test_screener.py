@@ -121,6 +121,11 @@ class TestComputeScores:
         result = compute_scores(df)
         assert "composite_score" in result.columns
 
+    @pytest.mark.parametrize("factor", ["pe", "pb"])
+    def test_non_positive_valuation_multiples_never_get_top_value_score(self, factor):
+        result = compute_scores(pd.DataFrame({factor: [-50.0, 10.0, 20.0]}))
+        assert result["value_score"].tolist() == [0, 100, 0]
+
 
 def _snapshot():
     return [

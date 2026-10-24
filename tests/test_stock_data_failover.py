@@ -240,6 +240,35 @@ class TestKlineFinnhub:
         assert result[0]["close"] == 100.0
         assert result[0]["open"] == 99.0
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="time.tzset is unavailable on Windows")
+    def test_kline_date_does_not_depend_on_host_timezone(self, mock_finnhub, monkeypatch):
+        import os
+        import time
+        from datetime import datetime, timezone
+
+        from tools import stock_data
+
+        timestamp = int(datetime(2024, 6, 14, 1, 30, tzinfo=timezone.utc).timestamp())
+        mock_client = MagicMock()
+        mock_finnhub.Client.return_value = mock_client
+        mock_client.stock_candles.return_value = {
+            "s": "ok",
+            "c": [11],
+            "o": [10],
+            "h": [12],
+            "l": [9],
+            "v": [1000],
+            "t": [timestamp],
+        }
+        monkeypatch.setattr(stock_data, "_kline_yfinance", MagicMock(side_effect=ValueError("offline")))
+        try:
+            with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key", "TZ": "America/New_York"}):
+                time.tzset()
+                rows = stock_data.cmd_kline(Namespace(symbol="0700.HK", period="daily", count=1))
+        finally:
+            time.tzset()
+        assert rows[0]["date"] == "2024-06-14"
+
     @patch.dict("os.environ", {}, clear=True)
     def test_no_api_key_raises(self):
         with pytest.raises(ValueError, match="FINNHUB_API_KEY not set"):
@@ -271,6 +300,66 @@ class TestKlineFinnhub:
         assert call_args[0][0] == "0700"
 
 
+class TestQuoteEfinance:
+    def test_pe_basis_is_dynamic(self):
+        import pandas as pd
+
+        from tools.stock_data import _quote_efinance
+
+        mock_ef = MagicMock()
+        mock_ef.stock.get_realtime_quotes.return_value = pd.DataFrame([{"股票代码": "600519", "市盈率": 20}])
+        with patch.dict(sys.modules, {"efinance": mock_ef}):
+            result = _quote_efinance("600519")
+        assert result["pe"] == 20
+        assert result["pe_basis"] == "dynamic"
+
+
+class TestFundamentalContext:
+    def test_preserves_quote_pe_basis(self, monkeypatch):
+        from tools import stock_data
+
+        monkeypatch.setattr(
+            stock_data, "quote_a", lambda symbol: {"pe": 20, "pe_basis": "dynamic", "pb": 5, "market_cap": 1000}
+        )
+        monkeypatch.setattr(stock_data, "_financials_a_frame", MagicMock(side_effect=ValueError("offline")))
+        mock_ak = MagicMock()
+        mock_ak.stock_history_dividend_detail.side_effect = ValueError("offline")
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = stock_data.cmd_fundamental_context(Namespace(symbol="600519"))
+        assert result["valuation"]["pe_basis"] == "dynamic"
+
+
+class TestSnapshotPeBasis:
+    @pytest.mark.parametrize(
+        ("function_name", "provider_method", "expected"),
+        [
+            ("_snapshot_akshare", "stock_zh_a_spot_em", "dynamic"),
+            ("_snapshot_efinance", None, "dynamic"),
+            ("snapshot_hk", "stock_hk_spot_em", "unknown"),
+            ("snapshot_us", "stock_us_spot_em", "unknown"),
+        ],
+    )
+    def test_snapshot_carries_pe_basis(self, function_name, provider_method, expected):
+        import pandas as pd
+
+        from tools import stock_data
+
+        provider = MagicMock()
+        if provider_method is None:
+            provider.stock.get_realtime_quotes.return_value = pd.DataFrame(
+                [{"股票代码": "600519", "股票名称": "x", "市盈率": 20}]
+            )
+            modules = {"efinance": provider}
+        else:
+            getattr(provider, provider_method).return_value = pd.DataFrame(
+                [{"代码": "600519", "名称": "x", "市盈率": 20}]
+            )
+            modules = {"akshare": provider}
+        with patch.dict(sys.modules, modules):
+            rows = getattr(stock_data, function_name)()
+        assert rows[0]["pe_basis"] == expected
+
+
 class TestQuoteYfinance:
     def test_returns_data(self, mock_yfinance):
         mock_ticker = MagicMock()
@@ -292,6 +381,7 @@ class TestQuoteYfinance:
         result = _quote_yfinance("AAPL")
         assert result["price"] == 150.0
         assert result["name"] == "Apple Inc."
+        assert result["pe_basis"] == "trailing"
 
     def test_no_data_raises(self, mock_yfinance):
         mock_ticker = MagicMock()
@@ -1371,6 +1461,7 @@ class TestAkshareETF:
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             result = _quote_akshare("600519")
         assert result["name"] == "贵州茅台"
+        assert result["pe_basis"] == "dynamic"
         for key in ("is_etf", "iopv", "premium_discount_rate", "fund_shares"):
             assert key not in result
 
@@ -2472,6 +2563,7 @@ class TestQuoteTencent:
         assert result["turnover"] == 295576e4  # 万元 → 元
         assert result["market_cap"] == 15735.40e8  # 亿元 → 元
         assert result["pe"] == 19.32
+        assert result["pe_basis"] == "unknown"
         assert result["pb"] == 6.26
         assert result["prev_close"] == 1272.75
 
@@ -2542,6 +2634,7 @@ def test_hk_quote_tencent_fallback_without_keys(monkeypatch, symbol):
         "prev_close": 425.8,
         "market_cap": pytest.approx(3826171270000.0),
         "pe": 15.37,
+        "pe_basis": "unknown",
         "pb": None,  # f[47] is dividend yield in Tencent's official HK_SQT_MAP, not PB
         "turnover_rate": None,
         "volume_ratio": None,
@@ -3156,6 +3249,13 @@ class TestFinancialsPeriodsYf:
         assert "periods" not in result
         assert result["name"] == "Apple"
         assert result["total_revenue"] == 100.0
+        assert result["snapshot_units"] == {
+            "pe": "trailing",
+            "roe": "ratio",
+            "profit_margin": "ratio",
+            "debt_to_equity": "percent",
+            "dividend_yield": "ratio",
+        }
 
     def test_multi_period_from_annual_income_statement(self, mock_yfinance):
         ticker = mock_yfinance.Ticker.return_value

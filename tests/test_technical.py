@@ -297,6 +297,32 @@ class TestCalcRsi:
         assert "rsi24" in result
         assert "signal" in result
 
+    def test_all_up_bars_are_overbought_not_missing(self):
+        result = calc_rsi(_make_close(list(range(1, 40))))
+        assert result["rsi6"] == 100
+        assert result["rsi12"] == 100
+        assert result["rsi24"] == 100
+        assert result["signal"] == "overbought"
+
+    def test_flat_bars_are_neutral(self):
+        result = calc_rsi(_make_close([100] * 30))
+        assert result["rsi6"] == 50
+        assert result["signal"] == "neutral"
+
+
+def test_text_signals_do_not_call_missing_rsi_or_volume_neutral():
+    signals = technical_mod.generate_signals(
+        {"ma_arrangement": "mixed"},
+        {"signal": "bearish"},
+        {"signal": "insufficient_data", "rsi6": None},
+        {"position": ""},
+        {"signal": "neutral"},
+        {"signal": "insufficient_data", "volume_ratio": None},
+        {},
+    )
+    assert any("RSI数据不足" in signal for signal in signals)
+    assert any("成交量数据不足" in signal for signal in signals)
+
 
 class TestCalcBollinger:
     def test_keys_present(self):
@@ -334,6 +360,19 @@ class TestCalcVolume:
         volume = _make_volume([1_000_000] * 19 + [3_000_000])
         result = calc_volume(volume)
         assert result["signal"] in ("heavy", "extremely_heavy")
+
+    def test_volume_ratio_uses_previous_five_bars(self):
+        result = calc_volume(_make_volume([100] * 10 + [200]))
+        assert result["volume_ratio"] == 2
+        assert result["vol_ma5"] == 100
+        assert result["vol_ma10"] == 100
+
+    def test_volume_ratio_warmup_is_unavailable(self):
+        result = calc_volume(_make_volume([100] * 5))
+        assert result["volume_ratio"] is None
+        assert result["vol_ma5"] is None
+        assert result["vol_ma10"] is None
+        assert result["signal"] == "insufficient_data"
 
 
 class TestCalcTrend:
@@ -399,11 +438,15 @@ class TestCalcVolumeDirection:
         result = calc_volume_direction(close, volume)
         assert result == "shrink_volume_down"
 
-    def test_single_point(self):
+    def test_single_point_is_unavailable(self):
         close = _make_close([10])
         volume = _make_volume([100_000])
         result = calc_volume_direction(close, volume)
-        assert result == "normal"
+        assert result == "insufficient_data"
+
+    def test_volume_direction_warmup_is_unavailable(self):
+        result = calc_volume_direction(_make_close([10] * 5), _make_volume([100] * 5))
+        assert result == "insufficient_data"
 
 
 class TestCalcMaSupport:
@@ -448,8 +491,9 @@ class TestGenerateSignalScore:
         volume = _make_volume([1_000_000] * 10 + [3_000_000])
 
         result = generate_signal_score(ma, macd, rsi, vol, trend, bias, close, volume)
-        assert result["signal_score"] < 30
-        assert result["buy_signal"] in ("SELL", "STRONG_SELL")
+        assert result["signal_score"] == 12
+        assert result["buy_signal"] == "STRONG_SELL"
+        assert "均线空头排列，趋势极弱" in result["risk_factors"]
 
 
 class TestParsePeriodsArg:

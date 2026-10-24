@@ -253,6 +253,19 @@ class TestCheckCondition:
         s = pd.Series([10, 20, 30])
         assert check_condition(s, "==", 20, 1) is True
 
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            {"indicator": "rsi", "period": 14, "operator": ">=", "value": 50},
+            {"indicator": "volume_ratio", "period": 5, "operator": "==", "value": 1},
+            {"indicator": "bollinger_position", "period": 20, "operator": "==", "value": 0.5},
+        ],
+    )
+    def test_warmup_values_do_not_satisfy_conditions(self, condition):
+        df = pd.DataFrame({"close": list(range(100, 70, -1)), "volume": [1000] * 30})
+        hit, _ = evaluate_conditions(df, [condition], "all", 0, {})
+        assert hit is False
+
 
 class TestSubstitute:
     def test_simple(self):
@@ -279,6 +292,32 @@ class TestSampleCurve:
         result = sample_curve(curve, 200)
         assert len(result) <= 201
         assert result[-1] == curve[-1]
+
+    def test_evaluate_result_preserves_full_curve_metrics(self, tmp_path):
+        metrics = {
+            "total_trades": 0,
+            "win_rate": 0,
+            "profit_loss_ratio": 1,
+            "max_drawdown": -0.5,
+            "total_return": 0,
+            "sharpe_ratio": -1.23,
+        }
+        path = tmp_path / "result.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "trades": [],
+                    "equity_curve": [{"date": "2024-12-31", "equity": 1000}],
+                    "initial_capital": 1000,
+                    "final_capital": 1000,
+                    "period": "2024-01-01 to 2024-12-31",
+                    "metrics": metrics,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = backtest.evaluate_result(str(path))
+        assert result["metrics"] == metrics
 
 
 class TestComputeMetrics:
@@ -321,6 +360,20 @@ class TestComputeMetrics:
         metrics = compute_metrics([], curve, 100000, 100000, "2024-01-01", "2024-12-31")
         assert metrics["total_trades"] == 0
         assert metrics["win_rate"] == 0
+
+    def test_all_win_profit_loss_ratio_is_not_a_currency_amount(self):
+        trades = [{"type": "sell", "pnl": 1000, "holding_days": 1}]
+        curve = [{"date": "2024-01-02", "equity": 11000}]
+        metrics = compute_metrics(trades, curve, 10000, 11000, "2024-01-01", "2024-01-02")
+        assert metrics["profit_loss_ratio"] == float("inf")
+        assert _json_safe(metrics)["profit_loss_ratio"] is None
+
+    @pytest.mark.parametrize("trades", [[], [{"type": "sell", "pnl": 0, "holding_days": 1}]])
+    def test_profit_loss_ratio_is_unavailable_without_winners(self, trades):
+        curve = [{"date": "2024-01-02", "equity": 10000}]
+        metrics = compute_metrics(trades, curve, 10000, 10000, "2024-01-01", "2024-01-02")
+        assert pd.isna(metrics["profit_loss_ratio"])
+        assert _json_safe(metrics)["profit_loss_ratio"] is None
 
 
 class TestDiagnose:
@@ -470,7 +523,7 @@ class TestJsonSafe:
         # Strict encoders reject non-finite floats; sanitized payload must pass.
         json.dumps(safe, allow_nan=False)
 
-    def test_all_zero_pnl_produces_inf_then_sanitized(self):
+    def test_all_zero_pnl_is_undefined_then_sanitized(self):
         trades = [
             {"type": "buy", "date": "2024-01-01", "price": 10, "shares": 100, "amount": 1000},
             {
@@ -486,7 +539,7 @@ class TestJsonSafe:
         ]
         curve = [{"date": f"2024-01-{i + 1:02d}", "equity": 100000} for i in range(30)]
         metrics = compute_metrics(trades, curve, 100000, 100000, "2024-01-01", "2024-01-31")
-        assert metrics["profit_loss_ratio"] == float("inf")
+        assert pd.isna(metrics["profit_loss_ratio"])
         assert _json_safe(metrics)["profit_loss_ratio"] is None
 
     def test_main_stdout_is_strict_json(self, monkeypatch, capsys):
@@ -610,6 +663,37 @@ class TestRunBacktest:
         assert "diagnosis" in result
         assert "diagnostics" in result
 
+    def test_prehistory_warms_indicators_without_entering_the_evaluation_window(self, monkeypatch, tmp_path):
+        import yaml
+
+        dates = pd.bdate_range("2024-01-01", periods=80)
+        rows = [
+            {
+                "date": date.strftime("%Y-%m-%d"),
+                "open": 100,
+                "high": 101,
+                "low": 99,
+                "close": 100,
+                "volume": 1000,
+            }
+            for date in dates
+        ]
+        monkeypatch.setattr(backtest, "run_tool", lambda *args, **kwargs: rows)
+        strategy = {
+            "entry": {"conditions": [{"indicator": "ma", "period": 20, "operator": ">", "value": 0}]},
+            "exit": {"stop_loss": -1, "take_profit": 1000},
+            "simulation": {"execution": "next_open", "slippage": 0, "commission": 0},
+        }
+        path = tmp_path / "warmup.yaml"
+        path.write_text(yaml.safe_dump(strategy), encoding="utf-8")
+        start, end = dates[40].strftime("%Y-%m-%d"), dates[70].strftime("%Y-%m-%d")
+
+        result = backtest.run_backtest(str(path), "AAPL", start, end, 10000)
+
+        assert result["trades"][0]["date"] == start
+        assert result["equity_curve"][0]["date"] == start
+        assert result["period"] == f"{start} to {end}"
+
     @pytest.mark.parametrize(
         "yaml_name",
         sorted(p.name for p in (Path(__file__).parent.parent / "strategies" / "examples").glob("*.yaml")),
@@ -727,6 +811,28 @@ class TestTrailingStop:
         # (110 <= 125*0.9 = 112.5) — trailing from its own peak, not the old 150.
         assert sells[1]["date"] == str(df["date"].iloc[7].date())
         assert sells[1]["reason"].startswith("移动止损触发")
+
+
+class TestStrategyValidation:
+    @pytest.mark.parametrize(
+        ("config", "field"),
+        [
+            ({"stop_loss": 0}, "stop_loss"),
+            ({"stop_loss": 0.05}, "stop_loss"),
+            ({"take_profit": 0}, "take_profit"),
+            ({"take_profit": -0.2}, "take_profit"),
+            ({"trailing_stop": 0}, "trailing_stop"),
+            ({"trailing_stop": -0.1}, "trailing_stop"),
+            ({"trailing_stop": 1}, "trailing_stop"),
+        ],
+    )
+    def test_exit_thresholds_reject_wrong_sign_or_range(self, config, field):
+        with pytest.raises(ValueError, match=field):
+            backtest.simulate(_df_from_closes([10, 10, 12]), {"exit": config}, 100000, "AAPL")
+
+    def test_multiple_positions_are_rejected_instead_of_ignored(self):
+        with pytest.raises(ValueError, match="max_positions"):
+            backtest.simulate(_df_from_closes([10, 10]), {"position": {"max_positions": 2}}, 1000, "AAPL")
 
 
 class TestStampTax:

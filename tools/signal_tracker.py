@@ -141,11 +141,13 @@ def _append_record(store: Path, record: dict):
 
 def cmd_record(args):
     entry_price = args.entry_price
+    price_as_of = None
     if entry_price is None:
         quote = run_tool("stock_data.py", ["quote", args.symbol])
         if not isinstance(quote, dict) or "error" in quote or quote.get("price") is None:
             return {"error": f"cannot determine entry price for {args.symbol}: quote unavailable"}
         entry_price = quote["price"]
+        price_as_of = quote.get("data_as_of") if isinstance(quote.get("data_as_of"), str) else None
     date = args.date or datetime.now().strftime("%Y-%m-%d")
     record = {
         "id": f"{date}-{args.symbol}-{uuid4().hex[:8]}",
@@ -159,6 +161,7 @@ def cmd_record(args):
         "source": args.source,
         "note": args.note,
         "record_date": date,
+        "price_as_of": price_as_of,
         "status": "open",
         "outcome": None,
     }
@@ -238,9 +241,37 @@ def _valid_bar(bar) -> bool:
 def _price_factor(rec, bars):
     if all(bar.get("adjusted") == "none" for bar in bars):
         return 1.0
-    anchor = next((bar for bar in bars if bar["date"] == rec["record_date"]), {})
-    basis = anchor.get("adjusted")
+    anchor_date = rec["record_date"]
+    price_as_of = rec.get("price_as_of")
+    has_price_date = False
+    if isinstance(price_as_of, str) and len(price_as_of) == 10 and price_as_of <= anchor_date:
+        try:
+            datetime.strptime(price_as_of, "%Y-%m-%d")
+            anchor_date = price_as_of
+            has_price_date = True
+        except ValueError:
+            pass
+    anchor_idx = next((i for i, bar in enumerate(bars) if bar["date"] == anchor_date), None)
+    if anchor_idx is None:
+        anchor_idx = next((i for i in range(len(bars) - 1, -1, -1) if bars[i]["date"] <= anchor_date), None)
+        if anchor_idx is None:
+            return None
+        next_bar = next((bar for bar in bars if bar["date"] > anchor_date), None)
+        if (
+            not has_price_date
+            and next_bar is not None
+            and next_bar.get("adjustment_factor") != bars[anchor_idx].get("adjustment_factor")
+        ):
+            return None
+    elif (
+        anchor_idx
+        and not has_price_date
+        and bars[anchor_idx - 1].get("adjustment_factor") != bars[anchor_idx].get("adjustment_factor")
+    ):
+        return None
+    anchor = bars[anchor_idx]
     factor = anchor.get("adjustment_factor")
+    basis = anchor.get("adjusted")
     if (
         basis in ("qfq", "total_return")
         and all(bar.get("adjusted") == basis for bar in bars)
