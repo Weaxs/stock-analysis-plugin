@@ -253,7 +253,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_etf_details` | A 股 ETF 净值折溢价、规模变动、披露持仓、可选基准成分与跟踪误差 |
 | `get_dividends` | A/HK 历史分红/除息日历/已实现 TTM 股息与连续年数；A/HK 报告期/年度排行 |
 | `get_kline` | K 线数据（OHLCV），支持日/周/月线；A 股股票/ETF 前复权，每条记录 `adjusted=qfq`，指数 `adjusted=none` |
-| `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价） |
+| `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注；`pe_basis` 区分 dynamic/trailing/unknown；ETF 的 premium_discount_rate 为正=溢价、负=折价） |
 | `get_capital_flow` | 资金流向（仅 A 股） |
 | `get_news` | 个股相关新闻 |
 | `get_financials` | 财务指标 |
@@ -300,7 +300,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `screen_stocks` | 全市场多因子筛选（可选 L2；factor_coverage 展示缺失因子、覆盖度、实际权重及 L2 effective_scores） |
 | `screen_risk` | 风险因子筛查 |
 | `run_backtest` | YAML 策略回测，默认收盘信号于次日开盘成交，execution 返回模型与限制 |
-| `detect_market_regime` | 市场状态检测（牛/熊/震荡） |
+| `detect_market_regime` | 市场状态检测（牛/熊/震荡；返回实际 as_of 和坏行警告，历史不足 60 根时 above_ma60=null） |
 | `get_market_review` | 市场日度复盘数据 |
 | `get_review_history` | 复盘归档历史（最近 N 条，最新在前，用于纵向对比） |
 | `run_watchlist_analysis` | 批量自选股分析 |
@@ -431,19 +431,19 @@ position:
 
 其他可用键：
 
-- `exit.trailing_stop`：移动止损，价格自持仓期间最高收盘价回撤达到该比例即卖出（如 `0.08` = 峰值回撤 8% 触发）；与 `stop_loss` 同时设置时先判固定止损。
-- `benchmark`（顶层）：基准对比标的代码（如 `"sh000300"` 沪深300；指数代码必须带 sh/sz 交易所前缀，裸 6 位数字会被当作个股），设置后回测结果附带 `benchmark` 块（基准买入持有收益与 `excess_return` 超额收益）。
-- `simulation.execution`：默认 `next_open`，前日收盘信号、次日开盘加滑点成交；显式 `same_close` 复现旧收盘成交假设。交易同时返回 signal_date/date。零成交量阻止成交；一字板限制只在输入提供同口径历史 limit_up/limit_down 时执行。`execution` 列出阻止成交次数、未成交订单及限制；止损是收盘信号，未模拟盘口排队、部分成交、结算和市场冲击。
+- `exit.trailing_stop`：移动止损，价格自持仓期间最高收盘价回撤达到该比例即卖出（如 `0.08` = 峰值回撤 8% 触发）；与 `stop_loss` 同时设置时先判固定止损。`stop_loss` 必须为负数、`take_profit` 必须为正数、`trailing_stop` 须在 (0, 1) 内；`position.max_positions` 当前仅支持 1，其他配置明确报错。
+- `benchmark`（顶层）：基准对比标的代码（如 `"sh000300"` 沪深300；指数代码必须带 sh/sz 交易所前缀，裸 6 位数字会被当作个股），设置后回测结果附带 `benchmark` 块（基准买入持有收益与 `excess_return` 超额收益）。基准与策略采用同一首日执行口径（next_open 用 open、same_close 用 close），无预热时以策略首条权益日期为起点；实际覆盖不符或首末价格非法时返回 error，不输出超额。
+- `simulation.execution`：默认 `next_open`，前日收盘信号、次日开盘加滑点成交；显式 `same_close` 复现旧收盘成交假设。交易同时返回 signal_date/date。延迟的入场信号在新收盘失效时撤单，风险退出 pending 保留至成交。`start` 前可得历史仅用于指标预热，取数长度随策略最大 lookback 增加，交易与权益仍按请求区间统计；`warnings` 出现 `Entry indicator is unavailable` 时必须披露指标不可用及数据质量，不能声称完成预热。零成交量阻止成交；一字板限制只在输入提供同口径历史 limit_up/limit_down 时执行。`execution` 列出阻止成交次数、未成交订单及限制；止损是收盘信号，未模拟盘口排队、部分成交、结算和市场冲击。回测仅接受单一 `qfq`/`total_return`/`none` 复权口径，unknown 或混合口径明确报错。
 - `simulation`（顶层）：交易成本。`slippage`（滑点，买卖双边，默认 0.001）、`commission`（佣金，买卖双边，默认 0.0015）、`stamp_tax`（印花税，仅卖出收取，默认 0；A股为 0.0005，各市场税率不同且会调整，按当下实际费率填写）。费率均须在 [0, 1) 区间，越界报错。回测结果附带 `costs` 块（实际生效费率与实付费用合计 `commission_paid`/`stamp_tax_paid`）。
 
 ### 可用指标
 
 | 指标 | 说明 | 需要 period |
 |------|------|-------------|
-| `rsi` | RSI 相对强弱指数 | 是（默认 14） |
+| `rsi` | RSI 相对强弱指数；预热不足不可用，全涨窗口为 100，全平为 50 | 是（默认 14） |
 | `ma` / `ema` | 简单 / 指数移动平均 | 是（默认 20） |
 | `macd_dif` / `macd_dea` / `macd` | MACD 三线 | 否 |
-| `volume_ratio` | 量比 | 是（默认 5） |
+| `volume_ratio` | 当根成交量 / 前 N 根平均成交量（不含当根） | 是（默认 5） |
 | `price_change` | 涨跌幅（%） | 否 |
 | `bollinger_position` | 布林带位置（0=下轨, 1=上轨） | 是（默认 20） |
 | `trend_score` | 独立实验趋势强度，默认 (EMA20−EMA60)/ATR14；fast_period/slow_period 控制 EMA | period 为 ATR 根数（默认 14） |
@@ -695,7 +695,7 @@ python3 tools/sec_edgar.py insider_trades AAPL --days 90 --top 10
 
 公告类别为 `all/forecast/express/annual/interim/quarterly/reduction/issuance/inquiry/dividend`。默认最近 90 天，最多 500 条；通过巨潮官方股票目录取得 orgId，沪深京统一使用官方 `szse` 查询栏目。业绩快报和问询使用标题关键词查询。第一版返回 PDF 原文链接，不引入 PDF 解析依赖；`total/truncated` 表示供应商匹配数量及截断，查询无结果与请求失败分开。
 
-港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。
+港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。Yahoo 顶层快照的 `snapshot_units` 明确：`pe=trailing`，`roe/profit_margin/dividend_yield=ratio`（小数），`debt_to_equity=percent`（百分数）；不得把 D/E 百分数当作小数倍数。
 
 SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通过环境变量提供。单进程最多每秒 2 次请求（多个并行进程需控制账户/IP 总量不超过 SEC 的每秒 10 次），并缓存 ticker/CIK、申报元数据和 XML 解析结果。13F 返回机构最近季度的原始申报，不是实时完整组合；通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准，2023-01-03 起金额单位为美元，更早申报为千美元。修订文件另列原文链接，避免错误合并补充与重述；发行人 CIK 反查现已通过 `mode=issuer` 支持：从结构化 Schedule 13D/G 校验发行人 CIK、提取 CUSIP，再扫描官方最新已发布 13F 批量窗口。`auto` 默认有当前或已检索历史 13F 时查机构，否则查发行人；Berkshire 等兼具两种身份时显式选择 `issuer`。修订按 `RESTATEMENT` 替换与 `NEW HOLDINGS` 补充重建；无法判断的修订或缺少基础版时总量为 null，并给出 `unresolved_manager_count`。
 
@@ -729,8 +729,10 @@ python3 tools/sec_edgar.py holdings 0001067983 --mode manager
 
 真实模型评测同时要求结构化证据检查与独立上下文的结论审稿通过：审稿检查正文事实、限制说明是否诚实，以及是否过度外推。未运行审稿、结果缺失或模糊都不能算通过；报告自行声明通过不被采信。另有人工核对的正确报告及两类反例用于验证审稿器（正确引用但正文捏造现价、3笔交易却保证长期胜率）。空回答也失败。离线渲染和规则检查不代表真实模型通过，也不证明策略未来有效。信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
 
-信号结算仅在价格口径可核实时进行：原始价格可直接比较；复权日线需记录日 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
+信号结算仅在价格口径可核实时进行：原始价格可直接比较；自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算；多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算，日内顺序未知的双触发仍 stop 优先；无止损的旧 HLC 记录可继续用 high/low/close 判定目标和到期，但若提供 open 也必须是正有限数值，有止损但缺 open 则拒绝结算。重复日期返回 skipped_no_data，复权乘除使用 Decimal。复权日线需该报价日的 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例；记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点，旧信号缺少报价时点且记录日因子变化时也保持未结算。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
 
 市场复盘数据不足时温度/姿态为 null，信号 unknown，data_quality.limitations 说明限制。自选股异动采集失败时 anomaly_status=unavailable、anomaly_count=null，保留警告并计入 summary.partial，不能当成无异常。
 
-L1 与 L2 综合分均在排序前按可用因子重新归一化；缺失或非有限因子不作零分处理，因子组内部也仅平均有效输入。factor_coverage.ratio 保留原始权重覆盖率，effective_weights 是实际归一化后的权重，高分仍需结合覆盖率判断。
+L1 与 L2 综合分均在排序前按可用因子重新归一化；缺失或非有限因子不作零分处理，因子组内部也仅平均有效输入。factor_coverage.ratio 保留原始权重覆盖率，effective_weights 是实际归一化后的权重，高分仍需结合覆盖率判断。估值比较需同时读取 `pe_basis`；有限非正 PE/PB 的价值子分为 0，不能因数值更低而获得最高价值分。
+
+L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_samples` 记录实际样本数，非正/非有限收盘价先剔除，空输入为 0；质量因子按 `report_date` 分组归一，避免年度累计与单季累计直接比较。资金流 5/10/20 日窗口不足返回 null，不按 0 或完整窗口处理。HK 快照统一带 `.HK`，US 快照移除东财交易所后缀并把类别股点号转为 Yahoo 连字符。主板 ST/*ST 按 5% 识别涨跌停，其他板块比例不变。

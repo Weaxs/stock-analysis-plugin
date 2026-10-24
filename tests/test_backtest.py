@@ -198,12 +198,12 @@ class TestComputeRsi:
     def test_uptrend_high_rsi(self):
         close = pd.Series([10 + i * 0.5 for i in range(50)])
         rsi = compute_rsi(close, 14)
-        assert float(rsi.iloc[-1]) >= 50
+        assert float(rsi.iloc[-1]) == 100
 
     def test_downtrend_low_rsi(self):
         close = pd.Series([30 - i * 0.5 for i in range(30)])
         rsi = compute_rsi(close, 14)
-        assert float(rsi.iloc[-1]) < 50
+        assert float(rsi.iloc[-1]) == 0
 
 
 class TestComputeMa:
@@ -253,6 +253,24 @@ class TestCheckCondition:
         s = pd.Series([10, 20, 30])
         assert check_condition(s, "==", 20, 1) is True
 
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            {"indicator": "rsi", "period": 14, "operator": ">=", "value": 50},
+            {"indicator": "volume_ratio", "period": 5, "operator": "==", "value": 1},
+            {"indicator": "bollinger_position", "period": 20, "operator": "==", "value": 0.5},
+        ],
+    )
+    def test_warmup_values_do_not_satisfy_conditions(self, condition):
+        df = pd.DataFrame({"close": list(range(100, 70, -1)), "volume": [1000] * 30})
+        hit, _ = evaluate_conditions(df, [condition], "all", 0, {})
+        assert hit is False
+
+    def test_warmup_boundary_does_not_create_cross(self):
+        df = pd.DataFrame({"close": list(range(100, 70, -1)), "volume": [1000] * 30})
+        condition = {"indicator": "rsi", "period": 14, "operator": "cross_below", "value": 30}
+        assert all(not evaluate_conditions(df, [condition], "all", i, {})[0] for i in range(len(df)))
+
 
 class TestSubstitute:
     def test_simple(self):
@@ -279,6 +297,32 @@ class TestSampleCurve:
         result = sample_curve(curve, 200)
         assert len(result) <= 201
         assert result[-1] == curve[-1]
+
+    def test_evaluate_result_preserves_full_curve_metrics_with_null_ratio(self, tmp_path):
+        metrics = {
+            "total_trades": 0,
+            "win_rate": 0,
+            "profit_loss_ratio": None,
+            "max_drawdown": -0.5,
+            "total_return": 0,
+            "sharpe_ratio": -1.23,
+        }
+        path = tmp_path / "result.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "trades": [],
+                    "equity_curve": [{"date": "2024-12-31", "equity": 1000}],
+                    "initial_capital": 1000,
+                    "final_capital": 1000,
+                    "period": "2024-01-01 to 2024-12-31",
+                    "metrics": metrics,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = backtest.evaluate_result(str(path))
+        assert result["metrics"] == metrics
 
 
 class TestComputeMetrics:
@@ -321,6 +365,20 @@ class TestComputeMetrics:
         metrics = compute_metrics([], curve, 100000, 100000, "2024-01-01", "2024-12-31")
         assert metrics["total_trades"] == 0
         assert metrics["win_rate"] == 0
+
+    def test_all_win_profit_loss_ratio_is_not_a_currency_amount(self):
+        trades = [{"type": "sell", "pnl": 1000, "holding_days": 1}]
+        curve = [{"date": "2024-01-02", "equity": 11000}]
+        metrics = compute_metrics(trades, curve, 10000, 11000, "2024-01-01", "2024-01-02")
+        assert metrics["profit_loss_ratio"] == float("inf")
+        assert _json_safe(metrics)["profit_loss_ratio"] is None
+
+    @pytest.mark.parametrize("trades", [[], [{"type": "sell", "pnl": 0, "holding_days": 1}]])
+    def test_profit_loss_ratio_is_unavailable_without_winners(self, trades):
+        curve = [{"date": "2024-01-02", "equity": 10000}]
+        metrics = compute_metrics(trades, curve, 10000, 10000, "2024-01-01", "2024-01-02")
+        assert pd.isna(metrics["profit_loss_ratio"])
+        assert _json_safe(metrics)["profit_loss_ratio"] is None
 
 
 class TestDiagnose:
@@ -376,6 +434,44 @@ class TestDiagnose:
         result = diagnose(metrics)
         assert len(result["weaknesses"]) > 0
         assert len(result["suggestions"]) > 0
+
+    @pytest.mark.parametrize("plr", [None, float("nan")])
+    def test_undefined_profit_loss_ratio_is_not_diagnosed(self, plr):
+        metrics = {
+            "win_rate": 0.5,
+            "profit_loss_ratio": plr,
+            "max_drawdown": -0.1,
+            "sharpe_ratio": 0.5,
+            "total_trades": 2,
+            "winning_trades": 1,
+            "losing_trades": 1,
+            "avg_holding_days": 5,
+            "max_consecutive_wins": 1,
+            "max_consecutive_losses": 1,
+            "total_return": 0.1,
+            "annual_return": 0.1,
+        }
+        result = diagnose(metrics)
+        messages = result["strengths"] + result["weaknesses"] + result["suggestions"]
+        assert not any("盈亏比" in message for message in messages)
+
+    def test_infinite_profit_loss_ratio_remains_a_strength(self):
+        metrics = {
+            "win_rate": 1,
+            "profit_loss_ratio": float("inf"),
+            "max_drawdown": -0.1,
+            "sharpe_ratio": 0.5,
+            "total_trades": 1,
+            "winning_trades": 1,
+            "losing_trades": 0,
+            "avg_holding_days": 1,
+            "max_consecutive_wins": 1,
+            "max_consecutive_losses": 0,
+            "total_return": 0.1,
+            "annual_return": 0.1,
+        }
+        result = diagnose(metrics)
+        assert "盈亏比优秀 (inf:1)" in result["strengths"]
 
 
 _MA_CROSS_STRATEGY = {
@@ -470,7 +566,7 @@ class TestJsonSafe:
         # Strict encoders reject non-finite floats; sanitized payload must pass.
         json.dumps(safe, allow_nan=False)
 
-    def test_all_zero_pnl_produces_inf_then_sanitized(self):
+    def test_all_zero_pnl_is_undefined_then_sanitized(self):
         trades = [
             {"type": "buy", "date": "2024-01-01", "price": 10, "shares": 100, "amount": 1000},
             {
@@ -486,7 +582,7 @@ class TestJsonSafe:
         ]
         curve = [{"date": f"2024-01-{i + 1:02d}", "equity": 100000} for i in range(30)]
         metrics = compute_metrics(trades, curve, 100000, 100000, "2024-01-01", "2024-01-31")
-        assert metrics["profit_loss_ratio"] == float("inf")
+        assert pd.isna(metrics["profit_loss_ratio"])
         assert _json_safe(metrics)["profit_loss_ratio"] is None
 
     def test_main_stdout_is_strict_json(self, monkeypatch, capsys):
@@ -610,6 +706,102 @@ class TestRunBacktest:
         assert "diagnosis" in result
         assert "diagnostics" in result
 
+    def test_monthly_momentum_252_increases_fetch_count_by_required_bars(self, monkeypatch, make_kline_data):
+        rows = make_kline_data(90)
+        counts = []
+
+        def fake_run(_script, args, **_kwargs):
+            counts.append(int(args[args.index("--count") + 1]))
+            return rows
+
+        monkeypatch.setattr(backtest, "run_tool", fake_run)
+        monkeypatch.setattr(
+            backtest,
+            "load_strategy",
+            lambda *a: {
+                "entry": {"conditions": [{"indicator": "monthly_momentum", "period": 252, "operator": ">", "value": 0}]}
+            },
+        )
+        start, end = str(rows[40]["date"].date()), str(rows[80]["date"].date())
+        backtest.fetch_kline("AAPL", start, end, True)
+        backtest.run_backtest("unused.yaml", "AAPL", start, end, 10000)
+
+        assert counts[1] - counts[0] == 253
+
+    def test_monthly_momentum_252_warns_when_first_window_signal_still_has_nan(self, monkeypatch, make_kline_data):
+        df = pd.DataFrame(make_kline_data(90))
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)
+        monkeypatch.setattr(
+            backtest,
+            "load_strategy",
+            lambda *a: {
+                "entry": {"conditions": [{"indicator": "monthly_momentum", "period": 252, "operator": ">", "value": 0}]}
+            },
+        )
+        start, end = str(df["date"].iloc[40].date()), str(df["date"].iloc[80].date())
+        result = backtest.run_backtest("unused.yaml", "AAPL", start, end, 10000)
+
+        assert "error" not in result
+        assert any(
+            "Entry indicator is unavailable" in warning and "monthly_momentum" in warning and "252" in warning
+            for warning in result["warnings"]
+        )
+
+    def test_zero_width_bollinger_is_not_misreported_as_insufficient_warmup(self, monkeypatch):
+        df = _df_from_closes([100] * 40)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)
+        monkeypatch.setattr(
+            backtest,
+            "load_strategy",
+            lambda *a: {"entry": {"conditions": [{"indicator": "bollinger_position", "operator": ">", "value": 0}]}},
+        )
+        start, end = str(df["date"].iloc[10].date()), str(df["date"].iloc[-1].date())
+        result = backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+        assert any("Entry indicator is unavailable" in warning for warning in result["warnings"])
+        assert all("Insufficient warmup" not in warning for warning in result["warnings"])
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            {"indicator": "ma", "period": 20, "operator": ">", "value": 0},
+            {"indicator": "ema_diff", "fast_period": 2, "slow_period": 4, "operator": ">", "value": 0},
+            {"indicator": "macd_dif", "operator": ">", "value": 0},
+            {"indicator": "monthly_momentum", "period": 5, "operator": ">", "value": 0},
+        ],
+    )
+    def test_prehistory_warms_indicators_without_entering_the_evaluation_window(
+        self, monkeypatch, tmp_path, condition, make_kline_data
+    ):
+        import yaml
+
+        rows = make_kline_data(80)
+        for i, row in enumerate(rows):
+            row.update(open=100 + i, high=101 + i, low=99 + i, close=100 + i, volume=1000)
+        dates = pd.DatetimeIndex(row["date"] for row in rows)
+        monkeypatch.setattr(backtest, "run_tool", lambda *args, **kwargs: rows)
+        strategy = {
+            "entry": {"conditions": [condition]},
+            "exit": {"stop_loss": -1, "take_profit": 1000},
+            "simulation": {"execution": "next_open", "slippage": 0, "commission": 0},
+        }
+        path = tmp_path / "warmup.yaml"
+        path.write_text(yaml.safe_dump(strategy), encoding="utf-8")
+        start, end = dates[40].strftime("%Y-%m-%d"), dates[70].strftime("%Y-%m-%d")
+
+        result = backtest.run_backtest(str(path), "AAPL", start, end, 10000)
+
+        assert result["trades"][0]["date"] == start
+        assert result["equity_curve"][0]["date"] == start
+        assert result["period"] == f"{start} to {end}"
+        reference_frame = pd.DataFrame(rows)
+        reference_frame = reference_frame[reference_frame["date"] <= end].reset_index(drop=True)
+        reference = backtest.simulate(reference_frame, strategy, 10000, "AAPL", start=start)
+        assert result["trades"] == reference["trades"]
+        assert result["equity_curve"] == backtest.sample_curve(reference["equity_curve"])
+        assert result["final_capital"] == reference["final_equity"]
+        assert all(trade["date"] >= start for trade in result["trades"])
+
     @pytest.mark.parametrize(
         "yaml_name",
         sorted(p.name for p in (Path(__file__).parent.parent / "strategies" / "examples").glob("*.yaml")),
@@ -727,6 +919,155 @@ class TestTrailingStop:
         # (110 <= 125*0.9 = 112.5) — trailing from its own peak, not the old 150.
         assert sells[1]["date"] == str(df["date"].iloc[7].date())
         assert sells[1]["reason"].startswith("移动止损触发")
+
+
+class TestStrategyValidation:
+    @pytest.mark.parametrize("side", ["entry", "exit"])
+    def test_condition_logic_must_be_all_or_any(self, side):
+        with pytest.raises(ValueError, match="logic"):
+            backtest.simulate(_df_from_closes([10, 10, 12]), {side: {"logic": "xor"}}, 1000, "AAPL")
+
+    @pytest.mark.parametrize("side", ["entry", "exit"])
+    def test_condition_operator_must_be_documented(self, side):
+        condition = {"indicator": "close", "operator": "!=", "value": 0}
+        strategy = {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]}}
+        strategy[side] = {"conditions": [condition]}
+        with pytest.raises(ValueError, match="operator"):
+            backtest.simulate(_df_from_closes([10, 10, 12]), strategy, 1000, "AAPL")
+
+    def test_untriggered_exit_indicator_is_validated_at_startup(self):
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [{"indicator": "not_an_indicator", "operator": ">", "value": 0}]},
+        }
+        with pytest.raises(ValueError, match="Unknown indicator"):
+            backtest.simulate(_df_from_closes([10, 10, 12]), strategy, 1000, "AAPL")
+
+    @pytest.mark.parametrize("parameter", ["period", "fast_period", "slow_period"])
+    @pytest.mark.parametrize("invalid", [True, 0, -1, 2.5, "2.5", "invalid", None])
+    def test_untriggered_exit_rejects_non_positive_integer_periods(self, parameter, invalid):
+        condition = {"indicator": "rsi", "operator": ">", "value": 50, parameter: invalid}
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [condition]},
+        }
+        with pytest.raises(ValueError, match=parameter):
+            backtest.simulate(_df_from_closes([10, 10, 12]), strategy, 1000, "AAPL")
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "not-a-number"])
+    def test_run_backtest_rejects_invalid_condition_values_before_entry(self, monkeypatch, value):
+        df = _df_from_closes([10.0] * 30)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *args: df)
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [{"indicator": "close", "operator": ">", "value": value}]},
+        }
+        monkeypatch.setattr(backtest, "load_strategy", lambda *args: strategy)
+        start, end = (str(df["date"].iloc[i].date()) for i in (0, -1))
+
+        with pytest.raises(ValueError, match="condition value"):
+            backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+    @pytest.mark.parametrize("side", ["entry", "exit"])
+    @pytest.mark.parametrize("value", [True, False])
+    def test_run_backtest_rejects_boolean_condition_values(self, monkeypatch, side, value):
+        df = _df_from_closes([10.0] * 30)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *args: df)
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]},
+        }
+        strategy[side] = {"conditions": [{"indicator": "close", "operator": ">", "value": value}]}
+        monkeypatch.setattr(backtest, "load_strategy", lambda *args: strategy)
+        start, end = (str(df["date"].iloc[i].date()) for i in (0, -1))
+
+        with pytest.raises(ValueError, match="condition value"):
+            backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+    @pytest.mark.parametrize(
+        "indicator",
+        [
+            "rsi",
+            "ma",
+            "ema",
+            "macd_dif",
+            "macd_dea",
+            "macd",
+            "ma_diff",
+            "ema_diff",
+            "trend_score",
+            "monthly_momentum",
+            "volume_ratio",
+            "price_change",
+            "bollinger_position",
+            "close",
+            "volume",
+        ],
+    )
+    def test_every_indicator_rejects_fractional_period_strings_at_startup(self, indicator):
+        condition = {"indicator": indicator, "operator": ">", "value": 0, "period": "2.5"}
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [condition]},
+        }
+        with pytest.raises(ValueError, match="period"):
+            backtest.simulate(_df_from_closes([10, 10, 12]), strategy, 1000, "AAPL")
+
+    def test_invalid_period_cli_prints_json_error(self, monkeypatch, capsys):
+        df = _df_from_closes([10.0] * 40)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)
+        monkeypatch.setattr(
+            backtest,
+            "load_strategy",
+            lambda *a: {"entry": {"conditions": [{"indicator": "ma", "period": "2.5", "operator": ">", "value": 0}]}},
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["backtest.py", "run", "unused.yaml", "AAPL", "--start", "2024-01-01", "--end", "2024-02-23"],
+        )
+        with pytest.raises(SystemExit) as exc:
+            backtest.main()
+        assert exc.value.code == 1
+        assert "period" in json.loads(capsys.readouterr().out)["error"]
+
+    def test_simulate_rejects_unknown_adjustment_basis(self):
+        df = _df_from_closes([10, 10, 12]).assign(adjusted="unknown")
+        with pytest.raises(ValueError, match="unknown adjustment basis"):
+            backtest.simulate(df, {"entry": _ALWAYS_ENTRY}, 1000, "AAPL")
+
+    def test_simulate_rejects_mixed_adjustment_basis(self):
+        df = _df_from_closes([10, 10, 12]).assign(adjusted=["qfq", "qfq", "none"])
+        with pytest.raises(ValueError, match="single adjustment basis"):
+            backtest.simulate(df, {"entry": _ALWAYS_ENTRY}, 1000, "AAPL")
+
+    @pytest.mark.parametrize("basis", [None, "qfq", "total_return", "none"])
+    def test_simulate_allows_missing_or_single_known_adjustment_basis(self, basis):
+        df = _df_from_closes([10, 10, 12])
+        if basis is not None:
+            df["adjusted"] = basis
+        result = backtest.simulate(df, {"entry": _ALWAYS_ENTRY}, 1000, "AAPL")
+        assert result["trades"]
+
+    @pytest.mark.parametrize(
+        ("config", "field"),
+        [
+            ({"stop_loss": 0}, "stop_loss"),
+            ({"stop_loss": 0.05}, "stop_loss"),
+            ({"take_profit": 0}, "take_profit"),
+            ({"take_profit": -0.2}, "take_profit"),
+            ({"trailing_stop": 0}, "trailing_stop"),
+            ({"trailing_stop": -0.1}, "trailing_stop"),
+            ({"trailing_stop": 1}, "trailing_stop"),
+        ],
+    )
+    def test_exit_thresholds_reject_wrong_sign_or_range(self, config, field):
+        with pytest.raises(ValueError, match=field):
+            backtest.simulate(_df_from_closes([10, 10, 12]), {"exit": config}, 100000, "AAPL")
+
+    def test_multiple_positions_are_rejected_instead_of_ignored(self):
+        with pytest.raises(ValueError, match="max_positions"):
+            backtest.simulate(_df_from_closes([10, 10]), {"position": {"max_positions": 2}}, 1000, "AAPL")
 
 
 class TestStampTax:
@@ -867,17 +1208,98 @@ class TestBenchmark:
         main_df = pd.DataFrame(make_kline_data(120, "volatile"))
         bm_df = pd.DataFrame(make_kline_data(120, "up", base=4000.0))
         dfs = {"600000": main_df, "000300.SH": bm_df}
-        monkeypatch.setattr(backtest, "fetch_kline", lambda symbol, *a, **kw: dfs[symbol])
+        monkeypatch.setattr(
+            backtest,
+            "fetch_kline",
+            lambda symbol, start, end, *a, **kw: dfs[symbol][(dfs[symbol].date >= start) & (dfs[symbol].date <= end)],
+        )
         monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: dict(_MA_CROSS_STRATEGY, benchmark="000300.SH"))
 
         result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
 
         bm = result["benchmark"]
         assert bm["symbol"] == "000300.SH"
-        first, last = float(bm_df["close"].iloc[0]), float(bm_df["close"].iloc[-1])
+        first, last = float(bm_df["open"].iloc[1]), float(bm_df["close"].iloc[-1])
         expected = (last - first) / first
         assert bm["total_return"] == pytest.approx(expected, abs=1e-3)
         assert bm["excess_return"] == pytest.approx(result["metrics"]["total_return"] - expected, abs=1e-3)
+
+    @pytest.mark.parametrize(("execution", "expected"), [("next_open", 0.5), ("same_close", 0.2)])
+    def test_benchmark_entry_price_matches_execution(self, monkeypatch, execution, expected):
+        df = _df_from_closes([100, 120])
+        df["open"] = [80, 110]
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)
+
+        result = backtest._benchmark_comparison("BENCH", "2024-01-01", "2024-01-02", 0, execution)
+
+        assert result["total_return"] == pytest.approx(expected)
+        assert result["excess_return"] == pytest.approx(-expected)
+
+    @pytest.mark.parametrize("execution", ["next_open", "same_close"])
+    def test_benchmark_starts_when_strategy_can_trade_without_prehistory(self, monkeypatch, execution):
+        df = _df_from_closes([50] + [100] * 29)
+        monkeypatch.setattr(
+            backtest, "fetch_kline", lambda symbol, start, end, *a, **kwargs: df[(df.date >= start) & (df.date <= end)]
+        )
+        strategy = {
+            "benchmark": "BENCH",
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]},
+            "simulation": {"execution": execution, "slippage": 0, "commission": 0},
+        }
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a: strategy)
+        start, end = str(df["date"].iloc[0].date()), str(df["date"].iloc[-1].date())
+
+        result = backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+        assert result["benchmark"]["total_return"] == 0
+        assert result["benchmark"]["excess_return"] == result["metrics"]["total_return"] == 0
+
+    @pytest.mark.parametrize(("start", "end"), [("2023-12-31", "2024-01-02"), ("2024-01-01", "2024-01-03")])
+    def test_benchmark_rejects_short_coverage_without_excess(self, monkeypatch, start, end):
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: _df_from_closes([100, 120]))
+
+        result = backtest._benchmark_comparison("BENCH", start, end, 0.1, "same_close")
+
+        assert "error" in result
+        assert "excess_return" not in result
+
+    @pytest.mark.parametrize(
+        ("column", "value"), [("open", 0), ("close", 0), ("open", float("inf")), ("close", float("nan"))]
+    )
+    def test_benchmark_rejects_non_positive_or_non_finite_boundary_prices(self, monkeypatch, column, value):
+        df = _df_from_closes([100.0, 120.0])
+        df.loc[0 if column == "open" else df.index[-1], column] = value
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)
+
+        result = backtest._benchmark_comparison("BENCH", "2024-01-01", "2024-01-02", 0.1)
+
+        assert "error" in result
+        assert "excess_return" not in result
+
+    @pytest.mark.parametrize("basis", ["unknown", "mixed"])
+    def test_benchmark_rejects_unverified_adjustment_basis(self, monkeypatch, make_kline_data, basis):
+        main_df = pd.DataFrame(make_kline_data(30)).assign(adjusted="total_return")
+        bm_df = pd.DataFrame(make_kline_data(30, base=4000.0))
+        bm_df["adjusted"] = "unknown" if basis == "unknown" else ["total_return"] * 15 + ["none"] * 15
+        dfs = {"AAPL": main_df, "BENCH": bm_df}
+
+        def fake_fetch(symbol, start, end, *args, **kwargs):
+            df = dfs[symbol]
+            return df[(df.date >= start) & (df.date <= end)].copy()
+
+        monkeypatch.setattr(backtest, "fetch_kline", fake_fetch)
+        strategy = {
+            "benchmark": "BENCH",
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]},
+        }
+        monkeypatch.setattr(backtest, "load_strategy", lambda *args: strategy)
+        start, end = (str(main_df["date"].iloc[i].date()) for i in (0, -1))
+
+        result = backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+        assert "adjusted" in result["benchmark"]["error"]
+        assert "total_return" not in result["benchmark"]
+        assert "excess_return" not in result["benchmark"]
 
     def test_no_benchmark_key_output_unchanged(self, monkeypatch, make_kline_data):
         df = pd.DataFrame(make_kline_data(120, "volatile"))
@@ -969,6 +1391,16 @@ class TestNextOpenExecution:
         assert sim["trades"][0]["date"] == "2024-01-04"
         assert sim["trades"][0]["signal_date"] == "2024-01-02"
         assert len(sim["equity_curve"]) == 3
+
+    def test_pending_entry_is_cancelled_when_latest_entry_condition_fails(self):
+        df = _df_from_closes([10, 11, 5, 5])
+        df.loc[2, "volume"] = 0
+        sim = backtest.simulate(
+            df, {"entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 10}]}}, 1000, "AAPL"
+        )
+        assert sim["trades"] == []
+        assert sim["execution"]["blocked_orders"] == 1
+        assert sim["execution"]["unfilled_order"] is False
 
     def test_explicit_locked_limit_blocks_buy(self):
         df = _df_from_closes([9, 10.5, 11, 12])

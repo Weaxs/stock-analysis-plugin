@@ -401,6 +401,81 @@ def test_adjacent_event_returns_are_not_overlapping():
     assert not any(e["overlaps_other_event"] for e in result["events"])
 
 
+def test_event_without_valid_window_does_not_mark_neighbor_as_overlapping():
+    dates = [f"2026-01-{day:02d}" for day in range(1, 13)]
+    prices = [{"date": day, "close": 100} for day in dates]
+    code, result = invoke(
+        "event_study",
+        {
+            "event_dates": ["2026-01-01", "2026-01-02"],
+            "horizons": [0, 5],
+            "price_basis": "adjusted",
+            "prices": prices,
+            "benchmark_prices": prices,
+        },
+    )
+    assert code == 0
+    assert all(window["reason"] for window in result["events"][0]["windows"])
+    assert not any(event["overlaps_other_event"] for event in result["events"])
+
+
+def test_tail_event_with_only_invalid_horizons_does_not_overlap():
+    dates = [f"2026-01-{day:02d}" for day in range(1, 13)]
+    prices = [{"date": day, "close": 100} for day in dates]
+    code, result = invoke(
+        "event_study",
+        {
+            "event_dates": ["2026-01-05", "2026-01-10"],
+            "horizons": [5],
+            "price_basis": "adjusted",
+            "prices": prices,
+            "benchmark_prices": prices,
+        },
+    )
+    assert code == 0
+    assert result["events"][1]["windows"][0]["reason"] == "insufficient_stock_window"
+    assert not any(event["overlaps_other_event"] for event in result["events"])
+
+
+def test_event_without_excess_return_sample_does_not_overlap():
+    dates = [f"2026-01-{day:02d}" for day in range(1, 13)]
+    prices = [{"date": day, "close": 100} for day in dates]
+    benchmark = [row for row in prices if row["date"] != "2026-01-03"]
+    code, result = invoke(
+        "event_study",
+        {
+            "event_dates": ["2026-01-03", "2026-01-04"],
+            "horizons": [2],
+            "price_basis": "adjusted",
+            "prices": prices,
+            "benchmark_prices": benchmark,
+        },
+    )
+    assert code == 0
+    assert result["events"][1]["windows"][0]["reason"] == "missing_benchmark_endpoint"
+    assert not any(event["overlaps_other_event"] for event in result["events"])
+
+
+def test_invalid_horizon_does_not_expand_overlap_interval():
+    dates = [f"2026-01-{day:02d}" for day in range(1, 9)]
+    prices = [{"date": day, "close": 100} for day in dates]
+    benchmark = [row for row in prices if row["date"] != "2026-01-05"]
+    code, result = invoke(
+        "event_study",
+        {
+            "event_dates": ["2026-01-03", "2026-01-04"],
+            "horizons": [0, 2],
+            "price_basis": "adjusted",
+            "prices": prices,
+            "benchmark_prices": benchmark,
+        },
+    )
+    assert code == 0
+    assert result["events"][0]["windows"][0]["excess_return_pct"] == 0
+    assert result["events"][0]["windows"][1]["reason"] == "missing_benchmark_endpoint"
+    assert not any(event["overlaps_other_event"] for event in result["events"])
+
+
 def test_large_input_file_round_trip(tmp_path):
     path = tmp_path / "输入.json"
     path.write_text(

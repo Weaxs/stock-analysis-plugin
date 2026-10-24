@@ -18,12 +18,37 @@ import sys
 import tempfile
 import time
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import command_timeout, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
+
+_MARKET_TIMEZONES = {
+    "A": "Asia/Shanghai",
+    "HK": "Asia/Hong_Kong",
+    "US": "America/New_York",
+    "JP": "Asia/Tokyo",
+    "KR": "Asia/Seoul",
+    "TW": "Asia/Taipei",
+}
+
+
+def _price_date(value, market):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        if len(value) == 10:
+            return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            return None
+        return timestamp.astimezone(ZoneInfo(_MARKET_TIMEZONES[market])).date().isoformat()
+    except (ValueError, KeyError, OverflowError):
+        return None
 
 
 def _default_store() -> Path:
@@ -53,6 +78,15 @@ def _validate_signal(record):
         if record.get(field) is not None
     ):
         raise ValueError("Signal prices must be finite and positive")
+    entry = record["entry_price"]
+    target = record.get("target_price")
+    stop = record.get("stop_price")
+    if record["direction"] == "buy":
+        valid_prices = (target is None or target > entry) and (stop is None or stop < entry)
+    else:
+        valid_prices = (target is None or target < entry) and (stop is None or stop > entry)
+    if not valid_prices:
+        raise ValueError("Signal target/stop prices conflict with direction")
     horizon = record.get("horizon_days")
     if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon <= 0:
         raise ValueError("Signal horizon_days must be a positive integer")
@@ -141,16 +175,20 @@ def _append_record(store: Path, record: dict):
 
 def cmd_record(args):
     entry_price = args.entry_price
+    price_as_of = None
     if entry_price is None:
         quote = run_tool("stock_data.py", ["quote", args.symbol])
         if not isinstance(quote, dict) or "error" in quote or quote.get("price") is None:
             return {"error": f"cannot determine entry price for {args.symbol}: quote unavailable"}
         entry_price = quote["price"]
-    date = args.date or datetime.now().strftime("%Y-%m-%d")
+        price_as_of = quote.get("data_as_of") if isinstance(quote.get("data_as_of"), str) else None
+    market = detect_market(args.symbol)
+    date = args.date or datetime.now(ZoneInfo(_MARKET_TIMEZONES[market])).date().isoformat()
+    price_date = _price_date(price_as_of, market) if price_as_of else None
     record = {
         "id": f"{date}-{args.symbol}-{uuid4().hex[:8]}",
         "symbol": args.symbol,
-        "market": detect_market(args.symbol),
+        "market": market,
         "direction": args.direction,
         "entry_price": entry_price,
         "target_price": args.target_price,
@@ -159,12 +197,16 @@ def cmd_record(args):
         "source": args.source,
         "note": args.note,
         "record_date": date,
+        "price_as_of": price_as_of,
+        "price_date": price_date,
         "status": "open",
         "outcome": None,
     }
     store = _store_path(args)
     try:
         _validate_signal(record)
+        if price_date and price_date > date:
+            raise ValueError("price_as_of cannot be later than record_date; use an explicit historical entry price")
         with _store_lock(store):
             _load_records(store, strict=True)
             _append_record(store, record)
@@ -177,9 +219,9 @@ def _evaluate_bars(rec: dict, bars: list):
     """Judge one open record against daily bars after record_date.
 
     Returns (outcome, exit_price, exit_date), or None when the record stays open
-    (fewer post-record bars than horizon_days and nothing triggered). Stop is
-    checked before target within each bar — when both trigger on the same day
-    the conservative stop_hit wins."""
+    (fewer post-record bars than horizon_days and nothing triggered). Opening
+    stops fill at the open and opening targets at the target. Otherwise stop is
+    checked before target within each bar."""
     entry = rec.get("entry_price")
     if not isinstance(entry, (int, float)) or entry <= 0:
         return None
@@ -192,13 +234,21 @@ def _evaluate_bars(rec: dict, bars: list):
         key=lambda b: str(b.get("date", "")),
     )
     for i, bar in enumerate(eligible, 1):
-        high, low, close = bar.get("high"), bar.get("low"), bar.get("close")
+        opening, high, low, close = (bar.get(key) for key in ("open", "high", "low", "close"))
         if direction == "buy":
+            hit_opening_stop = stop is not None and opening is not None and opening <= stop
+            hit_opening_target = target is not None and opening is not None and opening >= target
             hit_stop = stop is not None and low is not None and low <= stop
             hit_target = target is not None and high is not None and high >= target
         else:
+            hit_opening_stop = stop is not None and opening is not None and opening >= stop
+            hit_opening_target = target is not None and opening is not None and opening <= target
             hit_stop = stop is not None and high is not None and high >= stop
             hit_target = target is not None and low is not None and low <= target
+        if hit_opening_stop:
+            return "stop_hit", opening, bar.get("date")
+        if hit_opening_target:
+            return "target_hit", target, bar.get("date")
         if hit_stop:
             return "stop_hit", stop, bar.get("date")
         if hit_target:
@@ -222,25 +272,53 @@ def _kline_count(rec: dict) -> int:
     return min(max(horizon + 40, elapsed + 15), 800)
 
 
-def _valid_bar(bar) -> bool:
+def _valid_bar(bar, require_open=True) -> bool:
     if not isinstance(bar, dict):
         return False
     try:
         date = datetime.strptime(bar["date"], "%Y-%m-%d")
     except (KeyError, TypeError, ValueError):
         return False
+    keys = ("open", "high", "low", "close") if require_open or bar.get("open") is not None else ("high", "low", "close")
     return date.strftime("%Y-%m-%d") == bar["date"] and all(
-        isinstance(bar.get(key), (int, float)) and math.isfinite(bar[key]) and bar[key] > 0
-        for key in ("high", "low", "close")
+        not isinstance(bar.get(key), bool)
+        and isinstance(bar.get(key), (int, float))
+        and math.isfinite(bar[key])
+        and bar[key] > 0
+        for key in keys
     )
 
 
 def _price_factor(rec, bars):
+    market = rec.get("market") or detect_market(rec["symbol"])
+    price_date = _price_date(rec.get("price_date") or rec.get("price_as_of"), market)
+    if price_date and price_date > rec["record_date"]:
+        return None
     if all(bar.get("adjusted") == "none" for bar in bars):
         return 1.0
-    anchor = next((bar for bar in bars if bar["date"] == rec["record_date"]), {})
-    basis = anchor.get("adjusted")
+    anchor_date = price_date or rec["record_date"]
+    has_price_date = price_date is not None
+    anchor_idx = next((i for i, bar in enumerate(bars) if bar["date"] == anchor_date), None)
+    if anchor_idx is None:
+        anchor_idx = next((i for i in range(len(bars) - 1, -1, -1) if bars[i]["date"] <= anchor_date), None)
+        if anchor_idx is None:
+            return None
+        next_bar = next((bar for bar in bars if bar["date"] > anchor_date), None)
+        if (
+            not has_price_date
+            and next_bar is not None
+            and next_bar.get("adjustment_factor") != bars[anchor_idx].get("adjustment_factor")
+        ):
+            return None
+    elif (
+        anchor_idx
+        and not has_price_date
+        and bars[anchor_idx - 1].get("adjustment_factor") != bars[anchor_idx].get("adjustment_factor")
+    ):
+        return None
+    anchor = bars[anchor_idx]
     factor = anchor.get("adjustment_factor")
+    basis = anchor.get("adjusted")
     if (
         basis in ("qfq", "total_return")
         and all(bar.get("adjusted") == basis for bar in bars)
@@ -284,7 +362,8 @@ def cmd_evaluate(args):
         if (
             not isinstance(bars, list)
             or not bars
-            or any(not _valid_bar(bar) for bar in bars)
+            or any(not _valid_bar(bar, require_open=rec.get("stop_price") is not None) for bar in bars)
+            or len({bar["date"] for bar in bars}) != len(bars)
             or min(str(b.get("date", ""))[:10] for b in bars) > rec["record_date"]
         ):
             entry.update({"outcome": "skipped_no_data", "return_pct": None, "exit_date": None})
@@ -296,16 +375,17 @@ def cmd_evaluate(args):
                 warning="Adjusted or unknown prices lack a verified conversion to the original signal prices",
             )
         else:
+            decimal_factor = Decimal(str(factor))
             priced = dict(rec)
             for key in ("entry_price", "target_price", "stop_price"):
                 if priced.get(key) is not None:
-                    priced[key] *= factor
+                    priced[key] = float(Decimal(str(priced[key])) * decimal_factor)
             ev = _evaluate_bars(priced, bars)
             if ev is None:
                 entry.update({"outcome": "open", "return_pct": None, "exit_date": None})
             else:
                 outcome, exit_price, exit_date = ev
-                exit_price /= factor
+                exit_price = float(Decimal(str(exit_price)) / decimal_factor)
                 ret = round((exit_price - rec["entry_price"]) / rec["entry_price"] * 100, 2)
                 if rec.get("direction") == "sell":
                     ret = -ret
