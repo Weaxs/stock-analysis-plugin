@@ -37,9 +37,53 @@ def test_daily_failover_adjusts_all_prices_before_returning(monkeypatch):
         (10, 12, 9, 11),
     ]
     assert [row["volume"] for row in rows] == [900, 1000]
-    assert [row["turnover"] for row in rows] == [19800, 11000]
+    assert [row["turnover"] for row in rows] == [19_800_000, 11_000_000]
+    assert [row["date"] for row in rows] == ["2026-05-18", "2026-05-19"]
     assert all(row["adjusted"] == "qfq" for row in rows)
     assert [row["adjustment_factor"] for row in rows] == [0.5, 1]
+
+
+def test_tushare_kline_settles_original_price_signal(monkeypatch, tmp_path):
+    from tools import signal_tracker as st
+
+    def post(_url, *, json, timeout):
+        if json["api_name"] == "adj_factor":
+            return response(["trade_date", "adj_factor"], [["20260519", 2], ["20260518", 1]])
+        return response(
+            ["trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg"],
+            [["20260519", 51, 52, 50, 51, 1000, 11000, 2], ["20260518", 100, 101, 99, 100, 900, 19800, 0]],
+        )
+
+    monkeypatch.setattr("requests.post", post)
+    store = tmp_path / "signals.jsonl"
+    rec = st.cmd_record(
+        Namespace(
+            symbol="600519",
+            direction="buy",
+            entry_price=100,
+            target_price=120,
+            stop_price=90,
+            horizon_days=1,
+            source=None,
+            note=None,
+            date="2026-05-18",
+            store=str(store),
+        )
+    )
+    assert rec["status"] == "open"
+    monkeypatch.setattr(
+        st,
+        "run_tool",
+        lambda *args, **kwargs: stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=2)),
+    )
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 2
+    saved = st._load_records(store)[0]
+    assert saved["exit_price"] == 102
+    assert saved["evaluation_price_basis"]["factor"] == 0.5
 
 
 @pytest.mark.parametrize("period,freq", [("weekly", "week"), ("monthly", "month")])

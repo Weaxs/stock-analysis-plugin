@@ -54,7 +54,8 @@ def _get_index_kline(market: str) -> list:
 def _compute_indicators(klines: list) -> dict:
     import numpy as np
 
-    df = pd.DataFrame(klines).reindex(columns=["close", "high", "low"]).apply(pd.to_numeric, errors="coerce")
+    raw = pd.DataFrame(klines)
+    df = raw.reindex(columns=["close", "high", "low"]).apply(pd.to_numeric, errors="coerce")
     df = df[np.isfinite(df).all(axis=1) & (df > 0).all(axis=1)]
     closes = df["close"].to_numpy()
     if len(closes) < 20:
@@ -64,7 +65,7 @@ def _compute_indicators(klines: list) -> dict:
     ma5 = float(ma_series(close_s, 5).iloc[-1])
     ma10 = float(ma_series(close_s, 10).iloc[-1])
     ma20 = float(ma_series(close_s, 20).iloc[-1])
-    ma60 = float(ma_series(close_s, 60).iloc[-1]) if len(closes) >= 60 else float(np.mean(closes))
+    ma60 = float(ma_series(close_s, 60).iloc[-1]) if len(closes) >= 60 else None
     close = float(closes[-1])
 
     highs = df["high"].to_numpy()
@@ -79,14 +80,7 @@ def _compute_indicators(klines: list) -> dict:
 
     upper, mid, lower = bollinger_series(close_s)
     boll_width = float((upper.iloc[-1] - lower.iloc[-1]) / mid.iloc[-1]) if mid.iloc[-1] > 0 else 0
-
-    # rsi_series leaves NaN when the window has zero losses: 14 straight up bars
-    # is RSI 100, but 14 flat bars (no gains either) is undefined — call it neutral.
-    rsi_val = rsi_series(close_s, 14).iloc[-1]
-    if pd.isna(rsi_val):
-        rsi14 = 100.0 if float(close_s.diff().clip(lower=0).iloc[-14:].sum()) > 0 else 50.0
-    else:
-        rsi14 = float(rsi_val)
+    rsi14 = float(rsi_series(close_s, 14).iloc[-1])
 
     # Real EMA12-EMA26 (the old code mislabeled an np.mean simple average as EMA).
     dif, _, _ = macd_series(close_s)
@@ -96,12 +90,15 @@ def _compute_indicators(klines: list) -> dict:
 
     prev_close = float(closes[-2]) if len(closes) >= 2 else close
     change_pct = (close - prev_close) / prev_close * 100 if prev_close > 0 else 0
+    as_of = pd.to_datetime(raw.iloc[df.index[-1]].get("date"), errors="coerce")
 
     return {
+        "as_of": as_of.strftime("%Y-%m-%d") if not pd.isna(as_of) else None,
+        "dropped_rows": len(klines) - len(df),
         "ma5": round(ma5, 2),
         "ma10": round(ma10, 2),
         "ma20": round(ma20, 2),
-        "ma60": round(ma60, 2),
+        "ma60": round(ma60, 2) if ma60 is not None else None,
         "close": round(close, 2),
         "change_pct": round(change_pct, 2),
         "atr_ratio": round(atr_ratio, 4),
@@ -124,14 +121,14 @@ def classify_regime(ind: dict) -> tuple:
 
     bullish_ma = ma5 > ma10 > ma20
     bearish_ma = ma5 < ma10 < ma20
-    above_ma60 = close > ma60
+    above_ma60 = close > ma60 if ma60 is not None else None
     high_volatility = atr_ratio > 0.025 or boll_width > 0.15
     strong_trend = ma_spread > 0.03
 
     if bullish_ma and above_ma60 and strong_trend:
         regime = "trending_up"
         confidence = 0.85 + (0.1 if ma_spread > 0.05 else 0)
-    elif bearish_ma and not above_ma60 and strong_trend:
+    elif bearish_ma and above_ma60 is not None and not above_ma60 and strong_trend:
         regime = "trending_down"
         confidence = 0.85 + (0.1 if ma_spread > 0.05 else 0)
     elif high_volatility and not strong_trend:
@@ -176,6 +173,13 @@ def detect_regime(market: str = "A") -> dict:
     if not klines:
         return {"error": f"Failed to fetch index data for {name}"}
 
+    import numpy as np
+
+    if pd.isna(pd.to_datetime(klines[-1].get("date"), errors="coerce")):
+        return {"error": "Latest index bar has invalid date"}
+    latest = pd.DataFrame([klines[-1]]).reindex(columns=["close", "high", "low"]).apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(latest).all().all() or not (latest > 0).all().all():
+        return {"error": "Latest index bar has invalid OHLC data"}
     ind = _compute_indicators(klines)
     if not ind:
         return {"error": "Insufficient data to compute indicators"}
@@ -194,13 +198,19 @@ def detect_regime(market: str = "A") -> dict:
 
     return {
         "market": market,
-        "index": {"code": code, "name": name, "close": ind["close"], "change_pct": ind["change_pct"]},
+        "index": {
+            "code": code,
+            "name": name,
+            "close": ind["close"],
+            "change_pct": ind["change_pct"],
+            "as_of": ind["as_of"],
+        },
         "regime": regime,
         "regime_cn": REGIME_CN.get(regime, regime),
         "confidence": round(confidence, 2),
         "indicators": {
             "ma_arrangement": ma_arrangement,
-            "above_ma60": ind["close"] > ind["ma60"],
+            "above_ma60": ind["close"] > ind["ma60"] if ind["ma60"] is not None else None,
             "ma_spread_pct": ind["ma_spread_pct"],
             "atr_ratio": ind["atr_ratio"],
             "boll_width": ind["boll_width"],
@@ -210,6 +220,7 @@ def detect_regime(market: str = "A") -> dict:
         "sector_heat": sector_heat,
         "recommended_skills": recommended,
         "avoid_skills": avoid,
+        "warnings": [f"Dropped {ind['dropped_rows']} invalid OHLC rows"] if ind["dropped_rows"] else [],
     }
 
 

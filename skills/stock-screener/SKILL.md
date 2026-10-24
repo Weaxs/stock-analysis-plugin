@@ -70,6 +70,10 @@ python3 tools/screener.py screen --market A --top 20
 
 每个候选必须读取 `factor_coverage.available/missing/ratio/effective_weights`。ratio 是已覆盖因子的原始权重之和；L1 与 L2 的 effective_weights 均按可用因子重归一化，缺失或非有限值不按零分计，排序前先按实际可用因子计算综合分，effective_scores 保留实际参与计算的各组分数；用 sum(effective_scores[g] × effective_weights[g]) × market_sentiment.multiplier 核对 scores.final（四舍五入至一位）。scores.momentum 仍保留 L1 参考值，L2 贡献以 effective_scores.momentum 为准。相同分数但缺失因子不同的候选不能视为同等证据，报告缺失项和覆盖度，不以 `enriched=true` 代替覆盖判断。`scores.final=null` 表示没有足够因子计算，不能作为高分候选推荐。
 
+估值比较还需读取 `pe_basis`：dynamic、trailing 与 unknown 不得当成同一 PE 口径。筛选中的有限非正 PE/PB 价值子分为 0，不能因数值更低而获得最高价值分；缺失或非有限因子仍保持未知，不按零分处理。
+
+L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_samples` 记录实际样本数，非正/非有限收盘价先剔除，空输入为 0；短样本为缺测。质量因子按 `report_date` 分组归一，年度累计与单季累计不得直接排名；资金流 5/10/20 日窗口不足时返回 null，不按 0 或完整窗口处理。
+
 完成标准：列出实际生效的市场、过滤条件、排序口径和候选数量，且推荐理由只使用返回数据，并说明因子覆盖。
 
 ## 策略模板

@@ -67,6 +67,33 @@ class TestRecord:
         assert "error" in st.cmd_record(_rec_args(store, **overrides))
         assert not store.exists()
 
+    @pytest.mark.parametrize(
+        ("direction", "target_price", "stop_price"),
+        [
+            ("buy", 10.0, 9.0),
+            ("buy", 9.0, 9.0),
+            ("buy", 12.0, 10.0),
+            ("buy", 12.0, 11.0),
+            ("sell", 10.0, 11.0),
+            ("sell", 11.0, 11.0),
+            ("sell", 9.0, 10.0),
+            ("sell", 9.0, 9.0),
+        ],
+    )
+    def test_invalid_price_order_is_rejected_for_new_and_legacy_records(
+        self, store, direction, target_price, stop_price
+    ):
+        invalid = _rec_args(store, direction=direction, target_price=target_price, stop_price=stop_price)
+        assert "error" in st.cmd_record(invalid)
+        assert not store.exists()
+
+        legacy = st.cmd_record(_rec_args(store))
+        legacy.update(direction=direction, target_price=target_price, stop_price=stop_price)
+        store.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+        original = store.read_bytes()
+        assert "error" in st.cmd_record(_rec_args(store, symbol="000001"))
+        assert store.read_bytes() == original
+
     def test_append_after_missing_final_newline(self, store):
         first = st.cmd_record(_rec_args(store))
         store.write_bytes(store.read_bytes().rstrip(b"\n"))
@@ -93,7 +120,7 @@ class TestRecord:
 
     def test_entry_price_from_quote(self, store, mock_run_tool):
         mock_run_tool.return_value = {"symbol": "600519", "price": 1800.0}
-        rec = st.cmd_record(_rec_args(store, entry_price=None))
+        rec = st.cmd_record(_rec_args(store, entry_price=None, target_price=1900, stop_price=1700))
         assert rec["entry_price"] == 1800.0
         mock_run_tool.assert_called_once_with("stock_data.py", ["quote", "600519"])
 
@@ -139,6 +166,30 @@ class TestEvaluate:
         # kline fetch window includes the +40 buffer
         assert mock_run_tool.call_args[0][1] == ["kline", "600519", "--period", "daily", "--count", "43"]
 
+    @pytest.mark.parametrize(("target", "expected"), [(12, "target_hit"), (None, "timeout_profit")])
+    def test_hlc_history_without_open_does_not_require_stop(self, store, mock_run_tool, target, expected):
+        self._record(store, mock_run_tool, target_price=target, stop_price=None, horizon_days=1)
+        record_bar = _bar("2026-09-01", 10, 10, 10)
+        record_bar.pop("open")
+        bar = _bar("2026-09-02", 12.5, 9, 12.1)
+        bar.pop("open")
+        mock_run_tool.return_value = [record_bar, bar]
+
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+        assert result["results"][0]["outcome"] == expected
+
+    @pytest.mark.parametrize("bad_open", [float("inf"), 0, "bad"])
+    def test_target_only_record_rejects_invalid_open(self, store, mock_run_tool, bad_open):
+        self._record(store, mock_run_tool, target_price=12, stop_price=None, horizon_days=1)
+        bars = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 11, 9, 10)]
+        bars[1]["open"] = bad_open
+        mock_run_tool.return_value = bars
+
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+        assert result["results"][0]["outcome"] == "skipped_no_data"
+
     def test_old_signal_window_anchored_to_record_date(self, store, mock_run_tool):
         """An open signal recorded long ago must be evaluated against bars right
         after record_date, not against the most recent bars (window anchored at
@@ -169,6 +220,47 @@ class TestEvaluate:
         mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 8.5, 11.0)]
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         assert result["results"][0]["outcome"] == "stop_hit"
+
+    @pytest.mark.parametrize(
+        ("direction", "target", "stop", "opening", "high", "low", "outcome", "exit_price", "return_pct"),
+        [
+            ("buy", 12, 9, 8.5, 13, 8, "stop_hit", 8.5, -15),
+            ("buy", 12, 9, 12.5, 13, 8.5, "target_hit", 12, 20),
+            ("sell", 9, 11, 11.5, 12, 8, "stop_hit", 11.5, -15),
+            ("sell", 9, 11, 8.5, 12, 8, "target_hit", 9, 10),
+        ],
+    )
+    def test_opening_threshold_is_settled_before_intraday_prices(
+        self,
+        store,
+        mock_run_tool,
+        direction,
+        target,
+        stop,
+        opening,
+        high,
+        low,
+        outcome,
+        exit_price,
+        return_pct,
+    ):
+        self._record(store, mock_run_tool, direction=direction, target_price=target, stop_price=stop)
+        bar = _bar("2026-09-02", high, low, 10)
+        bar["open"] = opening
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), bar]
+
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+        assert result["results"][0]["outcome"] == outcome
+        assert result["results"][0]["return_pct"] == return_pct
+        assert st._load_records(store)[0]["exit_price"] == exit_price
+
+    def test_sell_same_day_target_and_stop_is_conservative_stop(self, store, mock_run_tool):
+        self._record(store, mock_run_tool, direction="sell", target_price=9, stop_price=11)
+        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 11.5, 8.5, 10)]
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert result["results"][0]["outcome"] == "stop_hit"
+        assert st._load_records(store)[0]["exit_price"] == 11
 
     def test_timeout_profit(self, store, mock_run_tool):
         self._record(store, mock_run_tool, target_price=None, stop_price=None)
@@ -209,6 +301,18 @@ class TestEvaluate:
         assert result["results"][0]["outcome"] == "skipped_no_data"
         assert st._load_records(store)[0]["status"] == "open"
 
+    def test_duplicate_bar_dates_are_skipped(self, store, mock_run_tool):
+        self._record(store, mock_run_tool)
+        mock_run_tool.return_value = [
+            _bar("2026-09-01", 10, 10, 10),
+            _bar("2026-09-02", 12.5, 10, 12.1),
+            _bar("2026-09-02", 10, 8.5, 9),
+        ]
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert result["closed"] == 0
+        assert result["results"][0]["outcome"] == "skipped_no_data"
+        assert st._load_records(store)[0]["status"] == "open"
+
     def test_history_missing_record_date_is_not_settled(self, store, mock_run_tool):
         self._record(store, mock_run_tool, date="2020-01-01", horizon_days=1)
         mock_run_tool.return_value = [_bar("2026-09-01", 21, 19, 20)]
@@ -217,10 +321,13 @@ class TestEvaluate:
         assert result["closed"] == 0
         assert st._load_records(store)[0]["status"] == "open"
 
-    @pytest.mark.parametrize("bad", [None, float("nan"), "bad"])
-    def test_incomplete_price_bar_does_not_record_a_false_win(self, store, mock_run_tool, bad):
+    @pytest.mark.parametrize("key", ["open", "high", "low", "close"])
+    @pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), 0, -1, "bad", True])
+    def test_incomplete_price_bar_does_not_record_a_false_win(self, store, mock_run_tool, bad, key):
         self._record(store, mock_run_tool, horizon_days=1)
-        mock_run_tool.return_value = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, bad, 12.1)]
+        bars = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 12.5, 10, 12.1)]
+        bars[1][key] = bad
+        mock_run_tool.return_value = bars
         result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
         assert result["closed"] == 0
         assert result["results"][0]["outcome"] == "skipped_no_data"
@@ -319,7 +426,7 @@ class TestSummary:
 
     def test_counts_win_rate_and_by_source(self, store, mock_run_tool):
         st.cmd_record(_rec_args(store, source="dragon-head"))
-        st.cmd_record(_rec_args(store, source="dragon-head", symbol="000001"))
+        st.cmd_record(_rec_args(store, source="dragon-head", symbol="000001", stop_price=8))
         st.cmd_record(_rec_args(store, source="hot-theme", symbol="300750"))
         # close #1 target_hit (+20), close #2 timeout_loss (-10), keep #3 open
         mock_run_tool.side_effect = [
@@ -495,6 +602,181 @@ def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_t
     assert saved["entry_price"] == 100
     assert saved["exit_price"] == 102
     assert saved["evaluation_price_basis"]["factor"] == 0.5
+
+
+def test_decimal_adjustment_preserves_threshold_and_original_prices(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, entry_price=2, stop_price=1, target_price=3))
+    bars = [_bar("2026-09-01", 0.2, 0.2, 0.2), _bar("2026-09-02", 0.3, 0.2, 0.25)]
+    for bar in bars:
+        bar.update(adjusted="qfq", adjustment_factor=0.1)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["closed"] == 1
+    assert result["results"][0]["outcome"] == "target_hit"
+    assert result["results"][0]["return_pct"] == 50
+    saved = st._load_records(store)[0]
+    assert {key: saved[key] for key in ("entry_price", "target_price", "stop_price")} == {
+        "entry_price": 2,
+        "target_price": 3,
+        "stop_price": 1,
+    }
+    assert saved["exit_price"] == 3
+    assert isinstance(json.loads(json.dumps(saved))["exit_price"], (int, float))
+    assert saved["evaluation_price_basis"]["factor"] == 0.1
+
+
+def test_weekend_quote_settles_against_actual_price_date(store, mock_run_tool):
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-09-04"}
+    rec = st.cmd_record(
+        _rec_args(store, date="2026-09-05", entry_price=None, stop_price=90, target_price=120, horizon_days=1)
+    )
+    assert rec["price_as_of"] == "2026-09-04"
+    bars = [_bar("2026-09-04", 50, 50, 50), _bar("2026-09-07", 51, 50, 51)]
+    for bar, factor in zip(bars, [0.5, 1]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 2
+    saved = st._load_records(store)[0]
+    assert saved["exit_price"] == 102
+    assert saved["evaluation_price_basis"]["factor"] == 0.5
+
+
+def test_legacy_signal_does_not_guess_factor_on_ex_date(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=1))
+    bars = [
+        _bar("2026-08-31", 100, 100, 100),
+        _bar("2026-09-01", 50, 50, 50),
+        _bar("2026-09-02", 51, 50, 51),
+    ]
+    for bar, factor in zip(bars, [1, 0.5, 0.5]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["closed"] == 0
+    assert result["results"][0]["outcome"] == "skipped_price_basis"
+    assert st._load_records(store)[0]["status"] == "open"
+
+
+def test_non_trading_day_uses_prior_bar_when_factor_is_unchanged(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, date="2026-09-05", entry_price=100, stop_price=90, target_price=120, horizon_days=1))
+    bars = [_bar("2026-09-04", 100, 100, 100), _bar("2026-09-07", 101, 100, 101)]
+    for bar in bars:
+        bar.update(adjusted="qfq", adjustment_factor=1)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 1
+    assert st._load_records(store)[0]["evaluation_price_basis"]["factor"] == 1
+
+
+def test_future_quote_date_is_rejected_before_recording(store, mock_run_tool):
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-09-07"}
+    result = st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=None, target_price=120, stop_price=90))
+    assert "error" in result
+    assert not store.exists()
+
+
+def test_legacy_future_quote_date_is_rejected_during_evaluation(store, mock_run_tool):
+    rec = st.cmd_record(
+        _rec_args(store, date="2026-09-01", entry_price=100, target_price=120, stop_price=90, horizon_days=1)
+    )
+    rec["price_as_of"] = "2026-09-07"
+    store.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    bars = [
+        _bar("2026-09-01", 50, 50, 50),
+        _bar("2026-09-07", 100, 100, 100),
+        _bar("2026-09-08", 102, 100, 102),
+    ]
+    for bar, factor in zip(bars, [0.5, 1, 1]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["closed"] == 0
+    assert result["results"][0]["outcome"] == "skipped_price_basis"
+
+
+def test_iso_quote_timestamp_uses_market_local_date(store, mock_run_tool):
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-09-04T20:00:00+00:00"}
+    rec = st.cmd_record(
+        _rec_args(
+            store,
+            symbol="AAPL",
+            date="2026-09-04",
+            entry_price=None,
+            stop_price=90,
+            target_price=120,
+            horizon_days=1,
+        )
+    )
+    assert rec["price_date"] == "2026-09-04"
+    bars = [
+        _bar("2026-09-03", 100, 100, 100),
+        _bar("2026-09-04", 50, 50, 50),
+        _bar("2026-09-07", 51, 50, 51),
+    ]
+    for bar, factor in zip(bars, [1, 0.5, 0.5]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 2
+
+
+@pytest.mark.parametrize(
+    ("symbol", "host_timezone", "record_date", "exit_date", "next_date"),
+    [
+        ("AAPL", "Asia/Shanghai", "2026-10-05", "2026-10-06", "2026-10-07"),
+        ("600519", "America/New_York", "2026-10-06", "2026-10-07", "2026-10-08"),
+    ],
+)
+def test_default_record_date_uses_symbol_market_timezone(
+    store, mock_run_tool, monkeypatch, symbol, host_timezone, record_date, exit_date, next_date
+):
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    fixed = datetime(2026, 10, 6, 0, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed.astimezone(ZoneInfo(host_timezone)).replace(tzinfo=None)
+            return fixed.astimezone(tz)
+
+    monkeypatch.setattr(st, "datetime", FrozenDateTime)
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-10-06T00:00:00+00:00"}
+    rec = st.cmd_record(
+        _rec_args(store, symbol=symbol, date=None, entry_price=None, target_price=110, stop_price=90, horizon_days=1)
+    )
+    assert rec["record_date"] == record_date
+    assert rec["price_date"] == record_date
+    bars = [
+        _bar(record_date, 100, 100, 100),
+        _bar(exit_date, 111, 100, 109),
+        _bar(next_date, 95, 95, 95),
+    ]
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "target_hit"
+    assert result["results"][0]["return_pct"] == 10
+    assert result["results"][0]["exit_date"] == exit_date
 
 
 def test_batch_deadline_returns_and_persists_completed_results(store, mock_run_tool, monkeypatch):

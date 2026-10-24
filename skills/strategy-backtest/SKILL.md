@@ -57,18 +57,22 @@ simulation:
 
 position:
   size: 1.0                   # 仓位比例
-  max_positions: 1            # 最大持仓数
+  max_positions: 1            # 当前仅支持单持仓，其他值明确报错
 ```
 
 **可用指标**：rsi, ma, ema, macd_dif, macd_dea, macd, volume_ratio, price_change, bollinger_position, close, volume
 
-`monthly_momentum` 是共享核心的月度观察对数收益：`period` 默认63，支持21/63/252等正整数；月初首根正成交量日K收盘计算并保持到下次月度观察，次日开盘才可能成交。零成交量记录不计回溯根数。MUST 读取 [多期限月度趋势](../bull-trend/references/trend-horizons.md)，不能把单期限YAML等同三子策略组合。需要在观察日已有period+1根有效日K；默认回测起点会截断输入历史，不能据此声称提前完成预热。三期限同资金起点的完整研究复现使用参考里的研究脚本。
+`rsi` 在预热不足时不可用，连续上涨窗口为 100，全平窗口为中性 50；不可用值不能满足条件或制造交叉。`volume_ratio` 是当根成交量除以前 N 根平均成交量，不包含当根本身。
+
+`monthly_momentum` 是共享核心的月度观察对数收益：`period` 默认63，支持21/63/252等正整数；月初首根正成交量日K收盘计算并保持到下次月度观察，次日开盘才可能成交。零成交量记录不计回溯根数。MUST 读取 [多期限月度趋势](../bull-trend/references/trend-horizons.md)，不能把单期限YAML等同三子策略组合。需要在观察日已有period+1根有效日K；回测按策略最大 lookback 增加取数，起点前历史仅用于指标预热，交易和权益仍限于请求区间；`warnings` 出现 `Entry indicator is unavailable` 时必须披露指标不可用及数据质量，提供方历史不足时不能声称完成预热。三期限同资金起点的完整研究复现使用参考里的研究脚本。
 
 独立趋势强度可用 `trend_score`，默认 `(EMA20-EMA60)/ATR14`，ATR 为真实波幅简单平均。`fast_period/slow_period/period` 分别控制快 EMA、慢 EMA、ATR，要求正整数且快线小于慢线；默认 60 根预热，预热或零 ATR 不触发条件。解释七档显示、初始化与样本外验证前 MUST 读取 [独立趋势温度](../bull-trend/references/trend-temperature.md)。它不是星球温度或肥尾信号，原固定止损/止盈默认值仍生效。
 
 该字段的 `validation_status=not_validated`。已有真实股票试验未支持默认温度入场规则；MUST NOT 自行补出“温转热买、降温卖”或零轴规则作为推荐策略。用户指定规则时可运行研究回测，但 MUST 同时报基准、成本、回撤及验证局限。
 
 **可用运算符**：`>`, `<`, `>=`, `<=`, `==`, `cross_above`, `cross_below`
+
+`entry/exit.logic` 仅允许 `all/any`，operator 仅限上表；period/fast_period/slow_period 仅接受正整数或整数字符串，非法输入明确报错，不静默替换默认值或截断。
 
 ### 第二步：运行回测
 
@@ -85,7 +89,7 @@ python3 tools/backtest.py run <path.yaml> <symbol> --start <date> --end <date>
 - `--start` / `--end`：回测时间范围（可选，默认近一年）
 - 初始资金默认 100 万，可用 `--capital` 调整
 
-默认 `simulation.execution=next_open`：信号在前一交易日收盘确定，下一有效交易日按开盘价加滑点成交；交易同时保留 `signal_date` 与实际 `date`。最后一天新信号没有后续开盘时不能成交。需要复现旧结果时显式使用 `same_close`，并说明它按信号日收盘成交，可能高估可执行收益。零/缺失成交量（已有 volume 字段时）阻止成交；一字涨跌停仅在输入提供同口径历史 `limit_up/limit_down` 时保守阻止，不猜 ST、IPO 或 ETF 限价。
+默认 `simulation.execution=next_open`：信号在前一交易日收盘确定，下一有效交易日按开盘价加滑点成交；交易同时保留 `signal_date` 与实际 `date`。最后一天新信号没有后续开盘时不能成交。需要复现旧结果时显式使用 `same_close`，并说明它按信号日收盘成交，可能高估可执行收益。零/缺失成交量（已有 volume 字段时）阻止成交；一字涨跌停仅在输入提供同口径历史 `limit_up/limit_down` 时保守阻止，不猜 ST、IPO 或 ETF 限价。延迟的入场信号在新收盘失效时撤单，风险退出 pending 保留至成交。回测仅接受单一 `qfq`/`total_return`/`none` 复权口径，unknown 或混合口径明确报错。
 
 读取 `execution.model/blocked_orders/unfilled_order/limitations` 并说明未成交情况。止损、止盈和移动止损均是收盘信号，不承诺盘中按阈值成交；次日跳空按实际开盘价计算。没有历史限价数据时，不能声称已验证涨跌停可成交性。
 
@@ -93,6 +97,7 @@ python3 tools/backtest.py run <path.yaml> <symbol> --start <date> --end <date>
 
 回测完成后，按共享框架的风险单位和回测约束解释原始结果。针对本工具：
 
+- 基准与策略使用相同首日执行口径，无预热时以策略首条权益日期为起点；覆盖不符或首末价格非法时读取 `benchmark.error`，不能输出超额。
 - 从 `metrics` 和 `trades` 计算期望值并与盈亏比一起报告。
 - 报告最大回撤、连续亏损、交易次数和平均持有期；结果未携带初始风险时，将 1R 分布标为不可计算。
 - 使用用户指定的互斥日期区间分别运行样本内和样本外回测。

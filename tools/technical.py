@@ -231,12 +231,13 @@ def macd_series(close: pd.Series) -> tuple:
 
 
 def rsi_series(close: pd.Series, period: int) -> pd.Series:
-    """Full RSI series (SMA of gains/losses over `period`). NaN where there were no losses."""
+    """Full RSI series (SMA of gains/losses over `period`)."""
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0).rolling(period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    rsi = (100 - 100 / (1 + rs)).mask((loss == 0) & (gain > 0), 100)
+    return rsi.mask((loss == 0) & (gain == 0), 50)
 
 
 def bollinger_series(close: pd.Series, period: int = 20) -> tuple:
@@ -257,22 +258,23 @@ def kdj_series(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple:
     return k, d, 3 * k - 2 * d
 
 
+def _ma_arrangement(values):
+    valid = [value for value in values if value is not None]
+    if len(valid) < 3:
+        return "insufficient_data"
+    if all(a > b for a, b in zip(valid, valid[1:])):
+        return "bullish"
+    if all(a < b for a, b in zip(valid, valid[1:])):
+        return "bearish"
+    return "mixed"
+
+
 def calc_ma(close: pd.Series) -> dict:
     mas = {}
     for n in [5, 10, 20, 60]:
         ma = ma_series(close, n)
         mas[f"ma{n}"] = round(float(ma.iloc[-1]), 2) if len(ma.dropna()) > 0 else None
-    vals = [mas.get(f"ma{n}") for n in [5, 10, 20, 60]]
-    valid = [v for v in vals if v is not None]
-    if len(valid) >= 3:
-        if valid == sorted(valid, reverse=True):
-            mas["ma_arrangement"] = "bullish"
-        elif valid == sorted(valid):
-            mas["ma_arrangement"] = "bearish"
-        else:
-            mas["ma_arrangement"] = "mixed"
-    else:
-        mas["ma_arrangement"] = "insufficient_data"
+    mas["ma_arrangement"] = _ma_arrangement([mas.get(f"ma{n}") for n in [5, 10, 20, 60]])
     return mas
 
 
@@ -353,11 +355,13 @@ def calc_kdj(high: pd.Series, low: pd.Series, close: pd.Series) -> dict:
 
 
 def calc_volume(volume: pd.Series) -> dict:
-    vol_ma5 = float(volume.rolling(5).mean().iloc[-1])
-    vol_ma10 = float(volume.rolling(10).mean().iloc[-1])
+    vol_ma5 = float(volume.rolling(5).mean().shift(1).iloc[-1])
+    vol_ma10 = float(volume.rolling(10).mean().shift(1).iloc[-1])
     cur = float(volume.iloc[-1])
-    ratio = cur / vol_ma5 if vol_ma5 > 0 else 0
-    if ratio > 3:
+    ratio = cur / vol_ma5 if np.isfinite(vol_ma5) and vol_ma5 > 0 else None
+    if ratio is None:
+        signal = "insufficient_data"
+    elif ratio > 3:
         signal = "extremely_heavy"
     elif ratio > 2:
         signal = "heavy"
@@ -367,9 +371,9 @@ def calc_volume(volume: pd.Series) -> dict:
         signal = "normal"
     return {
         "current": int(cur),
-        "vol_ma5": round(vol_ma5, 0),
-        "vol_ma10": round(vol_ma10, 0),
-        "volume_ratio": round(ratio, 2),
+        "vol_ma5": round(vol_ma5, 0) if np.isfinite(vol_ma5) else None,
+        "vol_ma10": round(vol_ma10, 0) if np.isfinite(vol_ma10) else None,
+        "volume_ratio": round(ratio, 2) if ratio is not None else None,
         "signal": signal,
     }
 
@@ -411,9 +415,11 @@ def calc_bias(close: pd.Series, ma_data: dict) -> dict:
 
 def calc_volume_direction(close: pd.Series, volume: pd.Series) -> str:
     if len(close) < 2:
-        return "normal"
+        return "insufficient_data"
     price_up = float(close.iloc[-1]) > float(close.iloc[-2])
-    vol_ma5 = float(volume.rolling(5).mean().iloc[-1])
+    vol_ma5 = float(volume.rolling(5).mean().shift(1).iloc[-1])
+    if not np.isfinite(vol_ma5) or vol_ma5 <= 0:
+        return "insufficient_data"
     cur_vol = float(volume.iloc[-1])
     heavy = cur_vol > vol_ma5 * 1.5
     shrink = cur_vol < vol_ma5 * 0.7
@@ -461,6 +467,8 @@ def generate_signal_score(
     # --- Trend score (30 points) ---
     arrangement = ma_data.get("ma_arrangement", "mixed")
     overall = trend_data.get("overall", "neutral")
+    ma_values = [value for value in (ma_data.get(f"ma{n}") for n in (5, 10, 20, 60)) if value is not None]
+    flat_ma = len(ma_values) >= 3 and len(set(ma_values)) == 1
     short_t = trend_data.get("short_term", "neutral")
     medium_t = trend_data.get("medium_term", "neutral")
     long_t = trend_data.get("long_term", "neutral")
@@ -479,15 +487,15 @@ def generate_signal_score(
         reasons.append("短中期趋势偏多")
     elif arrangement == "mixed":
         trend_score = 12
-    elif bear_count >= 2:
-        trend_score = 8
-        risks.append("中长期趋势偏空")
     elif arrangement == "bearish" and bear_count == 3:
         trend_score = 0
         risks.append("均线空头排列，趋势极弱")
     elif arrangement == "bearish":
         trend_score = 4
         risks.append("均线空头排列，不宜做多")
+    elif bear_count >= 2:
+        trend_score = 8
+        risks.append("中长期趋势偏空")
     else:
         trend_score = 12
     score += trend_score
@@ -604,9 +612,9 @@ def generate_signal_score(
     score += rsi_score
 
     # --- Buy signal classification ---
-    if score >= 75 and overall == "bullish":
+    if score >= 75 and overall == "bullish" and not flat_ma:
         buy_signal = "STRONG_BUY"
-    elif score >= 60 and overall in ("bullish", "neutral"):
+    elif score >= 60 and overall in ("bullish", "neutral") and not flat_ma:
         buy_signal = "BUY"
     elif score >= 45:
         buy_signal = "HOLD"
@@ -640,7 +648,9 @@ def generate_signals(
         signals.append("MACD空头排列（DIF < DEA）")
 
     rsi_sig = rsi_data.get("signal", "")
-    if "overbought" in rsi_sig:
+    if rsi_sig == "insufficient_data":
+        signals.append("RSI数据不足，无法判断超买超卖")
+    elif "overbought" in rsi_sig:
         signals.append(f"RSI超买区间（RSI6={rsi_data.get('rsi6')}），注意回调风险")
     elif "oversold" in rsi_sig:
         signals.append(f"RSI超卖区间（RSI6={rsi_data.get('rsi6')}），关注反弹机会")
@@ -663,7 +673,9 @@ def generate_signals(
         signals.append(f"KDJ超卖（J={kdj_data['j']}），关注低位机会")
 
     vs = vol_data.get("signal", "")
-    if "heavy" in vs:
+    if vs == "insufficient_data":
+        signals.append("成交量数据不足，无法判断放量或缩量")
+    elif "heavy" in vs:
         signals.append(f"成交量放大（量比={vol_data['volume_ratio']}），市场关注度高")
     elif vs == "light":
         signals.append(f"缩量交易（量比={vol_data['volume_ratio']}），市场观望情绪浓")
@@ -712,17 +724,7 @@ def calculate_ma_standalone(
         else:
             bias[f"bias_ma{n}"] = None
 
-    valid_mas = [(n, mas[f"ma{n}"]) for n in periods if mas.get(f"ma{n}") is not None]
-    if len(valid_mas) >= 3:
-        vals = [v for _, v in valid_mas]
-        if vals == sorted(vals, reverse=True):
-            alignment = "bullish"
-        elif vals == sorted(vals):
-            alignment = "bearish"
-        else:
-            alignment = "mixed"
-    else:
-        alignment = "insufficient_data"
+    alignment = _ma_arrangement([mas[f"ma{n}"] for n in periods if mas.get(f"ma{n}") is not None])
 
     cross_signals = []
     for fast, slow in [(5, 10), (5, 20), (10, 20), (20, 60)]:

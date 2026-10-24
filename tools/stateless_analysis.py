@@ -417,11 +417,18 @@ def event_study(p):
                     window["benchmark_return_pct"] = (benchmark[end_date] / benchmark[start_date] - 1) * 100
                     window["excess_return_pct"] = window["return_pct"] - window["benchmark_return_pct"]
             event["windows"].append(window)
-        intervals.append((idx - 1, min(idx + max(horizons), len(dates) - 1)))
+        valid_horizons = [window["horizon"] for window in event["windows"] if window["excess_return_pct"] is not None]
+        intervals.append((idx - 1, idx + max(valid_horizons)) if valid_horizons else None)
         events.append(event)
     for i, event in enumerate(events):
-        a, b = intervals[i]
-        event["overlaps_other_event"] = any(max(a, c) < min(b, d) for j, (c, d) in enumerate(intervals) if i != j)
+        interval = intervals[i]
+        if interval is None:
+            event["overlaps_other_event"] = False
+            continue
+        a, b = interval
+        event["overlaps_other_event"] = any(
+            other is not None and max(a, other[0]) < min(b, other[1]) for j, other in enumerate(intervals) if i != j
+        )
     summary = {}
     for horizon in horizons:
         values = [
@@ -448,7 +455,7 @@ def event_study(p):
 
 def robustness(p):
     import pandas as pd
-    from backtest import _resolve_refs, compute_metrics, get_indicator, simulate
+    from backtest import CONDITION_OPERATORS, _resolve_refs, compute_metrics, get_indicator, simulate
 
     capital = positive(p.get("capital", 1000000), "capital")
     train = integer(p.get("train_bars", 126), "train_bars", 30, 1000)
@@ -512,7 +519,7 @@ def robustness(p):
                         raise ValueError("condition logic must be all or any")
                     for condition in rows(config.get("conditions", []), "conditions", 0):
                         indicator = text(condition["indicator"], "indicator")
-                        if condition["operator"] not in (">", "<", ">=", "<=", "==", "cross_above", "cross_below"):
+                        if condition["operator"] not in CONDITION_OPERATORS:
                             raise ValueError("unknown condition operator")
                         periods = [
                             integer(condition[field], field, 1, 1000000) if field in condition else None
@@ -526,7 +533,7 @@ def robustness(p):
                 sim = simulate(frame.reset_index(drop=True), strategy, capital, symbol)
                 start, end = (frame["date"].iloc[i].strftime("%Y-%m-%d") for i in (0, -1))
                 metrics = compute_metrics(sim["trades"], sim["equity_curve"], capital, sim["final_equity"], start, end)
-                if math.isinf(metrics["profit_loss_ratio"]):
+                if not math.isfinite(metrics["profit_loss_ratio"]):
                     metrics["profit_loss_ratio"] = None
                 return {
                     "name": name,

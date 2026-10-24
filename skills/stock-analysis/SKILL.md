@@ -96,6 +96,7 @@ python3 scripts/gather.py <symbol>
 
 ## 注意事项
 - `get_kline` 的 A 股股票/ETF 数据为前复权，每条记录 `adjusted="qfq"`；显式指数 `sh000xxx` / `sz399xxx` 为原始点位，`adjusted="none"`。复权数据源全部失败时说明数据缺失，不用未复权价格补算指标或信号。
+- `get_technical_analysis` 的 RSI 全涨窗口为 100、全平为 50；预热不足的 RSI/量比不得解释为中性。量比是当根成交量除以前 5 根均量，不包含当根本身；不足时返回 unavailable/insufficient_data，不称为正常量价。
 - 行情读取 `source/fetched_at/data_as_of`，`fetched_at` 是 UTC 采集时间；`as_of_basis=trading_calendar` 是日历推断，不能声称是提供方报价时间。提供方时间未知时明确说明时效性未核实。
 - 始终提供风险提示
 - 不做绝对化的涨跌预测
@@ -126,6 +127,6 @@ get_shareholder_structure 的 northbound 优先使用沪深官方季度总量；
 
 实际披露股票持仓可用 get_etf_details(include_full_holdings=true) 获取半年度/年度表；按 as_of 解释，数量为股、市值为人民币元。默认不取大量明细；不是实时全资产组合，不与 PCF 对价数量混同。
 
-信号价格使用原始报价口径。复权 K 线需有记录日的可核实 adjustment_factor，才能换算入场/目标/止损及收益；缺失时 skipped_price_basis 并保持未结算，不得猜测拆股或除权比例。evaluate_signals 返回 complete/deferred/warnings；预算耗尽时已完成结果保存，未处理记录下次重试。当前仅日线 Tushare、Alpha Vantage 提供可验证换算系数，其余复权来源可能跳过结算。
+信号价格使用原始报价口径，自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算。多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算；日内顺序未知的双触发仍 stop 优先。复权 K 线需有该报价日的可核实 adjustment_factor，才能换算入场/目标/止损及收益；缺失时 skipped_price_basis 并保持未结算，不得猜测拆股或除权比例，重复日期返回 skipped_no_data。记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点；旧信号缺少报价时点且记录日因子发生变化时必须保持未结算。evaluate_signals 返回 complete/deferred/warnings；预算耗尽时已完成结果保存，未处理记录下次重试。当前仅日线 Tushare、Alpha Vantage 提供可验证换算系数，其余复权来源可能跳过结算。
 
 自选股上下文异动检查失败时 anomaly_status=unavailable、anomaly_count=null，并提供 anomaly_error/warnings；summary.partial 不得写成无异常或完整成功。
