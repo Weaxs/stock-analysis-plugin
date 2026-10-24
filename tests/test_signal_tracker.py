@@ -179,6 +179,17 @@ class TestEvaluate:
 
         assert result["results"][0]["outcome"] == expected
 
+    @pytest.mark.parametrize("bad_open", [float("inf"), 0, "bad"])
+    def test_target_only_record_rejects_invalid_open(self, store, mock_run_tool, bad_open):
+        self._record(store, mock_run_tool, target_price=12, stop_price=None, horizon_days=1)
+        bars = [_bar("2026-09-01", 10, 10, 10), _bar("2026-09-02", 11, 9, 10)]
+        bars[1]["open"] = bad_open
+        mock_run_tool.return_value = bars
+
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+        assert result["results"][0]["outcome"] == "skipped_no_data"
+
     def test_old_signal_window_anchored_to_record_date(self, store, mock_run_tool):
         """An open signal recorded long ago must be evaluated against bars right
         after record_date, not against the most recent bars (window anchored at

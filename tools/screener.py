@@ -197,9 +197,11 @@ def compute_sentiment(market: str, snapshot: list | None = None) -> dict:
 
 def _enrich_one(symbol: str, market: str) -> dict:
     """Fetch raw L2 indicators for one candidate; missing factor sources just yield missing keys."""
-    result: dict = {"vol20_samples": 0}
+    result: dict = {}
     try:
         kline = _fetch_json(["kline", symbol, "--period", "daily", "--count", "250"])
+        if isinstance(kline, list):
+            result["vol20_samples"] = 0
         if isinstance(kline, list) and len(kline) >= 2:
             closes = pd.Series([float(k["close"]) for k in kline if k.get("close") is not None])
             highs = [float(k["high"]) for k in kline if k.get("high") is not None]
@@ -211,7 +213,8 @@ def _enrich_one(symbol: str, market: str) -> dict:
                 peak = max(highs)
                 if peak > 0:
                     result["high_250_proximity"] = round(float(closes.iloc[-1]) / peak, 4)
-            rets = closes.pct_change().replace([np.inf, -np.inf], np.nan).dropna().tail(20)
+            valid_closes = closes[np.isfinite(closes) & (closes > 0)]
+            rets = valid_closes.pct_change().replace([np.inf, -np.inf], np.nan).dropna().tail(20)
             result["vol20_samples"] = len(rets)
             if len(rets) == 20:
                 result["vol20"] = round(float(rets.std()) * float(np.sqrt(252)), 4)

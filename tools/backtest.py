@@ -181,6 +181,7 @@ DEFAULT_INDICATOR_PERIODS = {
     "volume_ratio": 5,
     "bollinger_position": 20,
 }
+DEFAULT_TREND_PERIODS = (20, 60, 14)
 
 
 def get_indicator(
@@ -197,7 +198,10 @@ def get_indicator(
         "ma_diff": lambda: compute_ma_diff(close, period, fast, slow),
         "ema_diff": lambda: compute_ema_diff(close, period, fast, slow),
         "trend_score": lambda: trend_score_series(
-            df, fast if fast is not None else 20, slow if slow is not None else 60, period if period is not None else 14
+            df,
+            fast if fast is not None else DEFAULT_TREND_PERIODS[0],
+            slow if slow is not None else DEFAULT_TREND_PERIODS[1],
+            period if period is not None else DEFAULT_TREND_PERIODS[2],
         ),
         "monthly_momentum": lambda: monthly_momentum_series(
             df, period or DEFAULT_INDICATOR_PERIODS["monthly_momentum"]
@@ -268,7 +272,7 @@ def _strategy_warmup_bars(strategy: dict) -> int:
                 fast, slow = _resolve_ma_pair(fast, slow, period, defaults)
                 bars = max(fast, slow)
             elif name == "trend_score":
-                bars = max(slow or 60, (period or 14) + 1)
+                bars = max(slow or DEFAULT_TREND_PERIODS[1], (period or DEFAULT_TREND_PERIODS[2]) + 1)
             elif name in ("macd_dif", "macd_dea", "macd"):
                 bars = 26 if name == "macd_dif" else 34
             elif name == "price_change":

@@ -279,7 +279,7 @@ def _valid_bar(bar, require_open=True) -> bool:
         date = datetime.strptime(bar["date"], "%Y-%m-%d")
     except (KeyError, TypeError, ValueError):
         return False
-    keys = ("open", "high", "low", "close") if require_open else ("high", "low", "close")
+    keys = ("open", "high", "low", "close") if require_open or bar.get("open") is not None else ("high", "low", "close")
     return date.strftime("%Y-%m-%d") == bar["date"] and all(
         not isinstance(bar.get(key), bool)
         and isinstance(bar.get(key), (int, float))
