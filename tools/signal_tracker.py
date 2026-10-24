@@ -272,19 +272,20 @@ def _kline_count(rec: dict) -> int:
     return min(max(horizon + 40, elapsed + 15), 800)
 
 
-def _valid_bar(bar) -> bool:
+def _valid_bar(bar, require_open=True) -> bool:
     if not isinstance(bar, dict):
         return False
     try:
         date = datetime.strptime(bar["date"], "%Y-%m-%d")
     except (KeyError, TypeError, ValueError):
         return False
+    keys = ("open", "high", "low", "close") if require_open else ("high", "low", "close")
     return date.strftime("%Y-%m-%d") == bar["date"] and all(
         not isinstance(bar.get(key), bool)
         and isinstance(bar.get(key), (int, float))
         and math.isfinite(bar[key])
         and bar[key] > 0
-        for key in ("open", "high", "low", "close")
+        for key in keys
     )
 
 
@@ -361,7 +362,7 @@ def cmd_evaluate(args):
         if (
             not isinstance(bars, list)
             or not bars
-            or any(not _valid_bar(bar) for bar in bars)
+            or any(not _valid_bar(bar, require_open=rec.get("stop_price") is not None) for bar in bars)
             or len({bar["date"] for bar in bars}) != len(bars)
             or min(str(b.get("date", ""))[:10] for b in bars) > rec["record_date"]
         ):

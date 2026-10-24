@@ -166,6 +166,19 @@ class TestEvaluate:
         # kline fetch window includes the +40 buffer
         assert mock_run_tool.call_args[0][1] == ["kline", "600519", "--period", "daily", "--count", "43"]
 
+    @pytest.mark.parametrize(("target", "expected"), [(12, "target_hit"), (None, "timeout_profit")])
+    def test_hlc_history_without_open_does_not_require_stop(self, store, mock_run_tool, target, expected):
+        self._record(store, mock_run_tool, target_price=target, stop_price=None, horizon_days=1)
+        record_bar = _bar("2026-09-01", 10, 10, 10)
+        record_bar.pop("open")
+        bar = _bar("2026-09-02", 12.5, 9, 12.1)
+        bar.pop("open")
+        mock_run_tool.return_value = [record_bar, bar]
+
+        result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+        assert result["results"][0]["outcome"] == expected
+
     def test_old_signal_window_anchored_to_record_date(self, store, mock_run_tool):
         """An open signal recorded long ago must be evaluated against bars right
         after record_date, not against the most recent bars (window anchored at

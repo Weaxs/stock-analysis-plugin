@@ -172,14 +172,25 @@ def compute_ema_diff(
     return compute_ema(close, fast) - compute_ema(close, slow)
 
 
+CONDITION_OPERATORS = {">", "<", ">=", "<=", "==", "cross_above", "cross_below"}
+DEFAULT_INDICATOR_PERIODS = {
+    "rsi": 14,
+    "ma": 20,
+    "ema": 20,
+    "monthly_momentum": 63,
+    "volume_ratio": 5,
+    "bollinger_position": 20,
+}
+
+
 def get_indicator(
     df: pd.DataFrame, name: str, period: int | None = None, fast: int | None = None, slow: int | None = None
 ) -> pd.Series:
     close = df["close"]
     dispatch = {
-        "rsi": lambda: compute_rsi(close, period or 14),
-        "ma": lambda: compute_ma(close, period or 20),
-        "ema": lambda: compute_ema(close, period or 20),
+        "rsi": lambda: compute_rsi(close, period or DEFAULT_INDICATOR_PERIODS["rsi"]),
+        "ma": lambda: compute_ma(close, period or DEFAULT_INDICATOR_PERIODS["ma"]),
+        "ema": lambda: compute_ema(close, period or DEFAULT_INDICATOR_PERIODS["ema"]),
         "macd_dif": lambda: compute_macd_dif(close),
         "macd_dea": lambda: compute_macd_dea(close),
         "macd": lambda: compute_macd_hist(close),
@@ -188,10 +199,14 @@ def get_indicator(
         "trend_score": lambda: trend_score_series(
             df, fast if fast is not None else 20, slow if slow is not None else 60, period if period is not None else 14
         ),
-        "monthly_momentum": lambda: monthly_momentum_series(df, period if period is not None else 63),
-        "volume_ratio": lambda: compute_volume_ratio(df["volume"], period or 5),
+        "monthly_momentum": lambda: monthly_momentum_series(
+            df, period or DEFAULT_INDICATOR_PERIODS["monthly_momentum"]
+        ),
+        "volume_ratio": lambda: compute_volume_ratio(df["volume"], period or DEFAULT_INDICATOR_PERIODS["volume_ratio"]),
         "price_change": lambda: compute_price_change(close),
-        "bollinger_position": lambda: compute_bollinger_position(close, period or 20),
+        "bollinger_position": lambda: compute_bollinger_position(
+            close, period or DEFAULT_INDICATOR_PERIODS["bollinger_position"]
+        ),
         "close": lambda: close,
         "volume": lambda: df["volume"].astype(float),
     }
@@ -259,14 +274,7 @@ def _strategy_warmup_bars(strategy: dict) -> int:
             elif name == "price_change":
                 bars = 2
             else:
-                bars = period or {
-                    "rsi": 14,
-                    "ma": 20,
-                    "ema": 20,
-                    "monthly_momentum": 63,
-                    "volume_ratio": 5,
-                    "bollinger_position": 20,
-                }.get(name, 1)
+                bars = period or DEFAULT_INDICATOR_PERIODS.get(name, 1)
                 if name in ("rsi", "monthly_momentum", "volume_ratio"):
                     bars += 1
             lookback = max(lookback, bars + (cond.get("operator") in ("cross_above", "cross_below")))
@@ -274,7 +282,7 @@ def _strategy_warmup_bars(strategy: dict) -> int:
 
 
 def _condition_series(df: pd.DataFrame, cond: dict, cache: dict) -> tuple[pd.Series, str]:
-    if cond.get("operator") not in (">", "<", ">=", "<=", "==", "cross_above", "cross_below"):
+    if cond.get("operator") not in CONDITION_OPERATORS:
         raise ValueError(f"Unknown condition operator: {cond.get('operator')}")
     ind_name = cond["indicator"]
     period, fast, slow = _condition_parameters(cond)
@@ -317,7 +325,9 @@ def _entry_warmup_warnings(df: pd.DataFrame, strategy: dict, start: str, executi
             indices.append(signal_idx - 1)
         if any(idx < 0 or pd.isna(series.iloc[idx]) for idx in indices):
             signal_date = str(pd.Timestamp(df["date"].iloc[signal_idx]).date())
-            warnings.append(f"Insufficient warmup: entry indicator {label} is NaN at first window signal {signal_date}")
+            warnings.append(
+                f"Entry indicator is unavailable: {label} at first window signal {signal_date}; check warmup and data quality"
+            )
     return warnings
 
 
@@ -923,8 +933,9 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     }
     benchmark_symbol = strategy.get("benchmark")
     if benchmark_symbol:
+        benchmark_start = sim["equity_curve"][0]["date"] if sim["equity_curve"] else start
         result["benchmark"] = _benchmark_comparison(
-            str(benchmark_symbol), start, end, metrics["total_return"], execution
+            str(benchmark_symbol), benchmark_start, end, metrics["total_return"], execution
         )
     return result
 

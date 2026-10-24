@@ -743,9 +743,23 @@ class TestRunBacktest:
 
         assert "error" not in result
         assert any(
-            "Insufficient warmup" in warning and "monthly_momentum" in warning and "252" in warning
+            "Entry indicator is unavailable" in warning and "monthly_momentum" in warning and "252" in warning
             for warning in result["warnings"]
         )
+
+    def test_zero_width_bollinger_is_not_misreported_as_insufficient_warmup(self, monkeypatch):
+        df = _df_from_closes([100] * 40)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)
+        monkeypatch.setattr(
+            backtest,
+            "load_strategy",
+            lambda *a: {"entry": {"conditions": [{"indicator": "bollinger_position", "operator": ">", "value": 0}]}},
+        )
+        start, end = str(df["date"].iloc[10].date()), str(df["date"].iloc[-1].date())
+        result = backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+        assert any("Entry indicator is unavailable" in warning for warning in result["warnings"])
+        assert all("Insufficient warmup" not in warning for warning in result["warnings"])
 
     @pytest.mark.parametrize(
         "condition",
@@ -1169,14 +1183,18 @@ class TestBenchmark:
         main_df = pd.DataFrame(make_kline_data(120, "volatile"))
         bm_df = pd.DataFrame(make_kline_data(120, "up", base=4000.0))
         dfs = {"600000": main_df, "000300.SH": bm_df}
-        monkeypatch.setattr(backtest, "fetch_kline", lambda symbol, *a, **kw: dfs[symbol])
+        monkeypatch.setattr(
+            backtest,
+            "fetch_kline",
+            lambda symbol, start, end, *a, **kw: dfs[symbol][(dfs[symbol].date >= start) & (dfs[symbol].date <= end)],
+        )
         monkeypatch.setattr(backtest, "load_strategy", lambda *a, **kw: dict(_MA_CROSS_STRATEGY, benchmark="000300.SH"))
 
         result = backtest.run_backtest("unused.yaml", "600000", "2024-01-01", "2024-06-30", 1000000)
 
         bm = result["benchmark"]
         assert bm["symbol"] == "000300.SH"
-        first, last = float(bm_df["open"].iloc[0]), float(bm_df["close"].iloc[-1])
+        first, last = float(bm_df["open"].iloc[1]), float(bm_df["close"].iloc[-1])
         expected = (last - first) / first
         assert bm["total_return"] == pytest.approx(expected, abs=1e-3)
         assert bm["excess_return"] == pytest.approx(result["metrics"]["total_return"] - expected, abs=1e-3)
@@ -1191,6 +1209,25 @@ class TestBenchmark:
 
         assert result["total_return"] == pytest.approx(expected)
         assert result["excess_return"] == pytest.approx(-expected)
+
+    @pytest.mark.parametrize("execution", ["next_open", "same_close"])
+    def test_benchmark_starts_when_strategy_can_trade_without_prehistory(self, monkeypatch, execution):
+        df = _df_from_closes([50] + [100] * 29)
+        monkeypatch.setattr(
+            backtest, "fetch_kline", lambda symbol, start, end, *a, **kwargs: df[(df.date >= start) & (df.date <= end)]
+        )
+        strategy = {
+            "benchmark": "BENCH",
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]},
+            "simulation": {"execution": execution, "slippage": 0, "commission": 0},
+        }
+        monkeypatch.setattr(backtest, "load_strategy", lambda *a: strategy)
+        start, end = str(df["date"].iloc[0].date()), str(df["date"].iloc[-1].date())
+
+        result = backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+        assert result["benchmark"]["total_return"] == 0
+        assert result["benchmark"]["excess_return"] == result["metrics"]["total_return"] == 0
 
     @pytest.mark.parametrize(("start", "end"), [("2023-12-31", "2024-01-02"), ("2024-01-01", "2024-01-03")])
     def test_benchmark_rejects_short_coverage_without_excess(self, monkeypatch, start, end):

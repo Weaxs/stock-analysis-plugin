@@ -266,8 +266,9 @@ class TestCalcMa:
         assert result["ma_arrangement"] == "insufficient_data"
 
 
-def test_flat_analysis_does_not_emit_buy(make_kline_data):
-    bars = make_kline_data(120)
+@pytest.mark.parametrize("count", [30, 59, 120])
+def test_flat_analysis_does_not_emit_buy(make_kline_data, count):
+    bars = make_kline_data(count)
     for row in bars:
         row.update(open=100, high=100, low=100, close=100)
     result = technical_mod.analyze_records("TEST", bars)

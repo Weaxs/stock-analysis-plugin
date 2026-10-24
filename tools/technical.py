@@ -258,22 +258,23 @@ def kdj_series(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple:
     return k, d, 3 * k - 2 * d
 
 
+def _ma_arrangement(values):
+    valid = [value for value in values if value is not None]
+    if len(valid) < 3:
+        return "insufficient_data"
+    if all(a > b for a, b in zip(valid, valid[1:])):
+        return "bullish"
+    if all(a < b for a, b in zip(valid, valid[1:])):
+        return "bearish"
+    return "mixed"
+
+
 def calc_ma(close: pd.Series) -> dict:
     mas = {}
     for n in [5, 10, 20, 60]:
         ma = ma_series(close, n)
         mas[f"ma{n}"] = round(float(ma.iloc[-1]), 2) if len(ma.dropna()) > 0 else None
-    vals = [mas.get(f"ma{n}") for n in [5, 10, 20, 60]]
-    valid = [v for v in vals if v is not None]
-    if len(valid) >= 3:
-        if all(a > b for a, b in zip(valid, valid[1:])):
-            mas["ma_arrangement"] = "bullish"
-        elif all(a < b for a, b in zip(valid, valid[1:])):
-            mas["ma_arrangement"] = "bearish"
-        else:
-            mas["ma_arrangement"] = "mixed"
-    else:
-        mas["ma_arrangement"] = "insufficient_data"
+    mas["ma_arrangement"] = _ma_arrangement([mas.get(f"ma{n}") for n in [5, 10, 20, 60]])
     return mas
 
 
@@ -466,8 +467,8 @@ def generate_signal_score(
     # --- Trend score (30 points) ---
     arrangement = ma_data.get("ma_arrangement", "mixed")
     overall = trend_data.get("overall", "neutral")
-    ma_values = [ma_data.get(f"ma{n}") for n in (5, 10, 20, 60)]
-    flat_ma = ma_values[0] is not None and len(set(ma_values)) == 1
+    ma_values = [value for value in (ma_data.get(f"ma{n}") for n in (5, 10, 20, 60)) if value is not None]
+    flat_ma = len(ma_values) >= 3 and len(set(ma_values)) == 1
     short_t = trend_data.get("short_term", "neutral")
     medium_t = trend_data.get("medium_term", "neutral")
     long_t = trend_data.get("long_term", "neutral")
@@ -723,17 +724,7 @@ def calculate_ma_standalone(
         else:
             bias[f"bias_ma{n}"] = None
 
-    valid_mas = [(n, mas[f"ma{n}"]) for n in periods if mas.get(f"ma{n}") is not None]
-    if len(valid_mas) >= 3:
-        vals = [v for _, v in valid_mas]
-        if all(a > b for a, b in zip(vals, vals[1:])):
-            alignment = "bullish"
-        elif all(a < b for a, b in zip(vals, vals[1:])):
-            alignment = "bearish"
-        else:
-            alignment = "mixed"
-    else:
-        alignment = "insufficient_data"
+    alignment = _ma_arrangement([mas[f"ma{n}"] for n in periods if mas.get(f"ma{n}") is not None])
 
     cross_signals = []
     for fast, slow in [(5, 10), (5, 20), (10, 20), (20, 60)]:

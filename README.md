@@ -432,8 +432,8 @@ position:
 其他可用键：
 
 - `exit.trailing_stop`：移动止损，价格自持仓期间最高收盘价回撤达到该比例即卖出（如 `0.08` = 峰值回撤 8% 触发）；与 `stop_loss` 同时设置时先判固定止损。`stop_loss` 必须为负数、`take_profit` 必须为正数、`trailing_stop` 须在 (0, 1) 内；`position.max_positions` 当前仅支持 1，其他配置明确报错。
-- `benchmark`（顶层）：基准对比标的代码（如 `"sh000300"` 沪深300；指数代码必须带 sh/sz 交易所前缀，裸 6 位数字会被当作个股），设置后回测结果附带 `benchmark` 块（基准买入持有收益与 `excess_return` 超额收益）。基准与策略采用同一首日执行口径（next_open 用 open、same_close 用 close）；实际覆盖不符或首末价格非法时返回 error，不输出超额。
-- `simulation.execution`：默认 `next_open`，前日收盘信号、次日开盘加滑点成交；显式 `same_close` 复现旧收盘成交假设。交易同时返回 signal_date/date。延迟的入场信号在新收盘失效时撤单，风险退出 pending 保留至成交。`start` 前可得历史仅用于指标预热，取数长度随策略最大 lookback 增加，交易与权益仍按请求区间统计；`warnings` 出现 `Insufficient warmup` 时必须披露，不能声称完成预热。零成交量阻止成交；一字板限制只在输入提供同口径历史 limit_up/limit_down 时执行。`execution` 列出阻止成交次数、未成交订单及限制；止损是收盘信号，未模拟盘口排队、部分成交、结算和市场冲击。回测仅接受单一 `qfq`/`total_return`/`none` 复权口径，unknown 或混合口径明确报错。
+- `benchmark`（顶层）：基准对比标的代码（如 `"sh000300"` 沪深300；指数代码必须带 sh/sz 交易所前缀，裸 6 位数字会被当作个股），设置后回测结果附带 `benchmark` 块（基准买入持有收益与 `excess_return` 超额收益）。基准与策略采用同一首日执行口径（next_open 用 open、same_close 用 close），无预热时以策略首条权益日期为起点；实际覆盖不符或首末价格非法时返回 error，不输出超额。
+- `simulation.execution`：默认 `next_open`，前日收盘信号、次日开盘加滑点成交；显式 `same_close` 复现旧收盘成交假设。交易同时返回 signal_date/date。延迟的入场信号在新收盘失效时撤单，风险退出 pending 保留至成交。`start` 前可得历史仅用于指标预热，取数长度随策略最大 lookback 增加，交易与权益仍按请求区间统计；`warnings` 出现 `Entry indicator is unavailable` 时必须披露指标不可用及数据质量，不能声称完成预热。零成交量阻止成交；一字板限制只在输入提供同口径历史 limit_up/limit_down 时执行。`execution` 列出阻止成交次数、未成交订单及限制；止损是收盘信号，未模拟盘口排队、部分成交、结算和市场冲击。回测仅接受单一 `qfq`/`total_return`/`none` 复权口径，unknown 或混合口径明确报错。
 - `simulation`（顶层）：交易成本。`slippage`（滑点，买卖双边，默认 0.001）、`commission`（佣金，买卖双边，默认 0.0015）、`stamp_tax`（印花税，仅卖出收取，默认 0；A股为 0.0005，各市场税率不同且会调整，按当下实际费率填写）。费率均须在 [0, 1) 区间，越界报错。回测结果附带 `costs` 块（实际生效费率与实付费用合计 `commission_paid`/`stamp_tax_paid`）。
 
 ### 可用指标
@@ -729,10 +729,10 @@ python3 tools/sec_edgar.py holdings 0001067983 --mode manager
 
 真实模型评测同时要求结构化证据检查与独立上下文的结论审稿通过：审稿检查正文事实、限制说明是否诚实，以及是否过度外推。未运行审稿、结果缺失或模糊都不能算通过；报告自行声明通过不被采信。另有人工核对的正确报告及两类反例用于验证审稿器（正确引用但正文捏造现价、3笔交易却保证长期胜率）。空回答也失败。离线渲染和规则检查不代表真实模型通过，也不证明策略未来有效。信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
 
-信号结算仅在价格口径可核实时进行：原始价格可直接比较；自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算；多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算，日内顺序未知的双触发仍 stop 优先；重复日期返回 skipped_no_data，复权乘除使用 Decimal。复权日线需该报价日的 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例；记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点，旧信号缺少报价时点且记录日因子变化时也保持未结算。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
+信号结算仅在价格口径可核实时进行：原始价格可直接比较；自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算；多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算，日内顺序未知的双触发仍 stop 优先；无止损的旧 HLC 记录可继续用 high/low/close 判定目标和到期，有止损但缺 open 则拒绝结算。重复日期返回 skipped_no_data，复权乘除使用 Decimal。复权日线需该报价日的 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例；记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点，旧信号缺少报价时点且记录日因子变化时也保持未结算。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
 
 市场复盘数据不足时温度/姿态为 null，信号 unknown，data_quality.limitations 说明限制。自选股异动采集失败时 anomaly_status=unavailable、anomaly_count=null，保留警告并计入 summary.partial，不能当成无异常。
 
 L1 与 L2 综合分均在排序前按可用因子重新归一化；缺失或非有限因子不作零分处理，因子组内部也仅平均有效输入。factor_coverage.ratio 保留原始权重覆盖率，effective_weights 是实际归一化后的权重，高分仍需结合覆盖率判断。估值比较需同时读取 `pe_basis`；有限非正 PE/PB 的价值子分为 0，不能因数值更低而获得最高价值分。
 
-L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_samples` 记录实际样本数；质量因子按 `report_date` 分组归一，避免年度累计与单季累计直接比较。资金流 5/10/20 日窗口不足返回 null，不按 0 或完整窗口处理。HK 快照统一带 `.HK`，US 快照移除东财交易所后缀并把类别股点号转为 Yahoo 连字符。主板 ST/*ST 按 5% 识别涨跌停，其他板块比例不变。
+L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_samples` 记录实际样本数，非有限收益不计入样本，空输入为 0；质量因子按 `report_date` 分组归一，避免年度累计与单季累计直接比较。资金流 5/10/20 日窗口不足返回 null，不按 0 或完整窗口处理。HK 快照统一带 `.HK`，US 快照移除东财交易所后缀并把类别股点号转为 Yahoo 连字符。主板 ST/*ST 按 5% 识别涨跌停，其他板块比例不变。

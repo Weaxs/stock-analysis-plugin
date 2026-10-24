@@ -455,7 +455,7 @@ def event_study(p):
 
 def robustness(p):
     import pandas as pd
-    from backtest import _resolve_refs, compute_metrics, get_indicator, simulate
+    from backtest import CONDITION_OPERATORS, _resolve_refs, compute_metrics, get_indicator, simulate
 
     capital = positive(p.get("capital", 1000000), "capital")
     train = integer(p.get("train_bars", 126), "train_bars", 30, 1000)
@@ -519,7 +519,7 @@ def robustness(p):
                         raise ValueError("condition logic must be all or any")
                     for condition in rows(config.get("conditions", []), "conditions", 0):
                         indicator = text(condition["indicator"], "indicator")
-                        if condition["operator"] not in (">", "<", ">=", "<=", "==", "cross_above", "cross_below"):
+                        if condition["operator"] not in CONDITION_OPERATORS:
                             raise ValueError("unknown condition operator")
                         periods = [
                             integer(condition[field], field, 1, 1000000) if field in condition else None

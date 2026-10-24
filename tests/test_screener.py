@@ -692,9 +692,11 @@ def test_l1_missing_factors_do_not_count_as_zero_before_ranking(monkeypatch):
     assert best["factor_coverage"]["effective_weights"] == {"momentum": 0.5, "liquidity": 0.5}
 
 
-@pytest.mark.parametrize(("bars", "samples", "has_vol20"), [(2, 1, False), (20, 19, False), (21, 20, True)])
+@pytest.mark.parametrize(
+    ("bars", "samples", "has_vol20"), [(0, 0, False), (1, 0, False), (2, 1, False), (20, 19, False), (21, 20, True)]
+)
 def test_vol20_requires_exactly_twenty_daily_returns(monkeypatch, make_kline_data, bars, samples, has_vol20):
-    kline = make_kline_data(n=bars)
+    kline = make_kline_data(n=bars) if bars else []
     monkeypatch.setattr(
         screener,
         "_fetch_json",
@@ -703,6 +705,32 @@ def test_vol20_requires_exactly_twenty_daily_returns(monkeypatch, make_kline_dat
     result = screener._enrich_one("AAA", "A")
     assert result["vol20_samples"] == samples
     assert ("vol20" in result) is has_vol20
+
+
+def test_vol20_ignores_non_finite_returns(monkeypatch, make_kline_data):
+    kline = make_kline_data(22)
+    kline[10]["close"] = float("inf")
+    monkeypatch.setattr(
+        screener,
+        "_fetch_json",
+        lambda args, **kwargs: kline if args[0] == "kline" else {"error": "unavailable"},
+    )
+    import math
+
+    result = screener._enrich_one("AAA", "A")
+    assert result["vol20_samples"] == 20
+    assert math.isfinite(result["vol20"])
+
+
+def test_non_a_enrich_preserves_report_date(monkeypatch):
+    def fetch(args, **kwargs):
+        if args[0] == "financials":
+            return {"roe": 0.2, "report_date": "2025-12-31"}
+        return {"error": "unavailable"}
+
+    monkeypatch.setattr(screener, "_fetch_json", fetch)
+    result = screener._enrich_one("AAPL", "US")
+    assert result["report_date"] == "2025-12-31"
 
 
 def test_l2_output_exposes_vol20_sample_coverage(monkeypatch):
