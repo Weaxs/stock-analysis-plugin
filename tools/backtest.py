@@ -261,6 +261,19 @@ def _condition_parameters(cond: dict) -> tuple:
     return tuple(values)
 
 
+def _condition_value(cond: dict) -> float:
+    raw = cond.get("value")
+    if isinstance(raw, bool):
+        raise ValueError(f"condition value must be a finite number, got {raw!r}")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as e:
+        raise ValueError(f"condition value must be a finite number, got {raw!r}") from e
+    if not math.isfinite(value):
+        raise ValueError(f"condition value must be a finite number, got {raw!r}")
+    return value
+
+
 def _strategy_warmup_bars(strategy: dict) -> int:
     lookback = 0
     for side in ("entry", "exit"):
@@ -303,7 +316,7 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
     for cond in conditions:
         series, label = _condition_series(df, cond, cache)
         op = cond["operator"]
-        val = float(cond["value"])
+        val = _condition_value(cond)
         hit = check_condition(series, op, val, idx)
         results.append(hit)
         if hit:
@@ -338,6 +351,16 @@ def _entry_warmup_warnings(df: pd.DataFrame, strategy: dict, start: str, executi
 # --------------- Simulation ---------------
 
 
+def _validate_adjustment_basis(df: pd.DataFrame) -> None:
+    if "adjusted" not in df:
+        return
+    bases = set(df["adjusted"].fillna("unknown").astype(str))
+    if not bases or not bases <= {"qfq", "total_return", "none"}:
+        raise ValueError("adjusted contains unknown adjustment basis; expected qfq, total_return or none")
+    if len(bases) != 1:
+        raise ValueError("adjusted must use a single adjustment basis: qfq, total_return or none")
+
+
 def simulate(
     df: pd.DataFrame,
     strategy: dict,
@@ -349,12 +372,7 @@ def simulate(
 ) -> dict:
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("capital must be finite and positive")
-    if "adjusted" in df:
-        bases = set(df["adjusted"].fillna("unknown").astype(str))
-        if not bases or not bases <= {"qfq", "total_return", "none"}:
-            raise ValueError("adjusted contains unknown adjustment basis; expected qfq, total_return or none")
-        if len(bases) != 1:
-            raise ValueError("adjusted must use a single adjustment basis: qfq, total_return or none")
+    _validate_adjustment_basis(df)
     if not np.isfinite(df["close"]).all() or (df["close"] <= 0).any():
         raise ValueError("backtest prices must be finite and positive")
     dates = pd.to_datetime(df["date"], errors="coerce")
@@ -419,6 +437,7 @@ def simulate(
     cache: dict = {}
     for cond in entry_conditions + exit_conditions:
         _condition_series(df, cond, cache)
+        _condition_value(cond)
     trades = []
     equity_curve = []
     holding = None
@@ -868,6 +887,7 @@ def _benchmark_comparison(
     """Buy-and-hold benchmark over the same window; degrades to an error note on fetch failure."""
     try:
         df = fetch_kline(symbol, start, end)
+        _validate_adjustment_basis(df)
     except Exception as e:
         return {"symbol": symbol, "error": str(e)}
     if len(df) < 2:

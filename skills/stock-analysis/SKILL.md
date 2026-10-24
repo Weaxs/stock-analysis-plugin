@@ -96,6 +96,9 @@ python3 scripts/gather.py <symbol>
 
 ## 注意事项
 - `get_kline` 的 A 股股票/ETF 数据为前复权，每条记录 `adjusted="qfq"`；显式指数 `sh000xxx` / `sz399xxx` 为原始点位，`adjusted="none"`。复权数据源全部失败时说明数据缺失，不用未复权价格补算指标或信号。
+- `get_quote` 的 PE 必须连同 `pe_basis` 解读；dynamic、trailing 与 unknown 不是同一口径，不能直接比较。
+- `get_financials` 的 Yahoo 顶层快照按 `snapshot_units` 解读：`roe/profit_margin/dividend_yield=ratio`，`debt_to_equity=percent`，例如 150 表示 150%，不是 150 倍。
+- `detect_market_regime` 用 `index.as_of` 核对实际日期并披露 `warnings`；`above_ma60=null` 表示历史不足，不能当作高于或低于 MA60。
 - `get_technical_analysis` 的 RSI 全涨窗口为 100、全平为 50；预热不足的 RSI/量比不得解释为中性。量比是当根成交量除以前 5 根均量，不包含当根本身；不足时返回 unavailable/insufficient_data，不称为正常量价。
 - 行情读取 `source/fetched_at/data_as_of`，`fetched_at` 是 UTC 采集时间；`as_of_basis=trading_calendar` 是日历推断，不能声称是提供方报价时间。提供方时间未知时明确说明时效性未核实。
 - 始终提供风险提示

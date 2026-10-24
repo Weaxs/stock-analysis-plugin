@@ -310,7 +310,7 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
     for c in candidates:
         sym = c.get("symbol")
         groups = factor_scores.get(sym, {})
-        c["enriched"] = bool(enrichments.get(sym))
+        c["enriched"] = bool(groups)
         scores = c["scores"]
         # scores are sanitized to None when non-finite; L2 math needs numbers
         components = {

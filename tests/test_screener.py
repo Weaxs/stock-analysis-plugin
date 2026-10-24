@@ -722,11 +722,10 @@ def test_vol20_ignores_non_finite_returns(monkeypatch, make_kline_data):
     assert math.isfinite(result["vol20"])
 
 
-def test_vol20_excludes_invalid_close_before_return_calculation(monkeypatch):
-    kline = [
-        {"date": date, "open": close, "high": close, "low": close, "close": close, "volume": 1000}
-        for date, close in zip(pd.bdate_range("2024-01-01", periods=22), range(100, 122), strict=True)
-    ]
+def test_vol20_excludes_invalid_close_before_return_calculation(monkeypatch, make_kline_data):
+    kline = make_kline_data(22)
+    for i, row in enumerate(kline):
+        row["close"] = 100 + i
     kline[10]["close"] = float("inf")
     monkeypatch.setattr(
         screener,
@@ -743,6 +742,20 @@ def test_fetch_failure_does_not_mark_candidates_enriched(monkeypatch):
     monkeypatch.setattr(screener, "_fetch_json", lambda args, **kwargs: {"error": "offline"})
     result = screen("A", 20, {"l2": True})
     assert all(candidate["enriched"] is False for candidate in result["candidates"])
+
+
+def test_empty_kline_does_not_mark_candidates_enriched(monkeypatch):
+    _patch_screen(monkeypatch)
+    monkeypatch.setattr(
+        screener,
+        "_fetch_json",
+        lambda args, **kwargs: [] if args[0] == "kline" else {"error": "unavailable"},
+    )
+
+    result = screen("A", 20, {"l2": True})
+
+    assert all(candidate["enriched"] is False for candidate in result["candidates"])
+    assert all(candidate["factor_coverage"]["vol20_samples"] == 0 for candidate in result["candidates"])
 
 
 def test_non_a_enrich_preserves_report_date(monkeypatch):

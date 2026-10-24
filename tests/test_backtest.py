@@ -770,21 +770,15 @@ class TestRunBacktest:
             {"indicator": "monthly_momentum", "period": 5, "operator": ">", "value": 0},
         ],
     )
-    def test_prehistory_warms_indicators_without_entering_the_evaluation_window(self, monkeypatch, tmp_path, condition):
+    def test_prehistory_warms_indicators_without_entering_the_evaluation_window(
+        self, monkeypatch, tmp_path, condition, make_kline_data
+    ):
         import yaml
 
-        dates = pd.bdate_range("2024-01-01", periods=80)
-        rows = [
-            {
-                "date": date.strftime("%Y-%m-%d"),
-                "open": 100 + i,
-                "high": 101 + i,
-                "low": 99 + i,
-                "close": 100 + i,
-                "volume": 1000,
-            }
-            for i, date in enumerate(dates)
-        ]
+        rows = make_kline_data(80)
+        for i, row in enumerate(rows):
+            row.update(open=100 + i, high=101 + i, low=99 + i, close=100 + i, volume=1000)
+        dates = pd.DatetimeIndex(row["date"] for row in rows)
         monkeypatch.setattr(backtest, "run_tool", lambda *args, **kwargs: rows)
         strategy = {
             "entry": {"conditions": [condition]},
@@ -800,7 +794,8 @@ class TestRunBacktest:
         assert result["trades"][0]["date"] == start
         assert result["equity_curve"][0]["date"] == start
         assert result["period"] == f"{start} to {end}"
-        reference_frame = pd.DataFrame([row for row in rows if row["date"] <= end])
+        reference_frame = pd.DataFrame(rows)
+        reference_frame = reference_frame[reference_frame["date"] <= end].reset_index(drop=True)
         reference = backtest.simulate(reference_frame, strategy, 10000, "AAPL", start=start)
         assert result["trades"] == reference["trades"]
         assert result["equity_curve"] == backtest.sample_curve(reference["equity_curve"])
@@ -958,6 +953,36 @@ class TestStrategyValidation:
         }
         with pytest.raises(ValueError, match=parameter):
             backtest.simulate(_df_from_closes([10, 10, 12]), strategy, 1000, "AAPL")
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "not-a-number"])
+    def test_run_backtest_rejects_invalid_condition_values_before_entry(self, monkeypatch, value):
+        df = _df_from_closes([10.0] * 30)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *args: df)
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [{"indicator": "close", "operator": ">", "value": value}]},
+        }
+        monkeypatch.setattr(backtest, "load_strategy", lambda *args: strategy)
+        start, end = (str(df["date"].iloc[i].date()) for i in (0, -1))
+
+        with pytest.raises(ValueError, match="condition value"):
+            backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+    @pytest.mark.parametrize("side", ["entry", "exit"])
+    @pytest.mark.parametrize("value", [True, False])
+    def test_run_backtest_rejects_boolean_condition_values(self, monkeypatch, side, value):
+        df = _df_from_closes([10.0] * 30)
+        monkeypatch.setattr(backtest, "fetch_kline", lambda *args: df)
+        strategy = {
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 1000}]},
+            "exit": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]},
+        }
+        strategy[side] = {"conditions": [{"indicator": "close", "operator": ">", "value": value}]}
+        monkeypatch.setattr(backtest, "load_strategy", lambda *args: strategy)
+        start, end = (str(df["date"].iloc[i].date()) for i in (0, -1))
+
+        with pytest.raises(ValueError, match="condition value"):
+            backtest.run_backtest("unused", "AAPL", start, end, 10000)
 
     @pytest.mark.parametrize(
         "indicator",
@@ -1250,6 +1275,31 @@ class TestBenchmark:
 
         assert "error" in result
         assert "excess_return" not in result
+
+    @pytest.mark.parametrize("basis", ["unknown", "mixed"])
+    def test_benchmark_rejects_unverified_adjustment_basis(self, monkeypatch, make_kline_data, basis):
+        main_df = pd.DataFrame(make_kline_data(30)).assign(adjusted="total_return")
+        bm_df = pd.DataFrame(make_kline_data(30, base=4000.0))
+        bm_df["adjusted"] = "unknown" if basis == "unknown" else ["total_return"] * 15 + ["none"] * 15
+        dfs = {"AAPL": main_df, "BENCH": bm_df}
+
+        def fake_fetch(symbol, start, end, *args, **kwargs):
+            df = dfs[symbol]
+            return df[(df.date >= start) & (df.date <= end)].copy()
+
+        monkeypatch.setattr(backtest, "fetch_kline", fake_fetch)
+        strategy = {
+            "benchmark": "BENCH",
+            "entry": {"conditions": [{"indicator": "close", "operator": ">", "value": 0}]},
+        }
+        monkeypatch.setattr(backtest, "load_strategy", lambda *args: strategy)
+        start, end = (str(main_df["date"].iloc[i].date()) for i in (0, -1))
+
+        result = backtest.run_backtest("unused", "AAPL", start, end, 10000)
+
+        assert "adjusted" in result["benchmark"]["error"]
+        assert "total_return" not in result["benchmark"]
+        assert "excess_return" not in result["benchmark"]
 
     def test_no_benchmark_key_output_unchanged(self, monkeypatch, make_kline_data):
         df = pd.DataFrame(make_kline_data(120, "volatile"))
