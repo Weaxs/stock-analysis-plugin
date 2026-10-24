@@ -172,8 +172,8 @@ def cmd_record(args):
             return {"error": f"cannot determine entry price for {args.symbol}: quote unavailable"}
         entry_price = quote["price"]
         price_as_of = quote.get("data_as_of") if isinstance(quote.get("data_as_of"), str) else None
-    date = args.date or datetime.now().strftime("%Y-%m-%d")
     market = detect_market(args.symbol)
+    date = args.date or datetime.now(ZoneInfo(_MARKET_TIMEZONES[market])).date().isoformat()
     price_date = _price_date(price_as_of, market) if price_as_of else None
     record = {
         "id": f"{date}-{args.symbol}-{uuid4().hex[:8]}",

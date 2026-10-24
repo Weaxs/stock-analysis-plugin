@@ -198,12 +198,12 @@ class TestComputeRsi:
     def test_uptrend_high_rsi(self):
         close = pd.Series([10 + i * 0.5 for i in range(50)])
         rsi = compute_rsi(close, 14)
-        assert float(rsi.iloc[-1]) >= 50
+        assert float(rsi.iloc[-1]) == 100
 
     def test_downtrend_low_rsi(self):
         close = pd.Series([30 - i * 0.5 for i in range(30)])
         rsi = compute_rsi(close, 14)
-        assert float(rsi.iloc[-1]) < 50
+        assert float(rsi.iloc[-1]) == 0
 
 
 class TestComputeMa:
@@ -265,6 +265,11 @@ class TestCheckCondition:
         df = pd.DataFrame({"close": list(range(100, 70, -1)), "volume": [1000] * 30})
         hit, _ = evaluate_conditions(df, [condition], "all", 0, {})
         assert hit is False
+
+    def test_warmup_boundary_does_not_create_cross(self):
+        df = pd.DataFrame({"close": list(range(100, 70, -1)), "volume": [1000] * 30})
+        condition = {"indicator": "rsi", "period": 14, "operator": "cross_below", "value": 30}
+        assert all(not evaluate_conditions(df, [condition], "all", i, {})[0] for i in range(len(df)))
 
 
 class TestSubstitute:
@@ -722,6 +727,12 @@ class TestRunBacktest:
         assert result["trades"][0]["date"] == start
         assert result["equity_curve"][0]["date"] == start
         assert result["period"] == f"{start} to {end}"
+        reference_frame = pd.DataFrame([row for row in rows if row["date"] <= end])
+        reference = backtest.simulate(reference_frame, strategy, 10000, "AAPL", start=start)
+        assert result["trades"] == reference["trades"]
+        assert result["equity_curve"] == backtest.sample_curve(reference["equity_curve"])
+        assert result["final_capital"] == reference["final_equity"]
+        assert all(trade["date"] >= start for trade in result["trades"])
 
     @pytest.mark.parametrize(
         "yaml_name",

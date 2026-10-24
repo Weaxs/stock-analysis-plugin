@@ -267,7 +267,7 @@ class TestPeBasis:
             row["pe_basis"] = "dynamic"
         _patch_screen(monkeypatch)
         monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
-        monkeypatch.setattr(screener, "_apply_l2", lambda candidates, market, multiplier: None)
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
         result = screen("A", 20, {"l2": l2_enabled})
         assert [candidate["pe_basis"] for candidate in result["candidates"]] == ["dynamic"] * 3
 

@@ -491,6 +491,7 @@ class TestGenerateSignalScore:
         volume = _make_volume([1_000_000] * 10 + [3_000_000])
 
         result = generate_signal_score(ma, macd, rsi, vol, trend, bias, close, volume)
+        # Exact components: trend 0 + bias 4 + volume 0 + support 5 + MACD 0 + RSI 3 = 12.
         assert result["signal_score"] == 12
         assert result["buy_signal"] == "STRONG_SELL"
         assert "均线空头排列，趋势极弱" in result["risk_factors"]

@@ -604,6 +604,49 @@ def test_iso_quote_timestamp_uses_market_local_date(store, mock_run_tool):
     assert result["results"][0]["return_pct"] == 2
 
 
+@pytest.mark.parametrize(
+    ("symbol", "host_timezone", "record_date", "exit_date", "next_date"),
+    [
+        ("AAPL", "Asia/Shanghai", "2026-10-05", "2026-10-06", "2026-10-07"),
+        ("600519", "America/New_York", "2026-10-06", "2026-10-07", "2026-10-08"),
+    ],
+)
+def test_default_record_date_uses_symbol_market_timezone(
+    store, mock_run_tool, monkeypatch, symbol, host_timezone, record_date, exit_date, next_date
+):
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    fixed = datetime(2026, 10, 6, 0, 0, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed.astimezone(ZoneInfo(host_timezone)).replace(tzinfo=None)
+            return fixed.astimezone(tz)
+
+    monkeypatch.setattr(st, "datetime", FrozenDateTime)
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-10-06T00:00:00+00:00"}
+    rec = st.cmd_record(
+        _rec_args(store, symbol=symbol, date=None, entry_price=None, target_price=110, stop_price=90, horizon_days=1)
+    )
+    assert rec["record_date"] == record_date
+    assert rec["price_date"] == record_date
+    bars = [
+        _bar(record_date, 100, 100, 100),
+        _bar(exit_date, 111, 100, 109),
+        _bar(next_date, 95, 95, 95),
+    ]
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "target_hit"
+    assert result["results"][0]["return_pct"] == 10
+    assert result["results"][0]["exit_date"] == exit_date
+
+
 def test_batch_deadline_returns_and_persists_completed_results(store, mock_run_tool, monkeypatch):
     for symbol in ["600519", "000001", "300001", "600000", "000002"]:
         st.cmd_record(_rec_args(store, symbol=symbol))
