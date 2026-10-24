@@ -90,7 +90,7 @@ def _compute_indicators(klines: list) -> dict:
 
     prev_close = float(closes[-2]) if len(closes) >= 2 else close
     change_pct = (close - prev_close) / prev_close * 100 if prev_close > 0 else 0
-    as_of = pd.Timestamp(raw.iloc[df.index[-1]].get("date"))
+    as_of = pd.to_datetime(raw.iloc[df.index[-1]].get("date"), errors="coerce")
 
     return {
         "as_of": as_of.strftime("%Y-%m-%d") if not pd.isna(as_of) else None,
@@ -175,6 +175,8 @@ def detect_regime(market: str = "A") -> dict:
 
     import numpy as np
 
+    if pd.isna(pd.to_datetime(klines[-1].get("date"), errors="coerce")):
+        return {"error": "Latest index bar has invalid date"}
     latest = pd.DataFrame([klines[-1]]).reindex(columns=["close", "high", "low"]).apply(pd.to_numeric, errors="coerce")
     if not np.isfinite(latest).all().all() or not (latest > 0).all().all():
         return {"error": "Latest index bar has invalid OHLC data"}

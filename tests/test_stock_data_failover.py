@@ -240,8 +240,9 @@ class TestKlineFinnhub:
         assert result[0]["close"] == 100.0
         assert result[0]["open"] == 99.0
 
+    @pytest.mark.parametrize("tz", ["America/New_York", "Asia/Shanghai"])
     @pytest.mark.skipif(sys.platform == "win32", reason="time.tzset is unavailable on Windows")
-    def test_kline_date_does_not_depend_on_host_timezone(self, mock_finnhub, monkeypatch):
+    def test_kline_date_does_not_depend_on_host_timezone(self, mock_finnhub, monkeypatch, tz):
         import os
         import time
         from datetime import datetime, timezone
@@ -262,7 +263,7 @@ class TestKlineFinnhub:
         }
         monkeypatch.setattr(stock_data, "_kline_yfinance", MagicMock(side_effect=ValueError("offline")))
         try:
-            with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key", "TZ": "America/New_York"}):
+            with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key", "TZ": tz}):
                 time.tzset()
                 rows = stock_data.cmd_kline(Namespace(symbol="0700.HK", period="daily", count=1))
         finally:

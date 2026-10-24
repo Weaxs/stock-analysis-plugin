@@ -622,11 +622,12 @@ def diagnose(metrics: dict) -> dict:
         weaknesses.append(f"胜率偏低 ({round(wr * 100, 1)}%)")
 
     plr = metrics["profit_loss_ratio"]
-    if plr >= 2:
-        strengths.append(f"盈亏比优秀 ({plr}:1)")
-    elif plr < 1:
-        weaknesses.append(f"盈亏比不足 ({plr}:1)")
-        suggestions.append("考虑提高止盈目标或收紧止损")
+    if plr is not None and math.isfinite(plr):
+        if plr >= 2:
+            strengths.append(f"盈亏比优秀 ({plr}:1)")
+        elif plr < 1:
+            weaknesses.append(f"盈亏比不足 ({plr}:1)")
+            suggestions.append("考虑提高止盈目标或收紧止损")
 
     mdd = abs(metrics["max_drawdown"])
     if mdd > 0.2:

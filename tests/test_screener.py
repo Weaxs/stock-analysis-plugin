@@ -259,6 +259,19 @@ class TestComputeSentiment:
         assert result["multiplier"] == round(0.8 + 83.4 / 100 * 0.4, 3)
 
 
+class TestPeBasis:
+    @pytest.mark.parametrize("l2_enabled", [False, True])
+    def test_screen_preserves_pe_basis(self, monkeypatch, l2_enabled):
+        snapshot = _snapshot()
+        for row in snapshot:
+            row["pe_basis"] = "dynamic"
+        _patch_screen(monkeypatch)
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
+        monkeypatch.setattr(screener, "_apply_l2", lambda candidates, market, multiplier: None)
+        result = screen("A", 20, {"l2": l2_enabled})
+        assert [candidate["pe_basis"] for candidate in result["candidates"]] == ["dynamic"] * 3
+
+
 class TestScreenNoL2Regression:
     def test_output_shape_and_sorting_unchanged(self, monkeypatch):
         _patch_screen(monkeypatch)

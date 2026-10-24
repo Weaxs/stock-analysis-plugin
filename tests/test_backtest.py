@@ -293,11 +293,11 @@ class TestSampleCurve:
         assert len(result) <= 201
         assert result[-1] == curve[-1]
 
-    def test_evaluate_result_preserves_full_curve_metrics(self, tmp_path):
+    def test_evaluate_result_preserves_full_curve_metrics_with_null_ratio(self, tmp_path):
         metrics = {
             "total_trades": 0,
             "win_rate": 0,
-            "profit_loss_ratio": 1,
+            "profit_loss_ratio": None,
             "max_drawdown": -0.5,
             "total_return": 0,
             "sharpe_ratio": -1.23,
@@ -429,6 +429,26 @@ class TestDiagnose:
         result = diagnose(metrics)
         assert len(result["weaknesses"]) > 0
         assert len(result["suggestions"]) > 0
+
+    @pytest.mark.parametrize("plr", [None, float("nan")])
+    def test_undefined_profit_loss_ratio_is_not_diagnosed(self, plr):
+        metrics = {
+            "win_rate": 0.5,
+            "profit_loss_ratio": plr,
+            "max_drawdown": -0.1,
+            "sharpe_ratio": 0.5,
+            "total_trades": 2,
+            "winning_trades": 1,
+            "losing_trades": 1,
+            "avg_holding_days": 5,
+            "max_consecutive_wins": 1,
+            "max_consecutive_losses": 1,
+            "total_return": 0.1,
+            "annual_return": 0.1,
+        }
+        result = diagnose(metrics)
+        messages = result["strengths"] + result["weaknesses"] + result["suggestions"]
+        assert not any("盈亏比" in message for message in messages)
 
 
 _MA_CROSS_STRATEGY = {
@@ -663,24 +683,33 @@ class TestRunBacktest:
         assert "diagnosis" in result
         assert "diagnostics" in result
 
-    def test_prehistory_warms_indicators_without_entering_the_evaluation_window(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            {"indicator": "ma", "period": 20, "operator": ">", "value": 0},
+            {"indicator": "ema_diff", "fast_period": 2, "slow_period": 4, "operator": ">", "value": 0},
+            {"indicator": "macd_dif", "operator": ">", "value": 0},
+            {"indicator": "monthly_momentum", "period": 5, "operator": ">", "value": 0},
+        ],
+    )
+    def test_prehistory_warms_indicators_without_entering_the_evaluation_window(self, monkeypatch, tmp_path, condition):
         import yaml
 
         dates = pd.bdate_range("2024-01-01", periods=80)
         rows = [
             {
                 "date": date.strftime("%Y-%m-%d"),
-                "open": 100,
-                "high": 101,
-                "low": 99,
-                "close": 100,
+                "open": 100 + i,
+                "high": 101 + i,
+                "low": 99 + i,
+                "close": 100 + i,
                 "volume": 1000,
             }
-            for date in dates
+            for i, date in enumerate(dates)
         ]
         monkeypatch.setattr(backtest, "run_tool", lambda *args, **kwargs: rows)
         strategy = {
-            "entry": {"conditions": [{"indicator": "ma", "period": 20, "operator": ">", "value": 0}]},
+            "entry": {"conditions": [condition]},
             "exit": {"stop_loss": -1, "take_profit": 1000},
             "simulation": {"execution": "next_open", "slippage": 0, "commission": 0},
         }

@@ -20,10 +20,34 @@ import time
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import command_timeout, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
+
+_MARKET_TIMEZONES = {
+    "A": "Asia/Shanghai",
+    "HK": "Asia/Hong_Kong",
+    "US": "America/New_York",
+    "JP": "Asia/Tokyo",
+    "KR": "Asia/Seoul",
+    "TW": "Asia/Taipei",
+}
+
+
+def _price_date(value, market):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        if len(value) == 10:
+            return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            return None
+        return timestamp.astimezone(ZoneInfo(_MARKET_TIMEZONES[market])).date().isoformat()
+    except (ValueError, KeyError, OverflowError):
+        return None
 
 
 def _default_store() -> Path:
@@ -149,10 +173,12 @@ def cmd_record(args):
         entry_price = quote["price"]
         price_as_of = quote.get("data_as_of") if isinstance(quote.get("data_as_of"), str) else None
     date = args.date or datetime.now().strftime("%Y-%m-%d")
+    market = detect_market(args.symbol)
+    price_date = _price_date(price_as_of, market) if price_as_of else None
     record = {
         "id": f"{date}-{args.symbol}-{uuid4().hex[:8]}",
         "symbol": args.symbol,
-        "market": detect_market(args.symbol),
+        "market": market,
         "direction": args.direction,
         "entry_price": entry_price,
         "target_price": args.target_price,
@@ -162,12 +188,15 @@ def cmd_record(args):
         "note": args.note,
         "record_date": date,
         "price_as_of": price_as_of,
+        "price_date": price_date,
         "status": "open",
         "outcome": None,
     }
     store = _store_path(args)
     try:
         _validate_signal(record)
+        if price_date and price_date > date:
+            raise ValueError("price_as_of cannot be later than record_date; use an explicit historical entry price")
         with _store_lock(store):
             _load_records(store, strict=True)
             _append_record(store, record)
@@ -239,18 +268,14 @@ def _valid_bar(bar) -> bool:
 
 
 def _price_factor(rec, bars):
+    market = rec.get("market") or detect_market(rec["symbol"])
+    price_date = _price_date(rec.get("price_date") or rec.get("price_as_of"), market)
+    if price_date and price_date > rec["record_date"]:
+        return None
     if all(bar.get("adjusted") == "none" for bar in bars):
         return 1.0
-    anchor_date = rec["record_date"]
-    price_as_of = rec.get("price_as_of")
-    has_price_date = False
-    if isinstance(price_as_of, str) and len(price_as_of) == 10 and price_as_of <= anchor_date:
-        try:
-            datetime.strptime(price_as_of, "%Y-%m-%d")
-            anchor_date = price_as_of
-            has_price_date = True
-        except ValueError:
-            pass
+    anchor_date = price_date or rec["record_date"]
+    has_price_date = price_date is not None
     anchor_idx = next((i for i, bar in enumerate(bars) if bar["date"] == anchor_date), None)
     if anchor_idx is None:
         anchor_idx = next((i for i in range(len(bars) - 1, -1, -1) if bars[i]["date"] <= anchor_date), None)

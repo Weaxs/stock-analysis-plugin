@@ -443,6 +443,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "volume",
             "turnover_rate",
             "pe",
+            "pe_basis",
             "pb",
             "market_cap",
             "volume_ratio",

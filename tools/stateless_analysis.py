@@ -417,7 +417,8 @@ def event_study(p):
                     window["benchmark_return_pct"] = (benchmark[end_date] / benchmark[start_date] - 1) * 100
                     window["excess_return_pct"] = window["return_pct"] - window["benchmark_return_pct"]
             event["windows"].append(window)
-        intervals.append(None if idx == 0 or idx >= len(dates) else (idx - 1, min(idx + max(horizons), len(dates) - 1)))
+        has_valid_window = idx > 0 and any(idx + horizon < len(dates) for horizon in horizons)
+        intervals.append((idx - 1, min(idx + max(horizons), len(dates) - 1)) if has_valid_window else None)
         events.append(event)
     for i, event in enumerate(events):
         interval = intervals[i]

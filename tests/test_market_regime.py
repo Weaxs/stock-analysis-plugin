@@ -162,6 +162,13 @@ class TestDetectRegimeDataQuality:
             result = detect_regime("US")
         assert "Latest index bar" in result.get("error", "")
 
+    def test_invalid_latest_date_returns_json_error(self, make_kline_data):
+        klines = make_kline_data(40)
+        klines[-1]["date"] = "bad"
+        with patch("tools.market_regime._run_tool", return_value=klines):
+            result = detect_regime("US")
+        assert result == {"error": "Latest index bar has invalid date"}
+
     def test_reports_actual_date_and_dropped_rows(self, make_kline_data):
         klines = make_kline_data(80)
         klines[10]["low"] = None

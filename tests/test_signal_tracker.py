@@ -549,6 +549,61 @@ def test_non_trading_day_uses_prior_bar_when_factor_is_unchanged(store, mock_run
     assert st._load_records(store)[0]["evaluation_price_basis"]["factor"] == 1
 
 
+def test_future_quote_date_is_rejected_before_recording(store, mock_run_tool):
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-09-07"}
+    result = st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=None))
+    assert "error" in result
+    assert not store.exists()
+
+
+def test_legacy_future_quote_date_is_rejected_during_evaluation(store, mock_run_tool):
+    rec = st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, horizon_days=1))
+    rec["price_as_of"] = "2026-09-07"
+    store.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    bars = [
+        _bar("2026-09-01", 50, 50, 50),
+        _bar("2026-09-07", 100, 100, 100),
+        _bar("2026-09-08", 102, 100, 102),
+    ]
+    for bar, factor in zip(bars, [0.5, 1, 1]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["closed"] == 0
+    assert result["results"][0]["outcome"] == "skipped_price_basis"
+
+
+def test_iso_quote_timestamp_uses_market_local_date(store, mock_run_tool):
+    mock_run_tool.return_value = {"price": 100, "data_as_of": "2026-09-04T20:00:00+00:00"}
+    rec = st.cmd_record(
+        _rec_args(
+            store,
+            symbol="AAPL",
+            date="2026-09-04",
+            entry_price=None,
+            stop_price=90,
+            target_price=120,
+            horizon_days=1,
+        )
+    )
+    assert rec["price_date"] == "2026-09-04"
+    bars = [
+        _bar("2026-09-03", 100, 100, 100),
+        _bar("2026-09-04", 50, 50, 50),
+        _bar("2026-09-07", 51, 50, 51),
+    ]
+    for bar, factor in zip(bars, [1, 0.5, 0.5]):
+        bar.update(adjusted="qfq", adjustment_factor=factor)
+    mock_run_tool.return_value = bars
+
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+
+    assert result["results"][0]["outcome"] == "timeout_profit"
+    assert result["results"][0]["return_pct"] == 2
+
+
 def test_batch_deadline_returns_and_persists_completed_results(store, mock_run_tool, monkeypatch):
     for symbol in ["600519", "000001", "300001", "600000", "000002"]:
         st.cmd_record(_rec_args(store, symbol=symbol))
