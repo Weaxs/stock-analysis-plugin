@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -77,6 +78,15 @@ def _validate_signal(record):
         if record.get(field) is not None
     ):
         raise ValueError("Signal prices must be finite and positive")
+    entry = record["entry_price"]
+    target = record.get("target_price")
+    stop = record.get("stop_price")
+    if record["direction"] == "buy":
+        valid_prices = (target is None or target > entry) and (stop is None or stop < entry)
+    else:
+        valid_prices = (target is None or target < entry) and (stop is None or stop > entry)
+    if not valid_prices:
+        raise ValueError("Signal target/stop prices conflict with direction")
     horizon = record.get("horizon_days")
     if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon <= 0:
         raise ValueError("Signal horizon_days must be a positive integer")
@@ -209,9 +219,9 @@ def _evaluate_bars(rec: dict, bars: list):
     """Judge one open record against daily bars after record_date.
 
     Returns (outcome, exit_price, exit_date), or None when the record stays open
-    (fewer post-record bars than horizon_days and nothing triggered). Stop is
-    checked before target within each bar — when both trigger on the same day
-    the conservative stop_hit wins."""
+    (fewer post-record bars than horizon_days and nothing triggered). Opening
+    stops fill at the open and opening targets at the target. Otherwise stop is
+    checked before target within each bar."""
     entry = rec.get("entry_price")
     if not isinstance(entry, (int, float)) or entry <= 0:
         return None
@@ -224,13 +234,21 @@ def _evaluate_bars(rec: dict, bars: list):
         key=lambda b: str(b.get("date", "")),
     )
     for i, bar in enumerate(eligible, 1):
-        high, low, close = bar.get("high"), bar.get("low"), bar.get("close")
+        opening, high, low, close = (bar.get(key) for key in ("open", "high", "low", "close"))
         if direction == "buy":
+            hit_opening_stop = stop is not None and opening is not None and opening <= stop
+            hit_opening_target = target is not None and opening is not None and opening >= target
             hit_stop = stop is not None and low is not None and low <= stop
             hit_target = target is not None and high is not None and high >= target
         else:
+            hit_opening_stop = stop is not None and opening is not None and opening >= stop
+            hit_opening_target = target is not None and opening is not None and opening <= target
             hit_stop = stop is not None and high is not None and high >= stop
             hit_target = target is not None and low is not None and low <= target
+        if hit_opening_stop:
+            return "stop_hit", opening, bar.get("date")
+        if hit_opening_target:
+            return "target_hit", target, bar.get("date")
         if hit_stop:
             return "stop_hit", stop, bar.get("date")
         if hit_target:
@@ -262,8 +280,11 @@ def _valid_bar(bar) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return date.strftime("%Y-%m-%d") == bar["date"] and all(
-        isinstance(bar.get(key), (int, float)) and math.isfinite(bar[key]) and bar[key] > 0
-        for key in ("high", "low", "close")
+        not isinstance(bar.get(key), bool)
+        and isinstance(bar.get(key), (int, float))
+        and math.isfinite(bar[key])
+        and bar[key] > 0
+        for key in ("open", "high", "low", "close")
     )
 
 
@@ -341,6 +362,7 @@ def cmd_evaluate(args):
             not isinstance(bars, list)
             or not bars
             or any(not _valid_bar(bar) for bar in bars)
+            or len({bar["date"] for bar in bars}) != len(bars)
             or min(str(b.get("date", ""))[:10] for b in bars) > rec["record_date"]
         ):
             entry.update({"outcome": "skipped_no_data", "return_pct": None, "exit_date": None})
@@ -352,16 +374,17 @@ def cmd_evaluate(args):
                 warning="Adjusted or unknown prices lack a verified conversion to the original signal prices",
             )
         else:
+            decimal_factor = Decimal(str(factor))
             priced = dict(rec)
             for key in ("entry_price", "target_price", "stop_price"):
                 if priced.get(key) is not None:
-                    priced[key] *= factor
+                    priced[key] = float(Decimal(str(priced[key])) * decimal_factor)
             ev = _evaluate_bars(priced, bars)
             if ev is None:
                 entry.update({"outcome": "open", "return_pct": None, "exit_date": None})
             else:
                 outcome, exit_price, exit_date = ev
-                exit_price /= factor
+                exit_price = float(Decimal(str(exit_price)) / decimal_factor)
                 ret = round((exit_price - rec["entry_price"]) / rec["entry_price"] * 100, 2)
                 if rec.get("direction") == "sell":
                     ret = -ret

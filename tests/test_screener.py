@@ -690,3 +690,58 @@ def test_l1_missing_factors_do_not_count_as_zero_before_ranking(monkeypatch):
     assert best["scores"]["final"] == 100
     assert best["scores"]["value"] is None
     assert best["factor_coverage"]["effective_weights"] == {"momentum": 0.5, "liquidity": 0.5}
+
+
+@pytest.mark.parametrize(("bars", "samples", "has_vol20"), [(2, 1, False), (20, 19, False), (21, 20, True)])
+def test_vol20_requires_exactly_twenty_daily_returns(monkeypatch, make_kline_data, bars, samples, has_vol20):
+    kline = make_kline_data(n=bars)
+    monkeypatch.setattr(
+        screener,
+        "_fetch_json",
+        lambda args, **kwargs: kline if args[0] == "kline" else {"error": "unavailable"},
+    )
+    result = screener._enrich_one("AAA", "A")
+    assert result["vol20_samples"] == samples
+    assert ("vol20" in result) is has_vol20
+
+
+def test_l2_output_exposes_vol20_sample_coverage(monkeypatch):
+    _patch_screen(monkeypatch)
+    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {"vol20_samples": 2})
+    result = screen("A", 20, {"l2": True})
+    assert [candidate["factor_coverage"]["vol20_samples"] for candidate in result["candidates"]] == [2] * 3
+
+
+def test_enrich_one_preserves_profitability_report_date(monkeypatch):
+    def fetch(args, **kwargs):
+        if args[0] == "fundamental_context":
+            return {"profitability": {"roe": 12.5, "report_date": "2025-03-31"}}
+        return {"error": "unavailable"}
+
+    monkeypatch.setattr(screener, "_fetch_json", fetch)
+    result = screener._enrich_one("AAA", "A")
+    assert result["roe"] == 12.5
+    assert result["report_date"] == "2025-03-31"
+
+
+@pytest.mark.parametrize("factor", ["roe", "gross_margin", "net_margin"])
+def test_quality_factors_are_minmaxed_within_report_date_groups(factor):
+    enrichments = {
+        "AAA": {factor: 20, "report_date": "2024-12-31"},
+        "BBB": {factor: 40, "report_date": "2024-12-31"},
+        "CCC": {factor: 10, "report_date": "2025-03-31"},
+        "DDD": {factor: 30, "report_date": "2025-03-31"},
+        "EEE": {factor: 999, "report_date": "2025-06-30"},
+        "FFF": {factor: 0},
+        "GGG": {factor: 60, "report_date": None},
+    }
+    scores = screener._cross_sectional_scores(enrichments)
+    assert {symbol: values["quality"] for symbol, values in scores.items()} == {
+        "AAA": 0,
+        "BBB": 100,
+        "CCC": 0,
+        "DDD": 100,
+        "EEE": 50,
+        "FFF": 0,
+        "GGG": 100,
+    }

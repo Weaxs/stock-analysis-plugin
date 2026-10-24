@@ -72,12 +72,15 @@ def _substitute(s: str, params: dict):
 # --------------- Data Fetching ---------------
 
 
-def fetch_kline(symbol: str, start: str | None, end: str | None, include_warmup: bool = False) -> pd.DataFrame:
+def fetch_kline(
+    symbol: str, start: str | None, end: str | None, include_warmup: bool = False, warmup_bars: int = 0
+) -> pd.DataFrame:
     count = 500
     if start and end:
         d0 = datetime.strptime(start, "%Y-%m-%d")
         d1 = datetime.strptime(end, "%Y-%m-%d")
         count = max((datetime.now() - d0).days + 60, (d1 - d0).days + 60, 300)
+    count += warmup_bars
 
     data = run_tool(
         "stock_data.py", ["kline", symbol, "--period", "daily", "--count", str(count)], preserve_errors=True
@@ -224,43 +227,98 @@ def check_condition(series: pd.Series, operator: str, value: float, idx: int) ->
     return False
 
 
-def _coerce_int(v):
-    if isinstance(v, str):
-        try:
-            return int(float(v))
-        except (ValueError, TypeError):
-            return None
-    return v
+def _condition_parameters(cond: dict) -> tuple:
+    values = []
+    for key in ("period", "fast_period", "slow_period"):
+        if key not in cond:
+            values.append(None)
+            continue
+        value = cond[key]
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            value = int(value)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{key} must be a positive integer or integer string, got {value!r}")
+        values.append(value)
+    return tuple(values)
+
+
+def _strategy_warmup_bars(strategy: dict) -> int:
+    lookback = 0
+    for side in ("entry", "exit"):
+        for cond in strategy.get(side, {}).get("conditions", []):
+            name = cond["indicator"].lower()
+            period, fast, slow = _condition_parameters(cond)
+            if name in ("ma_diff", "ema_diff"):
+                defaults = (5, 20) if name == "ma_diff" else (12, 26)
+                fast, slow = _resolve_ma_pair(fast, slow, period, defaults)
+                bars = max(fast, slow)
+            elif name == "trend_score":
+                bars = max(slow or 60, (period or 14) + 1)
+            elif name in ("macd_dif", "macd_dea", "macd"):
+                bars = 26 if name == "macd_dif" else 34
+            elif name == "price_change":
+                bars = 2
+            else:
+                bars = period or {
+                    "rsi": 14,
+                    "ma": 20,
+                    "ema": 20,
+                    "monthly_momentum": 63,
+                    "volume_ratio": 5,
+                    "bollinger_position": 20,
+                }.get(name, 1)
+                if name in ("rsi", "monthly_momentum", "volume_ratio"):
+                    bars += 1
+            lookback = max(lookback, bars + (cond.get("operator") in ("cross_above", "cross_below")))
+    return lookback
+
+
+def _condition_series(df: pd.DataFrame, cond: dict, cache: dict) -> tuple[pd.Series, str]:
+    if cond.get("operator") not in (">", "<", ">=", "<=", "==", "cross_above", "cross_below"):
+        raise ValueError(f"Unknown condition operator: {cond.get('operator')}")
+    ind_name = cond["indicator"]
+    period, fast, slow = _condition_parameters(cond)
+    cache_key = f"{ind_name}_{period}_{fast}_{slow}"
+    if cache_key not in cache:
+        cache[cache_key] = get_indicator(df, ind_name, period, fast, slow)
+    label = f"{ind_name}({fast},{slow})" if fast or slow else f"{ind_name}({period})" if period else ind_name
+    return cache[cache_key], label
 
 
 def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int, cache: dict) -> tuple[bool, str]:
     results = []
     reasons = []
     for cond in conditions:
-        ind_name = cond["indicator"]
-        parameters = (cond.get("period"), cond.get("fast_period"), cond.get("slow_period"))
-        if ind_name.lower() in ("trend_score", "monthly_momentum"):
-            period, fast, slow = (int(v) if isinstance(v, str) else v for v in parameters)
-        else:
-            period, fast, slow = map(_coerce_int, parameters)
-
-        cache_key = f"{ind_name}_{period}_{fast}_{slow}"
-        if cache_key not in cache:
-            cache[cache_key] = get_indicator(df, ind_name, period, fast, slow)
-        series = cache[cache_key]
-
+        series, label = _condition_series(df, cond, cache)
         op = cond["operator"]
         val = float(cond["value"])
         hit = check_condition(series, op, val, idx)
         results.append(hit)
         if hit:
             cur_val = round(float(series.iloc[idx]), 2)
-            label = f"{ind_name}({fast},{slow})" if fast or slow else f"{ind_name}({period})" if period else ind_name
             reasons.append(f"{label} = {cur_val} {op} {val}")
 
     if logic == "all":
         return all(results), "; ".join(reasons)
     return any(results), "; ".join(reasons)
+
+
+def _entry_warmup_warnings(df: pd.DataFrame, strategy: dict, start: str, execution: str) -> list[str]:
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    window = np.flatnonzero((dates >= start).to_numpy())
+    first_bar = max(1, int(window[0]))
+    signal_idx = first_bar if execution == "same_close" else first_bar - 1
+    warnings = []
+    cache = {}
+    for cond in strategy.get("entry", {}).get("conditions", []):
+        series, label = _condition_series(df, cond, cache)
+        indices = [signal_idx]
+        if cond["operator"] in ("cross_above", "cross_below"):
+            indices.append(signal_idx - 1)
+        if any(idx < 0 or pd.isna(series.iloc[idx]) for idx in indices):
+            signal_date = str(pd.Timestamp(df["date"].iloc[signal_idx]).date())
+            warnings.append(f"Insufficient warmup: entry indicator {label} is NaN at first window signal {signal_date}")
+    return warnings
 
 
 # --------------- Simulation ---------------
@@ -277,6 +335,12 @@ def simulate(
 ) -> dict:
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("capital must be finite and positive")
+    if "adjusted" in df:
+        bases = set(df["adjusted"].fillna("unknown").astype(str))
+        if not bases or not bases <= {"qfq", "total_return", "none"}:
+            raise ValueError("adjusted contains unknown adjustment basis; expected qfq, total_return or none")
+        if len(bases) != 1:
+            raise ValueError("adjusted must use a single adjustment basis: qfq, total_return or none")
     if not np.isfinite(df["close"]).all() or (df["close"] <= 0).any():
         raise ValueError("backtest prices must be finite and positive")
     dates = pd.to_datetime(df["date"], errors="coerce")
@@ -334,8 +398,13 @@ def simulate(
     entry_logic = entry.get("logic", "all")
     exit_conditions = exit_.get("conditions", [])
     exit_logic = exit_.get("logic", "any")
+    for side, logic in (("entry", entry_logic), ("exit", exit_logic)):
+        if logic not in ("all", "any"):
+            raise ValueError(f"{side}.logic must be all or any")
 
     cache: dict = {}
+    for cond in entry_conditions + exit_conditions:
+        _condition_series(df, cond, cache)
     trades = []
     equity_curve = []
     holding = None
@@ -369,7 +438,10 @@ def simulate(
         if holding is None:
             hit, reason = evaluate_conditions(df, entry_conditions, entry_logic, signal_idx, cache)
             if pending:
-                hit, reason, signal_date = True, pending[0], pending[1]
+                if hit:
+                    reason, signal_date = pending
+                else:
+                    pending = None
             if entry_gate is not None and not entry_gate.iloc[signal_idx]:
                 hit, pending = False, None
             if hit and not tradable(row, "buy"):
@@ -776,7 +848,9 @@ def sample_curve(curve: list, max_points: int = 200) -> list:
 # --------------- Entry Points ---------------
 
 
-def _benchmark_comparison(symbol: str, start: str, end: str, strategy_return: float) -> dict:
+def _benchmark_comparison(
+    symbol: str, start: str, end: str, strategy_return: float, execution: str = "next_open"
+) -> dict:
     """Buy-and-hold benchmark over the same window; degrades to an error note on fetch failure."""
     try:
         df = fetch_kline(symbol, start, end)
@@ -784,8 +858,20 @@ def _benchmark_comparison(symbol: str, start: str, end: str, strategy_return: fl
         return {"symbol": symbol, "error": str(e)}
     if len(df) < 2:
         return {"symbol": symbol, "error": f"Insufficient benchmark data: {len(df)} rows"}
-    first, last = float(df["close"].iloc[0]), float(df["close"].iloc[-1])
-    total_return = (last - first) / first if first else 0.0
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    if dates.isna().any():
+        return {"symbol": symbol, "error": "Benchmark dates must be valid"}
+    actual_start, actual_end = str(dates.iloc[0].date()), str(dates.iloc[-1].date())
+    if (actual_start, actual_end) != (start, end):
+        return {
+            "symbol": symbol,
+            "error": f"Benchmark data covers {actual_start} to {actual_end}; requested {start} to {end}",
+        }
+    entry_column = "open" if execution == "next_open" else "close"
+    first, last = float(df[entry_column].iloc[0]), float(df["close"].iloc[-1])
+    if not all(math.isfinite(price) and price > 0 for price in (first, last)):
+        return {"symbol": symbol, "error": "Benchmark first and last prices must be finite and positive"}
+    total_return = (last - first) / first
     return {
         "symbol": symbol,
         "total_return": round(total_return, 4),
@@ -801,7 +887,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     if not start:
         start = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
 
-    df = fetch_kline(symbol, start, end, True)
+    df = fetch_kline(symbol, start, end, True, _strategy_warmup_bars(strategy))
     evaluation = df[(df["date"] >= start) & (df["date"] <= end)]
     if len(evaluation) < 30:
         return {"error": f"Insufficient data: {len(evaluation)} rows (need at least 30)"}
@@ -813,6 +899,8 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     if actual_start != start or actual_end != end:
         warnings.append(f"Actual data covers {actual_start} to {actual_end}; requested {requested_period}")
     start, end = actual_start, actual_end
+    execution = strategy.get("simulation", {}).get("execution", "next_open")
+    warnings.extend(_entry_warmup_warnings(df, strategy, start, execution))
     sim = simulate(df, strategy, capital, symbol, start=start)
     final = sim["final_equity"]
     metrics = compute_metrics(sim["trades"], sim["equity_curve"], capital, final, start, end)
@@ -835,7 +923,9 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     }
     benchmark_symbol = strategy.get("benchmark")
     if benchmark_symbol:
-        result["benchmark"] = _benchmark_comparison(str(benchmark_symbol), start, end, metrics["total_return"])
+        result["benchmark"] = _benchmark_comparison(
+            str(benchmark_symbol), start, end, metrics["total_return"], execution
+        )
     return result
 
 

@@ -266,9 +266,9 @@ def calc_ma(close: pd.Series) -> dict:
     vals = [mas.get(f"ma{n}") for n in [5, 10, 20, 60]]
     valid = [v for v in vals if v is not None]
     if len(valid) >= 3:
-        if valid == sorted(valid, reverse=True):
+        if all(a > b for a, b in zip(valid, valid[1:])):
             mas["ma_arrangement"] = "bullish"
-        elif valid == sorted(valid):
+        elif all(a < b for a, b in zip(valid, valid[1:])):
             mas["ma_arrangement"] = "bearish"
         else:
             mas["ma_arrangement"] = "mixed"
@@ -466,6 +466,8 @@ def generate_signal_score(
     # --- Trend score (30 points) ---
     arrangement = ma_data.get("ma_arrangement", "mixed")
     overall = trend_data.get("overall", "neutral")
+    ma_values = [ma_data.get(f"ma{n}") for n in (5, 10, 20, 60)]
+    flat_ma = ma_values[0] is not None and len(set(ma_values)) == 1
     short_t = trend_data.get("short_term", "neutral")
     medium_t = trend_data.get("medium_term", "neutral")
     long_t = trend_data.get("long_term", "neutral")
@@ -609,9 +611,9 @@ def generate_signal_score(
     score += rsi_score
 
     # --- Buy signal classification ---
-    if score >= 75 and overall == "bullish":
+    if score >= 75 and overall == "bullish" and not flat_ma:
         buy_signal = "STRONG_BUY"
-    elif score >= 60 and overall in ("bullish", "neutral"):
+    elif score >= 60 and overall in ("bullish", "neutral") and not flat_ma:
         buy_signal = "BUY"
     elif score >= 45:
         buy_signal = "HOLD"
@@ -724,9 +726,9 @@ def calculate_ma_standalone(
     valid_mas = [(n, mas[f"ma{n}"]) for n in periods if mas.get(f"ma{n}") is not None]
     if len(valid_mas) >= 3:
         vals = [v for _, v in valid_mas]
-        if vals == sorted(vals, reverse=True):
+        if all(a > b for a, b in zip(vals, vals[1:])):
             alignment = "bullish"
-        elif vals == sorted(vals):
+        elif all(a < b for a, b in zip(vals, vals[1:])):
             alignment = "bearish"
         else:
             alignment = "mixed"

@@ -212,7 +212,8 @@ def _enrich_one(symbol: str, market: str) -> dict:
                 if peak > 0:
                     result["high_250_proximity"] = round(float(closes.iloc[-1]) / peak, 4)
             rets = closes.pct_change().dropna().tail(20)
-            if len(rets) >= 2:
+            result["vol20_samples"] = len(rets)
+            if len(rets) == 20:
                 result["vol20"] = round(float(rets.std()) * float(np.sqrt(252)), 4)
     except Exception:
         pass
@@ -221,7 +222,7 @@ def _enrich_one(symbol: str, market: str) -> dict:
         fund = _fetch_json(["fundamental_context", symbol])
         if isinstance(fund, dict) and "error" not in fund:
             prof = fund.get("profitability") or {}
-            for key in ("roe", "gross_margin", "net_margin"):
+            for key in ("roe", "gross_margin", "net_margin", "report_date"):
                 if prof.get(key) is not None:
                     result[key] = prof[key]
             growth = fund.get("growth") or {}
@@ -265,7 +266,11 @@ def _cross_sectional_scores(enrichments: dict) -> dict:
         margin = profit_margin
     elif profit_margin is not None:
         margin = margin.combine_first(profit_margin)
-    add_group("quality", [_minmax(s) for s in (col("roe"), margin, col("net_margin")) if s is not None])
+    report_dates = fdf.get("report_date", pd.Series("unknown", index=fdf.index)).fillna("unknown")
+    add_group(
+        "quality",
+        [s.groupby(report_dates).transform(_minmax) for s in (col("roe"), margin, col("net_margin")) if s is not None],
+    )
     add_group(
         "growth", [_minmax(s.clip(-50, 100)) for s in (col("revenue_yoy"), col("net_income_yoy")) if s is not None]
     )
@@ -326,6 +331,7 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
             "ratio": round(total_weight, 4),
             "effective_weights": {g: L2_WEIGHTS[g] / total_weight for g in components},
             "effective_scores": components,
+            "vol20_samples": enrichments.get(sym, {}).get("vol20_samples"),
         }
 
 

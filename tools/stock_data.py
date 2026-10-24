@@ -1378,8 +1378,10 @@ def cmd_capital_flow(args):
             summary = {"symbol": args.symbol}
             for days, label in [(5, "5d"), (10, "10d"), (20, "20d")]:
                 tail = df_all.tail(days)
-                summary[f"main_net_{label}"] = _sanitize(tail.get("main_net_inflow", pd.Series()).sum())
-                summary[f"super_large_net_{label}"] = _sanitize(tail.get("super_large_net", pd.Series()).sum())
+                summary[f"main_net_{label}"] = _sanitize(tail.get("main_net_inflow", pd.Series()).sum(min_count=days))
+                summary[f"super_large_net_{label}"] = _sanitize(
+                    tail.get("super_large_net", pd.Series()).sum(min_count=days)
+                )
             recent = df_all["main_net_inflow"].tail(5) if "main_net_inflow" in df_all.columns else pd.Series()
             if len(recent) >= 3:
                 pos_count = (recent > 0).sum()
@@ -1854,6 +1856,9 @@ def snapshot_hk() -> list:
             "总市值": "market_cap",
         }
         df = df.rename(columns=col_map)
+        if "symbol" in df.columns:
+            symbols = df["symbol"].astype(str).str.upper()
+            df["symbol"] = symbols.map(lambda s: s if s.endswith(".HK") else f"{s}.HK")
         df["pe_basis"] = "unknown"
         keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
         return [_clean_row(r) for r in df[keep].to_dict("records")]
@@ -1878,6 +1883,9 @@ def snapshot_us() -> list:
             "总市值": "market_cap",
         }
         df = df.rename(columns=col_map)
+        if "symbol" in df.columns:
+            symbols = df["symbol"].astype(str).str.upper().str.replace(r"\.(?:OQ|N|A)$", "", regex=True)
+            df["symbol"] = symbols.str.replace(".", "-", regex=False)
         df["pe_basis"] = "unknown"
         keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
         return [_clean_row(r) for r in df[keep].to_dict("records")]
@@ -2730,6 +2738,9 @@ def compute_market_stats(data: list) -> dict:
             code_info = normalize_stock_code(sym)
             lp = code_info.get("limit_pct")
             if lp:
+                name = s.get("name", "")
+                if name and "ST" in name.upper() and code_info["board"] == "main":
+                    lp = 0.05
                 limit_up = calc_limit_price(float(prev), lp, "up")
                 limit_down = calc_limit_price(float(prev), lp, "down")
                 if abs(float(price) - limit_up) < 0.01:

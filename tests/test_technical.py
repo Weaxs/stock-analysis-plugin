@@ -249,10 +249,45 @@ class TestCalcMa:
         assert result["ma5"] < result["ma10"] < result["ma20"]
         assert result["ma_arrangement"] == "bearish"
 
+    @pytest.mark.parametrize(
+        "values",
+        [
+            [100] * 60,
+            [5] * 50 + [10] * 10,
+            [15] * 50 + [10] * 10,
+        ],
+    )
+    def test_equal_moving_averages_are_mixed(self, values):
+        assert calc_ma(_make_close(values))["ma_arrangement"] == "mixed"
+
     def test_insufficient_data(self):
         close = _make_close([10, 11])
         result = calc_ma(close)
         assert result["ma_arrangement"] == "insufficient_data"
+
+
+def test_flat_analysis_does_not_emit_buy(make_kline_data):
+    bars = make_kline_data(120)
+    for row in bars:
+        row.update(open=100, high=100, low=100, close=100)
+    result = technical_mod.analyze_records("TEST", bars)
+    assert result["moving_averages"]["ma_arrangement"] == "mixed"
+    assert result["buy_signal"] not in ("BUY", "STRONG_BUY")
+
+
+class TestCalculateMaStandalone:
+    @pytest.mark.parametrize(
+        "values",
+        [
+            [100] * 60,
+            [5] * 50 + [10] * 10,
+            [15] * 50 + [10] * 10,
+        ],
+    )
+    def test_equal_moving_averages_are_mixed(self, monkeypatch, values):
+        monkeypatch.setattr(technical_mod, "fetch_kline", lambda *args: [{"close": value} for value in values])
+        result = technical_mod.calculate_ma_standalone("TEST", periods=[5, 10, 20, 60], count=60)
+        assert result["alignment"] == "mixed"
 
 
 class TestCalcMacd:
