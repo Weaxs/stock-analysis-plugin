@@ -456,6 +456,26 @@ def test_event_without_excess_return_sample_does_not_overlap():
     assert not any(event["overlaps_other_event"] for event in result["events"])
 
 
+def test_invalid_horizon_does_not_expand_overlap_interval():
+    dates = [f"2026-01-{day:02d}" for day in range(1, 9)]
+    prices = [{"date": day, "close": 100} for day in dates]
+    benchmark = [row for row in prices if row["date"] != "2026-01-05"]
+    code, result = invoke(
+        "event_study",
+        {
+            "event_dates": ["2026-01-03", "2026-01-04"],
+            "horizons": [0, 2],
+            "price_basis": "adjusted",
+            "prices": prices,
+            "benchmark_prices": benchmark,
+        },
+    )
+    assert code == 0
+    assert result["events"][0]["windows"][0]["excess_return_pct"] == 0
+    assert result["events"][0]["windows"][1]["reason"] == "missing_benchmark_endpoint"
+    assert not any(event["overlaps_other_event"] for event in result["events"])
+
+
 def test_large_input_file_round_trip(tmp_path):
     path = tmp_path / "输入.json"
     path.write_text(
