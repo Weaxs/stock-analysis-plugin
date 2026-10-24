@@ -622,7 +622,7 @@ def diagnose(metrics: dict) -> dict:
         weaknesses.append(f"胜率偏低 ({round(wr * 100, 1)}%)")
 
     plr = metrics["profit_loss_ratio"]
-    if plr is not None and math.isfinite(plr):
+    if plr is not None and not math.isnan(plr):
         if plr >= 2:
             strengths.append(f"盈亏比优秀 ({plr}:1)")
         elif plr < 1:

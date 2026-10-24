@@ -455,6 +455,24 @@ class TestDiagnose:
         messages = result["strengths"] + result["weaknesses"] + result["suggestions"]
         assert not any("盈亏比" in message for message in messages)
 
+    def test_infinite_profit_loss_ratio_remains_a_strength(self):
+        metrics = {
+            "win_rate": 1,
+            "profit_loss_ratio": float("inf"),
+            "max_drawdown": -0.1,
+            "sharpe_ratio": 0.5,
+            "total_trades": 1,
+            "winning_trades": 1,
+            "losing_trades": 0,
+            "avg_holding_days": 1,
+            "max_consecutive_wins": 1,
+            "max_consecutive_losses": 0,
+            "total_return": 0.1,
+            "annual_return": 0.1,
+        }
+        result = diagnose(metrics)
+        assert "盈亏比优秀 (inf:1)" in result["strengths"]
+
 
 _MA_CROSS_STRATEGY = {
     "name": "ma_cross",
