@@ -72,9 +72,24 @@ def json_dumps_exact(value, cache=None):
 
 def fraction_value(value):
     if isinstance(value, RawNumber):
-        if len(value.raw) < 4000 and value.raw.lstrip("-").isdigit():
-            return Fraction(int(value.raw))
-        return Fraction(Decimal(value.raw))
+        raw = value.raw
+        if "e" in raw or "E" in raw:
+            mantissa, exponent_text = raw.lower().split("e", 1)
+            exponent = int(exponent_text)
+            sign = -1 if mantissa.startswith("-") else 1
+            whole, _, fraction = mantissa.lstrip("+-").partition(".")
+            digits = whole + fraction
+            if len(digits) < 4000:
+                numerator = int(digits or "0")
+                denominator = 10 ** len(fraction)
+                if exponent >= 0:
+                    numerator *= 10**exponent
+                else:
+                    denominator *= 10**-exponent
+                return sign * Fraction(numerator, denominator)
+        if len(raw) < 4000 and raw.lstrip("-").isdigit():
+            return Fraction(int(raw))
+        return Fraction(Decimal(raw))
     if isinstance(value, str):
         return Fraction(Decimal(value))
     if isinstance(value, (int, Decimal, Fraction)):
