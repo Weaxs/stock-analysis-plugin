@@ -35,16 +35,14 @@ class JsonExactNumber:
 
 
 def int_to_decimal(value):
-    if value.bit_length() < 14000:
+    if value.bit_length() < 14000 or not hasattr(sys, "set_int_max_str_digits"):
         return str(value)
-    sign = "-" if value < 0 else ""
-    number = abs(value)
-    base = 10**4000
-    parts = []
-    while number:
-        number, remainder = divmod(number, base)
-        parts.append(remainder)
-    return sign + str(parts[-1]) + "".join(str(part).rjust(4000, "0") for part in reversed(parts[:-1]))
+    previous = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(0)
+        return str(value)
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 def json_dumps_exact(value, cache=None):
@@ -359,18 +357,32 @@ def portfolio(p):
         histories[row["symbol"]] = prices(row["prices"])
     symbols = list(histories)
     returns_cache = {}
-    vector_cache = {}
-    raw_cache = {}
-    meta_cache = {}
-    days_cache = {}
+    history_data = {}
     if len(symbols) > 1:
         import numpy as np
 
+        for history in histories.values():
+            days = list(history)
+            values = history_returns(history, days, returns_cache)
+            center = values[0]
+            deviations = [value - center for value in values]
+            scale = max((abs(value) for value in deviations), default=0)
+            raw_vector = np.array([float(value / scale) if scale else 0.0 for value in deviations])
+            centered = raw_vector - raw_vector.mean()
+            history_data[id(history)] = {
+                "days": days,
+                "days_array": np.array(days, dtype=str),
+                "center": center,
+                "scale": scale,
+                "raw": raw_vector,
+                "centered": centered,
+                "norm": np.linalg.norm(centered),
+            }
+
         def scaled_vector(history, common):
-            key = (id(history), tuple(common))
-            cacheable = common == list(history)
-            if cacheable and key in vector_cache:
-                return vector_cache[key]
+            data = history_data[id(history)]
+            if common == data["days"]:
+                return data["centered"], data["norm"]
 
             def exact_common_vector():
                 values = history_returns(history, common, returns_cache)
@@ -381,63 +393,53 @@ def portfolio(p):
                 vector -= vector.mean()
                 return vector, np.linalg.norm(vector)
 
-            if not cacheable:
-                full_key = (id(history), tuple(list(history)))
-                scaled_vector(history, list(history))
-                center, scale = meta_cache[full_key]
-                if scale == 0 or scale > 1000000 or scale < Fraction(1, 1000000):
+            center, scale = data["center"], data["scale"]
+            if scale == 0 or scale > 1000000 or scale < Fraction(1, 1000000):
+                return exact_common_vector()
+            indices = np.searchsorted(data["days_array"], common)
+            subset = data["raw"][indices[1:] - 1].copy()
+            for index in np.flatnonzero(np.diff(indices) != 1):
+                gap = history_returns(history, [common[index], common[index + 1]], returns_cache)[0]
+                try:
+                    gap_value = float((gap - center) / scale)
+                except OverflowError:
                     return exact_common_vector()
-                raw_vector = raw_cache[full_key]
-                full_days = days_cache.get(id(history))
-                if full_days is None:
-                    full_days = np.array(list(history), dtype=str)
-                    days_cache[id(history)] = full_days
-                indices = np.searchsorted(full_days, common)
-                subset = raw_vector[indices[1:] - 1].copy()
-                for index in np.flatnonzero(np.diff(indices) != 1):
-                    gap = history_returns(history, [common[index], common[index + 1]], returns_cache)[0]
-                    try:
-                        gap_value = float((gap - center) / scale)
-                    except OverflowError:
-                        return exact_common_vector()
-                    if not math.isfinite(gap_value):
-                        return exact_common_vector()
-                    subset[index] = gap_value
-                if np.all(subset == subset[0]):
+                if not math.isfinite(gap_value):
                     return exact_common_vector()
-                pre_demean_max_abs = float(np.max(np.abs(subset)))
-                subset -= subset.mean()
-                if not np.isfinite(subset).all():
-                    return exact_common_vector()
-                norm = np.linalg.norm(subset)
-                noise_floor = np.finfo(float).eps * max(1.0, len(subset) * pre_demean_max_abs)
-                if norm <= noise_floor or not math.isfinite(norm):
-                    return exact_common_vector()
-                return subset, norm
-            values = history_returns(history, common, returns_cache)
-            center = values[0]
-            deviations = [value - center for value in values]
-            scale = max((abs(value) for value in deviations), default=0)
-            raw_vector = np.array([float(value / scale) if scale else 0.0 for value in deviations])
-            vector = raw_vector - raw_vector.mean()
-            result = (vector, np.linalg.norm(vector))
-            if cacheable:
-                vector_cache[key] = result
-                raw_cache[key] = raw_vector
-                meta_cache[key] = (center, scale)
-            return result
+                subset[index] = gap_value
+            if np.all(subset == subset[0]):
+                return exact_common_vector()
+            pre_demean_max_abs = float(np.max(np.abs(subset)))
+            subset -= subset.mean()
+            if not np.isfinite(subset).all():
+                return exact_common_vector()
+            norm = np.linalg.norm(subset)
+            noise_floor = np.finfo(float).eps * max(1.0, len(subset) * pre_demean_max_abs)
+            if norm <= noise_floor or not math.isfinite(norm):
+                return exact_common_vector()
+            return subset, norm
 
-        for i, a in enumerate(symbols):
-            for b in symbols[i + 1 :]:
-                common = sorted(histories[a].keys() & histories[b].keys())
-                corr = None
-                if len(common) >= 4:
-                    x, x_norm = scaled_vector(histories[a], common)
-                    y, y_norm = scaled_vector(histories[b], common)
-                    if x_norm and y_norm:
-                        correlation = float(np.dot(x, y) / (x_norm * y_norm))
-                        corr = max(-1.0, min(1.0, correlation))
-                correlations.append({"symbols": [a, b], "correlation": corr, "return_samples": max(len(common) - 1, 0)})
+        def correlation_row(pair):
+            a, b = pair
+            common = [day for day in history_data[id(histories[a])]["days"] if day in histories[b]]
+            corr = None
+            if len(common) >= 4:
+                x, x_norm = scaled_vector(histories[a], common)
+                y, y_norm = scaled_vector(histories[b], common)
+                if x_norm and y_norm:
+                    correlation = float(np.dot(x, y) / (x_norm * y_norm))
+                    corr = max(-1.0, min(1.0, correlation))
+            return {"symbols": [a, b], "correlation": corr, "return_samples": max(len(common) - 1, 0)}
+
+        pairs = [(a, b) for i, a in enumerate(symbols) for b in symbols[i + 1 :]]
+        if pairs and max(len(history) for history in histories.values()) * len(pairs) > 200000:
+            import os
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(2, os.cpu_count() or 1)) as pool:
+                correlations = list(pool.map(correlation_row, pairs))
+        else:
+            correlations = [correlation_row(pair) for pair in pairs]
     warnings = [
         "Price P&L uses current FX, excludes historical FX P&L, fees and distributions; stop risk is a scenario, not a guaranteed loss limit.",
         "Correlations use local-price returns on common dates, exclude FX, and do not forecast future dependence.",
