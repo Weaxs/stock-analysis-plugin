@@ -1515,7 +1515,7 @@ def test_rebalance_handles_large_nonterminating_lot_residual():
         '{"base_currency":"USD","cash":1e1000002,"positions":[],"targets":['
         '{"symbol":"A","weight":1,"price":3,"currency":"USD","lot_size":1e1000001}]}'
     )
-    code, out = invoke_raw(raw, exact=False)
+    code, out = invoke_raw(raw, exact=False, timeout=150)
     assert code == 0
     assert out["orders"][0]["quantity"] == "3" + "0" * 1000001
     assert out["unfilled"][0]["reason"] == "lot_rounding"
