@@ -137,6 +137,8 @@ const analysisFixtures = JSON.parse(readAnalysisFixture(new URL("../fixtures/sta
 for (const [name, fixture] of Object.entries(analysisFixtures)) {
   const out = await callTool(name, fixture.args);
   assert(!out.error, `${name}: real CLI failed`);
+  if (name === "analyze_portfolio_risk") assert(out.stress_tests?.length === 1, "portfolio risk: stress scenario evaluated");
+  if (name === "plan_portfolio_rebalance") assert(out.orders?.map((order: {side: string}) => order.side).join(",") === "sell,buy", "rebalance: sells precede buys");
   if (name === "calculate_position_size") assert(out.quantity === 200, "position size: cash/risk constraints");
   if (name === "validate_backtest") assert(out.datasets?.[0]?.folds?.length === 1, "robustness: one actual fold");
   console.log(`  OK: ${name}`);

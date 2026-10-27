@@ -55,11 +55,82 @@
           "symbol": "AAPL",
           "price": 100,
           "quantity": 10,
-          "currency": "USD"
+          "currency": "USD",
+          "sector": "tech"
         }
       ],
+      "base_currency": "CNY",
+      "cash": 100,
+      "fx_rates": [
+        {
+          "currency": "USD",
+          "rate": 7
+        }
+      ],
+      "stress_scenarios": [
+        {
+          "name": "risk_off",
+          "market_shock": -0.1,
+          "sector_shocks": [
+            {
+              "sector": "tech",
+              "shock": -0.2
+            }
+          ],
+          "symbol_shocks": [
+            {
+              "symbol": "AAPL",
+              "shock": -0.15
+            }
+          ],
+          "currency_shocks": [
+            {
+              "currency": "USD",
+              "shock": -0.1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "plan_portfolio_rebalance": {
+    "command": "rebalance",
+    "args": {
       "base_currency": "USD",
-      "cash": 100
+      "cash": 100,
+      "positions": [
+        {
+          "symbol": "AAPL",
+          "price": 100,
+          "quantity": 10,
+          "currency": "USD",
+          "cost": 95,
+          "stop_price": 90,
+          "sector": "tech",
+          "as_of": "2026-01-05"
+        }
+      ],
+      "targets": [
+        {
+          "symbol": "AAPL",
+          "weight": 0.5,
+          "sector": "tech",
+          "as_of": "2026-01-05",
+          "lot_size": 1
+        },
+        {
+          "symbol": "MSFT",
+          "weight": 0.25,
+          "price": 200,
+          "currency": "USD",
+          "sector": "tech",
+          "as_of": "2026-01-05",
+          "lot_size": 1
+        }
+      ],
+      "fee_rate": 0.001,
+      "slippage_rate": 0.001,
+      "max_turnover_fraction": 1.5
     }
   },
   "calculate_position_size": {

@@ -49,7 +49,7 @@ OpenClaw Gateway 启动时会扫描 `extensions/*` 工作区包并加载。
 openclaw plugins inspect stock-analysis --runtime --json
 ```
 
-应该看到 67 个 tool 全部出现在 `tools` 列表里。也可以直接在 OpenClaw 对话中调用：
+应该看到 71 个 tool 全部出现在 `tools` 列表里。也可以直接在 OpenClaw 对话中调用：
 
 ```
 帮我查一下贵州茅台的实时行情

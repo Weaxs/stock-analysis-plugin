@@ -570,6 +570,10 @@ def analyze_portfolio_risk(args: dict, **kwargs) -> str:
     return _run_analysis("portfolio", args)
 
 
+def plan_portfolio_rebalance(args: dict, **kwargs) -> str:
+    return _run_analysis("rebalance", args)
+
+
 def calculate_position_size(args: dict, **kwargs) -> str:
     return _run_analysis("position_size", args)
 

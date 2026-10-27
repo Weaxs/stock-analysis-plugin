@@ -44,6 +44,7 @@ try {
   assert.equal(found.loaded[0].name, "get_quote");
   assert.equal((await search(first, "stock quote", 1)).loaded[0].name, "get_quote", "a general stock keyword must not bury the requested quote capability");
   assert((await search(first, "股票回测")).loaded.some((tool: {name: string}) => tool.name === "run_backtest"), "Chinese capability terms must outrank generic stock characters");
+  assert.equal((await search(first, "股票回测", 1)).loaded[0].name, "run_backtest", "generic backtest query must prefer the canonical tool");
   assert((await names(first)).includes("get_quote"));
   assert(!(await names(second)).includes("get_quote"), "loading must remain agent-local");
 
@@ -88,8 +89,8 @@ await eager.plugin(ToolRuntime);
 await eager.plugin(SkillRegistry);
 await eager.plugin(stockPlugin, {toolDiscovery: false});
 try {
-  assert.equal(eager.tools.schemas().length, 70);
+  assert.equal(eager.tools.schemas().length, 71);
   assert.equal(eager.tools.get("stock_tool_search"), undefined);
-  assert.equal((await eager.systemPrompt.assemble({scope: {}})).tools.length, 70);
+  assert.equal((await eager.systemPrompt.assemble({scope: {}})).tools.length, 71);
 } finally { await eager.fiber.dispose(); }
 console.log("dsh discovery: scoped loading, Chinese search, permissions, fallback, and real Python round-trip passed");

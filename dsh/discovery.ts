@@ -20,7 +20,10 @@ export function registerToolDiscovery(ctx: Context, names: Set<string>) {
     output: {schema: {type: "string"}, render: (_args, value) => [{type: "text", text: value}]},
     async execute({query, limit = 5}, exec) {
       const needle = query.trim().toLowerCase();
-      const terms = [...new Set(needle.match(/[a-z0-9_]+|\p{Script=Han}/gu) ?? [])];
+      const tokens = needle.match(/[a-z0-9_]+|\p{Script=Han}/gu) ?? [];
+      const bigrams = (needle.match(/\p{Script=Han}+/gu) ?? [])
+        .flatMap(text => [...text].slice(0, -1).map((_, index) => text.slice(index, index + 2)));
+      const terms = [...new Set([...tokens, ...bigrams])];
       if (!terms.length || !Number.isInteger(limit) || limit < 1 || limit > 20) {
         return JSON.stringify({error: "query must contain searchable text and limit must be an integer from 1 to 20"});
       }
@@ -39,7 +42,7 @@ export function registerToolDiscovery(ctx: Context, names: Set<string>) {
           return {tool, score};
         })
         .filter(match => match.score > 0)
-        .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
+        .sort((a, b) => b.score - a.score || a.tool.name.length - b.tool.name.length || a.tool.name.localeCompare(b.tool.name))
         .slice(0, limit);
       for (const {tool} of matches) state.loaded.add(tool.name);
       return JSON.stringify({loaded: matches.map(({tool}) => ({name: tool.name, description: tool.description}))});

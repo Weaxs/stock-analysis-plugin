@@ -186,6 +186,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   "compare_stocks": {"companies": [{"symbol": "AAPL", "period": "2025", "metrics": [{"name": "pe", "value": 20, "unit": "multiple", "basis": "TTM"}]}, {"symbol": "MSFT", "period": "2025", "metrics": [{"name": "pe", "value": 30, "unit": "multiple", "basis": "TTM"}]}]},
   "analyze_disclosure_changes": {"previous": {"text": "利润下降", "source": "fixture:old", "period": "2024", "metrics": []}, "current": {"text": "利润增长", "source": "fixture:new", "period": "2025", "metrics": []}},
   "analyze_portfolio_risk": {"positions": [{"symbol": "AAPL", "price": 100, "quantity": 10, "currency": "USD"}], "base_currency": "USD", "cash": 100},
+  "plan_portfolio_rebalance": {"base_currency": "USD", "cash": 100, "positions": [], "targets": [{"symbol": "AAPL", "weight": 1, "price": 100, "currency": "USD", "lot_size": 1}]},
   "calculate_position_size": {"equity": 100000, "cash": 20000, "entry_price": 100, "stop_price": 95, "risk_fraction": 0.01, "lot_size": 100},
   "analyze_event_study": {"prices": [{"date": "2026-01-02", "close": 100}, {"date": "2026-01-05", "close": 110}], "benchmark_prices": [{"date": "2026-01-02", "close": 100}, {"date": "2026-01-05", "close": 100}], "event_dates": ["2026-01-05"], "price_basis": "adjusted", "horizons": [0]},
   "validate_backtest": {"datasets": [], "strategies": []},

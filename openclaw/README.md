@@ -1,6 +1,6 @@
 # Stock Analysis — OpenClaw Plugin
 
-A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。OpenClaw Gateway 加载后即可在对话中调用 70 个工具。
+A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选与回测。OpenClaw Gateway 加载后即可在对话中调用 71 个工具。
 
 ## 安装
 
@@ -35,6 +35,8 @@ npm install
 - `analyze_pattern` — 12+ 种 K 线形态识别
 - `calculate_ma` — 独立均线计算
 - `get_volume_analysis` — 量价分析
+- `analyze_portfolio_risk` — 组合敞口、相关性、止损与确定性压力测试
+- `plan_portfolio_rebalance` — 目标权重、整手和现金约束下的调仓清单
 
 ### 市场全景
 - `get_market_indices` — 主要指数（CN/HK/US/JP/KR/TW）

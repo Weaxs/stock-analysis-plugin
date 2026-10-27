@@ -17,7 +17,7 @@
 
 工具输出精确到传入文本行号的变化片段、来源、截断标志和指标差异。文本差异本身不等于经营变化；Agent 要阅读上下文，说明发生了什么、与原预期的关系和可能反证，并引用原文。金额单位和 basis 一致才计算 delta；前期值大于0才计算普通增长率，亏损转盈另述。报告期可不同，但必须核实是可比同长期间（年度/同比单季等），累计季度不能直接当单季。
 
-## 组合风险：analyze_portfolio_risk
+## 组合风险与压力测试：analyze_portfolio_risk
 
 输入 `base_currency`、基准币种 `cash>=0`、`positions`（1..100项）。持仓 `{symbol, quantity, price, currency, cost?, stop_price?, sector?, as_of?}`，现货多头；重复标的先汇总。价格/数量为正，单位由调用方确认。
 
@@ -26,6 +26,20 @@
 输出总权益、现金权重、单股权重、行业/币种敞口和持仓 HHI（不含现金项）。`price_pnl_base` 是按当前汇率折算的本币价格盈亏，MUST NOT 称为包含汇兑损益的账户真实收益；缺任何成本时为null。`stop_loss_risk_base` 是从现价到止损的损失情景，缺任何止损时为null，不保证成交。
 
 可选 `histories:[{symbol,prices:[{date,close}]}]`，工具按每对标的共同日期计算收益相关性；至少4个共同价格点、存在波动才有结果。不是组合收益率或汇率调整后的相关性；少样本、跨时区非同步收盘和缺交易日都应说明，不从相关性推断因果。缺历史时明确相关性未计算。
+
+可选 `stress_scenarios`（1..20项）执行确定性压力测试。每项包含唯一 `name`，以及可选 `market_shock`、`sector_shocks:[{sector,shock}]`、`symbol_shocks:[{symbol,shock}]`、`currency_shocks:[{currency,shock}]`；shock 是 -1..1 的小数。个股冲击覆盖行业冲击，行业冲击覆盖市场冲击；汇率冲击独立乘算，不能与资产冲击重复相加。基准币种不能相对自身冲击，重复或当前组合中不存在的标的/行业/币种会报错。
+
+`stress_tests` 返回每个情景的 `equity_before/equity_after/pnl_base/return_pct` 和逐持仓 `asset_shock/fx_shock/value_before/value_after/pnl_base`。这些是用户指定冲击下的 what-if 结果，不是预测、VaR 或最大亏损保证。
+
+## 目标权重调仓：plan_portfolio_rebalance
+
+输入 `base_currency`、基准币种 `cash>=0`、当前 `positions`（0..100项，纯现金可为空）和 `targets`（1..100项），汇率格式同上。当前持仓字段与组合风险一致，cost/stop_price 可保留但不参与调仓。
+
+每个 target 包含 `{symbol,weight,price?,currency?,sector?,as_of?,lot_size?}`。已有标的可继承当前价格、币种、行业和时点；新标的必须提供 price/currency。已有标的覆盖 price/currency 时，该有效价格与汇率同时用于初始权益、目标数量和调后权益，不能把新旧价差异计为无交易成本。weight 为 0..1，所有目标权重之和不得超过1，未分配部分保留现金；weight>0 时必须提供用户或交易规则确认的 lot_size。未出现在 targets 的当前持仓按 weight=0 全部退出。正目标权重按初始权益、参考价格和汇率向下取整到交易单位，不足一个交易单位则报错，不向上凑整。
+
+可选 `fee_rate`、`slippage_rate`（每边0..0.1）和 `max_turnover_fraction`（非负，默认不限制）。换手按买卖参考金额合计/初始权益计算，全仓换仓可超过1。计划先卖后买；卖出按 price×(1-slippage)×(1-fee) 估算回收，买入按 price×(1+slippage)×(1+fee) 估算成本。现金不足时所有买单按同一比例缩减并向下取整到各自交易单位，`cash_limited=true`。
+
+输出 `orders` 是参考价下的计划订单，不是已提交委托或成交；`unfilled` 分别用 `reason=lot_rounding/cash` 标记整手差额和现金未满足数量。整手差额按未取整原始调整需求减去整手后的计划数量计算，现金缩减另按计划前数量减去最终数量计算，两者不得重复。`positions_after` 同时保留 `target_weight` 与计划后的实际 `weight`，并返回 `cash_after/equity_after/gross_turnover_fraction/estimated_cost_base`。全额退出允许卖出当前全部数量；部分买卖向下取整，不为了贴近目标而超出目标。工具不提交订单，实际成交、未提供税费/最低收费、结算和流动性仍需核实。
 
 ## 仓位预算：calculate_position_size
 

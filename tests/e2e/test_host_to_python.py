@@ -148,6 +148,7 @@ class TestHermesE2E:
             "compare_stocks",
             "analyze_disclosure_changes",
             "analyze_portfolio_risk",
+            "plan_portfolio_rebalance",
             "calculate_position_size",
             "analyze_event_study",
             "validate_backtest",
@@ -158,6 +159,10 @@ class TestHermesE2E:
         fixtures = json.loads((PROJECT_ROOT / "tests/fixtures/stateless_analysis.json").read_text(encoding="utf-8"))
         result = json.loads(hermes_ctx.handlers[name](fixtures[name]["args"]))
         assert "error" not in result
+        if name == "analyze_portfolio_risk":
+            assert len(result["stress_tests"]) == 1
+        if name == "plan_portfolio_rebalance":
+            assert [order["side"] for order in result["orders"]] == ["sell", "buy"]
         if name == "calculate_position_size":
             assert result["quantity"] == 200
         if name == "validate_backtest":
