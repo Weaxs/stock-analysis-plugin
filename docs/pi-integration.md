@@ -54,7 +54,7 @@ npm install
 
 ## 验证加载
 
-最新稳定版 Pi 1.2.0 支持原生按需工具发现。插件在 `session_start` 检查 `tool_search` 的 exposure 元数据及活动工具 API：具备这些能力时，将股票工具设为 `deferred` 并启用原生搜索，保留其他插件的活动工具；旧宿主保持原来的 67 工具全量暴露，无需升级才能继续使用。
+最新稳定版 Pi 1.2.0 支持原生按需工具发现。插件在 `session_start` 检查 `tool_search` 的 exposure 元数据及活动工具 API：具备这些能力时，将股票工具设为 `deferred` 并启用原生搜索，保留其他插件的活动工具；旧宿主保持原来的 71 工具全量暴露，无需升级才能继续使用。
 
 新版中搜索已注册但未激活时，插件会尝试启用并确认成功后再隐藏股票工具；未加载搜索扩展、被宿主限制或无法启用时保持全量暴露。会话中途关闭搜索时，下次模型请求前恢复全部股票工具，并停止发送搜索指引。
 
@@ -68,7 +68,7 @@ npm install
 /skills
 ```
 
-应能看到 20 个已注册的 Skill（如 `stock-analysis`、`stock-screener`、`strategy-backtest` 等）。
+应能看到 21 个已注册的 Skill（如 `stock-analysis`、`stock-screener`、`strategy-backtest` 等）。
 
 也可以直接调用工具验证：
 

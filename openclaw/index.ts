@@ -142,7 +142,7 @@ export default definePluginEntry({
 
     api.registerTool({
       name: "analyze_portfolio_risk",
-      description: "无状态现货多头组合风险：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏和止损情景。缺汇率报错；不保存账户。",
+      description: "无状态现货多头组合风险与压力测试：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏、止损情景及可选市场/行业/个股/汇率冲击损益。缺汇率报错；不保存账户。",
       parameters: Type.Object({
         positions: Type.Array(Type.Object({
           symbol: Type.String({"description": "唯一代码，重复持仓先汇总"}),
@@ -167,10 +167,65 @@ export default definePluginEntry({
             close: Type.Number({"description": "正有限收盘价"}),
           }, {"additionalProperties": false}), {"description": "完整日K收盘序列，2..20000条，不得跨股票或混用复权口径"}),
         }, {"additionalProperties": false}), {"description": "可选历史，共同日期本币价格收益相关性，不计汇率"})),
+        stress_scenarios: Type.Optional(Type.Array(Type.Object({
+          name: Type.String({"description": "情景名称"}),
+          market_shock: Type.Optional(Type.Number({"description": "全市场资产价格冲击比例，如-0.1"})),
+          sector_shocks: Type.Optional(Type.Array(Type.Object({
+            sector: Type.String({"description": "与持仓一致的行业名称"}),
+            shock: Type.Number({"description": "行业价格冲击比例"}),
+          }, {"additionalProperties": false}), {"description": "可选行业冲击"})),
+          symbol_shocks: Type.Optional(Type.Array(Type.Object({
+            symbol: Type.String({"description": "持仓标的代码"}),
+            shock: Type.Number({"description": "标的价格冲击比例"}),
+          }, {"additionalProperties": false}), {"description": "可选个股冲击"})),
+          currency_shocks: Type.Optional(Type.Array(Type.Object({
+            currency: Type.String({"description": "持仓中的非基准币种；基准币种不可相对自身冲击"}),
+            shock: Type.Number({"description": "相对基准币种的汇率冲击比例"}),
+          }, {"additionalProperties": false}), {"description": "可选汇率冲击"})),
+        }, {"additionalProperties": false}), {"description": "可选压力情景；所有冲击均为比例，由共享核心计算"})),
       }, {"additionalProperties": false}),
       async execute(_id, params) {
         return asText(await withJsonInput(params, (path: string) =>
           runPy("stateless_analysis.py", ["portfolio", "--input", path])));
+      },
+    });
+
+    api.registerTool({
+      name: "plan_portfolio_rebalance",
+      description: "无状态组合调仓计划：按当前持仓、目标权重、现金、汇率、整手、费用和换手约束生成先卖后买清单；不保存账户或提交订单。",
+      parameters: Type.Object({
+        base_currency: Type.String({"description": "基准币种"}),
+        cash: Type.Number({"description": "基准币种现金，非负"}),
+        positions: Type.Array(Type.Object({
+          symbol: Type.String({"description": "唯一代码，重复持仓先汇总"}),
+          quantity: Type.Number({"description": "正持仓数量"}),
+          price: Type.Number({"description": "正现价"}),
+          currency: Type.String({"description": "持仓币种，如CNY/USD/HKD"}),
+          cost: Type.Optional(Type.Number({"description": "同币种正成本价，可选；调仓计算不使用"})),
+          stop_price: Type.Optional(Type.Number({"description": "同币种正止损价，可选；调仓计算不使用"})),
+          sector: Type.Optional(Type.String({"description": "统一行业分类，可选"})),
+          as_of: Type.Optional(Type.String({"description": "实际估值时点，建议ISO8601"})),
+        }, {"additionalProperties": false}), {"description": "0..100个现货多头持仓，空数组表示纯现金建仓"}),
+        targets: Type.Array(Type.Object({
+          symbol: Type.String({"description": "目标标的代码"}),
+          weight: Type.Number({"description": "目标权重；大于0时lot_size必填"}),
+          price: Type.Optional(Type.Number({"description": "正目标价格；当前未持有的新标的必填"})),
+          currency: Type.Optional(Type.String({"description": "目标币种；当前未持有的新标的必填"})),
+          sector: Type.Optional(Type.String({"description": "统一行业分类，可选"})),
+          as_of: Type.Optional(Type.String({"description": "实际估值时点，建议ISO8601"})),
+          lot_size: Type.Optional(Type.Number({"description": "正整数交易单位；weight>0时必填"})),
+        }, {"additionalProperties": false}), {"description": "1..100个目标；新标的price/currency必填"}),
+        fx_rates: Type.Optional(Type.Array(Type.Object({
+          currency: Type.String({"description": "唯一非基准币种"}),
+          rate: Type.Number({"description": "一单位该币种对应多少基准币种，正数"}),
+        }, {"additionalProperties": false}), {"description": "显式现价汇率；基准币种隐含1，不得重复"})),
+        fee_rate: Type.Optional(Type.Number({"description": "每边比例费用0..0.1，默认0；不含未提供税费/最低收费"})),
+        slippage_rate: Type.Optional(Type.Number({"description": "每边滑点0..0.1，默认0"})),
+        max_turnover_fraction: Type.Optional(Type.Number({"description": "非负最大总换手，按买卖参考金额合计/初始权益；默认不限制，可大于1"})),
+      }, {"additionalProperties": false}),
+      async execute(_id, params) {
+        return asText(await withJsonInput(params, (path: string) =>
+          runPy("stateless_analysis.py", ["rebalance", "--input", path])));
       },
     });
 

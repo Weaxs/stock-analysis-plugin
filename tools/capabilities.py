@@ -28,6 +28,7 @@ TOOL_MATRIX = {
     "compare_stocks": {"markets": ALL_MARKETS, "reason": None},
     "analyze_disclosure_changes": {"markets": ALL_MARKETS, "reason": None},
     "analyze_portfolio_risk": {"markets": ALL_MARKETS, "reason": None},
+    "plan_portfolio_rebalance": {"markets": ALL_MARKETS, "reason": None},
     "calculate_position_size": {"markets": ALL_MARKETS, "reason": None},
     "analyze_event_study": {"markets": ALL_MARKETS, "reason": None},
     "validate_backtest": {"markets": ALL_MARKETS, "reason": None},

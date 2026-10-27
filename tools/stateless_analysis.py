@@ -8,13 +8,106 @@ import sys
 from bisect import bisect_left
 from copy import deepcopy
 from datetime import date
+from decimal import ROUND_DOWN, Decimal, localcontext
 from difflib import SequenceMatcher
+from fractions import Fraction
 from pathlib import Path
 
 from _subproc import utf8_stdio
 
 
+class RawNumber(float):
+    def __new__(cls, value):
+        instance = super().__new__(cls, value)
+        instance.raw = value
+        return instance
+
+    def __str__(self):
+        return self.raw
+
+    def __repr__(self):
+        return self.raw
+
+
+class JsonExactNumber:
+    def __init__(self, raw):
+        self.raw = raw
+
+
+def int_to_decimal(value):
+    if value.bit_length() < 14000:
+        return str(value)
+    sign = "-" if value < 0 else ""
+    number = abs(value)
+    base = 10**4000
+    parts = []
+    while number:
+        number, remainder = divmod(number, base)
+        parts.append(remainder)
+    return sign + str(parts[-1]) + "".join(str(part).rjust(4000, "0") for part in reversed(parts[:-1]))
+
+
+def json_dumps_exact(value, cache=None):
+    cache = {} if cache is None else cache
+    if isinstance(value, RawNumber):
+        return value.raw
+    if isinstance(value, JsonExactNumber):
+        return value.raw
+    if isinstance(value, Fraction):
+        return json_dumps_exact(fraction_to_json_number(value), cache)
+    if isinstance(value, dict):
+        return (
+            "{"
+            + ",".join(
+                f"{json.dumps(key, ensure_ascii=False)}:{json_dumps_exact(item, cache)}" for key, item in value.items()
+            )
+            + "}"
+        )
+    if isinstance(value, list):
+        return "[" + ",".join(json_dumps_exact(item, cache) for item in value) + "]"
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value not in cache:
+            cache[value] = int_to_decimal(value)
+        return cache[value]
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+def fraction_value(value):
+    if isinstance(value, RawNumber):
+        if len(value.raw) < 4000 and value.raw.lstrip("-").isdigit():
+            return Fraction(int(value.raw))
+        return Fraction(Decimal(value.raw))
+    if isinstance(value, str):
+        return Fraction(Decimal(value))
+    if isinstance(value, (int, Decimal, Fraction)):
+        return Fraction(value)
+    return Fraction(Decimal(str(value)))
+
+
+def fraction_decimal_places(value):
+    denominator = value.denominator
+    twos = (denominator & -denominator).bit_length() - 1
+    remainder = denominator >> twos
+    if remainder == 1:
+        return twos
+    estimate = int(remainder.bit_length() / 2.321928094887362)
+    for fives in range(max(0, estimate - 2), estimate + 3):
+        if 5**fives == remainder:
+            return max(twos, fives)
+    return None
+
+
 def number(value, name, minimum=None, maximum=None):
+    if isinstance(value, RawNumber):
+        exact = fraction_value(value)
+        if (
+            minimum is not None
+            and exact < fraction_value(minimum)
+            or maximum is not None
+            and exact > fraction_value(maximum)
+        ):
+            raise ValueError(f"{name} outside allowed range")
+        return value
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{name} must be a finite number")
     if minimum is not None and value < minimum or maximum is not None and value > maximum:
@@ -22,15 +115,28 @@ def number(value, name, minimum=None, maximum=None):
     return value
 
 
+def exact_value(value):
+    return fraction_value(value) if isinstance(value, RawNumber) else value
+
+
 def positive(value, name):
+    if isinstance(value, Fraction):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+        return value
     value = number(value, name, minimum=0)
-    if value == 0:
+    if exact_value(value) == 0:
         raise ValueError(f"{name} must be positive")
     return value
 
 
-def integer(value, name, minimum, maximum):
+def integer(value, name, minimum, maximum=None):
     value = number(value, name, minimum, maximum)
+    if isinstance(value, RawNumber):
+        exact = fraction_value(value)
+        if exact.denominator != 1:
+            raise ValueError(f"{name} must be an integer")
+        return int(exact)
     if int(value) != value:
         raise ValueError(f"{name} must be an integer")
     return int(value)
@@ -95,15 +201,114 @@ def prices(value):
     return dict(sorted(result.items()))
 
 
-def portfolio(p):
-    base = text(p["base_currency"], "base_currency")
-    cash = number(p["cash"], "cash", 0)
+def history_returns(history, common, cache):
+    state = cache.get(id(history))
+    if state is None:
+        state = {"previous": {}, "adjacent": {}}
+        for previous, day in zip(history, list(history)[1:]):
+            state["previous"][day] = previous
+            state["adjacent"][day] = (
+                fraction_value(history[day]) - fraction_value(history[previous])
+            ) / fraction_value(history[previous])
+        cache[id(history)] = state
+    values = []
+    for previous, day in zip(common, common[1:]):
+        if state["previous"].get(day) == previous:
+            values.append(state["adjacent"][day])
+        else:
+            values.append(
+                (fraction_value(history[day]) - fraction_value(history[previous])) / fraction_value(history[previous])
+            )
+    return values
+
+
+def shock_map(value, key):
+    result = {}
+    for row in rows(value, f"{key}_shocks", 0):
+        label = text(row[key], key)
+        if label in result:
+            raise ValueError(f"duplicate {key} shock")
+        result[label] = number(row["shock"], "shock", -1, 1)
+    return result
+
+
+def stress(scenarios, positions, cash, base):
+    results = []
+    names = set()
+    known = {
+        "symbol": {row["symbol"] for row in positions},
+        "sector": {row["sector"] for row in positions},
+        "currency": {row["currency"] for row in positions},
+    }
+    for scenario in rows(scenarios, "stress_scenarios", 1, 20):
+        if set(scenario) - {"name", "market_shock", "sector_shocks", "symbol_shocks", "currency_shocks"}:
+            raise ValueError("unknown stress scenario field")
+        name = text(scenario["name"], "stress scenario name")
+        if name in names:
+            raise ValueError("duplicate stress scenario name")
+        names.add(name)
+        market = number(scenario.get("market_shock", 0), "market_shock", -1, 1)
+        sectors = shock_map(scenario.get("sector_shocks", []), "sector")
+        symbols = shock_map(scenario.get("symbol_shocks", []), "symbol")
+        currencies = shock_map(scenario.get("currency_shocks", []), "currency")
+        if base in currencies:
+            raise ValueError("base currency cannot be shocked against itself")
+        for key, values in (("sector", sectors), ("symbol", symbols), ("currency", currencies)):
+            if not set(values) <= known[key]:
+                raise ValueError(f"stress scenario contains unknown {key}")
+        rows_after, before_values, after_values, pnl_values = [], [], [], []
+        for row in positions:
+            symbol = row["symbol"]
+            asset = symbols.get(symbol, sectors.get(row["sector"], market))
+            fx = currencies.get(row["currency"], 0)
+            before_value = fraction_value(row["value_base"])
+            combined_shock = fraction_value(asset) + fraction_value(fx) + fraction_value(asset) * fraction_value(fx)
+            pnl = before_value * combined_shock
+            after = before_value + pnl
+            before_values.append(before_value)
+            after_values.append(after)
+            pnl_values.append(pnl)
+            rows_after.append(
+                {
+                    "symbol": symbol,
+                    "asset_shock": asset,
+                    "fx_shock": fx,
+                    "value_before": fraction_to_json_number(before_value),
+                    "value_after": fraction_to_json_number(after),
+                    "pnl_base": fraction_to_json_number(pnl),
+                }
+            )
+        before_total = fraction_value(cash) + sum(before_values, Fraction(0))
+        after_total = fraction_value(cash) + sum(after_values, Fraction(0))
+        pnl_total = sum(pnl_values, Fraction(0))
+        results.append(
+            {
+                "name": name,
+                "equity_before": fraction_to_json_number(before_total),
+                "equity_after": fraction_to_json_number(after_total),
+                "pnl_base": fraction_to_json_number(pnl_total),
+                "return_pct": fraction_to_json_number(pnl_total / before_total * 100) if before_total else None,
+                "positions": rows_after,
+            }
+        )
+    return results
+
+
+def currency_rates(p, base):
     rates = {base: 1}
     for row in rows(p.get("fx_rates", []), "fx_rates", 0):
         currency = text(row["currency"], "currency")
         if currency in rates:
             raise ValueError("duplicate/base FX currency")
         rates[currency] = positive(row["rate"], "rate")
+    return rates
+
+
+def portfolio(p):
+    base = text(p["base_currency"], "base_currency")
+    cash = number(p["cash"], "cash", 0)
+
+    rates = currency_rates(p, base)
     positions = []
     currencies, sectors = {}, {}
     seen, dates = set(), set()
@@ -118,24 +323,34 @@ def portfolio(p):
         rate = rates[currency]
         quantity = positive(row["quantity"], "quantity")
         price = positive(row["price"], "price")
-        value = price * quantity * rate
+        local_value = fraction_value(price) * fraction_value(quantity)
+        value = local_value * fraction_value(rate)
         cost = positive(row["cost"], "cost") if row.get("cost") is not None else None
         stop = positive(row["stop_price"], "stop_price") if row.get("stop_price") is not None else None
         pnl_complete &= cost is not None
         stop_complete &= stop is not None
         if cost is not None:
-            pnl += (price - cost) * quantity * rate
+            pnl += (fraction_value(price) - fraction_value(cost)) * fraction_value(quantity) * fraction_value(rate)
         if stop is not None:
-            stop_risk += max(price - stop, 0) * quantity * rate
+            stop_risk += (
+                max(fraction_value(price) - fraction_value(stop), Fraction(0))
+                * fraction_value(quantity)
+                * fraction_value(rate)
+            )
         sector = text(row.get("sector", "unknown"), "sector")
-        sectors[sector] = sectors.get(sector, 0) + value
-        currencies[currency] = currencies.get(currency, 0) + value
+        sectors.setdefault(sector, []).append(value)
+        currencies.setdefault(currency, []).append(value)
         dates.add(text(row.get("as_of", "unknown"), "as_of"))
         positions.append({"symbol": symbol, "currency": currency, "sector": sector, "value_base": value})
-    equity = cash + sum(row["value_base"] for row in positions)
+    equity = fraction_value(cash) + sum((fraction_value(row["value_base"]) for row in positions), Fraction(0))
     for row in positions:
         row["weight"] = row["value_base"] / equity
-    currencies[base] = currencies.get(base, 0) + cash
+    currencies = {
+        key: sum((fraction_value(item) for item in values), Fraction(0)) for key, values in currencies.items()
+    }
+    sectors = {key: sum((fraction_value(item) for item in values), Fraction(0)) for key, values in sectors.items()}
+    currencies[base] = currencies.get(base, Fraction(0)) + fraction_value(cash)
+
     correlations = []
     histories = {}
     for row in rows(p.get("histories", []), "histories", 0):
@@ -143,29 +358,96 @@ def portfolio(p):
             raise ValueError("history symbol must match a unique position")
         histories[row["symbol"]] = prices(row["prices"])
     symbols = list(histories)
-    for i, a in enumerate(symbols):
-        for b in symbols[i + 1 :]:
-            import numpy as np
+    returns_cache = {}
+    vector_cache = {}
+    raw_cache = {}
+    meta_cache = {}
+    days_cache = {}
+    if len(symbols) > 1:
+        import numpy as np
 
-            common = sorted(histories[a].keys() & histories[b].keys())
-            corr = None
-            if len(common) >= 4:
-                x = np.array([histories[a][day] for day in common])
-                y = np.array([histories[b][day] for day in common])
-                x, y = np.diff(x) / x[:-1], np.diff(y) / y[:-1]
-                if np.std(x) > 0 and np.std(y) > 0:
-                    corr = float(np.corrcoef(x, y)[0, 1])
-            correlations.append({"symbols": [a, b], "correlation": corr, "return_samples": max(len(common) - 1, 0)})
+        def scaled_vector(history, common):
+            key = (id(history), tuple(common))
+            cacheable = common == list(history)
+            if cacheable and key in vector_cache:
+                return vector_cache[key]
+
+            def exact_common_vector():
+                values = history_returns(history, common, returns_cache)
+                center = values[0]
+                deviations = [value - center for value in values]
+                scale = max((abs(value) for value in deviations), default=0)
+                vector = np.array([float(value / scale) if scale else 0.0 for value in deviations])
+                vector -= vector.mean()
+                return vector, np.linalg.norm(vector)
+
+            if not cacheable:
+                full_key = (id(history), tuple(list(history)))
+                scaled_vector(history, list(history))
+                center, scale = meta_cache[full_key]
+                if scale == 0 or scale > 1000000 or scale < Fraction(1, 1000000):
+                    return exact_common_vector()
+                raw_vector = raw_cache[full_key]
+                full_days = days_cache.get(id(history))
+                if full_days is None:
+                    full_days = np.array(list(history), dtype=str)
+                    days_cache[id(history)] = full_days
+                indices = np.searchsorted(full_days, common)
+                subset = raw_vector[indices[1:] - 1].copy()
+                for index in np.flatnonzero(np.diff(indices) != 1):
+                    gap = history_returns(history, [common[index], common[index + 1]], returns_cache)[0]
+                    try:
+                        gap_value = float((gap - center) / scale)
+                    except OverflowError:
+                        return exact_common_vector()
+                    if not math.isfinite(gap_value):
+                        return exact_common_vector()
+                    subset[index] = gap_value
+                if np.all(subset == subset[0]):
+                    return exact_common_vector()
+                pre_demean_max_abs = float(np.max(np.abs(subset)))
+                subset -= subset.mean()
+                if not np.isfinite(subset).all():
+                    return exact_common_vector()
+                norm = np.linalg.norm(subset)
+                noise_floor = np.finfo(float).eps * max(1.0, len(subset) * pre_demean_max_abs)
+                if norm <= noise_floor or not math.isfinite(norm):
+                    return exact_common_vector()
+                return subset, norm
+            values = history_returns(history, common, returns_cache)
+            center = values[0]
+            deviations = [value - center for value in values]
+            scale = max((abs(value) for value in deviations), default=0)
+            raw_vector = np.array([float(value / scale) if scale else 0.0 for value in deviations])
+            vector = raw_vector - raw_vector.mean()
+            result = (vector, np.linalg.norm(vector))
+            if cacheable:
+                vector_cache[key] = result
+                raw_cache[key] = raw_vector
+                meta_cache[key] = (center, scale)
+            return result
+
+        for i, a in enumerate(symbols):
+            for b in symbols[i + 1 :]:
+                common = sorted(histories[a].keys() & histories[b].keys())
+                corr = None
+                if len(common) >= 4:
+                    x, x_norm = scaled_vector(histories[a], common)
+                    y, y_norm = scaled_vector(histories[b], common)
+                    if x_norm and y_norm:
+                        correlation = float(np.dot(x, y) / (x_norm * y_norm))
+                        corr = max(-1.0, min(1.0, correlation))
+                correlations.append({"symbols": [a, b], "correlation": corr, "return_samples": max(len(common) - 1, 0)})
     warnings = [
         "Price P&L uses current FX, excludes historical FX P&L, fees and distributions; stop risk is a scenario, not a guaranteed loss limit.",
         "Correlations use local-price returns on common dates, exclude FX, and do not forecast future dependence.",
     ]
     if len(dates) != 1 or "unknown" in dates:
         warnings.append("Position valuation timestamps are missing or differ")
-    return {
+    result = {
         "base_currency": base,
-        "total_equity": equity,
-        "cash_weight": cash / equity,
+        "total_equity": fraction_to_json_number(equity),
+        "cash_weight": fraction_to_json_number(fraction_value(cash) / equity),
         "positions": positions,
         "price_pnl_base": pnl if pnl_complete else None,
         "stop_loss_risk_base": stop_risk if stop_complete else None,
@@ -173,6 +455,257 @@ def portfolio(p):
         "sector_exposure": {k: v / equity for k, v in sectors.items()},
         "position_hhi": sum(row["weight"] ** 2 for row in positions),
         "correlations": correlations,
+        "warnings": warnings,
+    }
+    if "stress_scenarios" in p:
+        result["stress_tests"] = stress(p["stress_scenarios"], positions, cash, base)
+        warnings.append(
+            "Stress scenarios are deterministic what-if calculations, not forecasts; symbol shocks override sector shocks, then market shock, and FX shocks compound separately."
+        )
+    return result
+
+
+def fraction_to_json_number(value, rounding=None):
+    value = fraction_value(value)
+    if value.denominator == 1:
+        return value.numerator
+    places = fraction_decimal_places(value)
+    if places is not None:
+        scaled = value.numerator * (10**places // value.denominator)
+        digits = int_to_decimal(abs(scaled)).rjust(places + 1, "0")
+        sign = "-" if scaled < 0 else ""
+        return JsonExactNumber(f"{sign}{digits[:-places]}.{digits[-places:]}" if places else f"{sign}{digits}")
+    numerator_text = int_to_decimal(value.numerator)
+    denominator_text = int_to_decimal(value.denominator)
+    with localcontext() as ctx:
+        ctx.prec = 50
+        ctx.Emax = max(ctx.Emax, len(numerator_text) + len(denominator_text) + 10)
+        ctx.Emin = min(ctx.Emin, -ctx.Emax)
+        if rounding is not None:
+            ctx.rounding = rounding
+        raw = format(Decimal(numerator_text) / Decimal(denominator_text), "e")
+    return JsonExactNumber(raw)
+
+
+def lot_parts(value, lot, divisor=1):
+    """Return the exact-ratio ideal quantity and its lot-floor without binary boundary drift."""
+    exact = fraction_value(value) / fraction_value(divisor)
+    return exact, int(exact / lot) * lot
+
+
+def rebalance(p):
+    base = text(p["base_currency"], "base_currency")
+    cash = number(p["cash"], "cash", 0)
+    rates = currency_rates(p, base)
+    fee = number(p.get("fee_rate", 0), "fee_rate", 0, 0.1)
+    slip = number(p.get("slippage_rate", 0), "slippage_rate", 0, 0.1)
+    turnover_limit = (
+        number(p["max_turnover_fraction"], "max_turnover_fraction", 0) if "max_turnover_fraction" in p else None
+    )
+    current, dates = {}, set()
+    for row in rows(p["positions"], "positions", 0):
+        symbol = text(row["symbol"], "symbol")
+        if symbol in current:
+            raise ValueError("duplicate current position")
+        currency = text(row["currency"], "currency")
+        as_of = text(row.get("as_of", "unknown"), "as_of")
+        current[symbol] = {
+            "symbol": symbol,
+            "quantity": positive(row["quantity"], "quantity"),
+            "price": positive(row["price"], "price"),
+            "currency": currency,
+            "rate": rates[currency],
+            "sector": text(row.get("sector", "unknown"), "sector"),
+            "as_of": as_of,
+        }
+        dates.add(as_of)
+    targets = {}
+    for row in rows(p["targets"], "targets", 1):
+        symbol = text(row["symbol"], "symbol")
+        if symbol in targets:
+            raise ValueError("duplicate rebalance target")
+        old = current.get(symbol, {})
+        weight = number(row["weight"], "target weight", 0, 1)
+        currency = text(row.get("currency", old.get("currency")), "currency")
+        as_of = text(row.get("as_of", old.get("as_of", "unknown")), "as_of")
+        targets[symbol] = {
+            "symbol": symbol,
+            "weight": weight,
+            "price": positive(row.get("price", old.get("price")), "price"),
+            "currency": currency,
+            "rate": rates[currency],
+            "sector": text(row.get("sector", old.get("sector", "unknown")), "sector"),
+            "as_of": as_of,
+            "lot_size": integer(row["lot_size"], "lot_size", 1)
+            if "lot_size" in row or exact_value(weight) > 0
+            else None,
+        }
+        dates.add(as_of)
+    if sum((fraction_value(row["weight"]) for row in targets.values()), Fraction(0)) > 1:
+        raise ValueError("target weights must sum to at most 1")
+    for symbol, old in current.items():
+        if symbol not in targets:
+            targets[symbol] = {**old, "weight": 0, "lot_size": None}
+    equity_fraction = fraction_value(cash) + sum(
+        (
+            fraction_value(current[symbol]["quantity"])
+            * fraction_value(targets[symbol]["price"])
+            * fraction_value(targets[symbol]["rate"])
+            for symbol in current
+        ),
+        Fraction(0),
+    )
+    for row in targets.values():
+        row["unit_value"] = fraction_value(row["price"]) * fraction_value(row["rate"])
+        if exact_value(row["weight"]) == 0:
+            row["ideal_quantity"] = row["target_quantity"] = 0
+            continue
+        positive(equity_fraction * fraction_value(row["weight"]), "target value")
+        positive(row["unit_value"], "target unit value")
+        row["ideal_quantity"], row["target_quantity"] = lot_parts(
+            fraction_value(equity_fraction) * fraction_value(row["weight"]), row["lot_size"], row["unit_value"]
+        )
+        if row["target_quantity"] == 0:
+            raise ValueError("positive target weight is below one lot")
+
+    sells, buys, unfilled = [], [], []
+    for symbol, row in sorted(targets.items()):
+        held = current.get(symbol, {}).get("quantity", 0)
+        raw_delta = row["ideal_quantity"] - fraction_value(held)
+        side = "buy" if raw_delta > 0 else "sell"
+        raw_desired = abs(raw_delta)
+        if raw_desired == 0:
+            quantity = 0
+        elif side == "sell" and exact_value(row["weight"]) == 0:
+            quantity = fraction_value(held)
+        else:
+            _, quantity = lot_parts(raw_desired, row["lot_size"])
+        if raw_desired - fraction_value(quantity) > 0:
+            unfilled.append(
+                {
+                    "symbol": symbol,
+                    "side": "buy" if raw_delta > 0 else "sell",
+                    "quantity": fraction_to_json_number(raw_desired - fraction_value(quantity), rounding=ROUND_DOWN),
+                    "reason": "lot_rounding",
+                }
+            )
+        if quantity:
+            order = {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "requested_quantity": quantity,
+                "lot_size": row["lot_size"],
+                "price": row["price"],
+                "currency": row["currency"],
+                "unit_value": row["unit_value"],
+            }
+            (buys if side == "buy" else sells).append(order)
+
+    def cash_flow(order):
+        gross = fraction_value(order["quantity"]) * fraction_value(order["unit_value"])
+        if order["side"] == "sell":
+            return gross * (1 - fraction_value(slip)) * (1 - fraction_value(fee))
+        return -gross * (1 + fraction_value(slip)) * (1 + fraction_value(fee))
+
+    available = fraction_value(cash) + sum((cash_flow(order) for order in sells), Fraction(0))
+    desired_buy_cost = -sum((cash_flow(order) for order in buys), Fraction(0))
+    cash_limited = desired_buy_cost > available
+    if cash_limited and desired_buy_cost:
+        scale = max(Fraction(0), available / desired_buy_cost)
+        for order in buys:
+            _, quantity = lot_parts(order["requested_quantity"] * scale, order["lot_size"])
+            if quantity < order["requested_quantity"]:
+                unfilled.append(
+                    {
+                        "symbol": order["symbol"],
+                        "side": "buy",
+                        "quantity": order["requested_quantity"] - quantity,
+                        "reason": "cash",
+                    }
+                )
+            order["quantity"] = quantity
+    gross = sum(
+        (fraction_value(order["quantity"]) * fraction_value(order["unit_value"]) for order in sells + buys),
+        Fraction(0),
+    )
+    if equity_fraction == 0 and gross:
+        raise ValueError("turnover requires positive equity")
+    gross_fraction = gross / equity_fraction if equity_fraction else Fraction(0)
+    if turnover_limit is not None and gross_fraction > fraction_value(turnover_limit):
+        return {
+            "error": "Rebalance exceeds max_turnover_fraction",
+            "error_code": "turnover_limit_exceeded",
+            "required_turnover_fraction": fraction_to_json_number(gross_fraction),
+            "max_turnover_fraction": turnover_limit,
+        }
+
+    post_quantities = {symbol: fraction_value(row["quantity"]) for symbol, row in current.items()}
+    for order in sells + buys:
+        change = order["quantity"] * (1 if order["side"] == "buy" else -1)
+        post_quantities[order["symbol"]] = post_quantities.get(order["symbol"], 0) + change
+    cash_after = available + sum((cash_flow(order) for order in buys), Fraction(0))
+    if cash_after < 0:
+        raise ValueError("rebalance cash reconciliation failed")
+    positions_after = []
+    for symbol, row in sorted(targets.items()):
+        quantity = post_quantities.get(symbol, 0)
+        if quantity <= 0:
+            continue
+        positions_after.append(
+            {
+                "symbol": symbol,
+                "quantity": fraction_to_json_number(quantity),
+                "price": row["price"],
+                "currency": row["currency"],
+                "sector": row["sector"],
+                "as_of": row["as_of"],
+                "target_weight": row["weight"],
+                "value_base": fraction_value(quantity) * row["unit_value"],
+            }
+        )
+    equity_after = cash_after + sum((row["value_base"] for row in positions_after), Fraction(0))
+    for row in positions_after:
+        row["weight"] = fraction_to_json_number(row["value_base"] / equity_after)
+        row["value_base"] = fraction_to_json_number(row["value_base"])
+    orders = []
+    for order in sells + buys:
+        if not order["quantity"]:
+            continue
+        orders.append(
+            {
+                "symbol": order["symbol"],
+                "side": order["side"],
+                "quantity": fraction_to_json_number(order["quantity"]),
+                "reference_price": order["price"],
+                "currency": order["currency"],
+                "lot_size": order["lot_size"],
+                "estimated_value_base": fraction_to_json_number(
+                    fraction_value(order["quantity"]) * fraction_value(order["unit_value"])
+                ),
+                "estimated_cash_flow_base": fraction_to_json_number(cash_flow(order)),
+            }
+        )
+    warnings = [
+        "Reference-price plan only; sells are ordered before buys. Actual fills, unprovided taxes/minimum fees, settlement and liquidity require confirmation."
+    ]
+    if len(dates) != 1 or "unknown" in dates:
+        warnings.append("Position and target valuation timestamps are missing or differ")
+    if cash_limited:
+        warnings.append("Cash was insufficient for all target buys; buy quantities were reduced proportionally by lot")
+    return {
+        "base_currency": base,
+        "initial_equity": fraction_to_json_number(equity_fraction),
+        "equity_after": fraction_to_json_number(equity_after),
+        "cash_after": fraction_to_json_number(cash_after),
+        "cash_weight_after": fraction_to_json_number(cash_after / equity_after) if equity_after else None,
+        "gross_turnover_fraction": fraction_to_json_number(gross_fraction),
+        "turnover_basis": "gross reference buy plus sell value / initial equity",
+        "estimated_cost_base": fraction_to_json_number(equity_fraction - equity_after),
+        "cash_limited": cash_limited,
+        "orders": orders,
+        "unfilled": unfilled,
+        "positions_after": positions_after,
         "warnings": warnings,
     }
 
@@ -587,6 +1120,7 @@ def robustness(p):
 COMMANDS = {
     "position_size": position_size,
     "portfolio": portfolio,
+    "rebalance": rebalance,
     "peers": peers,
     "disclosure": disclosure,
     "snapshot": snapshot,
@@ -614,12 +1148,21 @@ def main():
             raise ValueError("JSON numbers must be finite")
 
         payload = json.loads(
-            raw, parse_constant=reject_constant, parse_float=lambda value: number(float(value), "JSON number")
+            raw,
+            parse_constant=reject_constant,
+            parse_float=RawNumber
+            if args.command in {"rebalance", "portfolio"}
+            else lambda value: number(float(value), "JSON number"),
+            parse_int=RawNumber if args.command in {"rebalance", "portfolio"} else None,
         )
         if not isinstance(payload, dict):
             raise ValueError("input must be a JSON object")
         result = COMMANDS[args.command](payload)
-        output = json.dumps(result, ensure_ascii=False, allow_nan=False)
+        output = (
+            json_dumps_exact(result)
+            if args.command in {"rebalance", "portfolio"}
+            else json.dumps(result, ensure_ascii=False, allow_nan=False)
+        )
         output.encode("utf-8")
     except (ValueError, TypeError, KeyError, IndexError, OverflowError, OSError):
         result = {
