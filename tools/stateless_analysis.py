@@ -429,7 +429,7 @@ def portfolio(p):
             if not np.isfinite(subset).all():
                 return exact_common_vector()
             norm = np.linalg.norm(subset)
-            noise_floor = 4 * np.finfo(float).eps * max(1.0, len(subset) * pre_demean_max_abs)
+            noise_floor = pre_demean_max_abs * 1e-12
             if norm <= noise_floor or not math.isfinite(norm):
                 return exact_common_vector()
             return subset, norm

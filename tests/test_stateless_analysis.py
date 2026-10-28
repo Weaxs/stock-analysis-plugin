@@ -1501,6 +1501,52 @@ def test_portfolio_stress_identical_common_returns_remain_perfectly_correlated()
     assert result["correlations"][0]["return_samples"] == 3
 
 
+@pytest.mark.parametrize(
+    ("third", "fourth"),
+    [
+        ("121.00000000000033", "133.09999999999999999999999999901"),
+        ("121.00000000000001", "133.10000000000000000000000000001"),
+        ("121.000000000000000001", "133.100000000000000000000000000001"),
+    ],
+)
+def test_portfolio_stress_identical_common_returns_remain_perfectly_correlated_at_scales(third, fourth):
+    payload = {
+        "base_currency": "USD",
+        "cash": 0,
+        "positions": [
+            {"symbol": "A", "quantity": 1, "price": 1, "currency": "USD"},
+            {"symbol": "B", "quantity": 1, "price": 1, "currency": "USD"},
+        ],
+        "histories": [
+            {
+                "symbol": "A",
+                "prices": [
+                    {"date": "2025-12-31", "close": 50},
+                    {"date": "2026-01-01", "close": 100},
+                    {"date": "2026-01-02", "close": 110},
+                    {"date": "2026-01-03", "close": third},
+                    {"date": "2026-01-04", "close": fourth},
+                ],
+            },
+            {
+                "symbol": "B",
+                "prices": [
+                    {"date": "2026-01-01", "close": 100},
+                    {"date": "2026-01-02", "close": 110},
+                    {"date": "2026-01-03", "close": third},
+                    {"date": "2026-01-04", "close": fourth},
+                ],
+            },
+        ],
+        "stress_scenarios": [{"name": "unchanged"}],
+    }
+    raw = json.dumps(payload).replace(f'"{third}"', third).replace(f'"{fourth}"', fourth)
+    code, result = invoke_raw(raw, command="portfolio")
+    assert code == 0
+    assert result["correlations"][0]["correlation"] == pytest.approx(1)
+    assert result["correlations"][0]["return_samples"] == 3
+
+
 def test_portfolio_zero_shock_preserves_equity_and_pnl_order_independence():
     code, result = invoke(
         "portfolio",
