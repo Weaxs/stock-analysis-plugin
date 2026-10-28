@@ -1476,6 +1476,31 @@ def test_portfolio_stress_extreme_dynamic_range_uses_exact_common_scaling():
     assert result["correlations"][0]["return_samples"] == 3
 
 
+def test_portfolio_stress_identical_common_returns_remain_perfectly_correlated():
+    raw = (
+        '{"base_currency":"USD","cash":0,"positions":['
+        '{"symbol":"A","quantity":1,"price":1,"currency":"USD"},'
+        '{"symbol":"B","quantity":1,"price":1,"currency":"USD"}],'
+        '"histories":['
+        '{"symbol":"A","prices":['
+        '{"date":"2025-12-31","close":50},'
+        '{"date":"2026-01-01","close":100},'
+        '{"date":"2026-01-02","close":110},'
+        '{"date":"2026-01-03","close":121.000000000000066},'
+        '{"date":"2026-01-04","close":133.0999999999999999999999999999604}]},'
+        '{"symbol":"B","prices":['
+        '{"date":"2026-01-01","close":100},'
+        '{"date":"2026-01-02","close":110},'
+        '{"date":"2026-01-03","close":121.000000000000066},'
+        '{"date":"2026-01-04","close":133.0999999999999999999999999999604}]}],'
+        '"stress_scenarios":[{"name":"unchanged"}]}'
+    )
+    code, result = invoke_raw(raw, command="portfolio")
+    assert code == 0
+    assert result["correlations"][0]["correlation"] == pytest.approx(1)
+    assert result["correlations"][0]["return_samples"] == 3
+
+
 def test_portfolio_zero_shock_preserves_equity_and_pnl_order_independence():
     code, result = invoke(
         "portfolio",
