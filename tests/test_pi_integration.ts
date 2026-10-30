@@ -9,6 +9,7 @@ const EXPECTED_TOOLS = [
   "backtest_rotation_allocation",
   "analyze_disclosure_changes",
   "analyze_portfolio_risk",
+  "plan_portfolio_rebalance",
   "calculate_position_size",
   "analyze_event_study",
   "validate_backtest",

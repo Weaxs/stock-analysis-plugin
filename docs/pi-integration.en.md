@@ -54,7 +54,7 @@ Project-level extensions are only available within that project's Pi Agent sessi
 
 ## Verifying the Installation
 
-Pi 1.2.0 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 67 tools directly exposed.
+Pi 1.2.0 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 71 tools directly exposed.
 
 If search is registered but inactive, the plugin enables it and confirms activation before deferring stock tools. Missing, restricted, or unavailable search keeps the tools directly exposed. Disabling search during a session restores the stock tools before the next model request and removes the discovery guidance.
 
@@ -68,7 +68,7 @@ After starting Pi Agent, type:
 /skills
 ```
 
-You should see 20 registered Skills (e.g., `stock-analysis`, `stock-screener`, `strategy-backtest`, etc.).
+You should see 21 registered Skills (e.g., `stock-analysis`, `stock-screener`, `strategy-backtest`, etc.).
 
 You can also test by invoking a tool directly:
 

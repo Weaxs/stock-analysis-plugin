@@ -1901,7 +1901,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   ctx.tools.register(defineTool({
     name: "analyze_portfolio_risk",
-    description: "无状态现货多头组合风险：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏和止损情景。缺汇率报错；不保存账户。",
+    description: "无状态现货多头组合风险与压力测试：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏、止损情景及可选市场/行业/个股/汇率冲击损益。缺汇率报错；不保存账户。",
     parameters: {
       "positions": {
         "type": "array",
@@ -2015,12 +2015,233 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
           "additionalProperties": false
         },
         "description": "可选历史，共同日期本币价格收益相关性，不计汇率"
+      },
+      "stress_scenarios": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "情景名称",
+              "required": true
+            },
+            "market_shock": {
+              "type": "number",
+              "description": "全市场资产价格冲击比例，如-0.1"
+            },
+            "sector_shocks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sector": {
+                    "type": "string",
+                    "description": "与持仓一致的行业名称",
+                    "required": true
+                  },
+                  "shock": {
+                    "type": "number",
+                    "description": "行业价格冲击比例",
+                    "required": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "可选行业冲击"
+            },
+            "symbol_shocks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "description": "持仓标的代码",
+                    "required": true
+                  },
+                  "shock": {
+                    "type": "number",
+                    "description": "标的价格冲击比例",
+                    "required": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "可选个股冲击"
+            },
+            "currency_shocks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "currency": {
+                    "type": "string",
+                    "description": "持仓中的非基准币种；基准币种不可相对自身冲击",
+                    "required": true
+                  },
+                  "shock": {
+                    "type": "number",
+                    "description": "相对基准币种的汇率冲击比例",
+                    "required": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "可选汇率冲击"
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": "可选压力情景；所有冲击均为比例，由共享核心计算"
       }
     },
     output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["portfolio", "--input", path]));
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "plan_portfolio_rebalance",
+    description: "无状态组合调仓计划：按当前持仓、目标权重、现金、汇率、整手、费用和换手约束生成先卖后买清单；不保存账户或提交订单。",
+    parameters: {
+      "base_currency": {
+        "type": "string",
+        "description": "基准币种",
+        "required": true
+      },
+      "cash": {
+        "type": "number",
+        "description": "基准币种现金，非负",
+        "required": true
+      },
+      "positions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "唯一代码，重复持仓先汇总",
+              "required": true
+            },
+            "quantity": {
+              "type": "number",
+              "description": "正持仓数量",
+              "required": true
+            },
+            "price": {
+              "type": "number",
+              "description": "正现价",
+              "required": true
+            },
+            "currency": {
+              "type": "string",
+              "description": "持仓币种，如CNY/USD/HKD",
+              "required": true
+            },
+            "cost": {
+              "type": "number",
+              "description": "同币种正成本价，可选；调仓计算不使用"
+            },
+            "stop_price": {
+              "type": "number",
+              "description": "同币种正止损价，可选；调仓计算不使用"
+            },
+            "sector": {
+              "type": "string",
+              "description": "统一行业分类，可选"
+            },
+            "as_of": {
+              "type": "string",
+              "description": "实际估值时点，建议ISO8601"
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": "0..100个现货多头持仓，空数组表示纯现金建仓",
+        "required": true
+      },
+      "targets": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "目标标的代码",
+              "required": true
+            },
+            "weight": {
+              "type": "number",
+              "description": "目标权重；大于0时lot_size必填",
+              "required": true
+            },
+            "price": {
+              "type": "number",
+              "description": "正目标价格；当前未持有的新标的必填"
+            },
+            "currency": {
+              "type": "string",
+              "description": "目标币种；当前未持有的新标的必填"
+            },
+            "sector": {
+              "type": "string",
+              "description": "统一行业分类，可选"
+            },
+            "as_of": {
+              "type": "string",
+              "description": "实际估值时点，建议ISO8601"
+            },
+            "lot_size": {
+              "type": "number",
+              "description": "正整数交易单位；weight>0时必填"
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": "1..100个目标；新标的price/currency必填",
+        "required": true
+      },
+      "fx_rates": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "currency": {
+              "type": "string",
+              "description": "唯一非基准币种",
+              "required": true
+            },
+            "rate": {
+              "type": "number",
+              "description": "一单位该币种对应多少基准币种，正数",
+              "required": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": "显式现价汇率；基准币种隐含1，不得重复"
+      },
+      "fee_rate": {
+        "type": "number",
+        "description": "每边比例费用0..0.1，默认0；不含未提供税费/最低收费"
+      },
+      "slippage_rate": {
+        "type": "number",
+        "description": "每边滑点0..0.1，默认0"
+      },
+      "max_turnover_fraction": {
+        "type": "number",
+        "description": "非负最大总换手，按买卖参考金额合计/初始权益；默认不限制，可大于1"
+      }
+    },
+    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
+    async execute(params) {
+      return withJsonInput(params, (path: string) =>
+        runPy("stateless_analysis.py", ["rebalance", "--input", path]));
     },
   }));
 

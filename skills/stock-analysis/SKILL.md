@@ -17,7 +17,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 ## 无状态分析扩展
 
-当用户要求同行比较、组合风险、仓位预算或新旧分析比较时，MUST 读取[无状态研究工具](references/stateless-analysis.md)，分别使用 compare_stocks、analyze_portfolio_risk、calculate_position_size、compare_analysis_snapshots。所有用户状态均由本次输入提供。
+当用户要求同行比较、组合风险/压力测试、目标权重调仓、仓位预算或新旧分析比较时，MUST 读取[无状态研究工具](references/stateless-analysis.md)，分别使用 compare_stocks、analyze_portfolio_risk、plan_portfolio_rebalance、calculate_position_size、compare_analysis_snapshots。所有用户状态均由本次输入提供；调仓计划数量不等于成交，现金不足或整手差额必须读取 unfilled 说明。
 
 ## 意图路由表
 

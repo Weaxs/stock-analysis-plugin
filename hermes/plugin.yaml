@@ -8,6 +8,7 @@ provides_tools:
   - compare_stocks
   - analyze_disclosure_changes
   - analyze_portfolio_risk
+  - plan_portfolio_rebalance
   - calculate_position_size
   - analyze_event_study
   - validate_backtest

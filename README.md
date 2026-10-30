@@ -32,7 +32,7 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股
 
 ## 功能概览
 
-- **70 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
+- **71 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
 - **21 个 Skills** — 综合分析、全市场选股、策略回测 + 18 个策略、复盘与研究方法论（缠论、波浪、龙头、情绪周期等）
 - **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
 - **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股链路带粘性优选（最近成功的数据源下次优先尝试）
@@ -70,7 +70,7 @@ npm install @weaxs/stock-analysis-plugin
 
 Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
 
-新版 Pi（已核验 1.2.0）提供原生 `tool_search` 时，插件自动启用按需工具发现，70 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。检索使用英文关键词或工具名，例如 `get_quote`、`get_financials`。
+新版 Pi（已核验 1.2.0）提供原生 `tool_search` 时，插件自动启用按需工具发现，71 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。检索使用英文关键词或工具名，例如 `get_quote`、`get_financials`。
 
 ### Hermes Agent Plugin
 
@@ -95,7 +95,7 @@ register(ctx)
 openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw Gateway 启动后自动加载并注册 70 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
+OpenClaw Gateway 启动后自动加载并注册 71 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
 
 详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
 
@@ -106,7 +106,7 @@ dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 70 个 tool + 21 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
+作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 71 个 tool + 21 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
 新版 dsh 的原生函数调用模式默认通过 `stock_tool_search` 按 Agent 搜索、加载所需工具，支持中文关键词或工具名；旧接口、搜索入口不可用时保留全量暴露。可设置 `toolDiscovery: false` 关闭，配置与 PTC 模式边界见下方接入文档。
 
@@ -354,7 +354,8 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 |------|------|
 | `compare_stocks` | 比较显式输入的同行指标；检查单位、期间和口径，仅对可比数值排序 |
 | `analyze_disclosure_changes` | 比较新旧公告正文与财务指标，返回来源、变更行号和增长率限制 |
-| `analyze_portfolio_risk` | 一次性持仓的集中度、行业/币种敞口、价格盈亏、止损情景与可选相关性 |
+| `analyze_portfolio_risk` | 一次性持仓的集中度、行业/币种敞口、价格盈亏、止损情景、可选相关性与市场/行业/个股/汇率压力测试 |
+| `plan_portfolio_rebalance` | 按目标权重、整手、费用和现金约束生成先卖后买的调仓计划，返回未满足数量与调后敞口 |
 | `calculate_position_size` | 按现金、风险预算、费用、滑点和交易单位计算本次可买数量 |
 | `analyze_event_study` | 事件前一交易日收盘至各窗口的股票/基准收益差，标明缺失和重叠样本 |
 | `validate_backtest` | 复用现有引擎，滚动训练选候选、样本外验证，比较参数及多个标的 |
@@ -381,9 +382,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 python tools/stateless_analysis.py position_size --input input.json
 ```
 
-对应宿主工具是 `calculate_position_size`。其余 CLI 子命令依次为 `peers/disclosure/portfolio/event_study/robustness/snapshot`。事件研究可直接传 `symbol/benchmark/start_date/end_date/event_dates`；回测验证可传 `symbols/start_date/end_date/strategies`，由 Python 复用行情接口，避免模型重新抄写历史 K 线。显式价格/datasets 模式仍支持离线计算，两种模式互斥。
+对应宿主工具是 `calculate_position_size`。其余 CLI 子命令依次为 `peers/disclosure/portfolio/rebalance/event_study/robustness/snapshot`。事件研究可直接传 `symbol/benchmark/start_date/end_date/event_dates`；回测验证可传 `symbols/start_date/end_date/strategies`，由 Python 复用行情接口，避免模型重新抄写历史 K 线。显式价格/datasets 模式仍支持离线计算，两种模式互斥。
 
-跨币种组合必须提供显式汇率；价格盈亏不含历史汇兑损益。稳健性工具仅支持 next_open、每窗口重新从现金开始，样本内敏感性不等于样本外表现。
+跨币种组合必须提供显式汇率；价格盈亏不含历史汇兑损益。组合压力测试是用户指定市场/行业/个股/汇率冲击的确定性 what-if，个股冲击覆盖行业、行业覆盖市场，汇率独立乘算，不是预测或最大亏损保证。调仓工具按目标权重和整手生成计划，先卖后买；现金不足时同比例缩减买单并以 `cash_limited/unfilled` 标记，计划数量不代表成交。稳健性工具仅支持 next_open、每窗口重新从现金开始，样本内敏感性不等于样本外表现。
 
 ## 策略回测 DSL
 
@@ -566,20 +567,20 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 70 个工具 + 21 个 skill
+│   └── index.ts                     #   注册 71 个工具 + 21 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   工具 JSON Schema 定义
-│   └── tools.py                     #   70 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   71 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×70
+│   └── index.ts                     #   definePluginEntry + registerTool ×71
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×70
+│   └── index.ts                     #   cordis apply(ctx) + defineTool ×71
 │
 ├── tools/                           # 共享 Python CLI 工具
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
@@ -598,11 +599,11 @@ stock-analysis/
 │   ├── trading_calendar.py          #   交易日历
 │   └── requirements.txt
 │
-├── skills/                          # 共享 SKILL.md（20 个）
+├── skills/                          # 共享 SKILL.md（21 个）
 │   ├── stock-analysis/              #   综合分析 workflow
 │   ├── stock-screener/              #   选股 workflow
 │   ├── strategy-backtest/           #   回测 + 进化 workflow
-│   └── ...                          #   12 个策略方法论
+│   └── ...                          #   18 个策略方法论
 │
 ├── strategies/examples/             # 回测策略 YAML 示例
 ├── schemas/                         # JSON Schema（研报结构等）
