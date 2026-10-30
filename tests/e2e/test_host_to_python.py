@@ -92,7 +92,8 @@ class TestHermesE2E:
     """Hermes hosts Python natively via subprocess. Verify each handler round-trips."""
 
     @pytest.fixture(scope="class")
-    def hermes_ctx(self):
+    @classmethod
+    def hermes_ctx(cls):
         from hermes import register
 
         class MockCtx:

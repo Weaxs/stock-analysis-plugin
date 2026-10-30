@@ -131,8 +131,6 @@ TOOL_SCHEMAS = [
                 "symbols": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "minItems": 1,
-                    "maxItems": 100,
                     "description": "同一市场的完整股票池，1..100只；A如600036，HK如0700.HK，US如AAPL",
                 },
                 "as_of": {"type": "string", "description": "可选已收盘截止日期YYYY-MM-DD，默认该市场最近已收盘交易日"},

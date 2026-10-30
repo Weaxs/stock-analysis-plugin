@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -33,9 +33,9 @@ jobs:
       - name: Ruff format check
         run: ruff format --check tools/ skills/ tests/ hermes/
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
 
       # --ignore-scripts: tsc doesn't need the postinstall-built Python venv.
@@ -55,9 +55,9 @@ jobs:
         # and the suite passes on cpython 3.10.19.
         python-version: ["3.11", "3.10"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -80,9 +80,9 @@ jobs:
     timeout-minutes: 20
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -108,15 +108,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
 
       - name: Python setup failure check
@@ -185,16 +185,16 @@ jobs:
     timeout-minutes: 20
     if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
 
       - name: Resolve model endpoint on runner
@@ -252,16 +252,16 @@ jobs:
         host: [pi, openclaw, hermes, dsh]
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.host == 'hermes' && '3.14' || '3.11' }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         # OpenClaw 2026.10.5 requires Node >=24.16.
         with:
-          node-version: "24.16.0"
+          node-version: "24"
           cache: "npm"
 
       - name: Resolve model endpoint on runner
@@ -303,11 +303,11 @@ jobs:
     timeout-minutes: 10
     needs: [lint, test, compat]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
 
       # --ignore-scripts: packing/bundling doesn't need the Python venv
@@ -328,7 +328,7 @@ jobs:
       - name: Build package
         run: npm pack
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-tarball
           path: "*.tgz"

@@ -85,6 +85,24 @@ function pyTool<const S extends ParameterSchemaSpec>(opts: {
   });
 }
 
+// Match the other hosts' closed root object for structured JSON-input tools.
+function closedTool<const S extends ParameterSchemaSpec>(opts: {
+  name: string;
+  description: string;
+  parameters: S;
+  execute: (args: InferArgs<S>) => Promise<string>;
+}) {
+  const tool = defineTool({
+    ...opts,
+    output: {
+      schema: { type: "string" },
+      render: (_args, value) => [{ type: "text", text: value }],
+    },
+  });
+  tool.parameters.additionalProperties = false;
+  return tool;
+}
+
 // --- Skills ---------------------------------------------------------------
 
 // skills/ lives one level up: <pkg>/skills when published, repo skills/ in dev.
@@ -781,7 +799,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "calculate_rotation_metrics",
     description: "行业轮动数值复核：输入真实MC-dropout样本和/或历史成交计数，计算集中度和原始配权；不训练模型、不生成买入信号，零历史不补默认值。",
     parameters: {
@@ -840,14 +858,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     }
   }
 },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("sector_rotation.py", ["analyze", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "backtest_rotation_allocation",
     description: "行业轮动配权分项回测：代码自动取行情，或传明确币种/复权OHLCV；相同每周全池买卖下比较等权与历史配权。按市场和报价币种独立资金，支持A/HK/US/JP/KR/TW；不是完整论文深度模型或跨币种共享资金回测。",
     parameters: {
@@ -965,14 +982,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     "description": "每边比例成本0..0.1，默认0.001；买入预算含费用"
   }
 },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("sector_rotation.py", ["backtest", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "analyze_trend_strategy",
     description: "月度右侧趋势策略：直接传同市场A/HK/US股票代码，自动获取日K，输出月度新入/持有/退出与逆波动预算。as_of默认最近已收盘交易日，持仓可选且不保存，不自动下单；跨样本仍not_validated。",
     parameters: {
@@ -1007,7 +1023,6 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     "description": "可选固定容量K，默认ceil(N/3)，不得小于真实持股数量"
   }
 },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("trend_strategy.py", ["fetch", "--input", path]));
@@ -1680,7 +1695,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "compare_stocks",
     description: "无状态同行指标比较：先用现有财务/行情工具取数，再传companies；仅相同unit/basis/period可排序，缺失不填零，不生成买卖综合分。",
     parameters: {
@@ -1748,14 +1763,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "required": true
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["peers", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "analyze_disclosure_changes",
     description: "无状态公告财报比较：传新旧正文及指标，返回变更行号、来源与财务变化；负/零基数增长率为null。不下载PDF、不代替经济解读。",
     parameters: {
@@ -1892,14 +1906,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "description": "变化上限1..100，默认30"
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["disclosure", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "analyze_portfolio_risk",
     description: "无状态现货多头组合风险与压力测试：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏、止损情景及可选市场/行业/个股/汇率冲击损益。缺汇率报错；不保存账户。",
     parameters: {
@@ -2096,14 +2109,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "description": "可选压力情景；所有冲击均为比例，由共享核心计算"
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["portfolio", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "plan_portfolio_rebalance",
     description: "无状态组合调仓计划：按当前持仓、目标权重、现金、汇率、整手、费用和换手约束生成先卖后买清单；不保存账户或提交订单。",
     parameters: {
@@ -2238,14 +2250,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "description": "非负最大总换手，按买卖参考金额合计/初始权益；默认不限制，可大于1"
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["rebalance", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "calculate_position_size",
     description: "无状态多头仓位预算：同币种金额，按现金/风险预算/最大仓位/交易单位取最小数量，双边费用和滑点参与止损情景；不执行交易。",
     parameters: {
@@ -2292,14 +2303,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "description": "每边滑点0..0.1，默认0"
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["position_size", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "analyze_event_study",
     description: "无状态事件研究：提供同市场股票及基准完整价格、事件日期；事件前一交易日收盘为基点，计算交易日窗口收益差。缺窗口/基准为null，标注重叠，不推断因果。",
     parameters: {
@@ -2381,14 +2391,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "description": "同市场基准代码；与symbol一起使用"
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["event_study", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "validate_backtest",
     description: "无状态回测稳健性：输入历史OHLCV和完整候选DSL；滚动训练选参数、后续不重叠窗口验证，列出全部样本内敏感性及跨标的结果。仅next_open，不自动优化或保存。",
     parameters: {
@@ -2504,14 +2513,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "description": "1..5个唯一股票代码，配合start_date/end_date直接取数；和datasets互斥"
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["robustness", "--input", path]));
     },
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(closedTool({
     name: "compare_analysis_snapshots",
     description: "无状态快照比较：传新旧JSON，返回JSON Pointer及新增/删除/变化/失效/恢复；不保存快照。数组整体比较，调用前按symbol对齐。",
     parameters: {
@@ -2530,7 +2538,6 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         "required": true
       }
     },
-    output: { schema: { type: "string" }, render: (_args, value) => [{ type: "text", text: value }] },
     async execute(params) {
       return withJsonInput(params, (path: string) =>
         runPy("stateless_analysis.py", ["snapshot", "--input", path]));
