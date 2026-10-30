@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- Node.js >= 22.19（OpenClaw 官方要求）
+- Node.js >= 24.22.1 < 25（或 >= 26.12.1；OpenClaw 官方要求）
 - Python >= 3.10
 - OpenClaw Gateway 已安装并可正常运行
 - 如需通过 ClawHub 安装：`npm i -g clawhub` 并完成 `clawhub login`

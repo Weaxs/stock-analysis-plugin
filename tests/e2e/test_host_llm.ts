@@ -64,6 +64,7 @@ async function runLoop(userMsg: string, toolNames: string[], maxTurns = 3) {
     }
 
     for (const call of msg.tool_calls) {
+      if (call.type !== "function") continue;
       const name = call.function.name;
       const args = JSON.parse(call.function.arguments || "{}");
 

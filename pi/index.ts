@@ -1,9 +1,9 @@
 import { withJsonInput } from "../scripts/json-input.mjs";
 import type { ExtensionAPI } from "pi-agent";
-import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 
 import { commandTimeout } from "../scripts/cli-timeout.mjs";
+import { resolvePython } from "../scripts/venv-python.mjs";
 
 export default (pi: ExtensionAPI) => {
   const tools: Parameters<ExtensionAPI["registerTool"]>[0][] = [];
@@ -53,11 +53,7 @@ export default (pi: ExtensionAPI) => {
       ? `${__dirname}/..`
       : fileURLToPath(new URL("..", import.meta.url));
   const toolsDir = `${baseDir}/tools`;
-  const isWin = process.platform === "win32";
-  // Windows venvs ship Scripts/python.exe (there is no python3); POSIX venvs ship bin/python3.
-  const venvPython = `${baseDir}/.venv/${isWin ? "Scripts/python.exe" : "bin/python3"}`;
-  // Fallback: on Windows "python3" is usually the Microsoft Store stub — prefer "python".
-  const python = existsSync(venvPython) ? venvPython : isWin ? "python" : "python3";
+  const python = resolvePython(baseDir);
   const py = async (script: string, args: string[]) => {
     const result = await pi.exec(python, [`${toolsDir}/${script}`, ...args], { timeout: commandTimeout(script, args) });
     if (result.killed || !result.stdout.trim()) {
@@ -2050,8 +2046,6 @@ export default (pi: ExtensionAPI) => {
       "items": {
         "type": "string"
       },
-      "minItems": 1,
-      "maxItems": 100,
       "description": "同一市场的完整股票池，1..100只；A如600036，HK如0700.HK，US如AAPL"
     },
     "as_of": {

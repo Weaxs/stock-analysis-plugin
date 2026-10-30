@@ -1146,7 +1146,11 @@ def etf_basket(symbol):
 
 def fund_disclosed_equities(symbol):
     import requests
-    from akshare.utils import demjson
+
+    try:
+        from akshare.utils.jsonish import loads as decode
+    except ImportError:
+        from akshare.utils.demjson import decode
     from bs4 import BeautifulSoup
 
     limit = 10000
@@ -1160,7 +1164,7 @@ def fund_disclosed_equities(symbol):
         )
         response.raise_for_status()
         text = response.text
-        payload = demjson.decode(text[text.index("{") : text.rindex("}") + 1])
+        payload = decode(text[text.index("{") : text.rindex("}") + 1])
         soup = BeautifulSoup(payload["content"], "lxml")
         for block in soup.select("div.boxitem"):
             heading = block.find("h4")

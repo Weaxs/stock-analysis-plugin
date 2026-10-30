@@ -79,7 +79,7 @@ function findPython() {
       if (m && Number(m[1]) === 3 && Number(m[2]) === 14) return c;
     } catch { /* try next */ }
   }
-  throw new Error("Hermes v0.22.2 requires Python 3.14 (set SMOKE_PYTHON)");
+  throw new Error("Hermes v0.22.5 requires Python 3.14 (set SMOKE_PYTHON)");
 }
 
 // ---------------------------------------------------------------- pi -------
@@ -199,10 +199,14 @@ function smokeHermes() {
   const hermes = join(binDir, process.platform === "win32" ? "hermes.exe" : "hermes");
   sh(python, ["-m", "pip", "install", "--quiet", "--upgrade", "pip"]);
   const source = join(WORK, "hermes-source");
-  sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.22.2", "https://github.com/NousResearch/hermes-agent.git", source]);
-  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "d923a5eb487a17c0a68801bba9ef0f56c81040a8", "Hermes source commit must match verified release");
-  // Official releases reject wheel builds; editable source installs are supported.
-  sh(python, ["-m", "pip", "install", "--quiet", "--editable", source]);
+  sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.22.5", "https://github.com/NousResearch/hermes-agent.git", source]);
+  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "bf0203a794a07aac3ff764972ab9087baa4e4f4e", "Hermes source commit must match verified release");
+  // Hermes' uv.lock carries dependency overrides that pip cannot represent.
+  sh(python, ["-m", "pip", "install", "--quiet", "uv==0.13.6"]);
+  const uv = join(binDir, process.platform === "win32" ? "uv.exe" : "uv");
+  sh(uv, ["sync", "--locked", "--no-dev", "--inexact", "--project", source, "--python", python], {
+    env: { ...process.env, UV_PROJECT_ENVIRONMENT: venv },
+  });
   sh(python, ["-m", "pip", "install", "--quiet", repoRoot]);
   // handlers shell out to "python3" — make it resolve to this venv, which has
   // the full data-source deps (yfinance etc.) from tools/requirements.txt

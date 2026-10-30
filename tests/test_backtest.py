@@ -728,6 +728,38 @@ class TestRunBacktest:
 
         assert counts[1] - counts[0] == 253
 
+    def test_monthly_momentum_midmonth_start_uses_prior_monthly_observation_via_cli(
+        self, monkeypatch, tmp_path, capsys, make_kline_data
+    ):
+        import yaml
+
+        dates = pd.bdate_range("2023-01-02", "2024-03-28")
+        rows = make_kline_data(len(dates))
+        for row, stamp, close in zip(rows, dates, range(100, 100 + len(dates)), strict=True):
+            row.update(date=stamp, open=close, close=close, high=close + 1, low=close - 1)
+        monkeypatch.setattr(
+            backtest,
+            "run_tool",
+            lambda _script, args, **_kwargs: rows[-int(args[args.index("--count") + 1]) :],
+        )
+        strategy = {
+            "entry": {"conditions": [{"indicator": "monthly_momentum", "period": 5, "operator": ">", "value": 0}]},
+            "exit": {"stop_loss": -1, "take_profit": 1000},
+            "simulation": {"execution": "next_open", "slippage": 0, "commission": 0},
+        }
+        path = tmp_path / "monthly.yaml"
+        path.write_text(yaml.safe_dump(strategy), encoding="utf-8")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["backtest.py", "run", str(path), "AAPL", "--start", "2024-02-15", "--end", "2024-03-28"],
+        )
+
+        backtest.main()
+
+        result = json.loads(capsys.readouterr().out)
+        assert result["trades"][0]["date"] == "2024-02-15"
+
     def test_monthly_momentum_252_warns_when_first_window_signal_still_has_nan(self, monkeypatch, make_kline_data):
         df = pd.DataFrame(make_kline_data(90))
         monkeypatch.setattr(backtest, "fetch_kline", lambda *a: df)

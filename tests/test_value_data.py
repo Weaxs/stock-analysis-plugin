@@ -216,6 +216,54 @@ def test_etf_size_history_and_nav_date_comparability(monkeypatch):
     assert result["holdings"][0]["weight_pct"] == 5
 
 
+def test_etf_details_cli_reads_disclosed_equities_with_current_akshare(monkeypatch, capsys):
+    import json
+    import sys
+    from unittest.mock import MagicMock
+
+    import akshare as ak
+
+    from tools import value_data
+
+    monkeypatch.setattr(value_data, "cached", lambda _key, _ttl, fetch: fetch())
+    monkeypatch.setattr(
+        ak,
+        "fund_etf_fund_info_em",
+        lambda **kwargs: pd.DataFrame({"净值日期": ["2026-10-09"], "单位净值": [2], "日增长率": [1]}),
+    )
+    monkeypatch.setattr(
+        ak,
+        "fund_portfolio_hold_em",
+        lambda **kwargs: pd.DataFrame(
+            {"股票代码": ["600519"], "股票名称": ["A"], "占净值比例": [5], "季度": ["2026年2季度股票投资明细"]}
+        ),
+    )
+    monkeypatch.setattr("_subproc.run_tool", lambda *args, **kwargs: {"price": 2, "as_of": "2026-10-09"})
+    table = (
+        '<div class="boxitem"><h4><a href="/jjcc/510300.html">2026-06-30</a></h4>'
+        "<table><tr><th>股票代码</th><th>股票名称</th><th>占净值比例</th><th>持股数（万股）</th>"
+        "<th>持仓市值（万元）</th></tr><tr><td>600519</td><td>贵州茅台</td><td>5%</td><td>10</td><td>20</td></tr>"
+        "</table></div>"
+    )
+
+    def get(url, **kwargs):
+        if "FundArchivesDatas" in url:
+            return MagicMock(text=f"var apidata={{content:{table!r}}};")
+        if "pingzhongdata" in url:
+            return MagicMock(text='var Data_fluctuationScale = {"categories":[],"series":[]};')
+        raise OSError("offline")
+
+    monkeypatch.setattr("requests.get", get)
+    monkeypatch.setattr(sys, "argv", ["value_data.py", "etf_details", "510300", "--include-full-holdings"])
+
+    value_data.main()
+
+    result = json.loads(capsys.readouterr().out)
+    position = result["disclosed_equity_report"]["equity_positions"][0]
+    assert position["code"] == "600519"
+    assert position["weight_pct"] == 5
+
+
 def test_csi_fallback_never_labels_total_share_pe_as_ttm(monkeypatch):
     import akshare as ak
 
