@@ -215,6 +215,23 @@ def test_rebalance_uses_target_price_consistently_for_initial_and_after_equity()
     assert result["unfilled"] == []
 
 
+def test_rebalance_target_currency_override_does_not_require_old_fx_rate():
+    raw = (
+        '{"base_currency":"CNY","cash":0,'
+        '"positions":[{"symbol":"AAA","quantity":10,"price":10,"currency":"USD"}],'
+        '"targets":[{"symbol":"AAA","weight":1,"price":70,"currency":"CNY","lot_size":1}]}'
+    )
+    code, result = invoke_raw(raw)
+    assert code == 0
+    assert result["initial_equity"] == 700
+    assert result["equity_after"] == 700
+    assert result["orders"] == []
+    assert result["positions_after"][0]["quantity"] == 10
+    assert result["positions_after"][0]["value_base"] == 700
+    assert result["positions_after"][0]["weight"] == 1
+    assert result["unfilled"] == []
+
+
 def test_rebalance_scales_buys_for_cash_after_costs_without_overspending():
     code, result = invoke(
         "rebalance",

@@ -531,7 +531,6 @@ def rebalance(p):
             "quantity": positive(row["quantity"], "quantity"),
             "price": positive(row["price"], "price"),
             "currency": currency,
-            "rate": rates[currency],
             "sector": text(row.get("sector", "unknown"), "sector"),
             "as_of": as_of,
         }
@@ -562,6 +561,7 @@ def rebalance(p):
         raise ValueError("target weights must sum to at most 1")
     for symbol, old in current.items():
         if symbol not in targets:
+            old["rate"] = rates[old["currency"]]
             targets[symbol] = {**old, "weight": 0, "lot_size": None}
     equity_fraction = fraction_value(cash) + sum(
         (
