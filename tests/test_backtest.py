@@ -729,23 +729,14 @@ class TestRunBacktest:
         assert counts[1] - counts[0] == 253
 
     def test_monthly_momentum_midmonth_start_uses_prior_monthly_observation_via_cli(
-        self, monkeypatch, tmp_path, capsys
+        self, monkeypatch, tmp_path, capsys, make_kline_data
     ):
         import yaml
 
         dates = pd.bdate_range("2023-01-02", "2024-03-28")
-        closes = [100 + i for i in range(len(dates))]
-        rows = [
-            {
-                "date": stamp,
-                "open": close,
-                "high": close + 1,
-                "low": close - 1,
-                "close": close,
-                "volume": 1000,
-            }
-            for stamp, close in zip(dates, closes, strict=True)
-        ]
+        rows = make_kline_data(len(dates))
+        for row, stamp, close in zip(rows, dates, range(100, 100 + len(dates)), strict=True):
+            row.update(date=stamp, open=close, close=close, high=close + 1, low=close - 1)
         monkeypatch.setattr(
             backtest,
             "run_tool",

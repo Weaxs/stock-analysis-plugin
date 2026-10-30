@@ -4,7 +4,7 @@ This guide explains how to use `stock-analysis-plugin` as a [Pi Agent](https://p
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js >= 22.19.0
 - Python >= 3.10
 - Pi Agent installed and running
 

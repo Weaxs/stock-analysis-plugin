@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- Node.js >= 18
+- Node.js >= 22.19.0
 - Python >= 3.10
 - Pi Agent 已安装并可正常运行
 

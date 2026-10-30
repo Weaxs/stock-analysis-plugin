@@ -64,6 +64,11 @@ async function runPy(script: string, args: string[]): Promise<string> {
 // One canonical stdout contract shared by every tool: execute returns the
 // CLI's raw JSON text (same relay shape as the pi/openclaw adapters), render
 // relays it to the model as a single text block.
+const textOutput = {
+  schema: { type: "string" as const },
+  render: (_args: unknown, value: string) => [{ type: "text" as const, text: value }],
+};
+
 function pyTool<const S extends ParameterSchemaSpec>(opts: {
   name: string;
   description: string;
@@ -75,10 +80,7 @@ function pyTool<const S extends ParameterSchemaSpec>(opts: {
     name: opts.name,
     description: opts.description,
     parameters: opts.parameters,
-    output: {
-      schema: { type: "string" },
-      render: (_args, value) => [{ type: "text", text: value }],
-    },
+    output: textOutput,
     async execute(args) {
       return runPy(opts.script, opts.argv(args));
     },
@@ -94,10 +96,7 @@ function closedTool<const S extends ParameterSchemaSpec>(opts: {
 }) {
   const tool = defineTool({
     ...opts,
-    output: {
-      schema: { type: "string" },
-      render: (_args, value) => [{ type: "text", text: value }],
-    },
+    output: textOutput,
   });
   tool.parameters.additionalProperties = false;
   return tool;
