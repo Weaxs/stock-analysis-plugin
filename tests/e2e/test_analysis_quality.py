@@ -50,6 +50,12 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
     )
     if "run_backtest" in case["tools"]:
         prompt += "回测请求的策略文件路径使用fixture.yaml；这是请求参数，不代表已验证文件内容或数据覆盖期间。"
+    prompt += (
+        "\n最终提交前核对 evidence.path，至少逐项包含以下清单："
+        + json.dumps(case["required_paths"], ensure_ascii=False)
+        + "。从本次实际工具返回提取各项原始 value/source/as_of；漏项先补齐再提交最终 JSON。"
+        "只写在正文或 as_of 元数据里不算完成独立引用。"
+    )
     result = _run_agent_loop(client, ctx, prompt, list(case["tools"]), max_turns=6)
     assert set(case["tools"]) <= {call["name"] for call in result["tool_calls"]}
     assert all(call["args"].get("symbol") == "600519" for call in result["tool_calls"])
@@ -57,7 +63,9 @@ def test_final_report_is_grounded_in_fixed_evidence(client, case):
     report = parse_json_response(result["final"])
     review = review_report(client, OPENAI_MODEL, case, report, request_context=prompt, tool_calls=result["tool_calls"])
     failures = check_report(case, report, review=review)
-    assert failures == [], {"failures": failures, "review": review, "report": report}
+    assert failures == [], json.dumps(
+        {"failures": failures, "review": review, "report": report}, ensure_ascii=False, indent=2
+    )
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])

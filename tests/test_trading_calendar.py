@@ -158,7 +158,7 @@ class TestCnTradeDatesMemo:
             mock_ak.tool_trade_date_hist_sina.side_effect = ConnectionError("boom")
             assert tc.cn_trade_dates(2027) == set()
             assert tc.cn_trade_dates(2027) == set()
-            assert mock_ak.tool_trade_date_hist_sina.call_count == 3
+            assert mock_ak.tool_trade_date_hist_sina.call_count == 1
 
 
 class TestCnTradeDatesTimeout:
@@ -298,3 +298,46 @@ class TestUsTradingDayFallback:
         # the hardcoded set answered these wrong: 2024 MLK and 2026 Memorial Day
         assert is_trading_day("US", "2024-01-15")["is_trading_day"] is False
         assert is_trading_day("US", "2026-05-25")["is_trading_day"] is False
+
+
+def test_calendar_shares_full_snapshot_across_years(monkeypatch):
+    monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+    mock_ak = MagicMock()
+    mock_ak.tool_trade_date_hist_sina.return_value = pd.DataFrame({"trade_date": ["2025-12-31", "2026-09-18"]})
+    with patch.dict(sys.modules, {"akshare": mock_ak}):
+        assert tc.cn_trade_dates(2025) == {"2025-12-31"}
+        assert tc.cn_trade_dates(2026) == {"2026-09-18"}
+        monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+        assert tc.cn_trade_dates(2026) == {"2026-09-18"}
+    assert mock_ak.tool_trade_date_hist_sina.call_count == 1
+
+
+def test_calendar_failure_is_not_persisted(monkeypatch):
+    monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+    source = MagicMock(side_effect=[ConnectionError("offline"), pd.DataFrame({"date": ["2026-09-18"]})])
+    with patch.dict(sys.modules, {"akshare": MagicMock(tool_trade_date_hist_sina=source)}):
+        assert tc.cn_trade_dates(2026) == set()
+        assert tc.cn_trade_dates(2026) == {"2026-09-18"}
+    assert source.call_count == 2
+
+
+def test_calendar_refreshes_when_china_date_changes(monkeypatch):
+    from datetime import datetime
+
+    class Clock(datetime):
+        current = datetime(2026, 10, 29)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    monkeypatch.setattr(tc, "datetime", Clock)
+    monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
+    source = MagicMock(
+        side_effect=[pd.DataFrame({"date": ["2026-10-29"]}), pd.DataFrame({"date": ["2026-10-29", "2026-10-30"]})]
+    )
+    with patch.dict(sys.modules, {"akshare": MagicMock(tool_trade_date_hist_sina=source)}):
+        assert tc.cn_trade_dates(2026) == {"2026-10-29"}
+        Clock.current = datetime(2026, 10, 30)
+        assert tc.cn_trade_dates(2026) == {"2026-10-29", "2026-10-30"}
+    assert source.call_count == 2

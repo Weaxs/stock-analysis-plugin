@@ -6,7 +6,7 @@ import json
 import math
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,8 +28,12 @@ def _safe_float(val) -> float | None:
 # --------------- Check 1: Valuation ---------------
 
 
-def check_valuation(symbol: str) -> dict:
-    quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
+_UNSET = object()
+
+
+def check_valuation(symbol: str, *, quote=_UNSET) -> dict:
+    if quote is _UNSET:
+        quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
     if not isinstance(quote, dict) or "error" in quote:
         quote = {}
     pe = _safe_float(quote.get("pe"))
@@ -93,8 +97,9 @@ def check_valuation(symbol: str) -> dict:
 # --------------- Check 2: Technical Warning ---------------
 
 
-def check_technical(symbol: str) -> dict:
-    ta = _run_tool("technical.py", ["analyze", symbol])
+def check_technical(symbol: str, *, ta=_UNSET) -> dict:
+    if ta is _UNSET:
+        ta = _run_tool("technical.py", ["analyze", symbol])
     result = {"flags": [], "available": False}
 
     if not isinstance(ta, dict) or not ta or "error" in ta:
@@ -149,11 +154,17 @@ def check_technical(symbol: str) -> dict:
 # --------------- Check 3: Lock-up Expiry ---------------
 
 
-def check_lockup(symbol: str) -> dict:
-    result = _run_tool("risk_screening.py", ["lockup", symbol], timeout=25)
+def check_lockup(symbol: str, *, run=None) -> dict:
+    result = (run or _run_tool)("risk_screening.py", ["lockup", symbol], timeout=25)
     return (
         result
-        if isinstance(result, dict) and "error" not in result
+        if (
+            isinstance(result, dict)
+            and "error" not in result
+            and isinstance(result.get("upcoming_30d"), list)
+            and isinstance(result.get("flags"), list)
+            and isinstance(result.get("available"), bool)
+        )
         else {"upcoming_30d": [], "flags": [], "available": False}
     )
 
@@ -204,7 +215,7 @@ def _fetch_lockup(symbol: str) -> dict:
 # --------------- Check 4-7: News-based risks ---------------
 
 
-def check_news_risks(symbol: str, name: str = "") -> dict:
+def check_news_risks(symbol: str, name: str = "", *, run=None) -> dict:
     search_name = name if name else symbol
     categories = {
         "insider": f"{search_name} 减持 股东减持",
@@ -218,7 +229,7 @@ def check_news_risks(symbol: str, name: str = "") -> dict:
     # declaration order keeps result keys and flags stably ordered
     with ThreadPoolExecutor(max_workers=len(categories)) as pool:
         futures = {
-            cat: pool.submit(_run_tool, "search_intel.py", ["search", query, "--count", "3"])
+            cat: pool.submit(run or _run_tool, "search_intel.py", ["search", query, "--count", "3"])
             for cat, query in categories.items()
         }
         for cat, future in futures.items():
@@ -279,15 +290,31 @@ def compute_risk(flags: list) -> dict:
 # --------------- Main entry ---------------
 
 
-def screen_risk(symbol: str, name: str = "") -> dict:
+def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
+    inputs = inputs or {}
+
+    def supplied(key):
+        value = inputs[key]
+        return value.result() if isinstance(value, Future) else value
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        valuation = pool.submit(
+            lambda: check_valuation(symbol, quote=supplied("quote")) if "quote" in inputs else check_valuation(symbol)
+        )
+        technical = pool.submit(
+            lambda: (
+                check_technical(symbol, ta=supplied("technical")) if "technical" in inputs else check_technical(symbol)
+            )
+        )
+        lockups = pool.submit(check_lockup, symbol, **({"run": run} if run else {}))
+        searches = pool.submit(check_news_risks, symbol, name, **({"run": run} if run else {}))
+        val, tech, lockup, news = (future.result() for future in (valuation, technical, lockups, searches))
     all_flags = []
     checks = {}
 
-    val = check_valuation(symbol)
     checks["valuation"] = {k: val[k] for k in ("pe", "pb", "status", "available")}
     all_flags.extend(val["flags"])
 
-    tech = check_technical(symbol)
     checks["technical"] = {
         "buy_signal": tech.get("buy_signal"),
         "signal_score": tech.get("signal_score"),
@@ -296,11 +323,9 @@ def screen_risk(symbol: str, name: str = "") -> dict:
     }
     all_flags.extend(tech["flags"])
 
-    lockup = check_lockup(symbol)
     checks["lockup"] = {"upcoming_30d": lockup["upcoming_30d"], "available": lockup["available"]}
     all_flags.extend(lockup["flags"])
 
-    news = check_news_risks(symbol, name)
     checks["news_risks"] = {k: v for k, v in news.items() if k != "flags"}
     all_flags.extend(news["flags"])
 

@@ -267,7 +267,7 @@ class TestPeBasis:
             row["pe_basis"] = "dynamic"
         _patch_screen(monkeypatch)
         monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
-        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
         result = screen("A", 20, {"l2": l2_enabled})
         assert [candidate["pe_basis"] for candidate in result["candidates"]] == ["dynamic"] * 3
 
@@ -349,7 +349,7 @@ class TestScreenL2:
     def _run(self, monkeypatch, enrich=None, config=None, l2=False, multiplier=1.0):
         _patch_screen(monkeypatch, multiplier=multiplier)
         data = _L2_ENRICH if enrich is None else enrich
-        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: dict(data.get(symbol, {})))
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: dict(data.get(symbol, {})))
         return screen("A", 20, config, l2=l2)
 
     def test_factor_scores_and_final(self, monkeypatch):
@@ -484,7 +484,7 @@ class TestNonFiniteSanitization:
             row["volume"] = None
         monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
         monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
-        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
         result = screen("A", 20, None, l2=True)
         # L2 rewrites final from the (coerced) numeric components — no NaN, no crash
         for c in result["candidates"]:
@@ -588,7 +588,7 @@ def test_hk_dividend_factor_normalizes_hk_symbols_and_preserves_basis(monkeypatc
 
 def test_l2_coverage_exposes_missing_groups_and_actual_weights(monkeypatch):
     _patch_screen(monkeypatch)
-    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
     result = screen("A", 20, None, l2=True)
     candidate = result["candidates"][0]
     coverage = candidate["factor_coverage"]
@@ -624,7 +624,7 @@ def test_no_factor_data_is_unknown_instead_of_zero_score(monkeypatch):
     _patch_screen(monkeypatch)
     monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"symbol": "TEST", "price": 10}])
     for l2 in (False, True):
-        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {})
+        monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
         candidate = screen("A", 20, None, l2=l2)["candidates"][0]
         assert candidate["scores"]["value"] is None
         assert candidate["scores"]["final"] is None
@@ -647,7 +647,9 @@ def test_l2_fetch_can_finish_after_old_thirty_second_limit(monkeypatch):
 
 def test_l2_final_is_explainable_from_returned_effective_scores(monkeypatch):
     _patch_screen(monkeypatch)
-    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {"ret_20d": 0 if symbol == "AAA" else 20})
+    monkeypatch.setattr(
+        screener, "_enrich_one", lambda symbol, market, **kwargs: {"ret_20d": 0 if symbol == "AAA" else 20}
+    )
     result = screen("A", 20, None, l2=True)
     for candidate in result["candidates"]:
         coverage = candidate["factor_coverage"]
@@ -771,7 +773,7 @@ def test_non_a_enrich_preserves_report_date(monkeypatch):
 
 def test_l2_output_exposes_vol20_sample_coverage(monkeypatch):
     _patch_screen(monkeypatch)
-    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market: {"vol20_samples": 2})
+    monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {"vol20_samples": 2})
     result = screen("A", 20, {"l2": True})
     assert [candidate["factor_coverage"]["vol20_samples"] for candidate in result["candidates"]] == [2] * 3
 
@@ -809,3 +811,23 @@ def test_quality_factors_are_minmaxed_within_report_date_groups(factor):
         "FFF": 0,
         "GGG": 100,
     }
+
+
+def test_candidate_collects_independent_sources_concurrently(monkeypatch, make_kline_data):
+    import threading
+
+    barrier = threading.Barrier(3, timeout=2)
+
+    def fetch(args, **kwargs):
+        barrier.wait()
+        if args[0] == "kline":
+            return make_kline_data(80)
+        if args[0] == "fundamental_context":
+            return {"profitability": {"roe": 10}}
+        return {"main_net_5d": 123}
+
+    monkeypatch.setattr(screener, "_fetch_json", fetch)
+    result = screener._enrich_one("600519", "A")
+    assert result["roe"] == 10
+    assert result["main_net_5d"] == 123
+    assert result["vol20_samples"] == 20

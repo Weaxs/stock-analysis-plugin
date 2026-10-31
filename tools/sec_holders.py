@@ -4,17 +4,15 @@ import csv
 import hashlib
 import io
 import math
-import os
 import re
-import tempfile
 import time
 import zipfile
 from collections import Counter
 from datetime import date
-from pathlib import Path
 from xml.etree import ElementTree
 
 import _cache
+from _cache import atomic_write, file_lock
 from sec_edgar import archive_base, sec_get, xml_root
 
 CATALOG = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
@@ -102,34 +100,38 @@ def latest_bulk():
     return max(windows, key=lambda w: w["end"])
 
 
+def _fresh_archive(path):
+    try:
+        return 0 <= time.time() - path.stat().st_mtime < _cache.WEEK and zipfile.is_zipfile(path)
+    except OSError:
+        return False
+
+
 def bulk_file(window):
     path = _cache.CACHE_DIR / f"sec-13f-{hashlib.sha256(window['url'].encode()).hexdigest()[:16]}.zip"
-    if path.exists() and 0 <= time.time() - path.stat().st_mtime < _cache.WEEK and zipfile.is_zipfile(path):
+    if _fresh_archive(path):
         return path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = None
     try:
-        response = sec_get(window["url"], stream=True)
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as out:
-                tmp = Path(out.name)
-                size = 0
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    size += len(chunk)
-                    if size > 256 * 1024 * 1024:
-                        raise ValueError("SEC bulk archive exceeds the 256 MiB download limit")
-                    out.write(chunk)
-        finally:
-            response.close()
-        if not zipfile.is_zipfile(tmp):
-            raise ValueError("SEC bulk download is not a valid ZIP archive")
-        os.replace(tmp, path)
-        return path
+        with file_lock(path.with_suffix(".lock")):
+            if _fresh_archive(path):
+                return path
+            response = sec_get(window["url"], stream=True)
+            try:
+                with atomic_write(path, binary=True) as out:
+                    size = 0
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        size += len(chunk)
+                        if size > 256 * 1024 * 1024:
+                            raise ValueError("SEC bulk archive exceeds the 256 MiB download limit")
+                        out.write(chunk)
+                    out.flush()
+                    if not zipfile.is_zipfile(out):
+                        raise ValueError("SEC bulk download is not a valid ZIP archive")
+            finally:
+                response.close()
+            return path
     except OSError as exc:
         raise ValueError(f"SEC bulk archive unavailable ({type(exc).__name__})") from None
-    finally:
-        if tmp:
-            tmp.unlink(missing_ok=True)
 
 
 def table_rows(archive, table):

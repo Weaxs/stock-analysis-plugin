@@ -4,10 +4,12 @@
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cache import DAY, cached
 from _subproc import socket_timeout, utf8_stdio
 
 # Supported markets. argparse uses type=str.upper so lowercase input is accepted too.
@@ -18,10 +20,8 @@ def _is_weekend(d: datetime) -> bool:
     return d.weekday() >= 5
 
 
-# Process-local memo: one CLI call = one process, and the CN path
-# (is_trading_day / the prev|next_trading_days walk-back) would otherwise
-# re-fetch the sina calendar per step — up to ~5 fetches for one stale check.
-_CN_TRADE_DATES: dict[int, set[str]] = {}
+# Year views reuse a daily cached full calendar across CLI processes.
+_CN_TRADE_DATES: dict[tuple[str, int], set[str]] = {}
 
 
 def cn_trade_dates(year: int) -> set[str]:
@@ -30,25 +30,30 @@ def cn_trade_dates(year: int) -> set[str]:
     Empty set when the calendar can't be fetched (failures are not cached — the
     next call retries); callers treat empty as "weekends are the only non-trading
     days"."""
-    cached = _CN_TRADE_DATES.get(year)
-    if cached is not None:
-        return cached
+    stamp = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    memo = _CN_TRADE_DATES.get((stamp, year))
+    if memo is not None:
+        return memo
     try:
-        import akshare as ak
 
-        with socket_timeout(25):
-            df = ak.tool_trade_date_hist_sina()
-        dates = set()
-        for _, row in df.iterrows():
-            val = row.iloc[0]
-            d = str(val)[:10]
-            if d.startswith(str(year)):
-                dates.add(d)
+        def fetch():
+            import akshare as ak
+
+            with socket_timeout(25):
+                df = ak.tool_trade_date_hist_sina()
+            if df is None or df.empty:
+                return []
+            return sorted({date.fromisoformat(str(value)[:10]).isoformat() for value in df.iloc[:, 0]})
+
+        dates = cached(f"cn-trade-calendar:v1:{stamp}", DAY, fetch)
+        grouped = {}
+        for day in dates:
+            parsed = date.fromisoformat(day).isoformat()
+            grouped.setdefault((stamp, int(parsed[:4])), set()).add(parsed)
+        _CN_TRADE_DATES.update(grouped)
     except Exception:
         return set()
-    if dates:
-        _CN_TRADE_DATES[year] = dates
-    return dates
+    return _CN_TRADE_DATES.get((stamp, year), set())
 
 
 def _is_exchange_trading_day(exchange_code: str, date_str: str) -> bool:

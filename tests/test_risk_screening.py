@@ -198,3 +198,25 @@ class TestCheckNewsRisksArgv:
         mock_run.side_effect = fake_run
         result = check_news_risks("600519", "贵州茅台")
         assert [f["category"] for f in result["flags"]] == ["insider", "regulatory"]
+
+
+def test_screen_reuses_supplied_failed_inputs_and_parallelizes_other_sources():
+    import threading
+
+    barrier = threading.Barrier(5, timeout=3)
+    calls = []
+
+    def collect(script, args, **kwargs):
+        calls.append((script, args))
+        barrier.wait()
+        if args[0] == "lockup":
+            return {"upcoming_30d": [], "flags": [], "available": True}
+        return []
+
+    result = risk_screening.screen_risk("600519", inputs={"quote": None, "technical": {"error": "down"}}, run=collect)
+    assert len(calls) == 5
+    assert all(args[0] not in ("quote", "analyze") for _, args in calls)
+    assert result["risk_level"] == "unknown"
+    assert result["checks"]["valuation"]["available"] is False
+    assert result["checks"]["technical"]["available"] is False
+    assert result["checks"]["lockup"]["available"] is True

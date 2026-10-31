@@ -99,3 +99,18 @@ if __name__ == "__main__":
 
     r = subprocess.run([sys.executable, "-m", "pytest", __file__, "-q"], cwd=os.path.dirname(os.path.dirname(__file__)))
     sys.exit(r.returncode)
+
+
+def test_position_collects_quote_and_technical_concurrently(monkeypatch):
+    import threading
+
+    barrier = threading.Barrier(2, timeout=2)
+
+    def collect(script, args):
+        barrier.wait()
+        return {"price": 120} if args[0] == "quote" else {"trend": {"overall": "bullish"}}
+
+    monkeypatch.setattr(position_context, "_run_json", collect)
+    result = position_context.analyze_position("AAPL", cost=100, quantity=2)
+    assert result["position"]["total_pnl"] == 40
+    assert result["trend"] == "bullish"

@@ -2,14 +2,61 @@
 """Search intelligence & social sentiment — multi-engine web search + Reddit/X/A-share sentiment aggregation."""
 
 import argparse
+import contextlib
 import json
 import os
 import re
 import sys
 import time as _time
+from contextvars import ContextVar
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _subproc import scrub_secrets, utf8_stdio
+
+_SEARCH_STATE = ContextVar("search_budget", default=None)
+
+
+@contextlib.contextmanager
+def _search_budget(seconds):
+    parent = _SEARCH_STATE.get()
+    state = {
+        "deadline": min(_time.monotonic() + seconds, parent["deadline"] if parent else float("inf")),
+        "failed": parent["failed"] if parent else {},
+    }
+    token = _SEARCH_STATE.set(state)
+    try:
+        yield state
+    finally:
+        _SEARCH_STATE.reset(token)
+
+
+def _search_timeout():
+    state = _SEARCH_STATE.get()
+    remaining = state["deadline"] - _time.monotonic() if state else 15
+    if remaining <= 0:
+        raise TimeoutError("Search time budget exhausted")
+    return min(15, remaining)
+
+
+class _SearchUnavailable(RuntimeError):
+    pass
+
+
+def _unavailable(error):
+    if isinstance(error, (_SearchUnavailable, ConnectionError, TimeoutError)):
+        return True
+    try:
+        from requests.exceptions import ConnectionError as RequestsConnectionError
+        from requests.exceptions import Timeout as RequestsTimeout
+    except ImportError:
+        return False
+    return isinstance(error, (RequestsConnectionError, RequestsTimeout))
+
+
+def _search_error(message, code):
+    unavailable = str(code) in {"401", "403", "429"} or re.fullmatch(r"5\d\d", str(code))
+    return (_SearchUnavailable if unavailable else RuntimeError)(message)
+
 
 # --------------- Web Search ---------------
 
@@ -28,10 +75,10 @@ def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
             "max_results": max_results,
             "search_depth": "basic",
         },
-        timeout=15,
+        timeout=_search_timeout(),
     )
     if not resp.ok:
-        raise RuntimeError(f"tavily HTTP {resp.status_code}")
+        raise _search_error(f"tavily HTTP {resp.status_code}", resp.status_code)
     data = resp.json()
     return [
         {
@@ -54,10 +101,10 @@ def _brave_search(query: str, count: int = 5) -> list[dict]:
         "https://api.search.brave.com/res/v1/web/search",
         headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
         params={"q": query, "count": count},
-        timeout=15,
+        timeout=_search_timeout(),
     )
     if not resp.ok:
-        raise RuntimeError(f"brave HTTP {resp.status_code}")
+        raise _search_error(f"brave HTTP {resp.status_code}", resp.status_code)
     data = resp.json()
     return [
         {
@@ -84,10 +131,10 @@ def _serpapi_search(query: str, num: int = 5) -> list[dict]:
             "num": num,
             "engine": "google",
         },
-        timeout=15,
+        timeout=_search_timeout(),
     )
     if not resp.ok:
-        raise RuntimeError(f"serpapi HTTP {resp.status_code}")
+        raise _search_error(f"serpapi HTTP {resp.status_code}", resp.status_code)
     data = resp.json()
     return [
         {
@@ -110,15 +157,15 @@ def _bocha_search(query: str, max_results: int = 5) -> list[dict]:
         "https://api.bochaai.com/v1/web-search",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={"query": query, "count": max_results},
-        timeout=15,
+        timeout=_search_timeout(),
     )
     if not resp.ok:
-        raise RuntimeError(f"bocha HTTP {resp.status_code}")
+        raise _search_error(f"bocha HTTP {resp.status_code}", resp.status_code)
     data = resp.json()
     code = data.get("code")
     if code is not None and str(code) != "200":
         # Bocha can signal quota/auth failure via HTTP 200 + non-200 envelope code
-        raise RuntimeError(f"bocha code {code}: {data.get('msg') or data.get('message') or 'unknown'}")
+        raise _search_error(f"bocha code {code}: {data.get('msg') or data.get('message') or 'unknown'}", code)
     # Bocha web-search returns Bing-style data.webPages.value[] (issue #13)
     items = ((data.get("data") or {}).get("webPages") or {}).get("value") or []
     return [
@@ -144,6 +191,7 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
     import requests
 
     last_error = None
+    last_exception = None
     responded = False
     for base in base_urls:
         try:
@@ -151,10 +199,11 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
                 f"{base}/search",
                 params={"q": query, "format": "json"},
                 headers={"Accept": "application/json"},
-                timeout=15,
+                timeout=_search_timeout(),
             )
             if not resp.ok:
                 last_error = f"searxng {base} HTTP {resp.status_code}"
+                last_exception = _search_error(last_error, resp.status_code)
                 continue
             responded = True
             data = resp.json()
@@ -171,7 +220,10 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
                 return results
         except Exception as e:
             last_error = f"searxng {base}: {e}"
+            last_exception = e
     if last_error and not responded:
+        if _unavailable(last_exception):
+            raise _SearchUnavailable(last_error)
         raise RuntimeError(last_error)
     return []
 
@@ -182,24 +234,33 @@ def search_news(query: str, max_results: int = 10) -> dict:
     engines_available = []
     engines_errors = {}
 
-    for name, fn in [
-        ("tavily", _tavily_search),
-        ("brave", _brave_search),
-        ("bocha", _bocha_search),
-        ("serpapi", _serpapi_search),
-        ("searxng", _searxng_search),
-    ]:
-        engines_tried.append(name)
-        try:
-            items = fn(query, max_results)
-        except Exception as e:
-            engines_errors[name] = scrub_secrets(str(e))
-            continue
-        if items:
-            engines_available.append(name)
-            results.extend(items)
-            if len(results) >= max_results:
-                break
+    with _search_budget(45) as state:
+        for name, fn in [
+            ("tavily", _tavily_search),
+            ("brave", _brave_search),
+            ("bocha", _bocha_search),
+            ("serpapi", _serpapi_search),
+            ("searxng", _searxng_search),
+        ]:
+            engines_tried.append(name)
+            if name in state["failed"]:
+                engines_errors[name] = state["failed"][name]
+                continue
+            if _time.monotonic() >= state["deadline"]:
+                engines_errors[name] = "Search time budget exhausted"
+                continue
+            try:
+                items = fn(query, max_results)
+            except Exception as e:
+                engines_errors[name] = scrub_secrets(str(e))
+                if _unavailable(e):
+                    state["failed"][name] = engines_errors[name]
+                continue
+            if items:
+                engines_available.append(name)
+                results.extend(items)
+                if len(results) >= max_results:
+                    break
 
     if not results:
         if engines_errors:
@@ -246,10 +307,11 @@ def search_comprehensive(symbol: str, name: str = None) -> dict:
 
     results = {}
     engines_errors = {}
-    for dim, query in dimensions.items():
-        data = search_news(query, max_results=3)
-        results[dim] = data.get("results", [])
-        engines_errors.update(data.get("engines_errors") or {})
+    with _search_budget(90):
+        for dim, query in dimensions.items():
+            data = search_news(query, max_results=3)
+            results[dim] = data.get("results", [])
+            engines_errors.update(data.get("engines_errors") or {})
 
     return {"symbol": symbol, "name": label, "dimensions": results, "engines_errors": engines_errors}
 

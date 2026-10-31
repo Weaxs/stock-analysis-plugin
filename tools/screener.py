@@ -10,6 +10,7 @@ import argparse
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -195,11 +196,25 @@ def compute_sentiment(market: str, snapshot: list | None = None) -> dict:
         return fallback
 
 
-def _enrich_one(symbol: str, market: str) -> dict:
+def _enrich_one(symbol: str, market: str, *, pool=None) -> dict:
     """Fetch raw L2 indicators for one candidate; missing factor sources just yield missing keys."""
+    jobs = {
+        "kline": ["kline", symbol, "--period", "daily", "--count", "250"],
+        "fundamental": ["fundamental_context" if market == "A" else "financials", symbol],
+    }
+    if market == "A":
+        jobs["flow"] = ["capital_flow", symbol, "--mode", "summary"]
+    collected = {}
+    with ThreadPoolExecutor(max_workers=3) if pool is None else nullcontext(pool) as pool:
+        futures = {key: pool.submit(_fetch_json, args) for key, args in jobs.items()}
+        for key, future in futures.items():
+            try:
+                collected[key] = future.result()
+            except Exception:
+                collected[key] = None
     result: dict = {}
     try:
-        kline = _fetch_json(["kline", symbol, "--period", "daily", "--count", "250"])
+        kline = collected["kline"]
         if isinstance(kline, list):
             result["vol20_samples"] = 0
         if isinstance(kline, list) and len(kline) >= 2:
@@ -222,7 +237,7 @@ def _enrich_one(symbol: str, market: str) -> dict:
         pass
 
     if market == "A":
-        fund = _fetch_json(["fundamental_context", symbol])
+        fund = collected["fundamental"]
         if isinstance(fund, dict) and "error" not in fund:
             prof = fund.get("profitability") or {}
             for key in ("roe", "gross_margin", "net_margin", "report_date"):
@@ -233,14 +248,14 @@ def _enrich_one(symbol: str, market: str) -> dict:
                 if growth.get(key) is not None:
                     result[key] = growth[key]
     else:
-        fin = _fetch_json(["financials", symbol])
+        fin = collected["fundamental"]
         if isinstance(fin, dict) and "error" not in fin:
             for key in ("roe", "profit_margin", "report_date"):
                 if fin.get(key) is not None:
                     result[key] = fin[key]
 
     if market == "A":
-        flow = _fetch_json(["capital_flow", symbol, "--mode", "summary"])
+        flow = collected["flow"]
         if isinstance(flow, dict) and "error" not in flow and flow.get("main_net_5d") is not None:
             result["main_net_5d"] = flow["main_net_5d"]
     return result
@@ -297,8 +312,8 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
     """Enrich candidates with L2 factors and rewrite each scores['final'] as composite_l2 × multiplier."""
     symbols = [c.get("symbol") for c in candidates]
     enrichments: dict = {}
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        futures = {executor.submit(_enrich_one, sym, market): sym for sym in symbols if sym}
+    with ThreadPoolExecutor(max_workers=6) as collection, ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(_enrich_one, sym, market, pool=collection): sym for sym in symbols if sym}
         for future, sym in futures.items():
             try:
                 enrichments[sym] = future.result() or {}

@@ -15,7 +15,6 @@ import json
 import math
 import os
 import sys
-import tempfile
 import time
 from datetime import datetime
 from decimal import Decimal
@@ -24,6 +23,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _cache import atomic_write, file_lock
 from _subproc import command_timeout, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
 
@@ -100,29 +100,9 @@ def _validate_signal(record):
 
 @contextlib.contextmanager
 def _store_lock(store: Path):
-    # Lock a separate file: replacing the JSONL must not replace the lock inode.
-    store.parent.mkdir(parents=True, exist_ok=True)
-    with store.with_name(store.name + ".lock").open("a+b") as lock:
-        if sys.platform == "win32":
-            import msvcrt
-
-            if lock.seek(0, os.SEEK_END) == 0:
-                lock.write(b"\0")
-                lock.flush()
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if sys.platform == "win32":
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    # Replacing the JSONL must not replace the lock inode.
+    with file_lock(store.with_name(store.name + ".lock")):
+        yield
 
 
 def _load_records(store: Path, strict: bool = False) -> list:
@@ -149,17 +129,8 @@ def _load_records(store: Path, strict: bool = False) -> list:
 
 def _save_records(store: Path, records: list):
     """Atomic rewrite; caller holds the store lock."""
-    store.parent.mkdir(parents=True, exist_ok=True)
-    tmp = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=store.parent, delete=False) as stream:
-            tmp = Path(stream.name)
-            stream.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
-        os.replace(tmp, store)
-    finally:
-        if tmp:
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
+    with atomic_write(store) as stream:
+        stream.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
 
 
 def _append_record(store: Path, record: dict):

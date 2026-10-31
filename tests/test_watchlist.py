@@ -35,7 +35,7 @@ class TestAnalyzeWatchlist:
 
     @patch("tools.watchlist.gather_analysis")
     def test_partial_failure(self, mock_gather):
-        def side_effect(symbol):
+        def side_effect(symbol, **kwargs):
             if symbol == "INVALID":
                 raise RuntimeError("fetch failed")
             return {"quote": {"price": 50}}

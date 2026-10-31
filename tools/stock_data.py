@@ -16,7 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _cache import DAY, WEEK, cached  # noqa: E402
+from _cache import DAY, WEEK, atomic_write, cached  # noqa: E402
 from _subproc import run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
 
 # Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
@@ -146,8 +146,37 @@ def _akshare_retry(fn, *args, retries=2, delay=1, **kwargs):
     for attempt in range(retries + 1):
         try:
             return fn(*args, **kwargs)
-        except Exception:
-            if attempt == retries:
+        except Exception as exc:
+            from requests.exceptions import ChunkedEncodingError, HTTPError, Timeout
+            from requests.exceptions import ConnectionError as RequestsConnectionError
+            from requests.exceptions import JSONDecodeError as RequestsJSONDecodeError
+
+            transport_errors = (
+                ConnectionError,
+                TimeoutError,
+                RequestsConnectionError,
+                Timeout,
+                ChunkedEncodingError,
+                RequestsJSONDecodeError,
+                json.JSONDecodeError,
+            )
+            http_errors = (HTTPError,)
+            if type(exc).__module__.startswith("curl_cffi."):
+                from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
+                from curl_cffi.requests.exceptions import HTTPError as CurlHTTPError
+                from curl_cffi.requests.exceptions import Timeout as CurlTimeout
+
+                transport_errors += (CurlConnectionError, CurlTimeout)
+                http_errors += (CurlHTTPError,)
+            transient = isinstance(exc, transport_errors)
+            if isinstance(exc, http_errors):
+                status = getattr(exc.response, "status_code", None)
+                transient = status in (408, 429) or isinstance(status, int) and 500 <= status < 600
+            if type(exc).__module__.startswith("yfinance."):
+                from yfinance import exceptions as yf_errors
+
+                transient = isinstance(exc, getattr(yf_errors, "YFRateLimitError", ()))
+            if not transient or attempt == retries:
                 raise
             time.sleep(delay)
 
@@ -2181,8 +2210,8 @@ def _disk_cache_get(key: str):
 
 def _disk_cache_set(key: str, data):
     try:
-        _DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        (_DATA_CACHE_DIR / f"{key}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with atomic_write(_DATA_CACHE_DIR / f"{key}.json") as stream:
+            json.dump(data, stream, ensure_ascii=False, allow_nan=False)
     except Exception:
         pass
 
@@ -3180,15 +3209,12 @@ def cmd_margin_trading(args):
     try:
         import concurrent.futures
 
-        import akshare as ak
         from trading_calendar import prev_trading_days
 
         if exchange == "sh":
             col_map = _MARGIN_DETAIL_SSE_COLS
-            detail_fn = ak.stock_margin_detail_sse
         elif exchange == "sz":
             col_map = _MARGIN_DETAIL_SZSE_COLS
-            detail_fn = ak.stock_margin_detail_szse
         else:
             return {"error": f"margin_trading: {args.symbol} is a BSE code; only SSE/SZSE margin detail is available"}
         trade_days = prev_trading_days("CN", days)
@@ -3196,17 +3222,45 @@ def cmd_margin_trading(args):
             return {"error": "margin_trading: trading calendar unavailable"}
 
         def fetch_day(date_iso):
-            """Fetch + filter one day's all-stock table, fault-isolated per day."""
-            try:
+            """Cache the published exchange-day table, then select this stock."""
+
+            def fetch_table():
+                import akshare as ak
+
+                detail_fn = ak.stock_margin_detail_sse if exchange == "sh" else ak.stock_margin_detail_szse
                 df = _akshare_retry(detail_fn, date=date_iso.replace("-", ""))
+                if df is None or df.empty:
+                    return []
+                df = df.rename(columns=col_map)
+                required = {"symbol", "margin_buy", "margin_balance"}
+                if not required.issubset(df.columns):
+                    raise ValueError("margin detail table missing financial columns")
+                df = df[df["symbol"].astype(str).str.fullmatch(r"\d{6}")]
+                if "信用交易日期" in df.columns:
+                    source_days = df["信用交易日期"].map(lambda v: re.sub(r"\D", "", str(v))[:8])
+                    if not (source_days == date_iso.replace("-", "")).all():
+                        raise ValueError("margin detail table date does not match requested day")
+                keep = [c for c in col_map.values() if c in df.columns]
+                table = [{"date": date_iso, **_clean_row(r)} for r in df[keep].to_dict("records")]
+                for row in table:
+                    values = [_parse_float(row.get(field)) for field in ("margin_buy", "margin_balance")]
+                    if any(value is None or not math.isfinite(value) for value in values):
+                        # Keep usable stocks without persisting an incomplete exchange snapshot.
+                        return {"rows": table, "warnings": ["incomplete financial values"]}
+                return table
+
+            try:
+                today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+                table = (
+                    cached(f"margin-table:{exchange}:{date_iso}", DAY, fetch_table)
+                    if date_iso < today
+                    else fetch_table()
+                )
+                if isinstance(table, dict):
+                    table = table["rows"]
+                return date_iso, [r for r in table if str(r.get("symbol")) == bare], None
             except Exception as e:
                 return date_iso, [], f"{date_iso}: {type(e).__name__}: {scrub_secrets(str(e))}"
-            if df is None or df.empty:
-                return date_iso, [], None
-            df = df.rename(columns=col_map)
-            keep = [c for c in col_map.values() if c in df.columns]
-            hit = df[df["symbol"].astype(str) == bare] if "symbol" in df.columns else df.iloc[0:0]
-            return date_iso, [{"date": date_iso, **_clean_row(r)} for r in hit[keep].to_dict("records")], None
 
         rows = []
         failures = []

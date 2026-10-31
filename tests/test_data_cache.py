@@ -44,7 +44,7 @@ def test_cache_replace_failure_does_not_fail_fetch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(_cache.os, "replace", fail)
     assert _cache.cached("value", 10, lambda: {"ok": 1}) == {"ok": 1}
-    assert not list(tmp_path.iterdir())
+    assert all(path.suffix == ".lock" for path in tmp_path.iterdir())
 
 
 def test_windows_cache_denial_does_not_retry(monkeypatch, tmp_path):
@@ -73,10 +73,8 @@ def test_windows_cache_denial_does_not_retry(monkeypatch, tmp_path):
     monkeypatch.setattr(tempfile, "_os", DeniedWindows())
     monkeypatch.setattr(_cache, "os", DeniedWindows())
     monkeypatch.setattr(tempfile, "TMP_MAX", 4)
-    monkeypatch.setattr(Path, "open", lambda *a, **kw: DeniedWindows().open())
     assert _cache.cached("denied", 10, lambda: {"ok": 1}) == {"ok": 1}
-    # One read attempt and at most one write attempt; never retry permission denial.
-    assert len(attempts) <= 2
+    assert attempts == [1]
 
 
 def test_cache_directory_override(tmp_path):
@@ -105,18 +103,19 @@ def test_concurrent_cache_writes_are_complete(monkeypatch, tmp_path):
     monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
     barrier = threading.Barrier(8)
 
-    def fetch(value):
-        barrier.wait(timeout=3)
-        return {"value": value, "payload": "x" * 10000}
+    def write(value):
+        with _cache.atomic_write(tmp_path / "same-key.json") as stream:
+            barrier.wait(timeout=3)
+            result = {"value": value, "payload": "x" * 10000}
+            json.dump(result, stream)
+            return result
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(_cache.cached, "same-key", 60, lambda value=i: fetch(value)) for i in range(8)]
+        futures = [pool.submit(write, i) for i in range(8)]
         results = [future.result(timeout=5) for future in futures]
-    assert [result["value"] for result in results] == list(range(8))
     files = list(tmp_path.iterdir())
     assert len(files) == 1
-    data = json.loads(files[0].read_text())["data"]
-    assert data in results
+    assert json.loads(files[0].read_text()) in results
 
 
 def test_cache_keeps_owner_only_permissions(monkeypatch, tmp_path):
@@ -135,3 +134,45 @@ def test_cache_keeps_owner_only_permissions(monkeypatch, tmp_path):
     finally:
         os.umask(previous)
     assert stat.S_IMODE(next(tmp_path.glob("*.json")).stat().st_mode) == 0o600
+
+
+def test_concurrent_process_cache_miss_fetches_once(tmp_path):
+    import os
+    import subprocess
+
+    script = """
+import sys, time
+from tools._cache import cached
+print("ready", flush=True)
+sys.stdin.readline()
+def fetch():
+    print("fetch", flush=True)
+    time.sleep(0.2)
+    return {"ok": True}
+print(cached("shared", 60, fetch), flush=True)
+"""
+    children = [
+        subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "STOCK_CACHE_DIR": str(tmp_path)},
+        )
+        for _ in range(4)
+    ]
+    try:
+        for child in children:
+            assert child.stdout.readline().strip() == "ready"
+        for child in children:
+            child.stdin.write("go\n")
+            child.stdin.flush()
+        outputs = [child.communicate(timeout=10) for child in children]
+        assert all(child.returncode == 0 for child in children), outputs
+        assert sum(stdout.count("fetch") for stdout, _ in outputs) == 1
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
