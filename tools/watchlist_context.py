@@ -16,6 +16,7 @@ from _subproc import run_tool as _run_json  # noqa: E402
 from _subproc import scrub_secrets, utf8_stdio
 from anomaly_detect import detect_anomalies  # noqa: E402
 from gather import Collection
+from market_review import review_market
 from stock_data import detect_market  # noqa: E402
 from watchlist import analyze_watchlist, has_analysis_data
 
@@ -115,41 +116,37 @@ def build_context(symbols: list[str], include_market_review: bool = False, worke
         for symbol in symbols:
             if symbol not in items_by_symbol:
                 ready(symbol, results.get(symbol))
-    items = [items_by_symbol[symbol] for symbol in symbols]
+        items = [items_by_symbol[symbol] for symbol in symbols]
 
-    # preserve caller order
-    order = {s: i for i, s in enumerate(symbols)}
-    items.sort(key=lambda x: order.get(x["symbol"], 999))
+        output = {
+            "meta": {
+                "provider": "watchlist_context",
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "freshness": "realtime_or_latest_trade_day",
+                "fallback_used": False,
+                "warnings": [f"{i['symbol']}: {warning}" for i in items for warning in i.get("warnings", [])],
+            },
+            "summary": {
+                "total": len(symbols),
+                "success": sum(1 for i in items if "error" not in i and i.get("anomaly_status") == "ok"),
+                "partial": sum(1 for i in items if "error" not in i and i.get("anomaly_status") == "unavailable"),
+                "failed": sum(1 for i in items if "error" in i),
+                "high_risk_count": sum(1 for i in items if i.get("risk_level") == "high"),
+                "veto_count": sum(1 for i in items if i.get("veto_buy")),
+            },
+            "items": items,
+        }
 
-    output = {
-        "meta": {
-            "provider": "watchlist_context",
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "freshness": "realtime_or_latest_trade_day",
-            "fallback_used": False,
-            "warnings": [f"{i['symbol']}: {warning}" for i in items for warning in i.get("warnings", [])],
-        },
-        "summary": {
-            "total": len(symbols),
-            "success": sum(1 for i in items if "error" not in i and i.get("anomaly_status") == "ok"),
-            "partial": sum(1 for i in items if "error" not in i and i.get("anomaly_status") == "unavailable"),
-            "failed": sum(1 for i in items if "error" in i),
-            "high_risk_count": sum(1 for i in items if i.get("risk_level") == "high"),
-            "veto_count": sum(1 for i in items if i.get("veto_buy")),
-        },
-        "items": items,
-    }
+        if include_market_review:
+            markets = sorted({i.get("market") for i in items if i.get("market")})
+            review = {}
+            for m in markets:
+                r = review_market(m, run=session.json)
+                if r and "error" not in r:
+                    review[m] = r
+            output["market_review"] = review
 
-    if include_market_review:
-        markets = sorted({i.get("market") for i in items if i.get("market")})
-        review = {}
-        for m in markets:
-            r = _run_json("market_review.py", ["review", "--market", m])
-            if r:
-                review[m] = r
-        output["market_review"] = review
-
-    return output
+        return output
 
 
 def main():

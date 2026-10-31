@@ -5,12 +5,16 @@ import threading
 import time
 from collections import Counter
 
+import pytest
+
 from tools import watchlist_context
 
 
-def test_context_reuses_snapshot_and_market_with_bounded_collection(monkeypatch, make_kline_data):
+@pytest.mark.parametrize("include_review", [False, True])
+def test_context_reuses_snapshot_and_market_with_bounded_collection(monkeypatch, make_kline_data, include_review):
     import anomaly_detect
     import gather
+    import market_review
     import risk_screening
     import technical
 
@@ -21,10 +25,12 @@ def test_context_reuses_snapshot_and_market_with_bounded_collection(monkeypatch,
     lock = threading.Lock()
     active = peak = 0
 
-    def collect(script, args, **kwargs):
+    def collect(script, args, timeout=None, **kwargs):
         nonlocal active, peak
         if script == "risk_screening.py" and args[0] == "screen":
             return risk_screening.screen_risk(args[1])
+        if script == "market_review.py":
+            return market_review.review_market(args[-1])
         if script == "technical.py":
             return technical.analyze_records(args[1], collect("stock_data.py", ["kline", args[1]]))
         if script == "anomaly_detect.py":
@@ -49,6 +55,7 @@ def test_context_reuses_snapshot_and_market_with_bounded_collection(monkeypatch,
 
     monkeypatch.setattr(gather, "_run", lambda script, args, **kw: json.dumps(collect(script, args, **kw)))
     monkeypatch.setattr(risk_screening, "_run_tool", collect)
+    monkeypatch.setattr(market_review, "_run_tool", collect)
     monkeypatch.setattr(anomaly_detect, "_run_tool", collect)
     monkeypatch.setattr(
         anomaly_detect,
@@ -56,7 +63,9 @@ def test_context_reuses_snapshot_and_market_with_bounded_collection(monkeypatch,
         lambda symbol, period, count: collect("stock_data.py", ["kline", symbol, "--count", str(count)]),
     )
     monkeypatch.setattr(watchlist_context, "_run_json", collect)
-    result = watchlist_context.build_context(["600519", "000001", "000002"], workers=3)
+    result = watchlist_context.build_context(
+        ["600519", "000001", "000002"], workers=3, include_market_review=include_review
+    )
     assert calls["stock_data.py", "quote"] == 3
     assert calls["stock_data.py", "kline"] == 3
     assert calls["market_regime.py", "detect"] == 1
@@ -65,7 +74,7 @@ def test_context_reuses_snapshot_and_market_with_bounded_collection(monkeypatch,
     assert result["summary"]["success"] == 3
     assert all(item["price"] == 10 for item in result["items"])
     first_counts = calls.copy()
-    watchlist_context.build_context(["600519", "000001", "000002"], workers=3)
+    watchlist_context.build_context(["600519", "000001", "000002"], workers=3, include_market_review=include_review)
     assert calls == Counter({key: count * 2 for key, count in first_counts.items()})
 
 

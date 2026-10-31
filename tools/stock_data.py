@@ -16,7 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _cache import DAY, WEEK, cached  # noqa: E402
+from _cache import DAY, WEEK, atomic_write, cached  # noqa: E402
 from _subproc import run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
 
 # Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
@@ -2181,8 +2181,8 @@ def _disk_cache_get(key: str):
 
 def _disk_cache_set(key: str, data):
     try:
-        _DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        (_DATA_CACHE_DIR / f"{key}.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with atomic_write(_DATA_CACHE_DIR / f"{key}.json") as stream:
+            json.dump(data, stream, ensure_ascii=False, allow_nan=False)
     except Exception:
         pass
 

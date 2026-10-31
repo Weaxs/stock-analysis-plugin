@@ -1502,3 +1502,34 @@ def test_first_close_signal_executes_at_second_day_open():
 def test_cross_condition_does_not_read_last_bar_as_previous_first_bar():
     assert backtest.check_condition(pd.Series([10, 9]), "cross_above", 9.5, 0) is False
     assert backtest.check_condition(pd.Series([10, 9]), ">", 9.5, 0) is True
+
+
+def test_simulation_outputs_match_preoptimization_baseline(make_kline_data):
+    import hashlib
+
+    # Complete outputs captured from 41bf904 before the indexing optimization.
+    results = []
+    for execution in ("next_open", "same_close"):
+        for trend in ("up", "down", "volatile", "flat"):
+            frame = pd.DataFrame(make_kline_data(250, trend))
+            strategy = {
+                "entry": {"conditions": [{"indicator": "rsi", "period": 14, "operator": "<", "value": 65}]},
+                "exit": {
+                    "conditions": [{"indicator": "rsi", "period": 14, "operator": ">", "value": 75}],
+                    "stop_loss": -0.1,
+                    "take_profit": 0.2,
+                    "trailing_stop": 0.08,
+                },
+                "simulation": {"execution": execution, "commission": 0.0015, "stamp_tax": 0.001, "slippage": 0.001},
+            }
+            results.append(backtest.simulate(frame, strategy, 100000, "600519"))
+            gate = pd.Series([i % 3 != 0 for i in range(len(frame))])
+            frame["limit_up"], frame["limit_down"] = frame["high"], frame["low"]
+            frame.loc[::7, "low"] = frame.loc[::7, "high"]
+            frame.loc[::9, "volume"] = 0
+            results.append(backtest.simulate(frame, strategy, 100000, "600519", entry_gate=gate, start="2024-03-01"))
+    serialized = json.dumps(results, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    assert (
+        hashlib.sha256(serialized.encode()).hexdigest()
+        == "65d227da8d560bd7ff9ec5452207419872057fc8908fbee43e40bab8b3713476"
+    )

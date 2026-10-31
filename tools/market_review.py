@@ -79,7 +79,7 @@ def _signal_to_stance(signal: str) -> str | None:
     return {"green": "offensive", "yellow": "balanced", "red": "defensive"}.get(signal)
 
 
-def review_market(market: str = "A") -> dict:
+def review_market(market: str = "A", *, run=None) -> dict:
     """Gather market data and compute review for a single market."""
     from datetime import datetime
 
@@ -106,7 +106,7 @@ def review_market(market: str = "A") -> dict:
     results = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
-            key: executor.submit(_run_tool, script, args, command_timeout(script, args))
+            key: executor.submit(run or _run_tool, script, args, command_timeout(script, args))
             for key, (script, args) in tasks.items()
         }
         for key, future in futures.items():

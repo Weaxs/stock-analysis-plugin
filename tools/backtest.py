@@ -223,10 +223,11 @@ def get_indicator(
 # --------------- Condition Evaluation ---------------
 
 
-def check_condition(series: pd.Series, operator: str, value: float, idx: int) -> bool:
+def check_condition(series: pd.Series | np.ndarray, operator: str, value: float, idx: int) -> bool:
     if idx < 0 or idx >= len(series):
         return False
-    cur = float(series.iloc[idx])
+    values = series.iloc if isinstance(series, pd.Series) else series
+    cur = float(values[idx])
     ops = {
         ">": cur > value,
         "<": cur < value,
@@ -238,7 +239,7 @@ def check_condition(series: pd.Series, operator: str, value: float, idx: int) ->
         return ops[operator]
     if idx == 0:
         return False
-    prev = float(series.iloc[idx - 1])
+    prev = float(values[idx - 1])
     if operator == "cross_above":
         return prev <= value and cur > value
     if operator == "cross_below":
@@ -298,14 +299,14 @@ def _strategy_warmup_bars(strategy: dict) -> int:
     return lookback
 
 
-def _condition_series(df: pd.DataFrame, cond: dict, cache: dict) -> tuple[pd.Series, str]:
+def _condition_series(df: pd.DataFrame, cond: dict, cache: dict) -> tuple[np.ndarray, str]:
     if cond.get("operator") not in CONDITION_OPERATORS:
         raise ValueError(f"Unknown condition operator: {cond.get('operator')}")
     ind_name = cond["indicator"]
     period, fast, slow = _condition_parameters(cond)
     cache_key = f"{ind_name}_{period}_{fast}_{slow}"
     if cache_key not in cache:
-        cache[cache_key] = get_indicator(df, ind_name, period, fast, slow)
+        cache[cache_key] = get_indicator(df, ind_name, period, fast, slow).to_numpy()
     label = f"{ind_name}({fast},{slow})" if fast or slow else f"{ind_name}({period})" if period else ind_name
     return cache[cache_key], label
 
@@ -320,7 +321,7 @@ def evaluate_conditions(df: pd.DataFrame, conditions: list, logic: str, idx: int
         hit = check_condition(series, op, val, idx)
         results.append(hit)
         if hit:
-            cur_val = round(float(series.iloc[idx]), 2)
+            cur_val = round(float(series[idx]), 2)
             reasons.append(f"{label} = {cur_val} {op} {val}")
 
     if logic == "all":
@@ -340,7 +341,7 @@ def _entry_warmup_warnings(df: pd.DataFrame, strategy: dict, start: str, executi
         indices = [signal_idx]
         if cond["operator"] in ("cross_above", "cross_below"):
             indices.append(signal_idx - 1)
-        if any(idx < 0 or pd.isna(series.iloc[idx]) for idx in indices):
+        if any(idx < 0 or pd.isna(series[idx]) for idx in indices):
             signal_date = str(pd.Timestamp(df["date"].iloc[signal_idx]).date())
             warnings.append(
                 f"Entry indicator is unavailable: {label} at first window signal {signal_date}; check warmup and data quality"
@@ -388,7 +389,7 @@ def simulate(
     if entry_gate is not None:
         if not entry_gate.index.equals(df.index) or not (entry_gate.isna() | entry_gate.isin([True, False])).all():
             raise ValueError("entry_gate must contain aligned booleans or unavailable values")
-        entry_gate = entry_gate.fillna(False).astype(bool)
+        entry_gate = entry_gate.fillna(False).astype(bool).to_numpy()
     market = detect_market(symbol)
     lot_size = 100 if market == "A" else 1
     sim_cfg = strategy.get("simulation", {})
@@ -460,13 +461,17 @@ def simulate(
             and abs(float(row["high"]) - float(limit)) < 0.005
         )
 
+    bars = df.to_dict("records")
+    closes = df["close"].to_numpy()
+    date_strings = [str(value.date()) if hasattr(value, "date") else str(value) for value in df["date"]]
+    signal_dates = dates.dt.strftime("%Y-%m-%d").tolist()
     for i in range(first_bar, len(df)):
-        row = df.iloc[i]
-        date_str = str(row["date"].date()) if hasattr(row["date"], "date") else str(row["date"])
+        row = bars[i]
+        date_str = date_strings[i]
         signal_idx = i if execution == "same_close" else i - 1
-        price = float(df["close"].iloc[signal_idx])
+        price = float(closes[signal_idx])
         fill_price = float(row["close"] if execution == "same_close" else row["open"])
-        signal_date = str(pd.Timestamp(df["date"].iloc[signal_idx]).date())
+        signal_date = signal_dates[signal_idx]
 
         if holding is None:
             hit, reason = evaluate_conditions(df, entry_conditions, entry_logic, signal_idx, cache)
@@ -475,7 +480,7 @@ def simulate(
                     reason, signal_date = pending
                 else:
                     pending = None
-            if entry_gate is not None and not entry_gate.iloc[signal_idx]:
+            if entry_gate is not None and not entry_gate[signal_idx]:
                 hit, pending = False, None
             if hit and not tradable(row, "buy"):
                 pending = (reason, signal_date)
@@ -577,7 +582,7 @@ def simulate(
         equity_curve.append({"date": date_str, "equity": round(equity, 2)})
 
     if holding:
-        last_price = float(df["close"].iloc[-1])
+        last_price = float(closes[-1])
         equity = cash + holding["shares"] * last_price
         equity_curve[-1]["equity"] = round(equity, 2)
 
