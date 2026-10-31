@@ -4,11 +4,11 @@ import contextlib
 import hashlib
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
+from uuid import uuid4
 
-CACHE_DIR = Path.home() / ".stock-analysis" / "cache"
+CACHE_DIR = Path(os.environ.get("STOCK_CACHE_DIR") or Path.home() / ".stock-analysis" / "cache")
 DAY = 86400
 WEEK = 7 * DAY
 
@@ -46,8 +46,10 @@ def cached(key: str, ttl: int, fetch):
     tmp = None
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=CACHE_DIR, delete=False) as stream:
-            tmp = stream.name
+        candidate = path.with_suffix(f".tmp-{uuid4().hex}")
+        # Exclusive creation fails immediately on Windows ACL denial; tempfile may retry billions of times.
+        with open(candidate, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+            tmp = candidate
             json.dump(
                 {"key": key, "fetched_at": time.time(), "data": result}, stream, ensure_ascii=False, allow_nan=False
             )

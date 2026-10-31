@@ -498,7 +498,7 @@ python tools/value_data.py dividends --mode ranking --market HK --report-date 20
 python tools/value_data.py earnings_calendar --symbol 0700.HK
 ```
 
-财报、基本信息及估值/股东/ETF/分红等慢变数据缓存到 `~/.stock-analysis/cache`，TTL 一天；板块成分/映射一周。行情报价不缓存。缓存文件原子替换，过期/损坏重拉，错误和显式部分失败不缓存；不以过期数据伪装最新数据。原有临时目录的粘性路由和反向成分缓存保留。
+财报、基本信息及估值/股东/ETF/分红等慢变数据缓存到 `~/.stock-analysis/cache`（可通过 `STOCK_CACHE_DIR` 指定可写目录，适用于沙箱/只读用户目录），TTL 一天；板块成分/映射一周。行情报价不缓存。缓存写入失败时直接返回已获取数据；缓存文件原子替换，过期/损坏重拉，错误和显式部分失败不缓存；不以过期数据伪装最新数据。原有临时目录的粘性路由和反向成分缓存保留。
 
 估值使用可得数据的正值样本分位（`<=当前值`），返回 10/25/50/75/90 分位 Band 与实际起止日期；亏损 PE 分位为 null。当前 AKShare 已无 issue 中提到的 `stock_a_indicator_lg`，个股采用百度 PE-TTM/PB 历史，指数采用乐咕乐股；中证全指等通过中证官方历史接口取得多年滚动 PE，近期总股本 PE1 仍单独保留；PB 缺失时可配置 `LIXINGER_TOKEN` 补充理杏仁总市值加权（mcw）历史，返回每个指标的来源与口径，不拼接不同方法的同一指标。未配置或无权限时 PB 保持未知。A 股 `annual=true, periods=10` 请求十年年报；HK 按源实际可得年数返回，不补造缺失比率。
 

@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,19 +114,53 @@ def utf8_stdio() -> None:
             s.reconfigure(encoding="utf-8")
 
 
+_timeout_lock = threading.RLock()
+_active_timeouts = {}
+_original_socket_timeout = None
+_original_send = None
+
+
 @contextlib.contextmanager
 def socket_timeout(seconds: float):
-    """Bound every blocking socket op for the wrapped chain's duration: akshare/efinance
-    leave requests timeout-less, so on a blackholed network a leg hangs until the kernel
-    TCP timeout (~2min) and the chain would overrun the caller's subprocess budget before
-    ever reaching the plain-HTTPS legs. try/finally always restores the previous default
-    (no global-state leak); explicit per-request timeouts (tencent/sina legs) still win."""
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(seconds)
+    """Default socket/requests timeouts while guards are active (not a total deadline).
+
+    Like the socket default, this is process-wide: overlapping guards use the shortest
+    budget. Explicit requests timeouts still win. Restore only after the last guard exits.
+    """
+    try:
+        import requests
+    except ImportError:
+        requests = None
+
+    global _original_socket_timeout, _original_send
+    token = object()
+    with _timeout_lock:
+        if not _active_timeouts:
+            _original_socket_timeout = socket.getdefaulttimeout()
+            _original_send = requests.sessions.Session.send if requests is not None else None
+            if requests is not None:
+                original_send = _original_send
+
+                def bounded_send(session, request, **kwargs):
+                    with _timeout_lock:
+                        if kwargs.get("timeout") is None and _active_timeouts:
+                            kwargs["timeout"] = min(_active_timeouts.values())
+                    return original_send(session, request, **kwargs)
+
+                requests.sessions.Session.send = bounded_send
+        _active_timeouts[token] = seconds
+        socket.setdefaulttimeout(min(_active_timeouts.values()))
     try:
         yield
     finally:
-        socket.setdefaulttimeout(old_timeout)
+        with _timeout_lock:
+            del _active_timeouts[token]
+            if _active_timeouts:
+                socket.setdefaulttimeout(min(_active_timeouts.values()))
+            else:
+                if requests is not None and _original_send is not None:
+                    requests.sessions.Session.send = _original_send
+                socket.setdefaulttimeout(_original_socket_timeout)
 
 
 _SECRET_PARAM_RE = re.compile(r"(?i)((?:api[_-]?key|token|secret|access[_-]?token)=)[^&\s]+")
