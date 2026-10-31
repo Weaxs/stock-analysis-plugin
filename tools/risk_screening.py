@@ -6,7 +6,7 @@ import json
 import math
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -292,10 +292,19 @@ def compute_risk(flags: list) -> dict:
 
 def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
     inputs = inputs or {}
+
+    def supplied(key):
+        value = inputs[key]
+        return value.result() if isinstance(value, Future) else value
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        valuation = pool.submit(check_valuation, symbol, **({"quote": inputs["quote"]} if "quote" in inputs else {}))
+        valuation = pool.submit(
+            lambda: check_valuation(symbol, quote=supplied("quote")) if "quote" in inputs else check_valuation(symbol)
+        )
         technical = pool.submit(
-            check_technical, symbol, **({"ta": inputs["technical"]} if "technical" in inputs else {})
+            lambda: (
+                check_technical(symbol, ta=supplied("technical")) if "technical" in inputs else check_technical(symbol)
+            )
         )
         lockups = pool.submit(check_lockup, symbol, **({"run": run} if run else {}))
         searches = pool.submit(check_news_risks, symbol, name, **({"run": run} if run else {}))

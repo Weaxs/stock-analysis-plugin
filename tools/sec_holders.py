@@ -100,11 +100,20 @@ def latest_bulk():
     return max(windows, key=lambda w: w["end"])
 
 
+def _fresh_archive(path):
+    try:
+        return 0 <= time.time() - path.stat().st_mtime < _cache.WEEK and zipfile.is_zipfile(path)
+    except OSError:
+        return False
+
+
 def bulk_file(window):
     path = _cache.CACHE_DIR / f"sec-13f-{hashlib.sha256(window['url'].encode()).hexdigest()[:16]}.zip"
+    if _fresh_archive(path):
+        return path
     try:
         with file_lock(path.with_suffix(".lock")):
-            if path.exists() and 0 <= time.time() - path.stat().st_mtime < _cache.WEEK and zipfile.is_zipfile(path):
+            if _fresh_archive(path):
                 return path
             response = sec_get(window["url"], stream=True)
             try:

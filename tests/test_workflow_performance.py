@@ -111,3 +111,23 @@ def test_context_keeps_quote_when_reused_anomaly_input_is_invalid(monkeypatch):
     assert result["summary"]["partial"] == 1
     assert result["items"][0]["price"] == 10
     assert result["items"][0]["anomaly_status"] == "unavailable"
+
+
+def test_independent_risk_collection_starts_while_bars_are_pending(monkeypatch):
+    from tools import gather
+
+    lockup_started = threading.Event()
+    observed = []
+
+    def collect(script, args, **kwargs):
+        if args[0] == "kline":
+            observed.append(lockup_started.wait(1))
+            return "[]"
+        if args[0] == "lockup":
+            lockup_started.set()
+            return json.dumps({"upcoming_30d": [], "flags": [], "available": True})
+        return "{}"
+
+    monkeypatch.setattr(gather, "_run", collect)
+    gather.gather_analysis("AAPL")
+    assert observed == [True]

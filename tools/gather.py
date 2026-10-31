@@ -70,12 +70,16 @@ def _run_all(tasks: dict, symbol: str, *, session=None, with_risk=False) -> dict
             return _run_all(tasks, symbol, session=session, with_risk=with_risk)
     for script, args in tasks.values():
         session.submit(script, args)
-    records = session.json(*tasks["kline"])
-    technical = analyze_records(symbol, records) if records is not None else None
-    with ThreadPoolExecutor(max_workers=1) as continuations:
+    with ThreadPoolExecutor(max_workers=2) as continuations:
+
+        def analyze():
+            records = session.json(*tasks["kline"])
+            return analyze_records(symbol, records) if records is not None else None
+
+        technical = continuations.submit(analyze)
         risk = None
         if with_risk:
-            inputs = {"quote": session.json(*tasks["quote"]), "technical": technical}
+            inputs = {"quote": session.submit(*tasks["quote"]), "technical": technical}
 
             def collect_risk():
                 try:
@@ -85,7 +89,7 @@ def _run_all(tasks: dict, symbol: str, *, session=None, with_risk=False) -> dict
 
             risk = continuations.submit(collect_risk)
         result = {key: session.json(script, args) for key, (script, args) in tasks.items()}
-        result["technical"] = technical
+        result["technical"] = technical.result()
         if risk is not None:
             result["risk"] = risk.result()
     return result

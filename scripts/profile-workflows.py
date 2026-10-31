@@ -16,11 +16,11 @@ from pathlib import Path
 
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root / "tools"))
-import anomaly_detect
-import gather
-import risk_screening
-import technical
-import watchlist_context
+import anomaly_detect  # noqa: E402
+import gather  # noqa: E402
+import risk_screening  # noqa: E402
+import technical  # noqa: E402
+import watchlist_context  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("perf_fixtures", root / "tests/conftest.py")
 fixtures = importlib.util.module_from_spec(spec)

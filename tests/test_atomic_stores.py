@@ -113,3 +113,57 @@ def test_store_lock_wait_is_bounded_and_released_after_exception(tmp_path):
         raise ValueError("writer failed")
     with file_lock(path, timeout=0.02):
         pass
+
+
+def test_sec_cached_zip_does_not_require_write_access(monkeypatch, tmp_path):
+    import hashlib
+    import zipfile
+
+    import sec_holders
+
+    window = {"url": "https://example.invalid/data.zip"}
+    path = tmp_path / f"sec-13f-{hashlib.sha256(window['url'].encode()).hexdigest()[:16]}.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("data", "cached")
+    monkeypatch.setattr(sec_holders._cache, "CACHE_DIR", tmp_path)
+
+    def denied(*args, **kwargs):
+        raise PermissionError("read-only cache")
+
+    monkeypatch.setattr(sec_holders, "file_lock", denied)
+    monkeypatch.setattr(sec_holders, "sec_get", lambda *a, **kw: pytest.fail("valid archive should be reused"))
+    assert sec_holders.bulk_file(window) == path
+
+
+def test_concurrent_sec_queries_download_same_archive_once(monkeypatch, tmp_path):
+    import io
+    import threading
+    import time
+    import zipfile
+    from concurrent.futures import ThreadPoolExecutor
+
+    import sec_holders
+
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive:
+        archive.writestr("data", "shared")
+    calls = []
+    start = threading.Barrier(2, timeout=2)
+
+    def download(*args, **kwargs):
+        calls.append(True)
+        time.sleep(0.1)
+        return SimpleNamespace(iter_content=lambda **kw: iter([content.getvalue()]), close=lambda: None)
+
+    def query():
+        start.wait()
+        return sec_holders.bulk_file({"url": "https://example.invalid/data.zip"})
+
+    monkeypatch.setattr(sec_holders._cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(sec_holders, "sec_get", download)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(query) for _ in range(2)]
+        results = [future.result(timeout=3) for future in futures]
+    assert calls == [True]
+    assert results[0] == results[1]
+    assert zipfile.is_zipfile(results[0])
