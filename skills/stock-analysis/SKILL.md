@@ -84,7 +84,11 @@ python3 scripts/gather.py <symbol>
 1. 按 [报告 schema](../../schemas/report_schema.json) 构建结构化报告。
 2. 每个结论只使用成功返回的数据；缺失维度在 `risk_warning` 中说明影响。必须填写 `evidence`，每项使用原始工具结果路径（如 `get_quote.price`）、读者可理解的 `label`、原始 `value`、实际 `source` 和数据时间 `as_of`；未知来源或时间填 null，不用采集时间替代。历史财报与顶层快照分别引用日期、币种和单位，不把不同期间的数值拼成同一结论。 来源与时间沿证据 path 继承最近父对象的 source（该键缺失时用 snapshot_source）和 data_as_of，子对象的对应值（包括显式 null）覆盖祖先；数组项及 warnings 字符串同样继承，不能仅因叶子字段没有来源就填 null。整条路径均未提供对应元数据时才填 null，不能用工具名或策略方法名代替来源；as_of 保留完整数据时间及其时区。report_date 是财报报告期，应单独引用 value，不能当成披露日期或 data_as_of。证据 path 不含调用参数，例如 get_financials.periods.0.roe；股票名称未返回时 stock_name 填“未知”，不能凭常识补名；已知返回对象中未提供的末级字段可用 value=null 表示未知，其 source/as_of 可填 null，若填写则必须来自已知父对象；不能编成空数组、字符串或数值，不能跨缺失对象或数组编造路径；错误 value 保留原始字符串，不加 error: 前缀。请求的期间或文件路径不证明实际数据覆盖期或文件内容，需与实际返回数据区分。
    同时填写 `data_quality.flags/limitations`：关键数据缺失用 `partial_data`，明确过期行情用 `stale_quote`，同期间同口径来源冲突用 `conflicting_data`，回测/信号样本不足用 `insufficient_sample`。出现这些限制时降低置信度，不能给出 strong_buy；没有有效现价时不编造数值交易计划。数据完整时 flags 为空数组，限制仍按实际模拟条件说明。
-3. 渲染前核对证据清单：行情已返回的 `price` 和 `data_as_of` 必须分别作为 `get_quote.price`、`get_quote.data_as_of` 的独立 evidence 项，保留原始 value；其他证据项的 `as_of` 元数据不能代替时间字段自身的 path/value 引用。报价过期时仍保留原始价格与时间作为历史证据，说明时效限制，等待新报价后再制定当前数值交易计划。
+3. 提交前逐项核对 `evidence.path`，以下字段只要本次工具已返回，就必须各有独立的 path/value 项：
+   - 行情：`get_quote.price`、`get_quote.data_as_of`。
+   - 财务：`get_financials.report_date`、`get_financials.roe`，以及历史 `periods` 中实际返回的 `report_date`、`roe`，路径含数字下标。
+   - 回测：`run_backtest.metrics.total_trades`、`run_backtest.metrics.win_rate`。
+   每项保留原始 value，并按第 2 项填写 source/as_of；正文中的数字及其他证据的 as_of 元数据不替代独立引用。漏项先补齐再提交。报价过期时保留原始价格与时间作为历史证据，说明时效限制，等待新报价后再制定当前数值交易计划。
 4. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 5. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
 
