@@ -71,6 +71,7 @@ def test_windows_cache_denial_does_not_retry(monkeypatch, tmp_path):
 
     monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(tempfile, "_os", DeniedWindows())
+    monkeypatch.setattr(_cache, "os", DeniedWindows())
     monkeypatch.setattr(tempfile, "TMP_MAX", 4)
     monkeypatch.setattr(Path, "open", lambda *a, **kw: DeniedWindows().open())
     assert _cache.cached("denied", 10, lambda: {"ok": 1}) == {"ok": 1}
@@ -116,3 +117,21 @@ def test_concurrent_cache_writes_are_complete(monkeypatch, tmp_path):
     assert len(files) == 1
     data = json.loads(files[0].read_text())["data"]
     assert data in results
+
+
+def test_cache_keeps_owner_only_permissions(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    import _cache
+    import pytest
+
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits")
+    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
+    previous = os.umask(0o022)
+    try:
+        assert _cache.cached("private", 60, lambda: {"ok": 1}) == {"ok": 1}
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(next(tmp_path.glob("*.json")).stat().st_mode) == 0o600

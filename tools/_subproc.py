@@ -127,23 +127,27 @@ def socket_timeout(seconds: float):
     Like the socket default, this is process-wide: overlapping guards use the shortest
     budget. Explicit requests timeouts still win. Restore only after the last guard exits.
     """
-    import requests
+    try:
+        import requests
+    except ImportError:
+        requests = None
 
     global _original_socket_timeout, _original_send
     token = object()
     with _timeout_lock:
         if not _active_timeouts:
             _original_socket_timeout = socket.getdefaulttimeout()
-            _original_send = requests.sessions.Session.send
-            original_send = _original_send
+            _original_send = requests.sessions.Session.send if requests is not None else None
+            if requests is not None:
+                original_send = _original_send
 
-            def bounded_send(session, request, **kwargs):
-                with _timeout_lock:
-                    if kwargs.get("timeout") is None and _active_timeouts:
-                        kwargs["timeout"] = min(_active_timeouts.values())
-                return original_send(session, request, **kwargs)
+                def bounded_send(session, request, **kwargs):
+                    with _timeout_lock:
+                        if kwargs.get("timeout") is None and _active_timeouts:
+                            kwargs["timeout"] = min(_active_timeouts.values())
+                    return original_send(session, request, **kwargs)
 
-            requests.sessions.Session.send = bounded_send
+                requests.sessions.Session.send = bounded_send
         _active_timeouts[token] = seconds
         socket.setdefaulttimeout(min(_active_timeouts.values()))
     try:
@@ -154,7 +158,8 @@ def socket_timeout(seconds: float):
             if _active_timeouts:
                 socket.setdefaulttimeout(min(_active_timeouts.values()))
             else:
-                requests.sessions.Session.send = _original_send
+                if requests is not None and _original_send is not None:
+                    requests.sessions.Session.send = _original_send
                 socket.setdefaulttimeout(_original_socket_timeout)
 
 

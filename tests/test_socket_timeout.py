@@ -107,3 +107,24 @@ def test_overlapping_guards_restore_after_last_exit(monkeypatch):
     assert seen == [2]
     assert socket.getdefaulttimeout() == original_socket
     assert requests.sessions.Session.send is original_send
+
+
+def test_socket_guard_still_works_without_requests(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+    original_socket = socket.getdefaulttimeout()
+
+    def missing_requests(name, *args, **kwargs):
+        if name == "requests":
+            raise ModuleNotFoundError("requests")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_requests)
+    with pytest.raises(ValueError), socket_timeout(2):
+        assert socket.getdefaulttimeout() == 2
+        with socket_timeout(1):
+            assert socket.getdefaulttimeout() == 1
+        assert socket.getdefaulttimeout() == 2
+        raise ValueError("restore socket-only guard")
+    assert socket.getdefaulttimeout() == original_socket

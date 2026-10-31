@@ -48,7 +48,7 @@ def cached(key: str, ttl: int, fetch):
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         candidate = path.with_suffix(f".tmp-{uuid4().hex}")
         # Exclusive creation fails immediately on Windows ACL denial; tempfile may retry billions of times.
-        with candidate.open("x", encoding="utf-8") as stream:
+        with open(candidate, "x", encoding="utf-8", opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
             tmp = candidate
             json.dump(
                 {"key": key, "fetched_at": time.time(), "data": result}, stream, ensure_ascii=False, allow_nan=False
