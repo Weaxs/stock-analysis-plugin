@@ -3542,3 +3542,65 @@ def test_longbridge_quote_keeps_aware_time_through_cli(monkeypatch, mock_yfinanc
         assert result["as_of"] == expected
         assert result["stale"] is True
         assert result["as_of_basis"] == "provider"
+
+
+@pytest.mark.parametrize("error", [ValueError("bad schema"), KeyError("missing column"), TypeError("bad input")])
+def test_akshare_deterministic_errors_fail_fast(error):
+    from tools.stock_data import _akshare_retry
+
+    source = MagicMock(side_effect=error)
+    with patch("tools.stock_data.time.sleep") as sleep, pytest.raises(type(error)):
+        _akshare_retry(source)
+    assert source.call_count == 1
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "status,attempts", [(400, 1), (401, 1), (403, 1), (404, 1), (408, 3), (429, 3), (500, 3), (503, 3)]
+)
+def test_akshare_http_retry_policy(status, attempts):
+    from requests import HTTPError, Response
+
+    from tools.stock_data import _akshare_retry
+
+    response = Response()
+    response.status_code = status
+    source = MagicMock(side_effect=HTTPError("provider error", response=response))
+    with patch("tools.stock_data.time.sleep") as sleep, pytest.raises(HTTPError):
+        _akshare_retry(source)
+    assert source.call_count == attempts
+    assert sleep.call_count == attempts - 1
+
+
+def test_akshare_transient_json_and_rate_limit_errors_still_recover():
+    from requests.exceptions import JSONDecodeError
+    from yfinance import exceptions as yf_errors
+
+    from tools.stock_data import _akshare_retry
+
+    errors = [JSONDecodeError("empty upstream body", "", 0)]
+    if hasattr(yf_errors, "YFRateLimitError"):
+        errors.append(yf_errors.YFRateLimitError())
+    for error in errors:
+        source = MagicMock(side_effect=[error, {"ok": True}])
+        with patch("tools.stock_data.time.sleep"):
+            assert _akshare_retry(source) == {"ok": True}
+        assert source.call_count == 2
+
+
+def test_curl_transport_failures_still_retry():
+    from types import SimpleNamespace
+
+    curl = pytest.importorskip("curl_cffi.requests.exceptions")
+
+    from tools.stock_data import _akshare_retry
+
+    for error in (
+        curl.Timeout("slow"),
+        curl.ConnectionError("down"),
+        curl.HTTPError("busy", response=SimpleNamespace(status_code=503)),
+    ):
+        source = MagicMock(side_effect=[error, {"ok": True}])
+        with patch("tools.stock_data.time.sleep"):
+            assert _akshare_retry(source) == {"ok": True}
+        assert source.call_count == 2

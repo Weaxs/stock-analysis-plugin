@@ -373,3 +373,78 @@ def test_margin_buy_ratio_uses_matching_day_turnover(monkeypatch):
         rows = cmd_margin_trading(Namespace(symbol="600519", days=1, include_ratio=True))
     assert rows[0]["margin_buy_ratio_pct"] == 25
     assert rows[0]["turnover"] == 1.2e9
+
+
+def test_two_stocks_share_exchange_day_tables(monkeypatch):
+    days = ["2026-10-30", "2026-10-29", "2026-10-28"]
+    source = MagicMock(side_effect=lambda date: _sse_detail(date))
+    ak = MagicMock(stock_margin_detail_sse=source)
+    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: days)
+    with patch.dict(sys.modules, {"akshare": ak}):
+        first = cmd_margin_trading(Namespace(symbol="600519", days=3))
+        second = cmd_margin_trading(Namespace(symbol="601318", days=3))
+    assert len(first) == len(second) == 3
+    assert source.call_count == 3
+    assert all(r["symbol"] == "600519" for r in first)
+    assert all(r["symbol"] == "601318" for r in second)
+
+
+def test_empty_margin_table_is_not_cached(monkeypatch):
+    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
+    source = MagicMock(side_effect=[pd.DataFrame(), _sse_detail("20261029")])
+    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
+        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=1))
+        assert len(cmd_margin_trading(Namespace(symbol="600519", days=1))) == 1
+    assert source.call_count == 2
+
+
+def test_malformed_margin_table_is_not_cached(monkeypatch):
+    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
+    source = MagicMock(side_effect=[pd.DataFrame({"标的证券代码": ["600519"]}), _sse_detail("20261029")])
+    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
+        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=1))
+        result = cmd_margin_trading(Namespace(symbol="600519", days=1))
+        assert result[0]["margin_balance"] == 2.0e10
+    assert source.call_count == 2
+
+
+def test_wrong_day_margin_table_is_not_relabelled_or_cached(monkeypatch):
+    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
+    source = MagicMock(side_effect=[_sse_detail("20261028"), _sse_detail("20261029")])
+    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
+        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=1))
+        result = cmd_margin_trading(Namespace(symbol="600519", days=1))
+        assert result[0]["date"] == "2026-10-29"
+    assert source.call_count == 2
+
+
+def test_current_day_margin_table_is_not_persisted(monkeypatch):
+    from datetime import datetime
+
+    from tools import stock_data
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 30)
+
+    monkeypatch.setattr(stock_data, "datetime", Clock)
+    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-30"])
+    source = MagicMock(side_effect=lambda date: _sse_detail(date))
+    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
+        assert len(cmd_margin_trading(Namespace(symbol="600519", days=1))) == 1
+        assert len(cmd_margin_trading(Namespace(symbol="601318", days=1))) == 1
+    assert source.call_count == 2
+
+
+def test_unrelated_incomplete_stock_does_not_hide_healthy_stock(monkeypatch):
+    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
+    incomplete = _sse_detail("20261029")
+    incomplete.loc[1, "融资买入额"] = float("nan")
+    source = MagicMock(side_effect=[incomplete, _sse_detail("20261029")])
+    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
+        first = cmd_margin_trading(Namespace(symbol="600519", days=1))
+        assert first[0]["margin_balance"] == 2.0e10
+        second = cmd_margin_trading(Namespace(symbol="601318", days=1))
+        assert second[0]["margin_buy"] == 2.0e8
+    assert source.call_count == 2

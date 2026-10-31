@@ -8,6 +8,12 @@ import pytest
 from tools.search_intel import _bocha_search, _searxng_search, search_comprehensive, search_news
 
 
+@pytest.fixture(autouse=True)
+def no_external_search_credentials(monkeypatch):
+    for key in ("TAVILY_API_KEY", "BRAVE_API_KEY", "BOCHA_API_KEY", "SERPAPI_KEY", "SEARXNG_BASE_URLS"):
+        monkeypatch.delenv(key, raising=False)
+
+
 def _mock_requests(payload, ok=True, status_code=200):
     mock_resp = MagicMock()
     mock_resp.ok = ok
@@ -173,3 +179,80 @@ class TestSearchNewsSearxngFallback:
             result = search_news("some query")
         assert result["results"] == []
         assert "SEARXNG_BASE_URLS" in result["note"]
+
+
+def test_comprehensive_does_not_repeat_unavailable_engine_and_resets_next_call(monkeypatch):
+
+    monkeypatch.setenv("BOCHA_API_KEY", "fixture")
+    mock_req = _mock_requests({}, ok=False, status_code=503)
+    with patch.dict(sys.modules, {"requests": mock_req}):
+        first = search_comprehensive("600519")
+        assert "bocha" in first["engines_errors"]
+        assert mock_req.post.call_count == 1
+        search_news("new invocation")
+        assert mock_req.post.call_count == 2
+
+
+def test_search_requests_use_remaining_budget_and_reach_healthy_fallback(monkeypatch):
+    from tools import search_intel
+
+    clock = [0.0]
+    seen = []
+    monkeypatch.setattr(search_intel._time, "monotonic", lambda: clock[0])
+    monkeypatch.setenv("TAVILY_API_KEY", "fixture")
+    monkeypatch.setenv("BRAVE_API_KEY", "fixture")
+    monkeypatch.setenv("BOCHA_API_KEY", "fixture")
+    req = MagicMock()
+
+    def post(url, **kwargs):
+        seen.append(kwargs["timeout"])
+        if "tavily" in url:
+            clock[0] += 30
+            raise TimeoutError("slow")
+        return _mock_requests(
+            {"data": {"webPages": {"value": [{"url": "https://example.invalid", "name": "ok"}]}}}
+        ).post()
+
+    def get(url, **kwargs):
+        seen.append(kwargs["timeout"])
+        clock[0] += 12
+        raise TimeoutError("slow")
+
+    req.post.side_effect = post
+    req.get.side_effect = get
+    with patch.dict(sys.modules, {"requests": req}):
+        result = search_news("fixture", 1)
+    assert seen == [15, 15, 3]
+    assert result["engines_used"] == ["bocha"]
+    assert search_intel._SEARCH_STATE.get() is None
+
+
+def test_searxng_instances_share_search_budget(monkeypatch):
+    from tools import search_intel
+
+    clock = [0.0]
+    monkeypatch.setattr(search_intel._time, "monotonic", lambda: clock[0])
+    monkeypatch.setenv("SEARXNG_BASE_URLS", "http://a,http://b,http://c,http://d")
+    for key in ("TAVILY_API_KEY", "BRAVE_API_KEY", "BOCHA_API_KEY", "SERPAPI_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    req = MagicMock()
+
+    def get(url, **kwargs):
+        clock[0] += kwargs["timeout"]
+        raise TimeoutError("slow")
+
+    req.get.side_effect = get
+    with patch.dict(sys.modules, {"requests": req}):
+        result = search_news("fixture")
+    assert req.get.call_count == 3
+    assert "budget exhausted" in result["engines_errors"]["searxng"]
+
+
+@pytest.mark.parametrize("status", [200, 400])
+def test_comprehensive_retries_healthy_empty_or_query_specific_failure(monkeypatch, status):
+    monkeypatch.setenv("BOCHA_API_KEY", "fixture")
+    req = _mock_requests({"data": {"webPages": {"value": []}}}, ok=status == 200, status_code=status)
+    with patch.dict(sys.modules, {"requests": req}):
+        result = search_comprehensive("600519")
+    assert len(result["dimensions"]) == 6
+    assert req.post.call_count == 6
