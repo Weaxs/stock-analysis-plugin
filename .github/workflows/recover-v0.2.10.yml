@@ -1,0 +1,45 @@
+name: Recover v0.2.10 OpenClaw npm twin
+
+on:
+  push:
+    branches: [release/recover-v0.2.10]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-missing-twin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 841c22d0754216973ab7e47dd6e969b7bc32b5fb
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Download the already published scoped artifact
+        run: |
+          npm pack --ignore-scripts @weaxs/openclaw-stock-analysis@0.2.10
+          mkdir recovery
+          tar -xzf weaxs-openclaw-stock-analysis-0.2.10.tgz -C recovery
+      - name: Verify artifact and rename the twin
+        working-directory: recovery/package
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          assert.equal(pkg.name, '@weaxs/openclaw-stock-analysis');
+          assert.equal(pkg.version, '0.2.10');
+          for (const path of ['dist/index.js', 'openclaw.plugin.json', 'LICENSE', 'tools/_cache.py']) {
+            assert.ok(existsSync(path), `Missing ${path}`);
+          }
+          JS
+          npm pkg set name=openclaw-stock-analysis
+      - name: Publish the missing unscoped twin
+        working-directory: recovery/package
+        run: npm publish --ignore-scripts --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
