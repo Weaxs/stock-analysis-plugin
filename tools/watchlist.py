@@ -6,11 +6,12 @@ import json
 import math
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import utf8_stdio
-from gather import gather_analysis
+from gather import Collection, gather_analysis
 
 
 def has_analysis_data(data) -> bool:
@@ -28,27 +29,35 @@ def has_analysis_data(data) -> bool:
     return False
 
 
-def analyze_watchlist(symbols: list[str], workers: int = 3) -> dict:
+def analyze_watchlist(symbols: list[str], workers: int = 3, *, session=None, on_result=None) -> dict:
     if isinstance(workers, bool) or not isinstance(workers, int) or workers <= 0:
         return {"error": "workers must be a positive integer"}
     results = {}
     success = 0
     failed = 0
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(gather_analysis, sym): sym for sym in symbols}
-        for future in as_completed(futures):
-            sym = futures[future]
-            try:
-                data = future.result()
-                results[sym] = data
-                if has_analysis_data(data):
-                    success += 1
-                else:
+    with Collection() if session is None else nullcontext(session) as session:
+
+        def analyze(sym):
+            data = gather_analysis(sym, session=session)
+            if on_result is not None:
+                on_result(sym, data)
+            return data
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(analyze, sym): sym for sym in symbols}
+            for future in as_completed(futures):
+                sym = futures[future]
+                try:
+                    data = future.result()
+                    results[sym] = data
+                    if has_analysis_data(data):
+                        success += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    results[sym] = None
                     failed += 1
-            except Exception:
-                results[sym] = None
-                failed += 1
 
     return {
         "results": results,

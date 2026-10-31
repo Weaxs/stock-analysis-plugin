@@ -144,7 +144,11 @@ class TestGatherAnalysis:
         'stock news' query ranks poorly for CN sources."""
         mock_run.return_value = None
         gather_analysis("600519")
-        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "search" in c[0][1]]
+        news_call = [
+            c
+            for c in mock_run.call_args_list
+            if c[0][0] == "search_intel.py" and c[0][1][0] == "search" and len(c[0][1]) == 2
+        ]
         assert len(news_call) == 1
         assert news_call[0][0][1] == ["search", "600519 最新消息"]
 
@@ -152,7 +156,11 @@ class TestGatherAnalysis:
     def test_fundamental_news_query_is_chinese(self, mock_run):
         mock_run.return_value = None
         gather_fundamental("600519")
-        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "search" in c[0][1]]
+        news_call = [
+            c
+            for c in mock_run.call_args_list
+            if c[0][0] == "search_intel.py" and c[0][1][0] == "search" and len(c[0][1]) == 2
+        ]
         assert len(news_call) == 1
         assert news_call[0][0][1] == ["search", "600519 最新消息"]
 
@@ -162,7 +170,11 @@ class TestGatherAnalysis:
         # one — the query language follows the detected market.
         mock_run.return_value = None
         gather_analysis("AAPL")
-        news_call = [c for c in mock_run.call_args_list if c[0][0] == "search_intel.py" and "search" in c[0][1]]
+        news_call = [
+            c
+            for c in mock_run.call_args_list
+            if c[0][0] == "search_intel.py" and c[0][1][0] == "search" and len(c[0][1]) == 2
+        ]
         assert news_call[0][0][1] == ["search", "AAPL stock news"]
 
     @patch("tools.gather._run")

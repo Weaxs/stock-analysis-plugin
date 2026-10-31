@@ -323,12 +323,12 @@ def detect_limit_hit(symbol: str, quote: dict) -> list:
     return anomalies
 
 
-def detect_capital_flow_anomaly(symbol: str) -> list:
+def detect_capital_flow_anomaly(symbol: str, *, run=None) -> list:
     market = detect_market(symbol)
     if market != "A":
         return []
 
-    flow_data = _run_tool("stock_data.py", ["capital_flow", symbol, "--mode", "detail"])
+    flow_data = (run or _run_tool)("stock_data.py", ["capital_flow", symbol, "--mode", "detail"])
     if not flow_data or not isinstance(flow_data, list) or len(flow_data) < 3:
         return []
 
@@ -468,8 +468,12 @@ def detect_gap(df: pd.DataFrame) -> list:
 # --------------- Orchestration ---------------
 
 
-def detect_anomalies(symbol: str) -> dict:
-    records = fetch_kline(symbol, "daily", 60)
+_UNSET = object()
+
+
+def detect_anomalies(symbol: str, *, records=_UNSET, quote=_UNSET, run=None) -> dict:
+    if records is _UNSET:
+        records = fetch_kline(symbol, "daily", 60)
     if isinstance(records, dict) and "error" in records:
         return {"symbol": symbol, "error": records.get("error", "Failed to fetch kline")}
     if not records:
@@ -484,7 +488,8 @@ def detect_anomalies(symbol: str) -> dict:
     low = df["low"]
     volume = df["volume"]
 
-    quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
+    if quote is _UNSET:
+        quote = _run_tool("stock_data.py", ["quote", symbol]) or {}
 
     anomalies = []
     anomalies.extend(detect_macd_cross(close))
@@ -501,7 +506,7 @@ def detect_anomalies(symbol: str) -> dict:
         anomalies.extend(detect_limit_hit(symbol, quote))
         anomalies.extend(detect_large_move(quote))
 
-    anomalies.extend(detect_capital_flow_anomaly(symbol))
+    anomalies.extend(detect_capital_flow_anomaly(symbol, **({"run": run} if run else {})))
 
     severity_order = {"high": 0, "medium": 1, "low": 2}
     anomalies.sort(key=lambda a: severity_order.get(a["severity"], 3))

@@ -8,6 +8,7 @@ import argparse
 import json
 import math
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,8 +58,10 @@ def analyze_position(
     ):
         if value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
             return {"symbol": symbol, "error": f"{field} must be finite and positive"}
-    quote = _run_json("stock_data.py", ["quote", symbol]) or {}
-    tech = _run_json("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"]) or {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        quote_job = pool.submit(_run_json, "stock_data.py", ["quote", symbol])
+        tech_job = pool.submit(_run_json, "technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"])
+        quote, tech = quote_job.result() or {}, tech_job.result() or {}
 
     price = quote.get("price") if isinstance(quote, dict) and "error" not in quote else None
     if price is None:

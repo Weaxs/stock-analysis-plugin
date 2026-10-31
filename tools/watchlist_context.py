@@ -8,15 +8,16 @@ so the host agent can decide what to do next (write daily briefing, dig deeper, 
 import argparse
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import run_tool as _run_json  # noqa: E402
 from _subproc import scrub_secrets, utf8_stdio
+from anomaly_detect import detect_anomalies  # noqa: E402
+from gather import Collection
 from stock_data import detect_market  # noqa: E402
-from watchlist import analyze_watchlist, has_analysis_data  # noqa: E402
+from watchlist import analyze_watchlist, has_analysis_data
 
 
 def _suggest_next_tools(market: str, trend: str, anomalies: list, risk_level: str) -> list:
@@ -38,7 +39,7 @@ def _suggest_next_tools(market: str, trend: str, anomalies: list, risk_level: st
     return [t for t in tools if not (t in seen or seen.add(t))]
 
 
-def _build_item(symbol: str, data: dict | None) -> dict:
+def _build_item(symbol: str, data: dict | None, *, session=None) -> dict:
     if not has_analysis_data(data):
         return {"symbol": symbol, "error": "no data"}
 
@@ -46,7 +47,19 @@ def _build_item(symbol: str, data: dict | None) -> dict:
     risk = data.get("risk") or {}
 
     # anomalies — separate call (watchlist gather doesn't include them)
-    anom_result = _run_json("anomaly_detect.py", ["detect", symbol], preserve_errors=True)
+    if "kline" in data and "quote" in data:
+        records = data["kline"]
+        try:
+            anom_result = detect_anomalies(
+                symbol,
+                records=records[-60:] if isinstance(records, list) else records,
+                quote=data["quote"],
+                run=session.json if session is not None else None,
+            )
+        except Exception as exc:
+            anom_result = {"error": f"Anomaly analysis failed ({type(exc).__name__})"}
+    else:
+        anom_result = _run_json("anomaly_detect.py", ["detect", symbol], preserve_errors=True)
     anomaly_ok = (
         isinstance(anom_result, dict) and "error" not in anom_result and isinstance(anom_result.get("anomalies"), list)
     )
@@ -88,17 +101,21 @@ def _build_item(symbol: str, data: dict | None) -> dict:
 
 
 def build_context(symbols: list[str], include_market_review: bool = False, workers: int = 3) -> dict:
-    raw = analyze_watchlist(symbols, workers=workers)
-    if "error" in raw:
-        return raw
-    results = raw.get("results", {})
+    items_by_symbol = {}
+    with Collection() as session:
 
-    items = []
-    # fetch anomalies in parallel to keep it responsive
-    with ThreadPoolExecutor(max_workers=min(workers * 2, 6)) as pool:
-        futures = {pool.submit(_build_item, sym, results.get(sym)): sym for sym in symbols}
-        for fut in as_completed(futures):
-            items.append(fut.result())
+        def ready(symbol, data):
+            items_by_symbol[symbol] = _build_item(symbol, data, session=session)
+
+        raw = analyze_watchlist(symbols, workers=workers, session=session, on_result=ready)
+        if "error" in raw:
+            return raw
+        results = raw.get("results", {})
+        # Also supports pre-collected watchlists supplied by callers/tests.
+        for symbol in symbols:
+            if symbol not in items_by_symbol:
+                ready(symbol, results.get(symbol))
+    items = [items_by_symbol[symbol] for symbol in symbols]
 
     # preserve caller order
     order = {s: i for i, s in enumerate(symbols)}
