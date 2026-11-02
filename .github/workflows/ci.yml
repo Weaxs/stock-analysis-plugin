@@ -224,7 +224,15 @@ jobs:
             echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
-          pytest tests/e2e/test_hermes_llm.py tests/e2e/test_analysis_quality.py -m integration_llm -v --capture=tee-sys
+          # Live-provider waits must not serialize fixed-evidence report evaluation.
+          pytest tests/e2e/test_hermes_llm.py -m integration_llm -v --capture=tee-sys &
+          hermes_pid=$!
+          pytest tests/e2e/test_analysis_quality.py -m integration_llm -v --capture=tee-sys &
+          quality_pid=$!
+          llm_failed=0
+          wait "$hermes_pid" || llm_failed=1
+          wait "$quality_pid" || llm_failed=1
+          exit "$llm_failed"
 
       - name: E2E — ${{ matrix.host }} LLM flow
         if: matrix.host != 'hermes'

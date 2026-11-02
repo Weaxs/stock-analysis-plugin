@@ -19,7 +19,7 @@ export async function timedStage<T>(stage: string, operation: () => Promise<T>):
   try {
     return await operation();
   } finally {
-    console.error(`[timing] ${stage} seconds=${((performance.now() - started) / 1000).toFixed(3)}`);
+    console.error(`[timing] ${stage} seconds=${((performance.now() - started) / 1000).toFixed(3)} pid=${process.pid}`);
   }
 }
 

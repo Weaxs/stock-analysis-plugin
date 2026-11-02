@@ -3,6 +3,7 @@
 import contextlib
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -134,7 +135,11 @@ def timed_stage(stage):
     try:
         yield
     finally:
-        print(f"[timing] {stage} seconds={time.perf_counter() - started:.3f}", file=sys.stderr, flush=True)
+        print(
+            f"[timing] {stage} seconds={time.perf_counter() - started:.3f} pid={os.getpid()}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def review_report(client, model, case, report, *, request_context=None, tool_calls=None):
