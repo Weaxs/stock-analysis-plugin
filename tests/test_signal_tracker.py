@@ -867,3 +867,50 @@ def test_retry_queue_preserves_closed_filtered_and_concurrently_added_records(st
     assert saved[5]["status"] == "closed"
     assert saved[6] == added[0]
     assert {rec["id"] for rec in saved} == {rec["id"] for rec in [*before, *added]}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
+def test_record_creates_private_store_even_with_permissive_umask(store):
+    import os
+    import stat
+
+    previous = os.umask(0o022)
+    try:
+        assert "error" not in st.cmd_record(_rec_args(store))
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(store.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file-size limit")
+def test_failed_append_preserves_valid_store(store):
+    import textwrap
+
+    assert "error" not in st.cmd_record(_rec_args(store))
+    original = store.read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""\
+            import resource
+            import signal
+            import sys
+            from pathlib import Path
+            from tools import signal_tracker as st
+            from tests.test_signal_tracker import _rec_args
+
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+            result = st.cmd_record(_rec_args(Path(sys.argv[1]), note="x" * 5000))
+            assert "error" in result
+            """),
+            str(store),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert store.read_bytes() == original
+    assert len(st._load_records(store, strict=True)) == 1

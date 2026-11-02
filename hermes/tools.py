@@ -20,8 +20,8 @@ def _find_python() -> str:
         venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
     if venv_python.exists():
         return str(venv_python)
-    # On Windows "python3" is usually the Microsoft Store stub — prefer "python".
-    return "python" if sys.platform == "win32" else "python3"
+    # Installed wheels share the host environment, even when its venv is not activated.
+    return sys.executable
 
 
 def _run(script: str, argv: list) -> str:

@@ -140,18 +140,59 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     needs_anom = any(r.get("type") == "anomaly" for r in rules)
     needs_risk = any(r.get("type") in ("risk_veto", "risk_level_at_least") for r in rules)
 
-    # the fetches are independent subprocesses — fan out concurrently (same
-    # ThreadPoolExecutor pattern as gather._run_all), then read back in fixed order
-    jobs = {"quote": ("stock_data.py", ["quote", symbol])}
-    if needs_tech:
-        jobs["tech"] = ("technical.py", ["analyze", symbol, "--period", "daily", "--count", "60"])
-    if needs_anom:
-        jobs["anom"] = ("anomaly_detect.py", ["detect", symbol])
-    if needs_risk:
-        jobs["risk"] = ("risk_screening.py", ["screen", symbol])
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        futures = {key: pool.submit(_run_json, script, args) for key, (script, args) in jobs.items()}
-        fetched = {key: future.result() for key, future in futures.items()}
+    # Share one market snapshot while retaining 60-bar alerts and 120-bar risk analysis.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        quote_job = pool.submit(_run_json, "stock_data.py", ["quote", symbol])
+        jobs = {"quote": quote_job}
+        if needs_tech or needs_anom or needs_risk:
+            from technical import analyze_records
+
+            kline_job = pool.submit(
+                _run_json,
+                "stock_data.py",
+                ["kline", symbol, "--period", "daily", "--count", "120" if needs_risk else "60"],
+            )
+
+            def analyze(count):
+                records = kline_job.result()
+                try:
+                    return analyze_records(symbol, records[-count:] if isinstance(records, list) else records)
+                except Exception as exc:
+                    return {"error": f"Technical analysis failed ({type(exc).__name__})"}
+
+            if needs_risk:
+                from risk_screening import screen_risk
+
+                technical_job = pool.submit(analyze, 120)
+
+                def collect_risk():
+                    try:
+                        return screen_risk(
+                            symbol, inputs={"quote": quote_job, "technical": technical_job}, run=_run_json
+                        )
+                    except Exception as exc:
+                        return {"error": f"Risk analysis failed ({type(exc).__name__})"}
+
+                jobs["risk"] = pool.submit(collect_risk)
+            if needs_tech:
+                jobs["tech"] = pool.submit(analyze, 60)
+            if needs_anom:
+                from anomaly_detect import detect_anomalies
+
+                def anomalies():
+                    records = kline_job.result()
+                    try:
+                        return detect_anomalies(
+                            symbol,
+                            records=records[-60:] if isinstance(records, list) else records,
+                            quote=quote_job.result(),
+                            run=_run_json,
+                        )
+                    except Exception as exc:
+                        return {"error": f"Anomaly analysis failed ({type(exc).__name__})"}
+
+                jobs["anom"] = pool.submit(anomalies)
+        fetched = {key: future.result() for key, future in jobs.items()}
     fetched = {
         key: value if isinstance(value, dict) and "error" not in value else None for key, value in fetched.items()
     }

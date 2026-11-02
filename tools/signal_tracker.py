@@ -136,11 +136,12 @@ def _save_records(store: Path, records: list):
 def _append_record(store: Path, record: dict):
     """Append one complete JSON line; caller holds the store lock."""
     payload = (json.dumps(record, ensure_ascii=False, default=str, allow_nan=False) + "\n").encode("utf-8")
-    with store.open("a+b") as stream:
-        if stream.seek(0, os.SEEK_END):
-            stream.seek(-1, os.SEEK_END)
-            if stream.read(1) != b"\n":
-                stream.write(b"\n")
+    previous = store.read_bytes() if store.exists() else b""
+    # Publish only complete records; a failed append must not leave a corrupt tail.
+    with atomic_write(store, binary=True) as stream:
+        stream.write(previous)
+        if previous and not previous.endswith(b"\n"):
+            stream.write(b"\n")
         stream.write(payload)
 
 
