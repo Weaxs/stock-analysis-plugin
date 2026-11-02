@@ -177,7 +177,23 @@ def test_alerts_share_quote_and_bars_without_changing_analysis_windows(monkeypat
         {"type": "risk_veto"},
     ]
     expected_volume = technical.analyze_records("600519", bars[-60:])["volume"]["volume_ratio"]
+    risk_windows, anomaly_windows = [], []
+    original_check = risk_screening.check_technical
+    original_detect = anomaly_detect.detect_anomalies
+
+    def check_technical(symbol, **kwargs):
+        risk_windows.append(kwargs["ta"]["data_points"])
+        return original_check(symbol, **kwargs)
+
+    def detect_anomalies(symbol, **kwargs):
+        anomaly_windows.append(len(kwargs["records"]))
+        return original_detect(symbol, **kwargs)
+
+    monkeypatch.setattr(risk_screening, "check_technical", check_technical)
+    monkeypatch.setattr(anomaly_detect, "detect_anomalies", detect_anomalies)
     result = alert_rules.check_rules("600519", rules)
+    assert risk_windows == [120]
+    assert anomaly_windows == [60]
     assert calls["stock_data.py", "quote"] == 1
     assert calls["stock_data.py", "kline"] == 1
     assert result["evaluated"][1]["actual"] == expected_volume

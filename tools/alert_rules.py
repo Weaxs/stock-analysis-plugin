@@ -140,8 +140,10 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     needs_anom = any(r.get("type") == "anomaly" for r in rules)
     needs_risk = any(r.get("type") in ("risk_veto", "risk_level_at_least") for r in rules)
 
-    needs_quote = needs_anom or needs_risk or any(
-        r.get("type") in ("price_below", "price_above", "change_pct_above", "change_pct_below") for r in rules
+    needs_quote = (
+        needs_anom
+        or needs_risk
+        or any(r.get("type") in ("price_below", "price_above", "change_pct_above", "change_pct_below") for r in rules)
     )
 
     # Share one market snapshot while retaining 60-bar alerts and 120-bar risk analysis.
