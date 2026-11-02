@@ -14,6 +14,15 @@ export interface RegisteredTool {
   execute: (id: string, args: Record<string, unknown>) => Promise<ToolResult>;
 }
 
+export async function timedStage<T>(stage: string, operation: () => Promise<T>): Promise<T> {
+  const started = performance.now();
+  try {
+    return await operation();
+  } finally {
+    console.error(`[timing] ${stage} seconds=${((performance.now() - started) / 1000).toFixed(3)}`);
+  }
+}
+
 export async function loadLLMHost(host: string): Promise<RegisteredTool[]> {
   if (!["pi", "openclaw", "dsh"].includes(host)) throw new Error("Expected pi, openclaw or dsh");
   const tools: RegisteredTool[] = [];

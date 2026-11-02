@@ -224,7 +224,7 @@ jobs:
             echo "OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL are required — skipping LLM e2e"
             exit 0
           fi
-          pytest tests/e2e/test_hermes_llm.py tests/e2e/test_analysis_quality.py -m integration_llm -v
+          pytest tests/e2e/test_hermes_llm.py tests/e2e/test_analysis_quality.py -m integration_llm -v --capture=tee-sys
 
       - name: E2E — ${{ matrix.host }} LLM flow
         if: matrix.host != 'hermes'
@@ -272,13 +272,18 @@ jobs:
       - name: Install Node dependencies (also builds repo .venv via postinstall)
         run: npm ci
 
-      - name: Install host CLIs
-        # Pin the current host releases so failures are reproducible.
-        run: |
-          npm i -g @earendil-works/pi-coding-agent@1.4.0
-          npm i -g openclaw@2026.10.9
-          npm i -g @deepseek-ai/dsh@0.2.1-rc.5
-          npm i -g pnpm@10
+      # Pin each host release; Hermes installs its Python runtime inside host_smoke.mjs.
+      - name: Install Pi CLI
+        if: matrix.host == 'pi'
+        run: npm i -g @earendil-works/pi-coding-agent@1.4.0
+
+      - name: Install OpenClaw CLI
+        if: matrix.host == 'openclaw'
+        run: npm i -g openclaw@2026.10.9
+
+      - name: Install dsh CLI and package manager
+        if: matrix.host == 'dsh'
+        run: npm i -g @deepseek-ai/dsh@0.2.1-rc.5 pnpm@10
 
       - name: dsh research presets and persistent runtime (offline)
         if: matrix.host == 'dsh'

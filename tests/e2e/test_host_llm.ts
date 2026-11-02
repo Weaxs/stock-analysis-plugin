@@ -6,7 +6,7 @@
 //
 // Requires OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.
 
-import { loadLLMHost } from "./llm-host.js";
+import { loadLLMHost, timedStage } from "./llm-host.js";
 import OpenAI from "openai";
 
 const host = process.argv[2] ?? "pi";
@@ -28,6 +28,8 @@ console.log(`${host} LLM e2e (model: ${MODEL})`);
 const client = new OpenAI({
   apiKey,
   baseURL,
+  timeout: 120_000,
+  maxRetries: 1,
 });
 
 function toOpenAITools(names: string[]) {
@@ -50,12 +52,12 @@ async function runLoop(userMsg: string, toolNames: string[], maxTurns = 3) {
   const toolCallsSeen: { name: string; args: any; result: any }[] = [];
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const resp = await client.chat.completions.create({
+    const resp = await timedStage(`model:${turn + 1}`, () => client.chat.completions.create({
       model: MODEL,
       messages,
       tools,
       tool_choice: "auto",
-    });
+    }));
     const msg = resp.choices[0].message;
     messages.push(msg);
 
@@ -69,9 +71,9 @@ async function runLoop(userMsg: string, toolNames: string[], maxTurns = 3) {
       const args = JSON.parse(call.function.arguments || "{}");
 
       const tool = registered.find((r) => r.name === name);
-      const rawResult = tool
+      const rawResult = await timedStage(`tool:${tool?.name ?? "unknown"}`, async () => tool
         ? (await tool.execute(call.id, args)).content[0]?.text ?? ""
-        : JSON.stringify({ error: "unknown tool" });
+        : JSON.stringify({ error: "unknown tool" }));
 
       let parsedResult: any = null;
       try {
@@ -141,7 +143,9 @@ function assert(cond: boolean, msg: string) {
 
   // Probe akshare state outside the LLM path
   const tool = registered.find((r) => r.name === "parse_stock_list")!;
-  const probe = JSON.parse((await tool.execute("probe", { text: "贵州茅台和宁德时代" })).content[0].text);
+  const probeResult = await timedStage("probe:parse_stock_list", () =>
+    tool.execute("probe", { text: "贵州茅台和宁德时代" }));
+  const probe = JSON.parse(probeResult.content[0].text);
   const probeCodes = new Set(
     (probe.items || []).filter((i: any) => i.market === "A").map((i: any) => i.symbol as string)
   );

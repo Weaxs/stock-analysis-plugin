@@ -133,3 +133,89 @@ class TestEdgeCases:
     def test_empty_stock_map(self, set_stocks):
         set_stocks([])
         assert name_resolver.resolve("600519") == []
+
+
+def test_name_map_is_reused_across_cli_processes(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    counter = tmp_path / "fetches.txt"
+    script = textwrap.dedent("""\
+        import json, sys
+        from pathlib import Path
+        from types import SimpleNamespace
+        import pandas as pd
+
+        def fetch():
+            with Path(sys.argv[1]).open("a") as stream:
+                stream.write("fetch\\n")
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+        sys.modules["akshare"] = SimpleNamespace(stock_zh_a_spot_em=fetch)
+        from tools.name_resolver import resolve
+        print(json.dumps(resolve("贵州茅台")))
+        """)
+    for _ in range(2):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(counter)],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "STOCK_CACHE_DIR": str(tmp_path / "cache")},
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == [{"code": "600519", "name": "贵州茅台"}]
+    assert len(counter.read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("first", [[], [{"代码": "600519", "名称": None}], RuntimeError("provider down")])
+def test_empty_invalid_and_failed_maps_are_not_cached(monkeypatch, tmp_path, first):
+    import sys
+    from types import SimpleNamespace
+
+    import _cache
+    import pandas as pd
+
+    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
+    responses = iter([first, [{"代码": "600519", "名称": "贵州茅台"}]])
+
+    def fetch():
+        value = next(responses)
+        if isinstance(value, Exception):
+            raise value
+        return pd.DataFrame(value)
+
+    monkeypatch.setitem(sys.modules, "akshare", SimpleNamespace(stock_zh_a_spot_em=fetch))
+    if first == []:
+        assert name_resolver.resolve("600519") == []
+    else:
+        with pytest.raises(RuntimeError):
+            name_resolver.resolve("600519")
+    assert name_resolver.resolve("600519") == [{"code": "600519", "name": "贵州茅台"}]
+
+
+def test_name_map_refreshes_after_one_day(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    import _cache
+    import pandas as pd
+
+    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
+    now = [1000.0]
+    monkeypatch.setattr(_cache.time, "time", lambda: now[0])
+    names = iter(["原名称", "新名称"])
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(stock_zh_a_spot_em=lambda: pd.DataFrame([{"代码": "600519", "名称": next(names)}])),
+    )
+    assert name_resolver.resolve("600519")[0]["name"] == "原名称"
+    assert name_resolver.resolve("600519")[0]["name"] == "原名称"
+    now[0] += 86401
+    assert name_resolver.resolve("600519")[0]["name"] == "新名称"

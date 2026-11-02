@@ -14,6 +14,8 @@ import os
 
 import pytest
 
+from tests.analysis_quality import timed_stage
+
 pytestmark = pytest.mark.integration_llm
 
 
@@ -31,7 +33,7 @@ def client():
         from openai import OpenAI
     except ImportError:
         pytest.fail("openai SDK not installed. add to requirements-dev.txt")
-    return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=120, max_retries=1)
 
 
 @pytest.fixture(scope="module")
@@ -86,13 +88,14 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
 
     tool_calls_seen: list[dict] = []
 
-    for _ in range(max_turns):
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
+    for turn in range(max_turns):
+        with timed_stage(f"model:{turn + 1}"):
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+            )
         msg = resp.choices[0].message
         # Append the assistant message (must include tool_calls if present)
         messages.append(msg.model_dump(exclude_none=True))
@@ -111,7 +114,8 @@ def _run_agent_loop(client, hermes_ctx, user_msg: str, tool_names: list[str], ma
             if name not in hermes_ctx.handlers:
                 result = json.dumps({"error": f"unknown tool: {name}"})
             else:
-                result = hermes_ctx.handlers[name](args)
+                with timed_stage(f"tool:{name}"):
+                    result = hermes_ctx.handlers[name](args)
 
             try:
                 result_parsed = json.loads(result)
@@ -192,7 +196,8 @@ class TestSingleToolFlow:
         assert parse_calls, f"LLM did not call parse_stock_list. tool_calls={result['tool_calls']}"
 
         # akshare probe outside the loop — did the resolver work at all this run?
-        probe = json.loads(hermes_handlers.handlers["parse_stock_list"]({"text": "贵州茅台和宁德时代"}))
+        with timed_stage("probe:parse_stock_list"):
+            probe = json.loads(hermes_handlers.handlers["parse_stock_list"]({"text": "贵州茅台和宁德时代"}))
         probe_codes = {i["symbol"] for i in probe.get("items", []) if i.get("market") == "A"}
 
         if probe_codes:

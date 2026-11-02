@@ -9,30 +9,32 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _cache import DAY, cached  # noqa: E402
 from _subproc import utf8_stdio  # noqa: E402
 from stock_data import _akshare_retry  # noqa: E402
 
-_STOCK_MAP_CACHE = None
-
 
 def _load_stock_map() -> list[dict]:
-    global _STOCK_MAP_CACHE
-    if _STOCK_MAP_CACHE is not None:
-        return _STOCK_MAP_CACHE
-    try:
+    def fetch():
         import akshare as ak
 
         df = _akshare_retry(ak.stock_zh_a_spot_em)
         records = []
-        for _, row in df.iterrows():
-            records.append(
-                {
-                    "code": str(row.get("代码", "")),
-                    "name": str(row.get("名称", "")),
-                }
-            )
-        _STOCK_MAP_CACHE = records
+        for row in df.to_dict("records"):
+            code, name = str(row["代码"]), row["名称"]
+            if (
+                len(code) != 6
+                or not code.isascii()
+                or not code.isdigit()
+                or not isinstance(name, str)
+                or not name.strip()
+            ):
+                raise ValueError("Stock name map contains invalid codes or names")
+            records.append({"code": code, "name": name})
         return records
+
+    try:
+        return cached("stock-name-map:v1", DAY, fetch)
     except Exception as e:
         raise RuntimeError(f"Failed to load stock list: {e}") from e
 

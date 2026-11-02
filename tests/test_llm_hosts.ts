@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { loadLLMHost } from "./e2e/llm-host.js";
+import { loadLLMHost, timedStage } from "./e2e/llm-host.js";
 
 const expected = JSON.parse(readFileSync(new URL("../openclaw/openclaw.plugin.json", import.meta.url), "utf8")) as {
   contracts: { tools: string[] };
@@ -30,3 +30,18 @@ const piTools = await loadLLMHost("pi");
 const invalidMarket = await piTools.find(tool => tool.name === "get_market_capabilities")!
   .execute("invalid-market", {market: "INVALID"});
 assert.equal(JSON.parse(invalidMarket.content[0].text).error, "Python command returned no JSON");
+
+const timingLogs: string[] = [];
+const originalError = console.error;
+console.error = (...args: unknown[]) => { timingLogs.push(args.join(" ")); };
+try {
+  assert.equal(await timedStage("model:1", async () => "private answer"), "private answer");
+  await assert.rejects(timedStage("tool:parse_stock_list", async () => {
+    throw new Error("private error");
+  }), /private error/);
+} finally {
+  console.error = originalError;
+}
+assert.match(timingLogs[0], /model:1 seconds=\d+\.\d+/);
+assert.match(timingLogs[1], /tool:parse_stock_list seconds=\d+\.\d+/);
+assert(!timingLogs.join(" ").includes("private"));
