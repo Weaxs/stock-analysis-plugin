@@ -140,10 +140,16 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     needs_anom = any(r.get("type") == "anomaly" for r in rules)
     needs_risk = any(r.get("type") in ("risk_veto", "risk_level_at_least") for r in rules)
 
+    needs_quote = needs_anom or needs_risk or any(
+        r.get("type") in ("price_below", "price_above", "change_pct_above", "change_pct_below") for r in rules
+    )
+
     # Share one market snapshot while retaining 60-bar alerts and 120-bar risk analysis.
     with ThreadPoolExecutor(max_workers=4) as pool:
-        quote_job = pool.submit(_run_json, "stock_data.py", ["quote", symbol])
-        jobs = {"quote": quote_job}
+        jobs = {}
+        if needs_quote:
+            quote_job = pool.submit(_run_json, "stock_data.py", ["quote", symbol])
+            jobs["quote"] = quote_job
         if needs_tech or needs_anom or needs_risk:
             from technical import analyze_records
 
@@ -196,13 +202,13 @@ def check_rules(symbol: str, rules: list[dict]) -> dict:
     fetched = {
         key: value if isinstance(value, dict) and "error" not in value else None for key, value in fetched.items()
     }
-    quote = fetched["quote"] or {}
+    quote = fetched.get("quote") or {}
     tech = fetched.get("tech")
     anom = fetched.get("anom")
     risk = fetched.get("risk")
 
     warnings = []
-    if not quote or quote.get("price") is None:
+    if needs_quote and (not quote or quote.get("price") is None):
         warnings.append("quote fetch failed or missing price — price/change rules cannot fire")
     if needs_tech and not tech:
         warnings.append("technical analysis fetch failed — volume_ratio rules cannot fire")

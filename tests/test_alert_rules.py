@@ -203,6 +203,22 @@ class TestCheckRules:
         assert [e["rule"] for e in result["evaluated"]] == ["change_pct_above", "price_below"]
 
 
+def test_volume_only_alert_does_not_fetch_or_wait_for_quote(monkeypatch):
+    calls = []
+
+    def collect(script, args, **kwargs):
+        calls.append((script, args))
+        if args[0] == "quote":
+            pytest.fail("volume-only alerts must not fetch a quote")
+        return TECH if script == "technical.py" else []
+
+    monkeypatch.setattr(alert_rules, "_run_json", collect)
+    result = alert_rules.check_rules("AAPL", [{"type": "volume_ratio_above", "value": 2}])
+    assert result["hit_count"] == 1
+    assert result["meta"]["warnings"] == []
+    assert not any(args[0] == "quote" for _, args in calls)
+
+
 @pytest.mark.parametrize("failed_analysis", ["technical", "anomaly", "risk"])
 def test_analysis_exception_keeps_price_alert_and_marks_missing_data(monkeypatch, failed_analysis):
     import anomaly_detect
