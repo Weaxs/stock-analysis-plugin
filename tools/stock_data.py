@@ -1872,7 +1872,8 @@ def snapshot_hk() -> list:
     try:
         import akshare as ak
 
-        df = _akshare_retry(ak.stock_hk_spot_em)
+        with socket_timeout(25):
+            df = _akshare_retry(ak.stock_hk_spot_em)
         col_map = {
             "代码": "symbol",
             "名称": "name",
@@ -1900,7 +1901,8 @@ def snapshot_us() -> list:
     try:
         import akshare as ak
 
-        df = _akshare_retry(ak.stock_us_spot_em)
+        with socket_timeout(25):
+            df = _akshare_retry(ak.stock_us_spot_em)
         col_map = {
             "代码": "symbol",
             "名称": "name",

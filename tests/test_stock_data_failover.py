@@ -3209,6 +3209,29 @@ class TestSnapshotHkUsErrorDetail:
     """snapshot_hk/snapshot_us must surface the exception summary (type + message,
     truncated) instead of a bare fixed string — same shape as snapshot_a's error."""
 
+    @pytest.mark.parametrize("market", ["HK", "US"])
+    def test_snapshot_bounds_timeoutless_provider_requests(self, monkeypatch, market):
+        import requests
+
+        from tools import stock_data
+
+        timeouts = []
+
+        def send(session, request, **kwargs):
+            timeouts.append(kwargs.get("timeout"))
+            raise requests.exceptions.ReadTimeout("provider stalled")
+
+        provider = MagicMock()
+        getattr(provider, f"stock_{market.lower()}_spot_em").side_effect = lambda: requests.get(
+            "https://example.invalid/snapshot"
+        )
+        monkeypatch.setattr(requests.sessions.Session, "send", send)
+        monkeypatch.setattr(stock_data.time, "sleep", lambda _: None)
+        with patch.dict(sys.modules, {"akshare": provider}):
+            result = stock_data.cmd_market_snapshot(Namespace(market=market))
+        assert timeouts == [25, 25, 25]
+        assert result == [{"error": f"{market} snapshot unavailable: ReadTimeout: provider stalled"}]
+
     def test_hk_error_carries_summary(self, monkeypatch):
         monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
         mock_ak = MagicMock()

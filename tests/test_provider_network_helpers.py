@@ -28,3 +28,15 @@ def test_screener_validation_failure_stays_failure(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess([], 1, json.dumps(payload), ""))
     with pytest.raises(AssertionError):
         _run_cli("screener.py", ["screen", "--market", "US"])
+
+
+def test_l2_network_probe_allows_snapshot_sentiment_and_enrichment(monkeypatch):
+    def run(cmd, **kwargs):
+        # Snapshot (240s), sentiment (120s), one enrichment wave (360s), plus overhead.
+        assert kwargs["timeout"] > 720
+        payload = {"error": "A-share snapshot unavailable: connection closed", "market": "A"}
+        return subprocess.CompletedProcess(cmd, 1, json.dumps(payload), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(pytest.skip.Exception):
+        ScreenerChecks().test_screen_a_l2_enrichment()
