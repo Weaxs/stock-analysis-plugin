@@ -75,14 +75,19 @@ def test_semantic_reviewer_accepts_curated_reference_reports(client, case):
     assert check_report(case, report, review=review) == [], review
 
 
-@pytest.mark.parametrize("index", [0, 4], ids=["invented_price", "unfounded_prediction"])
-def test_semantic_reviewer_rejects_correct_citations_with_false_conclusions(client, index):
+@pytest.mark.parametrize(
+    ("index", "claim"),
+    [
+        (0, "现价999元，公司ROE为99%，因此确定上涨。"),
+        (4, "样本充足，可保证长期100%胜率。"),
+        (2, "报价80元来自2026-10-09，仅晚于分析日2026-10-14的行情变动未反映。"),
+    ],
+    ids=["invented_price", "unfounded_prediction", "stale_cutoff"],
+)
+def test_semantic_reviewer_rejects_correct_citations_with_false_conclusions(client, index, claim):
     case = CASES[index]
     report = reference_report(case)
-    report["core_conclusion"]["one_sentence"] = (
-        "现价999元，公司ROE为99%，因此确定上涨。" if index == 0 else "样本充足，可保证长期100%胜率。"
-    )
-    report["data_quality"]["limitations"] = ["无须降级判断"]
+    report["core_conclusion"]["one_sentence"] = claim
     review = review_report(client, OPENAI_MODEL, case, report)
     assert isinstance(review, dict)
     assert any(
