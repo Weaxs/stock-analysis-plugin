@@ -42,14 +42,14 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
-    "akshare>=1.18.97; python_version >= '3.11'",
+    "akshare>=1.20.24; python_version >= '3.11'",
     "akshare>=1.14.0; python_version < '3.11'",
     "yfinance>=0.2.36",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "pypinyin>=0.50.0",
     "requests>=2.33.0",
-    "newspaper4k>=0.9.0",
+    "newspaper4k>=0.9.6.1",
     "efinance>=0.5.0",
     "baostock>=0.8.8",
     "pytdx>=1.72",
