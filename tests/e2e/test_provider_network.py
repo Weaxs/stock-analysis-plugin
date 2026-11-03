@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tools._subproc import command_timeout
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 
@@ -150,7 +152,8 @@ class TestScreenerNetwork:
             assert "final" in c["scores"], f"candidate missing scores.final: {c.get('symbol')}"
 
     def test_screen_a_l2_enrichment(self):
-        out = _run_cli("screener.py", ["screen", "--market", "A", "--top", "3", "--l2"], timeout=300)
+        args = ["screen", "--market", "A", "--top", "3", "--l2"]
+        out = _run_cli("screener.py", args, timeout=command_timeout("screener.py", args))
         self._skip_if_snapshot_down(out, "A")
         assert isinstance(out, dict) and "candidates" in out, f"unexpected shape: {list(out)}"
         assert out["l2_enabled"] is True

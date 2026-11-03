@@ -1,8 +1,12 @@
 """Independent checks for final report claims against fixed tool evidence."""
 
+import contextlib
 import json
 import math
+import os
 import re
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -125,7 +129,33 @@ def check_report(case, report, *, review=None):
     return failures
 
 
+@contextlib.contextmanager
+def timed_stage(stage):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        print(
+            f"[timing] {stage} seconds={time.perf_counter() - started:.3f} pid={os.getpid()}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def review_report(client, model, case, report, *, request_context=None, tool_calls=None):
+    """Retry one malformed model response; a valid semantic rejection is final."""
+    for attempt in range(2):
+        try:
+            with timed_stage(f"review:{attempt + 1}"):
+                return _review_report_once(
+                    client, model, case, report, request_context=request_context, tool_calls=tool_calls
+                )
+        except ValueError:
+            if attempt:
+                raise
+
+
+def _review_report_once(client, model, case, report, *, request_context=None, tool_calls=None):
     """Review all final claims in a fresh model context, separate from the author."""
     response = client.chat.completions.create(
         model=model,
@@ -135,6 +165,7 @@ def review_report(client, model, case, report, *, request_context=None, tool_cal
                 "type": "function",
                 "function": {
                     "name": "submit_review",
+                    "strict": True,
                     "description": "提交独立审稿的正式结论",
                     "parameters": {
                         "type": "object",
@@ -200,5 +231,10 @@ def review_report(client, model, case, report, *, request_context=None, tool_cal
         or not isinstance(verdict["issues"], list)
         or not all(isinstance(issue, str) for issue in verdict["issues"])
     ):
-        raise ValueError("Reviewer verdict must match its declared schema")
+        shape = (
+            ", ".join(f"{key}={type(verdict.get(key)).__name__}" for key in (*criteria, "issues"))
+            if isinstance(verdict, dict)
+            else type(verdict).__name__
+        )
+        raise ValueError(f"Reviewer verdict must match its declared schema ({shape})")
     return verdict

@@ -237,6 +237,7 @@ def test_semantic_reviewer_requests_schema_constrained_verdict():
 
     def request(**kwargs):
         assert kwargs["tool_choice"] == {"type": "function", "function": {"name": "submit_review"}}
+        assert kwargs["tools"][0]["function"]["strict"] is True
         params = kwargs["tools"][0]["function"]["parameters"]
         assert params["type"] == "object"
         assert set(params["required"]) == set(ACCEPTED_REVIEW)
@@ -334,3 +335,52 @@ def test_warning_evidence_inherits_parent_provenance():
 def test_reference_report_does_not_invent_a_missing_stock_name():
     case = next(case for case in CASES if case["id"] == "missing")
     assert reference_report(case)["stock_name"] == "未知"
+
+
+def test_reviewer_retries_a_malformed_verdict_once_without_approving_rejection():
+    from types import SimpleNamespace
+
+    rejection = dict(ACCEPTED_REVIEW, conclusion_calibrated=False, issues=["Insufficient sample"])
+    responses = iter([_review_response(dict(rejection, conclusion_calibrated="false")), _review_response(rejection)])
+    calls = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
+    verdict = review_report(client, "test", CASES[-1], reference_report(CASES[-1]))
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert verdict == rejection
+    assert check_report(CASES[-1], reference_report(CASES[-1]), review=verdict)
+
+
+def test_reviewer_stops_after_two_malformed_verdicts():
+    from types import SimpleNamespace
+
+    calls = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return _review_response(dict(ACCEPTED_REVIEW, facts_supported="true"))
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
+    with pytest.raises(ValueError, match="facts_supported=str"):
+        review_report(client, "test", CASES[0], reference_report(CASES[0]))
+    assert len(calls) == 2
+
+
+def test_valid_semantic_rejection_is_never_retried():
+    from types import SimpleNamespace
+
+    calls = []
+    rejection = dict(ACCEPTED_REVIEW, facts_supported=False, issues=["Unsupported claim"])
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return _review_response(rejection)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=request)))
+    assert review_report(client, "test", CASES[0], reference_report(CASES[0])) == rejection
+    assert len(calls) == 1

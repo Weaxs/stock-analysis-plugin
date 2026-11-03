@@ -518,3 +518,17 @@ def test_monthly_trend_native_request_transport_is_removed(monkeypatch):
     monkeypatch.setattr(hermes_tools, "_run", run)
     assert json.loads(hermes_tools.analyze_trend_strategy(payload)) == {"transport": "ok"}
     assert not seen[0].exists()
+
+
+def test_installed_plugin_uses_host_interpreter_without_activation(monkeypatch, tmp_path):
+    import sys
+
+    monkeypatch.setattr(hermes_tools, "PROJECT_ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        hermes_tools.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0, stdout='{"price":10}'),
+    )
+    assert json.loads(hermes_tools.get_quote({"symbol": "AAPL"}))["price"] == 10
+    assert calls[0][0] == sys.executable

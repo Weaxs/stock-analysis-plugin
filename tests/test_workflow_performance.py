@@ -131,3 +131,70 @@ def test_independent_risk_collection_starts_while_bars_are_pending(monkeypatch):
     monkeypatch.setattr(gather, "_run", collect)
     gather.gather_analysis("AAPL")
     assert observed == [True]
+
+
+def test_alerts_share_quote_and_bars_without_changing_analysis_windows(monkeypatch, make_kline_data):
+    import anomaly_detect
+    import risk_screening
+    import technical
+
+    from tools import alert_rules
+
+    bars = make_kline_data(120, "volatile")
+    for row in bars:
+        row["date"] = row["date"].strftime("%Y-%m-%d")
+    calls = Counter()
+
+    def collect(script, args, **kwargs):
+        if script == "technical.py":
+            count = int(args[args.index("--count") + 1]) if "--count" in args else 120
+            return technical.analyze_records(
+                args[1], collect("stock_data.py", ["kline", args[1], "--count", str(count)])
+            )
+        if script == "anomaly_detect.py":
+            return anomaly_detect.detect_anomalies(args[1])
+        if script == "risk_screening.py" and args[0] == "screen":
+            return risk_screening.screen_risk(args[1])
+        calls[script, args[0]] += 1
+        if args[0] == "kline":
+            return bars[-int(args[args.index("--count") + 1]) :]
+        if args[0] == "quote":
+            return {"price": 10, "pe": 15, "pb": 2}
+        if args[0] == "lockup":
+            return {"upcoming_30d": [], "flags": [], "available": True}
+        return []
+
+    monkeypatch.setattr(alert_rules, "_run_json", collect)
+    monkeypatch.setattr(risk_screening, "_run_tool", collect)
+    monkeypatch.setattr(anomaly_detect, "_run_tool", collect)
+    monkeypatch.setattr(
+        anomaly_detect, "fetch_kline", lambda s, p, n: collect("stock_data.py", ["kline", s, "--count", str(n)])
+    )
+    rules = [
+        {"type": "price_above", "value": 9},
+        {"type": "volume_ratio_above", "value": 0},
+        {"type": "anomaly", "value": "volume_spike"},
+        {"type": "risk_veto"},
+    ]
+    expected_volume = technical.analyze_records("600519", bars[-60:])["volume"]["volume_ratio"]
+    risk_windows, anomaly_windows = [], []
+    original_check = risk_screening.check_technical
+    original_detect = anomaly_detect.detect_anomalies
+
+    def check_technical(symbol, **kwargs):
+        risk_windows.append(kwargs["ta"]["data_points"])
+        return original_check(symbol, **kwargs)
+
+    def detect_anomalies(symbol, **kwargs):
+        anomaly_windows.append(len(kwargs["records"]))
+        return original_detect(symbol, **kwargs)
+
+    monkeypatch.setattr(risk_screening, "check_technical", check_technical)
+    monkeypatch.setattr(anomaly_detect, "detect_anomalies", detect_anomalies)
+    result = alert_rules.check_rules("600519", rules)
+    assert risk_windows == [120]
+    assert anomaly_windows == [60]
+    assert calls["stock_data.py", "quote"] == 1
+    assert calls["stock_data.py", "kline"] == 1
+    assert result["evaluated"][1]["actual"] == expected_volume
+    assert [row["rule"] for row in result["evaluated"]] == [row["type"] for row in rules]

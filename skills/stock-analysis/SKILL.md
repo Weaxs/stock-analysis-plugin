@@ -88,7 +88,7 @@ python3 scripts/gather.py <symbol>
    - 行情：`get_quote.price`、`get_quote.data_as_of`。
    - 财务：`get_financials.report_date`、`get_financials.roe`，以及历史 `periods` 中实际返回的 `report_date`、`roe`，路径含数字下标。
    - 回测：`run_backtest.metrics.total_trades`、`run_backtest.metrics.win_rate`。
-   每项保留原始 value，并按第 2 项填写 source/as_of；正文中的数字及其他证据的 as_of 元数据不替代独立引用。漏项先补齐再提交。报价过期时保留原始价格与时间作为历史证据，说明时效限制，等待新报价后再制定当前数值交易计划。
+   每项保留原始 value，并按第 2 项填写 source/as_of；正文中的数字及其他证据的 as_of 元数据不替代独立引用。漏项先补齐再提交。报价过期时保留原始价格与时间作为历史证据；结论与风险说明均以报价的 data_as_of 为行情覆盖截止点，明确该时点至分析日及之后的行情变动未知，等待新报价后再制定当前数值交易计划。
 4. 调用 `render_stock_report`：快速问答用 `brief`，完整研判用 `full`。
 5. 输出渲染后的 Markdown；只在用户要求机器可读数据时附加结构化 JSON。
 
