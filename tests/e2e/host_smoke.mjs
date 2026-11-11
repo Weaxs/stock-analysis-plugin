@@ -200,7 +200,7 @@ function smokeHermes() {
   sh(python, ["-m", "pip", "install", "--quiet", "--upgrade", "pip"]);
   const source = join(WORK, "hermes-source");
   sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.23.1", "https://github.com/NousResearch/hermes-agent.git", source]);
-  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "bf0203a794a07aac3ff764972ab9087baa4e4f4e", "Hermes source commit must match verified release");
+  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "3b421578588243f920886e6fe79a6faa87ea026e", "Hermes source commit must match verified release");
   // Hermes' uv.lock carries dependency overrides that pip cannot represent.
   sh(python, ["-m", "pip", "install", "--quiet", "uv==0.13.6"]);
   const uv = join(binDir, process.platform === "win32" ? "uv.exe" : "uv");
@@ -239,10 +239,11 @@ function smokeHermes() {
   const provider = "openai";
   sh(runtimePython, ["-c", `
 import hermes_bootstrap, os, sys
-from hermes_cli.oneshot import _validate_explicit_toolsets
+from hermes_cli.plugins import discover_plugins
 from hermes_cli.runtime_provider import resolve_runtime_provider
-toolsets, error = _validate_explicit_toolsets(['stock-analysis'])
-assert toolsets == ['stock-analysis'] and error is None, error
+from toolsets import validate_toolset
+discover_plugins()
+assert validate_toolset('stock-analysis'), 'stock-analysis toolset not registered by plugin discovery'
 runtime = resolve_runtime_provider(requested=sys.argv[1])
 assert runtime['api_mode'] == 'chat_completions', 'smoke requires Chat Completions'
 assert runtime['base_url'].rstrip('/') == os.environ['OPENAI_BASE_URL'].rstrip('/'), 'smoke endpoint mismatch'

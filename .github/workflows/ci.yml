@@ -270,7 +270,7 @@ jobs:
           python-version: ${{ matrix.host == 'hermes' && '3.14' || '3.11' }}
 
       - uses: actions/setup-node@v7
-        # OpenClaw 2026.10.9 requires Node >=24.22.1.
+        # OpenClaw 2026.11.3 requires Node >=24.16.0 <25 || >=26.1.0.
         with:
           node-version: "24"
           cache: "npm"
