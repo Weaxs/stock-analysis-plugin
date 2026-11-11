@@ -14,7 +14,7 @@ import {
 // Type-only import: pulls in the `Context.skills` service augmentation.
 import type {} from "@deepseek-ai/dsh-skill";
 import { venvPythonPath } from "../scripts/venv-python.mjs";
-import { registerToolDiscovery } from "./discovery.js";
+import { createToolDiscovery } from "./discovery.js";
 import { registerDashboard } from "./dashboard.js";
 
 // Indirected so tests can replace the executor without touching node:child_process.
@@ -146,8 +146,9 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
   if (config.toolDiscovery !== undefined && typeof config.toolDiscovery !== "boolean") {
     throw new TypeError("toolDiscovery must be a boolean");
   }
-  const previousTools = new Set(ctx.tools.schemas?.().map(tool => tool.name));
-  ctx.tools.register(
+  const discovery = config.toolDiscovery === false ? undefined : createToolDiscovery(ctx);
+  const register = (tool: Parameters<Context["tools"]["register"]>[0]) => ctx.tools.register(tool, discovery?.(tool));
+  register(
     pyTool({
       name: "get_announcements",
       description: "查询A股巨潮公告标题、日期、类型和原文PDF链接；按日期范围/类别筛选，默认近90天，top=1..500。第一版不提取正文，truncated提示截断。",
@@ -191,7 +192,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_us_holdings",
       description: "查询SEC 13F：mode=auto默认有13F申报时查机构，否则按发行人CIK反查持仓机构；manager/issuer可显式指定。发行人通过官方13D/G精确映射CUSIP，扫描最新已发布13F窗口，处理重述/补充修订，返回实际报告期、截止日及映射覆盖。首次约100MB下载，后续缓存；无映射明确报错，不做名称猜测。需SEC_USER_AGENT含真实联系邮箱，不是实时或全部证券持仓。",
@@ -208,7 +209,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_insider_trades",
       description: "查询美股发行人近期Form 4/4-A内部人交易（SEC官方XML），保留人员职务、交易代码、买卖方向、数量、价格、脚注和衍生品标志。需SEC_USER_AGENT含真实联系邮箱；days按申报日期筛选，top限制文件数，修订勿重复计数。",
@@ -234,7 +235,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Data Tools ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_valuation_history",
       description: "查询A/HK股票历史PE-TTM/PB、当前正值分位和10/25/50/75/90分位Band，返回实际采样区间；亏损估值分位为null。years=1..10，按天缓存。HK配置LIXINGER_TOKEN时优先理杏仁非金融公司日历史，失败降级百度，不混接来源。",
@@ -254,7 +255,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_index_valuation",
       description: "查询中国指数估值历史分位与Band；乐咕乐股PE/PB优先，中证官方历史补充滚动PE并保留近期PE1口径。缺PB时可用LIXINGER_TOKEN补充理杏仁mcw历史，来源与算法分别标明，不混接同一指标。",
@@ -274,7 +275,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_earnings_calendar",
       description: "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日），缺失时返回供应商日期。HK可按已知财政期末过滤，未知期次另列。",
@@ -297,7 +298,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_shareholder_structure",
       description: "查询A股股东户数、十大流通股东变化及沪深交易所季度北向合计持股；官方总量优先，十大HKSCC名义持股仅兜底且标明口径。HK返回港交所南向记录。缺失不当零，期末不等于已公布。",
@@ -317,7 +318,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_etf_details",
       description: "查询A股ETF净值折溢价、规模、披露持仓及沪深完整PCF申赎篮子；篮子不是实际持仓。include_full_holdings=true另取最近可得半年度/年度披露股票表，含数量/市值/报告期，非实时全资产组合；benchmark用于跟踪误差。",
@@ -342,7 +343,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_dividends",
       description: "查询A/HK分红历史、除息日历、已实施TTM股息与连续年数。mode=ranking省略symbol，market=A查报告期排行，market=HK查HKEX/LSEG年度股息率排行（report_date须年末）；排行均非当前TTM收益率。缺失不按零。",
@@ -379,7 +380,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_kline",
       description:
@@ -410,7 +411,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_quote",
       description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价。返回 source、UTC fetched_at 和提供方 data_as_of（未知为null）；as_of_basis区分提供方时间与交易日历推断，采集时间不等于行情时间。场外基金用 get_fund_quote；TIAAxxxxxx 返回投顾组合识别、advisor_org 与无统一净值提示；长钱/海外长钱/稳钱另有有知有行 official_disclosures（partial=true，非实时完整持仓）；其他组合搜索可用时为 search_partial，否则 unsupported_provider。",
@@ -422,7 +423,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_fund_quote",
       description: "获取场外公募基金净值（6位基金代码，如018147）。nav 是已披露日终净值，非实时价；返回 accumulated_nav（累计净值）、change_pct（日涨跌幅）、nav_date（净值日期）。estimated_nav 为估算净值，可能为 null，不能当作实时价；QDII 净值可能滞后 1-2 交易日。",
@@ -434,7 +435,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_capital_flow",
       description:
@@ -460,7 +461,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_news",
       description: "获取个股最近N天财经新闻快讯（轻量、无需配置）。需要深度全网情报用 search_comprehensive_intel，按主题搜索用 search_stock_news，读文章全文用 extract_article",
@@ -473,7 +474,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_financials",
       description: "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。有效Yahoo顶层快照按整组保留，currency为财报币种、market_cap_currency为市值币种、snapshot_source标明来源；缺失值及report_date不混入历史数值/日期。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
@@ -494,7 +495,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Analysis Tools ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_technical_analysis",
       description:
@@ -528,7 +529,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "analyze_pattern",
       description:
@@ -556,7 +557,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Market Tools ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_market_indices",
       description:
@@ -573,7 +574,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_sector_rankings",
       description:
@@ -604,7 +605,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_sector_constituents",
       description:
@@ -631,7 +632,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "resolve_stock_sectors",
       description:
@@ -648,7 +649,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_stock_info",
       description:
@@ -661,7 +662,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_chip_distribution",
       description:
@@ -678,7 +679,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_market_stats",
       description:
@@ -689,7 +690,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_limit_up_pool",
       description:
@@ -706,7 +707,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_dragon_tiger",
       description:
@@ -727,7 +728,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_hot_stocks",
       description: "获取A股全市场人气热搜榜（东方财富人气榜）",
@@ -739,7 +740,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_margin_trading",
       description:
@@ -754,7 +755,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_northbound_flow",
       description:
@@ -767,7 +768,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_fundamental_context",
       description:
@@ -786,7 +787,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Screener & Backtest ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "screen_stocks",
       description:
@@ -811,7 +812,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "calculate_rotation_metrics",
     description: "行业轮动数值复核：输入真实MC-dropout样本和/或历史成交计数，计算集中度和原始配权；不训练模型、不生成买入信号，零历史不补默认值。",
     parameters: {
@@ -876,7 +877,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "backtest_rotation_allocation",
     description: "行业轮动配权分项回测：代码自动取行情，或传明确币种/复权OHLCV；相同每周全池买卖下比较等权与历史配权。按市场和报价币种独立资金，支持A/HK/US/JP/KR/TW；不是完整论文深度模型或跨币种共享资金回测。",
     parameters: {
@@ -1000,7 +1001,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "analyze_trend_strategy",
     description: "月度右侧趋势策略：直接传同市场A/HK/US股票代码，自动获取日K，输出月度新入/持有/退出与逆波动预算。as_of默认最近已收盘交易日，持仓可选且不保存，不自动下单；跨样本仍not_validated。",
     parameters: {
@@ -1041,7 +1042,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "run_backtest",
       description:
@@ -1064,7 +1065,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "evaluate_signal",
       description:
@@ -1108,7 +1109,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Name Resolution ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "resolve_stock_name",
       description:
@@ -1128,7 +1129,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Trading Calendar ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "check_trading_day",
       description:
@@ -1151,7 +1152,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_trading_days",
       description: "获取最近/未来N个交易日列表。支持CN/HK/US/JP/KR/TW",
@@ -1179,7 +1180,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_trading_phase",
       description:
@@ -1199,7 +1200,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Standalone MA Calculator ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "calculate_ma",
       description:
@@ -1232,7 +1233,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Volume-Price Analysis ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_volume_analysis",
       description:
@@ -1260,7 +1261,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Search Intelligence ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "search_stock_news",
       description:
@@ -1274,7 +1275,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "search_comprehensive_intel",
       description:
@@ -1292,7 +1293,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_social_sentiment",
       description:
@@ -1305,7 +1306,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_trending_sentiment",
       description:
@@ -1316,7 +1317,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "extract_article",
       description:
@@ -1329,7 +1330,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "screen_risk",
       description:
@@ -1351,7 +1352,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "detect_market_regime",
       description:
@@ -1368,7 +1369,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_market_review",
       description:
@@ -1385,7 +1386,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "run_watchlist_analysis",
       description:
@@ -1406,7 +1407,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "detect_anomaly",
       description:
@@ -1425,7 +1426,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Diagnostics & Capabilities ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "diagnose_data_sources",
       description:
@@ -1442,7 +1443,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_market_capabilities",
       description:
@@ -1465,7 +1466,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Report Rendering ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "render_stock_report",
       description:
@@ -1492,7 +1493,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "render_market_report",
       description:
@@ -1521,7 +1522,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_review_history",
       description:
@@ -1536,7 +1537,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   // --- Watchlist / Position / Alert Context ---
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "build_watchlist_context",
       description:
@@ -1558,7 +1559,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "analyze_position_context",
       description:
@@ -1587,7 +1588,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "check_alert_rules",
       description:
@@ -1609,7 +1610,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "record_signal",
       description:
@@ -1649,7 +1650,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "evaluate_signals",
       description:
@@ -1666,7 +1667,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "get_signal_summary",
       description:
@@ -1691,7 +1692,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(
+  register(
     pyTool({
       name: "parse_stock_list",
       description:
@@ -1707,7 +1708,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     })
   );
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "compare_stocks",
     description: "无状态同行指标比较：先用现有财务/行情工具取数，再传companies；仅相同unit/basis/period可排序，缺失不填零，不生成买卖综合分。",
     parameters: {
@@ -1781,7 +1782,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "analyze_disclosure_changes",
     description: "无状态公告财报比较：传新旧正文及指标，返回变更行号、来源与财务变化；负/零基数增长率为null。不下载PDF、不代替经济解读。",
     parameters: {
@@ -1924,7 +1925,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "analyze_portfolio_risk",
     description: "无状态现货多头组合风险与压力测试：输入持仓、基准币种现金与汇率，返回集中度、币种/行业敞口、价格盈亏、止损情景及可选市场/行业/个股/汇率冲击损益。缺汇率报错；不保存账户。",
     parameters: {
@@ -2127,7 +2128,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "plan_portfolio_rebalance",
     description: "无状态组合调仓计划：按当前持仓、目标权重、现金、汇率、整手、费用和换手约束生成先卖后买清单；不保存账户或提交订单。",
     parameters: {
@@ -2268,7 +2269,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "calculate_position_size",
     description: "无状态多头仓位预算：同币种金额，按现金/风险预算/最大仓位/交易单位取最小数量，双边费用和滑点参与止损情景；不执行交易。",
     parameters: {
@@ -2321,7 +2322,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "analyze_event_study",
     description: "无状态事件研究：提供同市场股票及基准完整价格、事件日期；事件前一交易日收盘为基点，计算交易日窗口收益差。缺窗口/基准为null，标注重叠，不推断因果。",
     parameters: {
@@ -2409,7 +2410,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "validate_backtest",
     description: "无状态回测稳健性：输入历史OHLCV和完整候选DSL；滚动训练选参数、后续不重叠窗口验证，列出全部样本内敏感性及跨标的结果。仅next_open，不自动优化或保存。",
     parameters: {
@@ -2531,7 +2532,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
-  ctx.tools.register(closedTool({
+  register(closedTool({
     name: "compare_analysis_snapshots",
     description: "无状态快照比较：传新旧JSON，返回JSON Pointer及新增/删除/变化/失效/恢复；不保存快照。数组整体比较，调用前按symbol对齐。",
     parameters: {
@@ -2558,7 +2559,4 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
 
   registerDashboard(ctx, runPy);
   registerSkills(ctx);
-  if (config.toolDiscovery !== false) {
-    registerToolDiscovery(ctx, new Set(ctx.tools.schemas?.().filter(tool => !previousTools.has(tool.name)).map(tool => tool.name)));
-  }
 }
