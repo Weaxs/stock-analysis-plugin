@@ -29,6 +29,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 |------|---------|
 | 个股买卖时机 | `get_technical_analysis` → `get_market_capabilities` → 当前市场支持的资金/风险工具 → `detect_market_regime`。A股可加 `get_capital_flow`(summary) 和 `screen_risk`；其他市场不得用缺失的资金或风险数据。veto_buy=true 则不入场；大盘下跌时个股看多信号降级为轻仓试错或等待；HOLD/WAIT 给出可观察触发条件 |
 | 个股状态速览 | `get_quote` + `get_technical_analysis` |
+| 场外公募基金净值 | `get_fund_quote`（6 位基金代码，如 018147） |
 | 异动归因 | `detect_anomaly` + `get_news` |
 | 大盘择时 | `detect_market_regime`；A 股可补充 `get_market_stats` |
 
@@ -45,6 +46,8 @@ python3 scripts/gather.py <symbol>
 解析返回的 JSON 数据。如果某个字段为 `null` 或包含 `error`，表示该数据不可用，基于可用数据继续分析。大盘状态按股票所属市场查询；日/韩/台市场暂不支持，标明缺失，不能套用 A 股状态。
 
 解读实时行情前先调 `get_trading_phase` 确认该市场当前盘中阶段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），避免把休市时的静态快照当作盘中信号解读。
+
+场外公募基金净值查询使用 `get_fund_quote(symbol="018147")`，不要当作股票实时报价。`nav` 是 `nav_date` 对应的已披露日终净值而非实时价；`accumulated_nav` 为累计净值，`change_pct` 为日涨跌幅。`estimated_nav` 是估算值且可能为 `null`，缺失时不得编造或当作实时成交价；QDII 净值可能滞后 1-2 交易日，须披露实际 `nav_date`。`TIAAxxxxxx` 使用 `get_quote` 获取投顾组合识别与无统一净值提示，不推算组合净值。`advisor_code/advisor_org` 按 TIAA 前三位机构段与资本市场标准网基金投顾业务编码表进行 best-effort 映射，来源和抓取时间随结果返回；投顾机构不等于主理人，查不到时保留 null。`official_disclosures` 目前仅对确认属于有知有行的 `TIAA001001/TIAA001002/TIAA001004` 提供，其他 TIAA 组合不得套用该站文章；有搜索配置时可返回 `disclosure_status=search_partial` 和 `public_search_results`，其中每项均为 `verification=unverified_search_result`，只能作为待核实线索，否则为 `unsupported_provider`。官方披露含发布日期、摘要、正文摘录和 URL；`disclosures_partial=true` 时必须视为不完整历史披露，不能当作实时业绩或完整成分基金清单。示例账户收益不等于用户收益，引用基金代码时必须保留对应文章日期和链接。
 
 港股 `get_quote` 自动按 yfinance → 腾讯 → finnhub → longbridge 容灾，腾讯无需 API key，使用 `r_hk` 实时报价通道（`hk` 通道延迟约 15 分钟）。腾讯港股成交量为股，成交额及市值为港元；PB、换手率、量比为 null 时按缺失处理。该备用源只覆盖报价，K 线仍走原链路。
 

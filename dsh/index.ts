@@ -413,12 +413,24 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
   ctx.tools.register(
     pyTool({
       name: "get_quote",
-      description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价。返回 source、UTC fetched_at 和提供方 data_as_of（未知为null）；as_of_basis区分提供方时间与交易日历推断，采集时间不等于行情时间。",
+      description: "获取股票实时行情报价（现价、涨跌幅、量比等）。支持A股、港股、美股、日股、韩股、台股；非交易时段返回最近交易日收盘价并以 as_of/stale 标注；ETF 的 premium_discount_rate 为正=溢价、负=折价。返回 source、UTC fetched_at 和提供方 data_as_of（未知为null）；as_of_basis区分提供方时间与交易日历推断，采集时间不等于行情时间。场外基金用 get_fund_quote；TIAAxxxxxx 返回投顾组合识别、advisor_org 与无统一净值提示；长钱/海外长钱/稳钱另有有知有行 official_disclosures（partial=true，非实时完整持仓）；其他组合搜索可用时为 search_partial，否则 unsupported_provider。",
       parameters: {
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
       },
       script: "stock_data.py",
       argv: (p) => ["quote", p.symbol],
+    })
+  );
+
+  ctx.tools.register(
+    pyTool({
+      name: "get_fund_quote",
+      description: "获取场外公募基金净值（6位基金代码，如018147）。nav 是已披露日终净值，非实时价；返回 accumulated_nav（累计净值）、change_pct（日涨跌幅）、nav_date（净值日期）。estimated_nav 为估算净值，可能为 null，不能当作实时价；QDII 净值可能滞后 1-2 交易日。",
+      parameters: {
+        symbol: { type: "string", required: true, description: "6位场外公募基金代码，如 018147" },
+      },
+      script: "stock_data.py",
+      argv: (p) => ["fund_quote", p.symbol],
     })
   );
 

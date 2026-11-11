@@ -24,6 +24,7 @@ provides_tools:
   - get_dividends
   - get_kline
   - get_quote
+  - get_fund_quote
   - get_capital_flow
   - get_news
   - get_financials

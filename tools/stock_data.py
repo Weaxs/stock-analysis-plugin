@@ -1286,12 +1286,128 @@ def _quote_stale_marker(market: str):
     }
 
 
+_YOUZHIYOUXING_TIAA = {
+    "TIAA001001": "长钱账户",
+    "TIAA001002": "海外长钱",
+    "TIAA001004": "稳钱账户",
+}
+
+
+def _quote_tiaa(symbol: str) -> dict:
+    import requests
+
+    disclosure_name = _YOUZHIYOUXING_TIAA.get(symbol)
+    result = {
+        "symbol": symbol,
+        "name": None,
+        "asset_type": "investment_advisory_portfolio",
+        "type_description": "雪球投顾组合，无统一单位净值",
+        "manager": None,
+        "advisor_code": f"A{symbol[4:7]}",
+        "advisor_org": None,
+        "advisor_mapping_basis": "tiaa_prefix_best_effort",
+        "advisor_source_url": None,
+        "advisor_retrieved_at": None,
+        "nav": None,
+        "example_account_performance": None,
+        "quote_type": None,
+        "exchange": None,
+        "source": None,
+        "source_url": f"https://xueqiu.com/S/{symbol}",
+        "data_as_of": None,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "official_disclosures": [],
+        "public_search_results": [],
+        "disclosure_provider": "youzhiyouxing" if disclosure_name else None,
+        "disclosure_status": "unavailable" if disclosure_name else "unsupported_provider",
+        "disclosures_partial": True,
+        "disclosures_as_of": None,
+        "note": (
+            "投顾组合无统一净值；主理人及完整业绩/持仓需在对应投顾平台登录后查询；"
+            "官方公开披露仅为部分历史信息，持有人收益随买入时点和调仓跟进不同"
+        ),
+    }
+    try:
+        with requests.Session() as session:
+            session.get(
+                "https://xueqiu.com/",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+                allow_redirects=True,
+            ).raise_for_status()
+            response = session.get(
+                "https://stock.xueqiu.com/v5/stock/quote.json",
+                params={"symbol": symbol, "extend": "detail"},
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://xueqiu.com/"},
+                timeout=10,
+            )
+            response.raise_for_status()
+        payload = response.json()
+        if payload.get("error_code") not in (None, 0):
+            raise ValueError("xueqiu portfolio metadata unavailable")
+        quote = (payload.get("data") or {}).get("quote") or {}
+        if quote.get("symbol") != symbol:
+            raise ValueError("xueqiu returned different portfolio metadata")
+        result.update(
+            name=quote.get("name"),
+            quote_type=quote.get("type"),
+            exchange=quote.get("exchange"),
+            source="xueqiu",
+            data_as_of=_unix_quote_time(quote.get("timestamp")),
+        )
+    except Exception:
+        result["warnings"] = ["xueqiu portfolio name unavailable; type guidance remains available"]
+    if disclosure_name and result["name"] in (None, disclosure_name):
+        try:
+            from tiaa_disclosures import public_disclosures
+
+            disclosure = public_disclosures(symbol, disclosure_name)
+            result["official_disclosures"] = disclosure["items"]
+            result["disclosures_as_of"] = disclosure["as_of"]
+            if disclosure["items"]:
+                result["disclosure_status"] = "partial_public"
+        except Exception:
+            result.setdefault("warnings", []).append(
+                "official public disclosures unavailable; type guidance remains available"
+            )
+    elif disclosure_name and result["name"]:
+        result["disclosure_status"] = "unsupported_provider"
+        result.setdefault("warnings", []).append("portfolio name does not match the registered disclosure source")
+    else:
+        from tiaa_disclosures import search_public
+
+        result["public_search_results"] = search_public(symbol, result["name"])
+        if result["public_search_results"]:
+            result["disclosure_provider"] = "web_search"
+            result["disclosure_status"] = "search_partial"
+    try:
+        from tiaa_disclosures import advisor_metadata
+
+        result.update(advisor_metadata(symbol))
+    except Exception:
+        result.setdefault("warnings", []).append("advisor organization metadata unavailable")
+    return result
+
+
 def cmd_quote(args):
+    if re.fullmatch(r"TIAA\d{6}", args.symbol, re.IGNORECASE):
+        return _quote_tiaa(args.symbol.upper())
     market = detect_market(args.symbol)
     try:
         result = quote_a(args.symbol, evidence=True) if market == "A" else quote_yf(args.symbol, evidence=True)
     except Exception as e:
-        return {"error": str(e)}
+        result = {"error": str(e)}
+    # Exchange quotes cannot see open-end funds. Stock-only prefixes (SH 60/68, ChiNext 30, BSE) keep the bare error.
+    if (
+        isinstance(result, dict)
+        and "error" in result
+        and re.fullmatch(r"\d{6}", args.symbol)
+        and not re.match(r"(?:60|68|30|43|83|87|92)", args.symbol)
+    ):
+        result["hint"] = (
+            f"{args.symbol} 若为场外公募基金，请改用 get_fund_quote（stock_data.py fund_quote {args.symbol}）"
+        )
+        return result
     if isinstance(result, dict) and "error" not in result:
         marker = _quote_stale_marker(market)
         if marker:
@@ -1320,6 +1436,109 @@ def cmd_quote(args):
             except (ValueError, KeyError, TypeError, OSError):
                 pass  # Calendar/timestamp unavailable: retain the provider evidence without guessing.
     return result
+
+
+# --------------- open-end fund quote ---------------
+
+
+def _fund_js_value(text: str, name: str):
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*", text)
+    if not match:
+        raise ValueError(f"eastmoney fund data missing {name}")
+    try:
+        return json.JSONDecoder().raw_decode(text[match.end() :])[0]
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"eastmoney fund data has invalid {name}") from exc
+
+
+def _fund_nav_date(stamp) -> str:
+    return datetime.fromtimestamp(stamp / 1000, timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+
+
+def _fund_estimate(symbol: str) -> dict:
+    import akshare as ak
+
+    with socket_timeout(25):
+        df = ak.fund_value_estimation_em()
+    if df is None or df.empty or "基金代码" not in df.columns:
+        return {}
+    rows = df[df["基金代码"] == symbol]
+    value_col = next((c for c in df.columns if c.endswith("-估算数据-估算值")), None)
+    change_col = next((c for c in df.columns if c.endswith("-估算数据-估算增长率")), None)
+    if rows.empty or not value_col:
+        return {}
+    row = rows.iloc[0]
+    estimated_nav = _parse_float(row.get(value_col))
+    if estimated_nav is None:
+        return {}
+    return {
+        "estimated_nav": estimated_nav,
+        "estimated_change_pct": _parse_float(str(row.get(change_col)).rstrip("%")) if change_col else None,
+        "estimated_at": value_col.split("-估算数据-", 1)[0],
+        "estimate_status": "available",
+    }
+
+
+def cmd_fund_quote(args):
+    symbol = args.symbol
+    if not re.fullmatch(r"\d{6}", symbol):
+        return {"error": "open-end fund symbol must be exactly 6 digits"}
+    try:
+        import requests
+
+        response = requests.get(f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js", timeout=15)
+        response.raise_for_status()
+        text = response.text
+        if _fund_js_value(text, "fS_code") != symbol:
+            raise ValueError(f"eastmoney returned a different fund for {symbol}")
+        name = _fund_js_value(text, "fS_name")
+        nav_rows = _fund_js_value(text, "Data_netWorthTrend")
+        accumulated_rows = _fund_js_value(text, "Data_ACWorthTrend")
+        if not nav_rows:
+            raise ValueError(f"eastmoney returned no NAV for {symbol}")
+        latest = nav_rows[-1]
+        nav_date = _fund_nav_date(latest["x"])
+        accumulated_by_date = {_fund_nav_date(row[0]): row[1] for row in accumulated_rows}
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        estimate = {
+            "estimated_nav": None,
+            "estimated_change_pct": None,
+            "estimated_at": None,
+            "estimate_status": "unavailable",
+        }
+        warnings = []
+        try:
+            estimate.update(_fund_estimate(symbol))
+        except Exception:
+            warnings.append("estimated NAV provider request failed; published NAV remains available")
+        result = _clean_row(
+            {
+                "symbol": symbol,
+                "name": name,
+                "asset_type": "open_end_fund",
+                "nav": latest.get("y"),
+                "accumulated_nav": accumulated_by_date.get(nav_date),
+                "change_pct": latest.get("equityReturn"),
+                "nav_date": nav_date,
+                "data_as_of": nav_date,
+                "as_of": nav_date,
+                "as_of_basis": "provider",
+                "stale": nav_date < today,
+                "source": "eastmoney",
+                "source_url": f"https://fund.eastmoney.com/{symbol}.html",
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "note": (
+                    "nav is published end-of-day NAV, not a real-time price; QDII disclosure may lag "
+                    "1-2 trading days; estimated_nav is separate and may be unavailable"
+                ),
+                **estimate,
+            }
+        )
+        if warnings:
+            result["warnings"] = warnings
+        return result
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # --------------- capital_flow ---------------
@@ -1998,33 +2217,39 @@ def cmd_market_indices(args):
                 )
             return results
         elif region in _REGION_INDEX_SYMBOLS:
+            from concurrent.futures import ThreadPoolExecutor
+
             import yfinance as yf
 
             symbols = _REGION_INDEX_SYMBOLS[region]
-            results = []
-            for sym, name in symbols.items():
+
+            def fetch_index(item):
+                sym, name = item
                 try:
-                    t = yf.Ticker(sym)
-                    info = t.info
-                    results.append(
-                        _clean_row(
-                            {
-                                "code": sym,
-                                "name": name,
-                                "price": info.get("regularMarketPrice"),
-                                "change": info.get("regularMarketChange"),
-                                "change_pct": info.get("regularMarketChangePercent"),
-                                "volume": info.get("regularMarketVolume"),
-                                "high": info.get("regularMarketDayHigh"),
-                                "low": info.get("regularMarketDayLow"),
-                                "open": info.get("regularMarketOpen"),
-                                "prev_close": info.get("regularMarketPreviousClose"),
-                            }
-                        )
+                    info = yf.Ticker(sym).info
+                    return _clean_row(
+                        {
+                            "code": sym,
+                            "name": name,
+                            "price": info.get("regularMarketPrice"),
+                            "change": info.get("regularMarketChange"),
+                            "change_pct": info.get("regularMarketChangePercent"),
+                            "volume": info.get("regularMarketVolume"),
+                            "high": info.get("regularMarketDayHigh"),
+                            "low": info.get("regularMarketDayLow"),
+                            "open": info.get("regularMarketOpen"),
+                            "prev_close": info.get("regularMarketPreviousClose"),
+                            "source": "yfinance",
+                            "data_as_of": _unix_quote_time(info.get("regularMarketTime")),
+                            "fetched_at": datetime.now(timezone.utc).isoformat(),
+                        }
                     )
                 except Exception:
-                    results.append({"code": sym, "name": name, "note": "data unavailable"})
-            return results
+                    return {"code": sym, "name": name, "note": "data unavailable"}
+
+            # Preserve provider order while overlapping independent quote requests.
+            with ThreadPoolExecutor(max_workers=min(4, len(symbols))) as pool:
+                return list(pool.map(fetch_index, symbols.items()))
         return {"error": f"Unknown region: {region}"}
     except Exception as e:
         return {"error": str(e)}
@@ -3384,6 +3609,9 @@ def main():
     p_quote = sub.add_parser("quote")
     p_quote.add_argument("symbol")
 
+    p_fund_quote = sub.add_parser("fund_quote")
+    p_fund_quote.add_argument("symbol")
+
     p_cf = sub.add_parser("capital_flow")
     p_cf.add_argument("symbol", nargs="?", default="")
     p_cf.add_argument("--mode", default="detail", choices=["detail", "summary", "sector_flow"])
@@ -3453,6 +3681,7 @@ def main():
     dispatch = {
         "kline": cmd_kline,
         "quote": cmd_quote,
+        "fund_quote": cmd_fund_quote,
         "capital_flow": cmd_capital_flow,
         "news": cmd_news,
         "financials": cmd_financials,

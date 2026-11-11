@@ -89,8 +89,8 @@ await eager.plugin(ToolRuntime);
 await eager.plugin(SkillRegistry);
 await eager.plugin(stockPlugin, {toolDiscovery: false});
 try {
-  assert.equal(eager.tools.schemas().length, 71);
+  assert.equal(eager.tools.schemas().length, 72);
   assert.equal(eager.tools.get("stock_tool_search"), undefined);
-  assert.equal((await eager.systemPrompt.assemble({scope: {}})).tools.length, 71);
+  assert.equal((await eager.systemPrompt.assemble({scope: {}})).tools.length, 72);
 } finally { await eager.fiber.dispose(); }
 console.log("dsh discovery: scoped loading, Chinese search, permissions, fallback, and real Python round-trip passed");

@@ -25,6 +25,7 @@ const EXPECTED_TOOLS = [
   "get_dividends",
   "get_kline",
   "get_quote",
+  "get_fund_quote",
   "get_capital_flow",
   "get_news",
   "get_financials",
@@ -233,6 +234,23 @@ await registeredTools.find(t => t.name === "get_us_holdings")!.execute!("disclos
 assert(calls[calls.length - 1].some(x => x.endsWith("sec_edgar.py")) && JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["holdings", "0001067983"]), "get_us_holdings: argv mismatch");
 await registeredTools.find(t => t.name === "get_insider_trades")!.execute!("disclosure", {symbol: "AAPL", days: 30, top: 2});
 assert(calls[calls.length - 1].some(x => x.endsWith("sec_edgar.py")) && JSON.stringify(calls[calls.length - 1].slice(1)) === JSON.stringify(["insider_trades", "AAPL", "--days", "30", "--top", "2"]), "get_insider_trades: argv mismatch");
+
+const fundQuote = registeredTools.find(t => t.name === "get_fund_quote");
+assert(!!fundQuote, "get_fund_quote: not registered");
+if (fundQuote) {
+  const parameters = fundQuote.parameters as any;
+  assert(JSON.stringify(Object.keys(parameters.properties)) === JSON.stringify(["symbol"]), "get_fund_quote: only symbol is accepted");
+  assert(JSON.stringify(parameters.required) === JSON.stringify(["symbol"]) && parameters.properties.symbol.type === "string", "get_fund_quote: symbol must be a required string");
+  for (const term of ["nav", "已披露日终净值", "非实时价", "accumulated_nav", "change_pct", "nav_date", "estimated_nav", "null", "QDII", "1-2 交易日"]) {
+    assert(fundQuote.description.includes(term), `get_fund_quote: description missing ${term}`);
+  }
+  await fundQuote.execute!("fund_quote", {symbol: "018147"});
+  assert(calls.at(-1)![0].endsWith("stock_data.py") && JSON.stringify(calls.at(-1)!.slice(1)) === JSON.stringify(["fund_quote", "018147"]), "get_fund_quote: argv mismatch");
+}
+const quoteDescription = registeredTools.find(t => t.name === "get_quote")!.description;
+for (const term of ["get_fund_quote", "TIAAxxxxxx", "投顾组合", "无统一净值", "official_disclosures", "partial", "advisor_org", "search_partial"]) {
+  assert(quoteDescription.includes(term), `get_quote: description missing ${term}`);
+}
 
 // --- Summary ---
 if (failures > 0) {

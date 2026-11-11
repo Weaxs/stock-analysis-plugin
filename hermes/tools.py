@@ -66,6 +66,11 @@ def get_quote(args: dict, **kwargs) -> str:
     return _run("stock_data.py", ["quote", symbol])
 
 
+def get_fund_quote(args: dict, **kwargs) -> str:
+    symbol = args["symbol"]
+    return _run("stock_data.py", ["fund_quote", symbol])
+
+
 def get_capital_flow(args: dict, **kwargs) -> str:
     symbol = args.get("symbol", "")
     mode = args.get("mode", "detail")

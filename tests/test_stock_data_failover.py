@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+import time
 from argparse import Namespace
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -53,6 +54,7 @@ from tools.stock_data import (
     _xq_symbol,
     _yf_hk_symbol,
     cmd_capital_flow,
+    cmd_market_indices,
     cmd_market_stats,
     cmd_news,
     cmd_quote,
@@ -191,6 +193,41 @@ def mock_finnhub():
     mock_fh = MagicMock()
     with patch.dict(sys.modules, {"finnhub": mock_fh}):
         yield mock_fh
+
+
+def test_non_cn_indices_fetch_in_parallel_and_keep_symbol_order(mock_yfinance):
+    active = 0
+    max_active = 0
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        @property
+        def info(self):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            time.sleep(0.03)
+            active -= 1
+            return {
+                "regularMarketPrice": 101,
+                "regularMarketChange": 1,
+                "regularMarketChangePercent": 1,
+                "regularMarketVolume": 1000,
+                "regularMarketDayHigh": 102,
+                "regularMarketDayLow": 99,
+                "regularMarketOpen": 100,
+                "regularMarketPreviousClose": 100,
+            }
+
+    mock_yfinance.Ticker.side_effect = FakeTicker
+    result = cmd_market_indices(Namespace(region="us"))
+
+    assert max_active > 1
+    assert [row["code"] for row in result] == ["^DJI", "^IXIC", "^GSPC", "^RUT"]
+    assert result[0]["price"] == 101
+    assert result[0]["change_pct"] == 1
 
 
 class TestKlineYfinance:
