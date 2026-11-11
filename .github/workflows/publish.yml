@@ -213,7 +213,7 @@ jobs:
             || { echo "::error::dist/index.js missing from dsh npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
           grep -q "cordis.patch.yml" pack-dry-run.txt \
             || { echo "::error::cordis.patch.yml missing from dsh npm tarball — dsh bundle manifest would dangle"; exit 1; }
-          for file in dist/research-role.js research.patch.yml deepseek-search.patch.yml; do
+          for file in dist/research-role.js dist/client.js dist/web/index.html dist/web/app.js dist/web/style.css research.patch.yml deepseek-search.patch.yml; do
             grep -q "$file" pack-dry-run.txt \
               || { echo "::error::$file missing from dsh npm tarball"; exit 1; }
           done
@@ -228,14 +228,15 @@ jobs:
 
       - name: Publish unscoped variant to npm
         # The bundle manifest references the plugin by package name, so the
-        # unscoped variant's patch (and README install command) must name the
-        # unscoped package — otherwise a profile installing it would resolve
-        # the scoped name at boot and fail.
+        # unscoped variant's patch, browser module id (and README install command)
+        # must name the unscoped package — otherwise a profile installing it would
+        # resolve the scoped name at boot and fail.
         working-directory: dsh
         run: |
           npm pkg set name=dsh-stock-analysis
-          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml research.patch.yml README.md
+          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml research.patch.yml README.md dist/client.js
           grep -q 'name: "dsh-stock-analysis"' cordis.patch.yml
+          grep -q 'id: "dsh-stock-analysis"' dist/client.js
           npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

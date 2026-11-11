@@ -10,7 +10,7 @@ The architecture is **one Python core, four thin host adapters**:
 - `pi/index.ts` — Pi extension. `pi.registerTool` ×71, each spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
 - `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×71). Bundled with esbuild.
-- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×71 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
+- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×71 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). It also has a Web/Desktop-only dashboard (`client.ts` + `dashboard.ts` + `web/`, TypeScript compiled to browser IIFEs) backed by a resident warm cache of fixed CLI calls and served through snapshot/watchlist routes; it does not add model tools. Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
 - `skills/*/SKILL.md` — 21 workflow / strategy-methodology skills shared by all four hosts.
 
 > **The invariant that matters most:** the four adapters expose the *same* 71 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one.
@@ -158,6 +158,7 @@ Commands:
 npx tsx tests/test_pi_integration.ts                       # Pi registration (jiti load + skill paths)
 npx tsx tests/test_openclaw_integration.ts                 # OpenClaw registration
 npx tsx tests/test_dsh_integration.ts                      # dsh registration (tools + skills + bundle manifest)
+npx tsx tests/test_dsh_dashboard.ts                        # dsh dashboard warmer + snapshot API + watchlist + client manifest
 .venv/bin/python -m pytest tests/e2e/test_host_to_python.py -v     # host↔python round-trip
 npx tsx tests/e2e/test_pi_e2e.ts                           # Pi real-subprocess e2e
 npx tsx tests/e2e/test_openclaw_e2e.ts                     # OpenClaw real-subprocess e2e

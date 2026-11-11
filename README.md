@@ -108,6 +108,8 @@ dsh --profile <你的profile>
 
 作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 71 个 tool + 21 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
 
+支持 dsh 前端的宿主还会在侧栏提供「股票仪表盘」：可排序、按市场筛选的自选股行情表（今日区间、成交额、30 日走势），顶部六市场指数带与 A 股涨跌分布，下方各市场指数、A 股涨跌统计和行业涨跌榜。插件在后台常驻预热并缓存行情，页面只读内存快照，打开即显示；交易时段有页面打开时约 30 秒更新一次。数据仍复用共享 Python CLI，不新增模型工具。
+
 新版 dsh 的原生函数调用模式默认通过 `stock_tool_search` 按 Agent 搜索、加载所需工具，支持中文关键词或工具名；旧接口、搜索入口不可用时保留全量暴露。可设置 `toolDiscovery: false` 关闭，配置与 PTC 模式边界见下方接入文档。
 
 详见 [`dsh/README.md`](dsh/README.md)。
@@ -581,8 +583,11 @@ stock-analysis/
 │   └── index.ts                     #   definePluginEntry + registerTool ×71
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
-│   ├── package.json                 #   含 dsh.bundle 块（bundle manifest）
-│   └── index.ts                     #   cordis apply(ctx) + defineTool ×71
+│   ├── package.json                 #   dsh.bundle + dsh.client manifest
+│   ├── index.ts                     #   cordis apply(ctx) + defineTool ×71
+│   ├── dashboard.ts                 #   后台预热缓存 + 快照/自选股 HTTP API 与持久化
+│   ├── client.ts                    #   侧栏入口 + 主面板 + 主题同步（编译为 dist/client.js）
+│   └── web/                         #   仪表盘页面（app.ts 编译为 dist/web/app.js）
 │
 ├── tools/                           # 共享 Python CLI 工具
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪

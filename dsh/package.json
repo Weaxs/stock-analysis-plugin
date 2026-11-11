@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
+    "./client": "./dist/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./research-role": "./dist/research-role.js",
     "./research.patch.yml": "./research.patch.yml",
@@ -14,6 +15,15 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ]
     }
   },
   "scripts": {
@@ -51,7 +61,7 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2 || ^0.2.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2 || ^0.2.1-rc.2"
+    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2 || ^0.2.1-rc.2 || ^0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1 || ^0.1.7-rc.1 || ^0.2.0-rc.2 || ^0.2.1-rc.2 || ^0.2.2-rc.1"
   }
 }
