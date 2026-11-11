@@ -228,13 +228,13 @@ def _searxng_search(query: str, max_results: int = 5) -> list[dict]:
     return []
 
 
-def search_news(query: str, max_results: int = 10) -> dict:
+def search_news(query: str, max_results: int = 10, budget_seconds: int = 45) -> dict:
     results = []
     engines_tried = []
     engines_available = []
     engines_errors = {}
 
-    with _search_budget(45) as state:
+    with _search_budget(budget_seconds) as state:
         for name, fn in [
             ("tavily", _tavily_search),
             ("brave", _brave_search),

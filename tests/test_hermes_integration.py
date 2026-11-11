@@ -126,6 +126,7 @@ EXPECTED_TOOLS = sorted(
         "get_dividends",
         "get_kline",
         "get_quote",
+        "get_fund_quote",
         "get_capital_flow",
         "get_news",
         "get_financials",
@@ -221,6 +222,49 @@ def _make_ctx():
     ctx = MockCtx()
     register(ctx)
     return ctx
+
+
+def test_fund_quote_schema_and_cli_dispatch(monkeypatch):
+    schema = next((row for row in TOOL_SCHEMAS if row["name"] == "get_fund_quote"), None)
+    assert schema is not None, "get_fund_quote: not registered"
+    if schema is None:
+        return
+    assert list(schema["parameters"]["properties"]) == ["symbol"]
+    assert schema["parameters"]["required"] == ["symbol"]
+    assert schema["parameters"]["properties"]["symbol"]["type"] == "string"
+    for term in [
+        "nav",
+        "已披露日终净值",
+        "非实时价",
+        "accumulated_nav",
+        "change_pct",
+        "nav_date",
+        "estimated_nav",
+        "null",
+        "QDII",
+        "1-2 交易日",
+    ]:
+        assert term in schema["description"], f"get_fund_quote: description missing {term}"
+    quote_description = next(row["description"] for row in TOOL_SCHEMAS if row["name"] == "get_quote")
+    for term in [
+        "get_fund_quote",
+        "TIAAxxxxxx",
+        "投顾组合",
+        "无统一净值",
+        "official_disclosures",
+        "partial",
+        "advisor_org",
+        "search_partial",
+    ]:
+        assert term in quote_description, f"get_quote: description missing {term}"
+    handler = getattr(hermes_tools, "get_fund_quote", None)
+    assert callable(handler), "get_fund_quote: handler missing"
+    if not callable(handler):
+        return
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
+    assert handler({"symbol": "018147"}) == "{}"
+    assert calls == [("stock_data.py", ["fund_quote", "018147"])]
 
 
 def test_tools_match_expected():

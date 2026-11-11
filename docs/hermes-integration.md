@@ -183,8 +183,8 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) 入口
 │   ├── plugin.yaml       # 插件元数据清单
-│   ├── schemas.py        # 71 个工具的 JSON Schema
-│   └── tools.py          # 71 个 handler
+│   ├── schemas.py        # 72 个工具的 JSON Schema
+│   └── tools.py          # 72 个 handler
 └── tools/                # Python CLI 工具
 ```
 

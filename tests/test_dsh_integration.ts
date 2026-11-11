@@ -4,7 +4,7 @@
 // (defineTool is identity, so the options object is captured verbatim).
 // Verifies:
 //   - the plugin exports the cordis function-plugin form (name/inject/apply)
-//   - all 71 tools register, aligned with the canonical cross-host tool list
+//   - all 72 tools register, aligned with the canonical cross-host tool list
 //     (openclaw.plugin.json contracts.tools — the repo invariant says every
 //     host exposes the same set)
 //   - the dsh bundle manifest (package.json dsh.bundle.patch + cordis.patch.yml)
@@ -146,6 +146,24 @@ if (failures === 0) {
   console.log(`  OK: ${tools.length} tools registered, canonical list aligned`);
 }
 
+const fundQuote = tools.find(t => t.name === "get_fund_quote");
+assert(!!fundQuote, "get_fund_quote: not registered");
+if (fundQuote) {
+  assert(JSON.stringify(Object.keys(fundQuote.parameters)) === JSON.stringify(["symbol"]), "get_fund_quote: only symbol is accepted");
+  const symbol = fundQuote.parameters.symbol as any;
+  assert(symbol.type === "string" && symbol.required === true, "get_fund_quote: symbol must be a required string");
+  for (const term of ["nav", "已披露日终净值", "非实时价", "accumulated_nav", "change_pct", "nav_date", "estimated_nav", "null", "QDII", "1-2 交易日"]) {
+    assert(fundQuote.description.includes(term), `get_fund_quote: description missing ${term}`);
+  }
+  await fundQuote.execute({symbol: "018147"}, {});
+  const call = execCalls.at(-1)!;
+  assert(call.script.endsWith("stock_data.py") && JSON.stringify(call.args) === JSON.stringify(["fund_quote", "018147"]), "get_fund_quote: argv mismatch");
+}
+const quoteDescription = tools.find(t => t.name === "get_quote")!.description;
+for (const term of ["get_fund_quote", "TIAAxxxxxx", "投顾组合", "无统一净值", "official_disclosures", "partial", "advisor_org", "search_partial"]) {
+  assert(quoteDescription.includes(term), `get_quote: description missing ${term}`);
+}
+
 // --- Smoke-test every tool's execute() -----------------------------------
 
 console.log("Tool execute() smoke test:");
@@ -174,6 +192,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_dividends: { symbol: "600519" },
   get_kline: { symbol: "600519" },
   get_quote: { symbol: "600519" },
+  get_fund_quote: { symbol: "018147" },
   get_capital_flow: {},
   get_news: { symbol: "600519" },
   get_financials: { symbol: "600519", periods: 4, annual: true },

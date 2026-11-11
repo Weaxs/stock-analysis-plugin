@@ -175,6 +175,23 @@ if (failures === 0) {
   console.log(`  OK: ${tools.length} tools registered, manifest aligned`);
 }
 
+const fundQuote = tools.find(t => t.name === "get_fund_quote");
+assert(!!fundQuote, "get_fund_quote: not registered");
+if (fundQuote) {
+  assert(JSON.stringify(Object.keys(fundQuote.parameters.props)) === JSON.stringify(["symbol"]), "get_fund_quote: only symbol is accepted");
+  assert((fundQuote.parameters.props.symbol as any).__typebox === "string", "get_fund_quote: symbol must be a string");
+  for (const term of ["nav", "已披露日终净值", "非实时价", "accumulated_nav", "change_pct", "nav_date", "estimated_nav", "null", "QDII", "1-2 交易日"]) {
+    assert(fundQuote.description.includes(term), `get_fund_quote: description missing ${term}`);
+  }
+  await fundQuote.execute("fund_quote", {symbol: "018147"});
+  const call = execCalls.at(-1)!;
+  assert(call.script.endsWith("stock_data.py") && JSON.stringify(call.args) === JSON.stringify(["fund_quote", "018147"]), "get_fund_quote: argv mismatch");
+}
+const quoteDescription = tools.find(t => t.name === "get_quote")!.description;
+for (const term of ["get_fund_quote", "TIAAxxxxxx", "投顾组合", "无统一净值", "official_disclosures", "partial", "advisor_org", "search_partial"]) {
+  assert(quoteDescription.includes(term), `get_quote: description missing ${term}`);
+}
+
 // --- Smoke-test every tool's execute() -----------------------------------
 
 console.log("Tool execute() smoke test:");
@@ -203,6 +220,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_dividends: { symbol: "600519" },
   get_kline: { symbol: "600519" },
   get_quote: { symbol: "600519" },
+  get_fund_quote: { symbol: "018147" },
   get_capital_flow: {},
   get_news: { symbol: "600519" },
   get_financials: { symbol: "600519", periods: 4, annual: true },
