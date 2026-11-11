@@ -60,7 +60,7 @@ If search is registered but inactive, the plugin enables it and confirms activat
 
 The plugin preserves Pi's restored active tools across reloads. If an SDK reload does not emit `session_start`, initialization runs before the next model request.
 
-Use English keywords or exact tool names such as `get_quote`, `get_financials`, `screen_stocks`, and `run_backtest`: the current native ranker does not tokenize Chinese. The plugin supplies this guidance to the model only when discovery is enabled. Loaded tools remain active for the session, so the active set can grow during long conversations.
+Search with exact tool names such as `get_quote`, `get_financials`, `screen_stocks`, and `run_backtest`, or with keywords: since Pi 1.5 the native ranker segments Chinese, so Chinese terms like `实时行情` match the tools' Chinese descriptions; older Pi only matches English terms. The plugin supplies this guidance to the model only when discovery is enabled. Loaded tools remain active for the session, so the active set can grow during long conversations.
 
 After starting Pi Agent, type:
 

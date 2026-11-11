@@ -70,7 +70,7 @@ npm install @weaxs/stock-analysis-plugin
 
 Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
 
-新版 Pi（已核验 1.5.2）提供原生 `tool_search` 时，插件自动启用按需工具发现，72 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。检索使用英文关键词或工具名，例如 `get_quote`、`get_financials`。
+新版 Pi（已核验 1.5.2）提供原生 `tool_search` 时，插件自动启用按需工具发现，72 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。可直接用中文关键词或工具名检索，例如 `实时行情`、`get_quote`、`get_financials`；Pi 1.5 之前的版本只能匹配英文关键词。
 
 ### Hermes Agent Plugin
 
