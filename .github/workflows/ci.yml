@@ -144,6 +144,9 @@ jobs:
       - name: dsh plugin registration
         run: npx tsx tests/test_dsh_integration.ts
 
+      - name: dsh dashboard and watchlist regressions
+        run: npx tsx tests/test_dsh_dashboard.ts
+
       - name: dsh current SDK compatibility
         run: npx tsx tests/test_dsh_sdk_compat.ts
 

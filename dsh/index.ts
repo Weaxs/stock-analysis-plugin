@@ -15,14 +15,15 @@ import {
 import type {} from "@deepseek-ai/dsh-skill";
 import { venvPythonPath } from "../scripts/venv-python.mjs";
 import { registerToolDiscovery } from "./discovery.js";
+import { registerDashboard } from "./dashboard.js";
 
 // Indirected so tests can replace the executor without touching node:child_process.
-type Executor = (bin: string, argv: string[]) => Promise<string>;
+type Executor = (bin: string, argv: string[], timeoutMs?: number) => Promise<string>;
 
-const defaultExecutor: Executor = async (bin, argv) => {
+const defaultExecutor: Executor = async (bin, argv, timeoutMs) => {
   const exec = promisify(cp.execFile);
   try {
-    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024, timeout: commandTimeout(argv[0], argv.slice(1)) });
+    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs ?? commandTimeout(argv[0], argv.slice(1)) });
     return stdout;
   } catch (error) {
     const stdout = (error as { stdout?: string }).stdout;
@@ -42,9 +43,9 @@ export function __setExecutor(fn: Executor) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-// tools/ lives one level up: <pkg>/tools when published (here = dist/), repo tools/ in dev.
-const toolsDir = join(here, "..", "tools");
-const pkgRoot = dirname(toolsDir);
+// Published: <pkg>/dist -> <pkg>. Dev bundle: dsh/dist -> repo root.
+const pkgRoot = [join(here, ".."), join(here, "..", "..")].find(root => existsSync(join(root, "tools"))) ?? join(here, "..");
+const toolsDir = join(pkgRoot, "tools");
 const isWin = process.platform === "win32";
 
 function pythonBin(): string {
@@ -57,8 +58,8 @@ function pythonBin(): string {
   return isWin ? "python" : "python3";
 }
 
-async function runPy(script: string, args: string[]): Promise<string> {
-  return executor(pythonBin(), [join(toolsDir, script), ...args]);
+async function runPy(script: string, args: string[], timeoutMs?: number): Promise<string> {
+  return executor(pythonBin(), [join(toolsDir, script), ...args], timeoutMs);
 }
 
 // One canonical stdout contract shared by every tool: execute returns the
@@ -104,8 +105,8 @@ function closedTool<const S extends ParameterSchemaSpec>(opts: {
 
 // --- Skills ---------------------------------------------------------------
 
-// skills/ lives one level up: <pkg>/skills when published, repo skills/ in dev.
-const skillsDir = join(here, "..", "skills");
+// The same pkgRoot fallback covers published packages and the dev bundle.
+const skillsDir = join(pkgRoot, "skills");
 
 // Minimal single-line `key: value` read from the leading YAML frontmatter.
 function frontmatterValue(raw: string, key: string): string | undefined {
@@ -2543,6 +2544,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     },
   }));
 
+  registerDashboard(ctx, runPy);
   registerSkills(ctx);
   if (config.toolDiscovery !== false) {
     registerToolDiscovery(ctx, new Set(ctx.tools.schemas?.().filter(tool => !previousTools.has(tool.name)).map(tool => tool.name)));

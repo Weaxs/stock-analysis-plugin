@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="在 DeepSeek Harness 中查看自选股与六市场指数。">
+  <title>股票仪表盘</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <header class="bar">
+      <div class="bar-title">
+        <h1>自选</h1>
+        <span id="watch-count" class="count">0</span>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite">正在连接行情服务…</p>
+      <div class="bar-actions">
+        <button id="refresh" class="btn ghost" type="button" title="立即刷新全部行情">
+          <svg class="refresh-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1-.8-7.8L20 9"/></svg>
+          <span>刷新</span>
+        </button>
+        <button id="add-toggle" class="btn primary" type="button" aria-expanded="false" aria-controls="add-form">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+          <span>添加</span>
+        </button>
+      </div>
+    </header>
+
+    <form id="add-form" class="add" hidden>
+      <label class="sr-only" for="symbol-input">股票代码，多个用逗号分隔</label>
+      <input id="symbol-input" type="text" placeholder="600519, 00700.HK, AAPL, 7203.T" autocomplete="off" spellcheck="false" maxlength="512" required>
+      <button class="btn primary" type="submit">加入自选</button>
+      <button id="add-cancel" class="btn ghost" type="button">取消</button>
+      <p class="add-hint">A 股填 6 位代码；港股 .HK、日股 .T、韩股 .KS/.KQ、台股 .TW，美股直接填代码。最多 30 只。</p>
+      <p id="add-message" class="add-message" role="status" aria-live="polite"></p>
+    </form>
+
+    <section id="ribbon-wrap" class="ribbon" aria-label="主要指数">
+      <div id="ribbon" class="ribbon-track"></div>
+      <button class="ribbon-nav prev" type="button" data-step="-1" aria-label="查看前面的指数" hidden>
+        <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5"/></svg>
+      </button>
+      <button class="ribbon-nav next" type="button" data-step="1" aria-label="查看更多市场指数" hidden>
+        <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5L13 10l-5.5 5.5"/></svg>
+      </button>
+    </section>
+    <div id="pulse" class="pulse" aria-label="A 股市场宽度"></div>
+
+    <section class="watch" aria-labelledby="watch-heading">
+      <h2 id="watch-heading" class="sr-only">自选股行情</h2>
+      <div id="filters" class="filters" role="toolbar" aria-label="按市场筛选" hidden></div>
+      <div id="watch-error" class="notice" role="alert" hidden></div>
+      <div class="table-wrap">
+        <table class="quotes">
+          <thead>
+            <tr>
+              <th scope="col" class="c-name"><button type="button" data-sort="order">名称</button></th>
+              <th scope="col" class="c-num"><button type="button" data-sort="price">最新</button></th>
+              <th scope="col" class="c-num"><button type="button" data-sort="change_pct">涨跌幅</button></th>
+              <th scope="col" class="c-num c-change"><button type="button" data-sort="change">涨跌额</button></th>
+              <th scope="col" class="c-range">今日区间</th>
+              <th scope="col" class="c-num c-amount"><button type="button" data-sort="turnover">成交额</button></th>
+              <th scope="col" class="c-trend"><button type="button" data-sort="trend">30 日</button></th>
+              <th scope="col" class="c-act"><span class="sr-only">操作</span></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="market" aria-labelledby="market-heading">
+      <div class="market-head">
+        <h2 id="market-heading">市场</h2>
+        <div id="market-tabs" class="tabs" role="tablist" aria-label="切换市场"></div>
+      </div>
+      <div id="market-body" class="market-body" role="tabpanel" aria-labelledby="market-heading"></div>
+    </section>
+
+    <footer class="foot">报价可能延迟，悬停名称可查看来源与报价时间。交易时段内有页面打开时约每 30 秒更新一次，后台每 5 分钟预热；30 日走势为最近 30 个有效交易日收盘价。</footer>
+  </div>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+</body>
+</html>

@@ -47,6 +47,16 @@ allowBuilds:
 
 如果 venv 最终没建起来，plugin 会回退到系统 `python3`（Windows 为 `python`），此时请自行 `pip install -r tools/requirements.txt`。
 
+## 股票仪表盘（Web / Desktop）
+
+支持 dsh 前端的宿主会在侧栏显示「股票仪表盘」。首屏是自选股行情表：最新价、涨跌幅、涨跌额、今日区间（振幅与昨收位置）、成交额和 30 日走势（悬停可看每日收盘与较首日涨跌），可按列排序、按市场筛选；上方是六市场指数带和 A 股涨跌分布，下方可切换 A / HK / US / JP / KR / TW 查看各市场指数与交易阶段，A 股另有涨跌统计和行业领涨/领跌榜。其他市场没有用少数指数推算全市场宽度。
+
+自选股按代码添加，支持逗号批量导入和删除，最多 30 只，覆盖六个市场。列表保存在 `$STOCK_WATCHLIST_FILE`，未配置时保存到 `$DSH_HOME/stock-analysis/watchlist.json`（`DSH_HOME` 默认为 `~/.dsh`）。文件损坏时拒绝静默覆盖。
+
+数据由插件后台常驻预热：Web 路由注册后即开始按固定任务表调用现有 CLI（`stock_data.py quote/market_indices/kline/sector_rankings/market_stats` 与 `trading_calendar.py phase`），最多 4 个 Python 进程按优先级排队（报价 > 指数 > 走势 > 行业/统计），结果留在内存缓存。刷新节奏随各市场交易阶段变化：交易时段有页面打开时报价与指数约 30 秒、行业 1 分钟、全 A 统计 2 分钟；无人查看时放宽到 5–10 分钟；收盘后 30–60 分钟一次。失败保留上次成功值并标注，重试间隔按 1、2、4… 分钟退避。页面只轮询内存快照 `/api/snapshot`（有后台任务时 1.5 秒，否则 15 秒，页面不可见时停止），并在浏览器本地缓存 24 小时，打开即显示上次数据；「刷新」会让所有数据立即重新获取。不调用包含财务、新闻、风险等完整采集的 `run_watchlist_analysis`。前端接口只接受固定的快照、刷新和自选股操作，不开放任意 Python 脚本或参数。
+
+前端由 `dsh/client.ts`、`dsh/dashboard.ts` 和 `dsh/web/`（`app.ts` + HTML/CSS）组成，均为 TypeScript，`npm run build:dsh` 将浏览器端编译为 IIFE 输出到 `dist/`；它不增加或改变四宿主共享的 71 个模型工具。源码或 manifest 改动后重新运行 `npm run build:dsh` 并重装/重启对应 profile。
+
 ## 工具列表
 
 ### 行情数据
