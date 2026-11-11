@@ -194,7 +194,8 @@ def public_disclosures(symbol, portfolio_name):
                 search_results = _until(
                     deadline, _search_urls, portfolio_name, max(1, int(deadline - time.monotonic()))
                 )
-            except (TimeoutError, _DisclosureTimeout):
+            # concurrent.futures.TimeoutError only aliases the builtin from Python 3.11.
+            except (TimeoutError, FutureTimeoutError, _DisclosureTimeout):
                 timeout_state["search"] = True
             if time.monotonic() >= deadline:
                 timeout_state["search"] = True
