@@ -41,7 +41,7 @@ export default (pi: ExtensionAPI) => {
     return discoveryEnabled ? {
       message: {
         customType: "stock-analysis-discovery",
-        content: "Stock analysis tools are available through tool_search. Search using English keywords or exact tool names (e.g. get_quote, get_financials, screen_stocks, run_backtest); its search does not tokenize Chinese. Load the tools needed for the task, then call them normally.",
+        content: "Stock analysis tools are available through tool_search. Search with exact tool names (e.g. get_quote, get_financials, screen_stocks, run_backtest) or keywords; their descriptions are Chinese, so Chinese keywords match on Pi 1.5+, while older Pi matches only English/ASCII terms. Load the tools needed for the task, then call them normally.",
         display: false,
       },
     } : undefined;

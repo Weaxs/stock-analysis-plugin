@@ -362,7 +362,7 @@ for (const mode of ["legacy", "legacy-metadata", "native", "no-search", "search-
     assert(EXPECTED_TOOLS.every(name => tools.get(name)?.exposure === "deferred"), "native Pi: stock tools must be deferred");
     assert(JSON.stringify(active.slice().sort()) === JSON.stringify(["other_plugin", "read", "tool_search"]), "native Pi: only search is activated, other tools are preserved");
     const hint = await handlers.get("before_agent_start")?.({}, {});
-    assert(hint?.message?.content.includes("English") && hint.message.content.includes("tool_search"), "native Pi: tell the model how to discover Chinese-described tools");
+    assert(hint?.message?.content.includes("English") && hint.message.content.includes("Chinese keywords match") && hint.message.content.includes("tool_search"), "native Pi: tell the model how to discover Chinese-described tools");
     const quote = tools.get("get_quote")!;
     active.push("get_quote"); // Native tool_search loads a matching registered definition.
     await quote.execute!("discovery", {symbol: "600519"});

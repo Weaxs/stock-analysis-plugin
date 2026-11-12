@@ -270,7 +270,7 @@ jobs:
           python-version: ${{ matrix.host == 'hermes' && '3.14' || '3.11' }}
 
       - uses: actions/setup-node@v7
-        # OpenClaw 2026.10.9 requires Node >=24.22.1.
+        # OpenClaw 2026.11.3 requires Node >=24.16.0 <25 || >=26.1.0.
         with:
           node-version: "24"
           cache: "npm"
@@ -286,15 +286,15 @@ jobs:
       # Pin each host release; Hermes installs its Python runtime inside host_smoke.mjs.
       - name: Install Pi CLI
         if: matrix.host == 'pi'
-        run: npm i -g @earendil-works/pi-coding-agent@1.4.0
+        run: npm i -g @earendil-works/pi-coding-agent@1.5.2
 
       - name: Install OpenClaw CLI
         if: matrix.host == 'openclaw'
-        run: npm i -g openclaw@2026.10.9
+        run: npm i -g openclaw@2026.11.3
 
       - name: Install dsh CLI and package manager
         if: matrix.host == 'dsh'
-        run: npm i -g @deepseek-ai/dsh@0.2.1-rc.5 pnpm@10
+        run: npm i -g @deepseek-ai/dsh@0.2.2-rc.1 pnpm@10
 
       - name: dsh research presets and persistent runtime (offline)
         if: matrix.host == 'dsh'

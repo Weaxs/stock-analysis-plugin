@@ -5,12 +5,14 @@ import SkillRegistry from "@deepseek-ai/dsh-skill";
 import { createScope } from "@deepseek-ai/dsh-scope";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime, { defineTool } from "@deepseek-ai/dsh-tools";
+import * as NativeExecutor from "@deepseek-ai/dsh-tool-executor-native";
 import { ToolCallId } from "@deepseek-ai/dsh-llm";
 import * as stockPlugin from "../dsh/index.js";
 
 const ctx = new Context();
 await ctx.plugin(SystemPrompt);
 await ctx.plugin(ToolRuntime);
+await ctx.plugin(NativeExecutor);
 await ctx.plugin(SkillRegistry);
 const plugin = await ctx.plugin(stockPlugin);
 try {
@@ -25,12 +27,21 @@ try {
   await ctx.plugin({name: "discovery-test-scopes", inject: ["tools"], apply(inner: Context) { scopeOwner = inner; }});
   const firstScope = createScope(scopeOwner, first);
   const secondScope = createScope(scopeOwner, second);
-  const names = async (scope: object) => (await ctx.systemPrompt.assemble({scope})).tools.map(tool => tool.name);
+  const step = (scope: object) => ctx.tools.resolve({agent: scope as Agent, modelSelection: {provider: "p", model: "m"} as never, signal: new AbortController().signal});
+  const names = async (scope: object) => {
+    const toolSet = await step(scope);
+    try { return (await ctx.systemPrompt.assemble({scope, toolSet})).tools.map(tool => tool.name); } finally { toolSet.dispose(); }
+  };
+  const call = async (scope: object, name: string, args: object) => {
+    const toolSet = await step(scope);
+    try {
+      const batch = await ctx.tools.execute({calls: [{type: "tool-call", id: ToolCallId(name), name, arguments: JSON.stringify(args)}],
+        agent: scope as Agent, toolSet, signal: new AbortController().signal});
+      return batch.results[0].result;
+    } finally { toolSet.dispose(); }
+  };
   const search = async (scope: object, query: string, limit = 5) => {
-    const result = await ctx.tools.execute({
-      callId: ToolCallId("discovery-test"), name: "stock_tool_search",
-      arguments: {query, limit}, agent: scope as Agent, signal: new AbortController().signal,
-    });
+    const result = await call(scope, "stock_tool_search", {query, limit});
     assert.equal(result.isError, false, JSON.stringify(result));
     return JSON.parse(String(result.value));
   };
@@ -55,10 +66,7 @@ try {
   assert(chinese.loaded.some((tool: {name: string}) => tool.name === "get_financials"), "Chinese descriptions must be searchable");
   await search(second, "get_market_capabilities", 1);
   assert((await names(second)).includes("get_market_capabilities"));
-  const capabilities = await ctx.tools.execute({
-    callId: ToolCallId("discovered-python"), name: "get_market_capabilities",
-    arguments: {market: "HK"}, agent: second as Agent, signal: new AbortController().signal,
-  });
+  const capabilities = await call(second, "get_market_capabilities", {market: "HK"});
   assert.equal(capabilities.isError, false);
   assert.equal(JSON.parse(String(capabilities.value)).market, "HK", "a discovered tool must execute the real Python CLI");
   assert.deepEqual((await search(first, "nonexistent_zzzzz")).loaded, []);
@@ -72,8 +80,9 @@ try {
   assert(!(await names(first)).includes("get_quote"), "re-enabled discovery starts with an empty loaded set");
   const disposePtc = ctx.on("system-prompt/assemble", async (_assembly, _context, next) => {
     const assembly = await next();
-    return {...assembly, tools: [...assembly.tools, {name: "run_code", description: "PTC transport", parameters: {type: "object"}}]};
+    return {...assembly, sections: [...assembly.sections, {name: "tools:sdk", order: 0, text: "sdk", interpolate: false} as never]};
   });
+  await names(first); // the PTC SDK section is observed by assembly, after this step's activation
   assert((await names(first)).includes("run_backtest"), "PTC presentation keeps the host-owned catalog");
   disposePtc();
   await firstScope.dispose();
@@ -86,6 +95,7 @@ try {
 const eager = new Context();
 await eager.plugin(SystemPrompt);
 await eager.plugin(ToolRuntime);
+await eager.plugin(NativeExecutor);
 await eager.plugin(SkillRegistry);
 await eager.plugin(stockPlugin, {toolDiscovery: false});
 try {
