@@ -167,3 +167,24 @@ def test_concurrent_sec_queries_download_same_archive_once(monkeypatch, tmp_path
     assert calls == [True]
     assert results[0] == results[1]
     assert zipfile.is_zipfile(results[0])
+
+
+def test_sec_download_removes_archives_of_older_windows(monkeypatch, tmp_path):
+    import io
+    import zipfile
+
+    import sec_holders
+
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive:
+        archive.writestr("data", "new")
+    old = tmp_path / "sec-13f-0000000000000000.zip"
+    old.write_bytes(b"old quarter")
+    monkeypatch.setattr(sec_holders._cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(
+        sec_holders,
+        "sec_get",
+        lambda *a, **kw: SimpleNamespace(iter_content=lambda **kw: iter([content.getvalue()]), close=lambda: None),
+    )
+    path = sec_holders.bulk_file({"url": "https://example.invalid/new.zip"})
+    assert sorted(p.name for p in tmp_path.glob("sec-13f-*.zip")) == [path.name]

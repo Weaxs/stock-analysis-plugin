@@ -1,5 +1,6 @@
 """Exact issuer CUSIPs joined to the latest published SEC 13F bulk window."""
 
+import contextlib
 import csv
 import hashlib
 import io
@@ -129,6 +130,11 @@ def bulk_file(window):
                         raise ValueError("SEC bulk download is not a valid ZIP archive")
             finally:
                 response.close()
+            # Each quarter is a ~100 MB archive; keep only the current window.
+            for old in path.parent.glob("sec-13f-*.zip"):
+                if old != path:
+                    with contextlib.suppress(OSError):
+                        old.unlink()
             return path
     except OSError as exc:
         raise ValueError(f"SEC bulk archive unavailable ({type(exc).__name__})") from None

@@ -38,6 +38,7 @@ const fakeTypebox = {
     Optional: (s: unknown) => ({ __t: "optional", s }),
     Union: (schemas: unknown[]) => ({ __t: "union", schemas }),
     Literal: (v: unknown) => ({ __t: "literal", v }),
+    Unknown: () => ({ __t: "unknown" }),
     Array: (item: unknown) => ({ __t: "array", item }),
   },
 };

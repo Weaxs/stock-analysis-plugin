@@ -1,4 +1,5 @@
 import { withJsonInput } from "../scripts/json-input.mjs";
+import { cliJson, failureMessage, withoutNulls } from "../scripts/cli-json.mjs";
 import { commandTimeout } from "../scripts/cli-timeout.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as cp from "node:child_process";
@@ -18,26 +19,21 @@ import { createToolDiscovery } from "./discovery.js";
 import { registerDashboard } from "./dashboard.js";
 
 // Indirected so tests can replace the executor without touching node:child_process.
-type Executor = (bin: string, argv: string[], timeoutMs?: number) => Promise<string>;
+type Executor = (bin: string, argv: string[], timeoutMs?: number, signal?: AbortSignal) => Promise<string>;
 
-const defaultExecutor: Executor = async (bin, argv, timeoutMs) => {
+export const __defaultExecutor: Executor = async (bin, argv, timeoutMs, signal) => {
   const exec = promisify(cp.execFile);
   try {
-    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs ?? commandTimeout(argv[0], argv.slice(1)) });
-    return stdout;
+    const { stdout } = await exec(bin, argv, { maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs ?? commandTimeout(argv[0], argv.slice(1)), signal });
+    return cliJson(stdout);
   } catch (error) {
-    const stdout = (error as { stdout?: string }).stdout;
-    try {
-      const data = JSON.parse(stdout ?? "");
-      if (data && typeof data.error === "string") return stdout!;
-    } catch {
-      // A failed subprocess without JSON must not expose stderr or command arguments.
-    }
-    return JSON.stringify({ error: (error as { killed?: boolean }).killed ? "Python command timed out" : "Python command failed; check interpreter/dependencies" });
+    // stderr and command arguments are never surfaced.
+    const failed = error as { stdout?: string; code?: unknown; killed?: boolean };
+    return cliJson(failed.stdout ?? "", failureMessage(failed));
   }
 };
 
-let executor: Executor = defaultExecutor;
+let executor: Executor = __defaultExecutor;
 export function __setExecutor(fn: Executor) {
   executor = fn;
 }
@@ -58,8 +54,8 @@ function pythonBin(): string {
   return isWin ? "python" : "python3";
 }
 
-async function runPy(script: string, args: string[], timeoutMs?: number): Promise<string> {
-  return executor(pythonBin(), [join(toolsDir, script), ...args], timeoutMs);
+async function runPy(script: string, args: string[], timeoutMs?: number, signal?: AbortSignal): Promise<string> {
+  return executor(pythonBin(), [join(toolsDir, script), ...args], timeoutMs, signal);
 }
 
 // One canonical stdout contract shared by every tool: execute returns the
@@ -147,7 +143,13 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
     throw new TypeError("toolDiscovery must be a boolean");
   }
   const discovery = config.toolDiscovery === false ? undefined : createToolDiscovery(ctx);
-  const register = (tool: Parameters<Context["tools"]["register"]>[0]) => ctx.tools.register(tool, discovery?.(tool));
+  const register = (definition: Parameters<Context["tools"]["register"]>[0]) => {
+    const tool = {
+      ...definition,
+      execute: (args: unknown, exec: Parameters<typeof definition.execute>[1]) => definition.execute(withoutNulls(args), exec),
+    };
+    return ctx.tools.register(tool, discovery?.(tool));
+  };
   register(
     pyTool({
       name: "get_announcements",
@@ -1467,8 +1469,9 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
   // --- Report Rendering ---
 
   register(
-    pyTool({
+    defineTool({
       name: "render_stock_report",
+      output: textOutput,
       description:
         "股票分析报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 skill 提供的 report_schema 为准，不要自造字段。template: brief|full。全部分析完成后的最后一步调用。默认仅渲染；final=true表示最终回复，支持直出的宿主可原样交付并结束本轮。report可包含evidence（path/label/value/source/as_of）与data_quality（flags/limitations），brief/full均展示证据和限制。",
       parameters: {
@@ -1485,17 +1488,15 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
           description: "模板类型，默认 full",
         },
       },
-      script: "report_renderer.py",
-      argv: (p) => {
-        const b64 = Buffer.from(JSON.stringify(p.report), "utf-8").toString("base64");
-        return ["stock", "--template", p.template ?? "full", "--input-b64", b64, ...(p.final ? ["--final"] : [])];
-      },
+      execute: (p) => withJsonInput(p.report, (path: string) =>
+        runPy("report_renderer.py", ["stock", "--template", p.template ?? "full", "--input", path, ...(p.final ? ["--final"] : [])])),
     })
   );
 
   register(
-    pyTool({
+    defineTool({
       name: "render_market_report",
+      output: textOutput,
       description:
         "大盘复盘报告渲染 — 将结构化报告 JSON 通过 j2 模板渲染为 Markdown。report 字段以 schemas/market_review_schema.json 为准。save=true 时把报告对象追加归档到本地 JSONL（默认不保存不推送），纵向对比用 get_review_history；final=true仅用于最终回复，保存附件或继续分析时保持false",
       parameters: {
@@ -1511,14 +1512,8 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
           description: "是否归档到本地复盘 JSONL 存储，默认 false",
         },
       },
-      script: "report_renderer.py",
-      argv: (p) => {
-        const b64 = Buffer.from(JSON.stringify(p.report), "utf-8").toString("base64");
-        const args = ["market", "--input-b64", b64];
-        if (p.final) args.push("--final");
-        if (p.save) args.push("--save");
-        return args;
-      },
+      execute: (p) => withJsonInput(p.report, (path: string) =>
+        runPy("report_renderer.py", ["market", "--input", path, ...(p.final ? ["--final"] : []), ...(p.save ? ["--save"] : [])])),
     })
   );
 
@@ -1597,7 +1592,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         symbol: { type: "string", required: true, description: "股票代码（A股如600519，美股如AAPL，港股如00700.HK）" },
         rules: {
           type: "array",
-          items: { type: "object", additionalProperties: true },
+          items: { type: "object", additionalProperties: true, properties: { type: { type: "string" }, value: { type: "json" } } },
           required: true,
           description: "规则列表，每项 { type, value }",
         },

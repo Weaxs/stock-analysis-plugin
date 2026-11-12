@@ -19,7 +19,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, cached
 from _subproc import scrub_secrets, socket_timeout, utf8_stdio
-from stock_data import _A_INDEX_RE, _cn_code, _yf_hk_symbol, detect_market, normalize_stock_code
+from stock_data import _A_INDEX_RE, _cn_code, _cn_now, _yf_hk_symbol, detect_market, normalize_stock_code
 
 
 def records(frame):
@@ -94,7 +94,7 @@ def valuation_history(args):
                 from lixinger import hk_data
 
                 rows = hk_data(args.symbol, "fundamental", ["pe_ttm", "pb"])
-                cutoff = (date.today() - pd.DateOffset(years=args.years)).date().isoformat()
+                cutoff = (_cn_now().date() - pd.DateOffset(years=args.years)).date().isoformat()
                 history = sorted(
                     [
                         {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm")), "pb": number(r.get("pb"))}
@@ -133,7 +133,7 @@ def valuation_history(args):
             ),
         )
     merged = {}
-    cutoff = (date.today() - timedelta(days=365.25 * args.years)).isoformat()
+    cutoff = (_cn_now().date() - timedelta(days=365.25 * args.years)).isoformat()
     for field in ("pe_ttm", "pb"):
         for row in series.get(field, []):
             stamp = iso(row.get("date"))
@@ -201,7 +201,7 @@ def index_valuation(args):
         raise ValueError("years must be in 1..10")
     result = {"symbol": code, "name": name, "source": "legulegu", "requested_years": args.years}
     merged = {}
-    cutoff = (pd.Timestamp(date.today()) - pd.DateOffset(years=args.years)).date().isoformat()
+    cutoff = (pd.Timestamp(_cn_now().date()) - pd.DateOffset(years=args.years)).date().isoformat()
     for field, fn, column in [("pe_ttm", ak.stock_index_pe_lg, "滚动市盈率"), ("pb", ak.stock_index_pb_lg, "市净率")]:
         section = {}
         capture(
@@ -211,7 +211,7 @@ def index_valuation(args):
         )
         for row in section.get("rows", []):
             stamp = iso(row.get("日期"))
-            if stamp and cutoff <= stamp <= date.today().isoformat():
+            if stamp and cutoff <= stamp <= _cn_now().date().isoformat():
                 merged.setdefault(stamp, {"date": stamp})[field] = number(row.get(column))
         result.setdefault("warnings", []).extend(section.get("warnings", []))
     if not any(number(r.get("pe_ttm")) is not None for r in merged.values()) and re.fullmatch(
@@ -224,14 +224,14 @@ def index_valuation(args):
             lambda: dataset(
                 f"csi-history:{code}:{args.years}",
                 lambda: ak.stock_zh_index_hist_csindex(
-                    symbol=code, start_date=cutoff.replace("-", ""), end_date=date.today().strftime("%Y%m%d")
+                    symbol=code, start_date=cutoff.replace("-", ""), end_date=_cn_now().date().strftime("%Y%m%d")
                 ),
             ),
         )
         for row in section.get("history", []):
             stamp = iso(row.get("日期"))
             pe = number(row.get("滚动市盈率"))
-            if stamp and cutoff <= stamp <= date.today().isoformat() and pe is not None:
+            if stamp and cutoff <= stamp <= _cn_now().date().isoformat() and pe is not None:
                 merged.setdefault(stamp, {"date": stamp})["pe_ttm"] = pe
         capture(
             section,
@@ -240,7 +240,7 @@ def index_valuation(args):
         )
         for row in section.get("recent", []):
             stamp = iso(row.get("日期"))
-            if stamp and cutoff <= stamp <= date.today().isoformat():
+            if stamp and cutoff <= stamp <= _cn_now().date().isoformat():
                 merged.setdefault(stamp, {"date": stamp}).update(
                     pe=number(row.get("市盈率1")), dividend_yield=number(row.get("股息率1"))
                 )
@@ -258,9 +258,9 @@ def index_valuation(args):
     missing = [field for field in ("pe_ttm", "pb") if field not in result["metric_sources"]]
     if missing and os.environ.get("LIXINGER_TOKEN") and re.fullmatch(r"\d{6}|H\d{5}", code, re.I):
         section = {}
-        capture(section, "rows", lambda: lixinger_index_history(code, cutoff, date.today().isoformat()))
+        capture(section, "rows", lambda: lixinger_index_history(code, cutoff, _cn_now().date().isoformat()))
         for row in section.get("rows", []):
-            if row["date"] and cutoff <= row["date"] <= date.today().isoformat():
+            if row["date"] and cutoff <= row["date"] <= _cn_now().date().isoformat():
                 for field in missing:
                     if row[field] is not None:
                         merged.setdefault(row["date"], {"date": row["date"]})[field] = row[field]
@@ -346,7 +346,7 @@ def earnings_calendar(args):
             for board in ("main", "gem")
             for r in sections.get(board, [])
             if r["symbol"] == hk_code + ".HK"
-            and r["scheduled_date"] >= date.today().isoformat()
+            and r["scheduled_date"] >= _cn_now().date().isoformat()
             and (not stamp or r["report_date"] == stamp)
         ]
         events = list({(r["scheduled_date"], r["purpose"], r["report_date"]): r for r in events}.values())
@@ -370,7 +370,7 @@ def earnings_calendar(args):
                 "date_kind": "provider_earnings_schedule",
             }
             for d in sections.get("dates", [])
-            if d >= date.today().isoformat()
+            if d >= _cn_now().date().isoformat()
         ]
         if not stamp and not events:
             events = provider_events
@@ -391,7 +391,7 @@ def earnings_calendar(args):
                 "official dates are scheduled board meetings approving results, not actual disclosure dates; notice list may not be exhaustive",
                 "provider-only schedules have unverified fiscal periods and are not assigned to requested report_date",
             ],
-            "as_of": date.today().isoformat(),
+            "as_of": _cn_now().date().isoformat(),
         }
     if not stamp or stamp[5:] not in suffix:
         raise ValueError("report_date must be a quarter end for A-share earnings calendars")
@@ -495,8 +495,10 @@ def northbound_holdings(symbol, report_date=""):
     exchange = _cn_code(symbol)[:2]
     if exchange not in ("sh", "sz"):
         raise ValueError("Stock Connect holdings cover Shanghai/Shenzhen securities only")
-    if report_date and (not iso(report_date) or iso(report_date)[5:] not in ("03-31", "06-30", "09-30", "12-31")):
-        raise ValueError("report_date must be a quarter end")
+    if report_date:
+        report_date = iso(report_date)
+        if not report_date or report_date[5:] not in ("03-31", "06-30", "09-30", "12-31"):
+            raise ValueError("report_date must be a quarter end")
 
     def fetch():
         if exchange == "sh":
@@ -547,7 +549,7 @@ def northbound_holdings(symbol, report_date=""):
 
             stamp = report_date
             if not stamp:
-                end = date(date.today().year, ((date.today().month - 1) // 3) * 3 + 1, 1) - timedelta(days=1)
+                end = date(_cn_now().date().year, ((_cn_now().date().month - 1) // 3) * 3 + 1, 1) - timedelta(days=1)
                 for _ in range(2):
                     candidate = end.isoformat()
                     if query(candidate, "").get("data"):
@@ -566,7 +568,7 @@ def northbound_holdings(symbol, report_date=""):
             source = "SZSE quarterly Stock Connect holdings"
         if (
             not stamp
-            or stamp > date.today().isoformat()
+            or stamp > _cn_now().date().isoformat()
             or (report_date and stamp != report_date)
             or shares is None
             or shares < 0
@@ -581,7 +583,7 @@ def northbound_holdings(symbol, report_date=""):
             "note": "exchange-disclosed aggregate Stock Connect quantity for this security; not a top-ten shareholder inference",
         }
 
-    return cached(f"northbound-official:{symbol}:{report_date or date.today().isoformat()}", DAY, fetch)
+    return cached(f"northbound-official:{symbol}:{report_date or ''}", DAY, fetch)
 
 
 def shareholder_structure(args):
@@ -671,7 +673,7 @@ def shareholder_structure(args):
 def hk_dividend_ranking(report_date=""):
     import requests
 
-    stamp = iso(report_date) if report_date else f"{date.today().year - 1}-12-31"
+    stamp = iso(report_date) if report_date else f"{_cn_now().date().year - 1}-12-31"
     if not stamp or stamp[5:] != "12-31":
         raise ValueError("HK dividend ranking requires an annual year-end report_date")
 
@@ -768,7 +770,7 @@ def dividend_ranking(report_date="", market="A"):
         return hk_dividend_ranking(report_date)
     if market != "A":
         raise ValueError("dividend rankings cover A/HK only")
-    stamp = iso(report_date) if report_date else f"{date.today().year - 1}-12-31"
+    stamp = iso(report_date) if report_date else f"{_cn_now().date().year - 1}-12-31"
     if not stamp or stamp[5:] not in ("03-31", "06-30", "09-30", "12-31"):
         raise ValueError("dividend report_date must be a quarter end")
     rows = dataset(f"dividend-ranking:{stamp}", lambda: ak.stock_fhps_em(date=stamp.replace("-", "")))
@@ -804,7 +806,7 @@ def dividends(args):
     import akshare as ak
     from _subproc import run_tool
 
-    today = date.today()
+    today = _cn_now().date()
     result = {
         "symbol": args.symbol,
         "market": market,
@@ -1052,15 +1054,15 @@ def etf_basket(symbol):
                     "SHOWTYPE": "JSON",
                     "CATALOGID": "sgshqd",
                     "txtJCorDH": symbol,
-                    "txtStart": (date.today() - timedelta(days=30)).isoformat(),
-                    "txtEnd": date.today().isoformat(),
+                    "txtStart": (_cn_now().date() - timedelta(days=30)).isoformat(),
+                    "txtEnd": _cn_now().date().isoformat(),
                 },
                 headers={"Referer": "https://www.szse.cn/"},
                 timeout=20,
             )
             response.raise_for_status()
             dates = re.findall(rf"pcf_{re.escape(symbol)}_(\d{{8}})", json.dumps(response.json()))
-            dates = [d for d in dates if iso(d) and iso(d) <= date.today().isoformat()]
+            dates = [d for d in dates if iso(d) and iso(d) <= _cn_now().date().isoformat()]
             if not dates:
                 raise ValueError("no published SZSE PCF found")
             response = requests.get(
@@ -1083,7 +1085,7 @@ def etf_basket(symbol):
         if (
             fund_code != symbol
             or not stamp
-            or stamp > date.today().isoformat()
+            or stamp > _cn_now().date().isoformat()
             or not unit
             or unit <= 0
             or count != len(components)
@@ -1141,7 +1143,7 @@ def etf_basket(symbol):
             "basis": "complete published creation/redemption basket, not actual fund holdings; quantities per creation unit, rates are fractions",
         }
 
-    return cached(f"etf-basket:{symbol}:{date.today().isoformat()}", DAY, fetch)
+    return cached(f"etf-basket:{symbol}", DAY, fetch)
 
 
 def fund_disclosed_equities(symbol):
@@ -1208,7 +1210,7 @@ def fund_disclosed_equities(symbol):
             }
         raise ValueError("requested semiannual/annual equity report not available")
 
-    end = date(date.today().year, ((date.today().month - 1) // 6) * 6 + 1, 1) - timedelta(days=1)
+    end = date(_cn_now().date().year, ((_cn_now().date().month - 1) // 6) * 6 + 1, 1) - timedelta(days=1)
     requested = end.isoformat()
     for _ in range(2):
         stamp = end.isoformat()
@@ -1227,19 +1229,26 @@ def etf_details(args):
     symbol = _cn_code(args.symbol)[2:]
     if detect_market(args.symbol) != "A" or not normalize_stock_code(symbol)["is_etf"] or not 10 <= args.days <= 252:
         raise ValueError("ETF details requires an A-share ETF code and days in 10..252")
+    benchmark = (args.benchmark or "").strip()
+    if suffixed := re.fullmatch(r"(\d{6})\.(SH|SZ)", benchmark, re.I):
+        benchmark = suffixed[2].lower() + suffixed[1]
+    if benchmark and not re.fullmatch(
+        r"(?i)(sh|sz)?\d{6}|H\d{5}|93\d{4}|\^?(?!(sh|sz)\d)[A-Z][A-Z0-9.=-]{0,14}", benchmark
+    ):
+        raise ValueError("benchmark must be an index/ETF code such as sh000300, 399006, 000300.SH, H30269 or ^NDX")
     result = {
         "symbol": symbol,
         "market": "A",
         "source": "eastmoney",
         "holdings_basis": "latest disclosed fund portfolio, not a complete live creation/redemption basket",
     }
-    end = date.today()
+    end = _cn_now().date()
     start = end - timedelta(days=args.days * 2)
     capture(
         result,
         "nav_history",
         lambda: dataset(
-            f"etf-nav:{symbol}:{args.days}",
+            f"etf-nav:{symbol}:{args.days}:{end.isoformat()}",
             lambda: ak.fund_etf_fund_info_em(
                 fund=symbol, start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d")
             ),
@@ -1310,13 +1319,30 @@ def etf_details(args):
     capture(result, "basket", lambda: etf_basket(symbol))
     if getattr(args, "include_full_holdings", False):
         capture(result, "disclosed_equity_report", lambda: fund_disclosed_equities(symbol))
-    if args.benchmark:
-        benchmark = "sh" + args.benchmark if args.benchmark in INDEX_NAMES else args.benchmark
-        benchmark_rows = run_tool("stock_data.py", ["kline", benchmark, "--count", str(args.days + 5)])
+    if benchmark:
+        if re.fullmatch(r"H\d{5}|93\d{4}", benchmark.upper()):
+            benchmark = code = benchmark.upper()
+            capture(
+                result,
+                "benchmark_history",
+                lambda: dataset(
+                    f"csi-close:{code}:{args.days}:{end.isoformat()}",
+                    lambda: ak.stock_zh_index_hist_csindex(
+                        symbol=code, start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d")
+                    ),
+                ),
+            )
+            history = result.pop("benchmark_history", [])
+            benchmark_rows = [{"date": iso(r.get("日期")), "close": number(r.get("收盘"))} for r in history]
+        else:
+            if re.fullmatch(r"\d{6}", benchmark):
+                benchmark = ("sz" if benchmark.startswith(("399", "15", "16")) else "sh") + benchmark
+            code = benchmark[2:] if re.fullmatch(r"(?i)(sh|sz)\d{6}", benchmark) else ""
+            benchmark = benchmark.lower() if code else benchmark
+            benchmark_rows = run_tool("stock_data.py", ["kline", benchmark, "--count", str(args.days + 5)])
         result["tracking_error"] = tracking_error(nav, benchmark_rows if isinstance(benchmark_rows, list) else [])
         result["tracking_error"]["benchmark"] = benchmark
-        if benchmark.lower().startswith(("sh", "sz")):
-            code = benchmark[2:]
+        if code:
             capture(
                 result,
                 "benchmark_constituents",
@@ -1368,7 +1394,7 @@ def announcements(args):
     market, symbol = stock_identity(args.symbol)
     if market != "A" or not 1 <= args.top <= 500 or args.category not in ANNOUNCEMENT_CATEGORIES:
         raise ValueError("announcements require an A-share stock, valid category and top in 1..500")
-    end = date.fromisoformat(args.end_date) if args.end_date else date.today()
+    end = date.fromisoformat(args.end_date) if args.end_date else _cn_now().date()
     start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
     if start > end:
         raise ValueError("start_date must not exceed end_date")

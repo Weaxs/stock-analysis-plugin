@@ -29,7 +29,7 @@ await assert.rejects(loadLLMHost("unknown"), /Expected pi, openclaw or dsh/);
 const piTools = await loadLLMHost("pi");
 const invalidMarket = await piTools.find(tool => tool.name === "get_market_capabilities")!
   .execute("invalid-market", {market: "INVALID"});
-assert.equal(JSON.parse(invalidMarket.content[0].text).error, "Python command returned no JSON");
+assert.equal(JSON.parse(invalidMarket.content[0].text).error, "Python command failed (exit 2); check interpreter/dependencies");
 
 const timingLogs: string[] = [];
 const originalError = console.error;

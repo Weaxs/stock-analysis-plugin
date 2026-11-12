@@ -88,7 +88,6 @@ def calc_limit_price(pre_close: float, ratio: float, direction: str = "up") -> f
 _STICKY_CHAINS = {
     "kline_a",
     "quote_a",
-    "quote_a_etf",
     "snapshot_a",
     "sector_constituents",
     "sina",
@@ -108,6 +107,7 @@ def _failover(sources: list, label: str, evidence: bool = False):
     entry costs one failed attempt, then the new winner replaces it (self-healing).
     """
     chain = label.split(":", 1)[0]
+    sticky = None
     if chain in _STICKY_CHAINS:
         sticky = _disk_cache_get(f"sticky-{chain}")
         if sticky:
@@ -117,7 +117,7 @@ def _failover(sources: list, label: str, evidence: bool = False):
         try:
             result = fn()
             if result:
-                if chain in _STICKY_CHAINS:
+                if chain in _STICKY_CHAINS and name != sticky:
                     _disk_cache_set(f"sticky-{chain}", name)
                 if evidence:
                     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -225,7 +225,7 @@ def _kline_baostock(symbol: str, period: str, count: int) -> list:
     import pandas as pd
 
     freq_map = {"daily": "d", "weekly": "w", "monthly": "m"}
-    end = datetime.now()
+    end = _cn_now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
     # baostock login/logout print status lines to stdout — silence them so the
     # tool's JSON output on stdout stays clean for the calling host.
@@ -520,6 +520,11 @@ def _sanitize(obj):
     return obj
 
 
+def _cn_now() -> datetime:
+    """Naive Asia/Shanghai wall-clock now — A-share "today" must not follow the host timezone."""
+    return datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+
+
 def _clean_row(d: dict) -> dict:
     return {k: _sanitize(v) for k, v in d.items()}
 
@@ -554,7 +559,7 @@ def _kline_akshare(symbol: str, period: str, count: int) -> list:
     import akshare as ak
 
     period_map = {"daily": "daily", "weekly": "weekly", "monthly": "monthly"}
-    end = datetime.now()
+    end = _cn_now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
 
     # ETFs (51/52/56/58/15/16/18xxxx) are not covered by stock_zh_a_hist
@@ -603,7 +608,7 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
 
     if normalize_stock_code(symbol)["is_etf"]:
         raise ValueError("tushare stock adjustment does not cover ETFs")
-    end = datetime.now()
+    end = _cn_now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
 
     ts_code = f"{symbol}.{_cn_code(symbol)[:2].upper()}"
@@ -1650,7 +1655,9 @@ def cmd_capital_flow(args):
 
 def _news_search_intel_fallback(symbol: str) -> list:
     """Fallback: use search_intel to find news when primary sources fail."""
-    data = run_tool("search_intel.py", ["search", f"{symbol} 最新消息"], timeout=30)
+    data = run_tool("search_intel.py", ["search", f"{symbol} 最新消息"])
+    if isinstance(data, dict):
+        data = data.get("results", [])
     if isinstance(data, list):
         return [{"title": item.get("title", ""), "url": item.get("url", ""), "source": "search"} for item in data[:10]]
     return []
@@ -1674,7 +1681,7 @@ def cmd_news(args):
             }
             df = df.rename(columns=col_map)
             keep = [c for c in col_map.values() if c in df.columns]
-            cutoff = datetime.now() - timedelta(days=args.days)
+            cutoff = _cn_now() - timedelta(days=args.days)
             df = df[keep]
             if "datetime" in df.columns:
                 import pandas as pd
@@ -1691,15 +1698,18 @@ def cmd_news(args):
                 raise ValueError("yfinance news empty")
             results = []
             for item in news[:20]:
+                content = item.get("content") or item  # yfinance >= 0.2.50 nests fields under `content`
                 results.append(
                     {
-                        "title": item.get("title", ""),
-                        "publisher": item.get("publisher", ""),
-                        "url": item.get("link", ""),
-                        "published": item.get("providerPublishTime", ""),
-                        "type": item.get("type", ""),
+                        "title": content.get("title") or item.get("title", ""),
+                        "publisher": (content.get("provider") or {}).get("displayName") or item.get("publisher", ""),
+                        "url": (content.get("canonicalUrl") or {}).get("url") or item.get("link", ""),
+                        "published": content.get("pubDate") or item.get("providerPublishTime", ""),
+                        "type": content.get("contentType") or item.get("type", ""),
                     }
                 )
+            if not any(r["title"] for r in results):
+                raise ValueError("yfinance news has no titles")
             return results
     except Exception:
         return _news_search_intel_fallback(args.symbol)
@@ -2870,7 +2880,7 @@ def cmd_stock_info(args):
             if is_etf:
                 try:
                     # ETF 最新净值（天天基金-场内基金历史净值明细）。窄日期窗口 → 单页返回
-                    end = datetime.now()
+                    end = _cn_now()
                     start = end - timedelta(days=30)
                     nav_df = _cached_frame(
                         f"etf-basic-nav:{args.symbol}",
@@ -3128,7 +3138,7 @@ def _resolve_cn_data_date(raw: str) -> tuple[datetime, datetime]:
     from trading_calendar import cn_trade_dates  # flat sibling import
 
     req = datetime.strptime(raw, "%Y%m%d")
-    d = min(req, datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    d = min(req, _cn_now().replace(hour=0, minute=0, second=0, microsecond=0))
     trade_dates = cn_trade_dates(d.year)
     if d.month == 1:  # the walk-back can cross into December of the previous year
         trade_dates |= cn_trade_dates(d.year - 1)
@@ -3150,7 +3160,7 @@ def cmd_limit_up_pool(args):
     request resolves to itself and no stale label is emitted (the zt-pool payload
     carries no date column to cross-check against)."""
     try:
-        req, data_day = _resolve_cn_data_date((args.date or datetime.now().strftime("%Y%m%d")).replace("-", ""))
+        req, data_day = _resolve_cn_data_date((args.date or _cn_now().strftime("%Y%m%d")).replace("-", ""))
     except ValueError:
         return {"error": f"limit_up_pool: invalid --date {args.date!r} (want YYYYMMDD)"}
     date = data_day.strftime("%Y%m%d")
@@ -3267,7 +3277,7 @@ def cmd_dragon_tiger(args):
     date is served the last trading day's list, labeled with requested_date and
     stale=True."""
     try:
-        req, data_day = _resolve_cn_data_date((args.date or datetime.now().strftime("%Y-%m-%d")).replace("-", ""))
+        req, data_day = _resolve_cn_data_date((args.date or _cn_now().strftime("%Y-%m-%d")).replace("-", ""))
     except ValueError:
         return {"error": f"dragon_tiger: invalid --date {args.date!r} (want YYYY-MM-DD)"}
     raw = data_day.strftime("%Y%m%d")
@@ -3351,7 +3361,7 @@ def _hot_stocks_baidu() -> list:
     df = _akshare_retry(
         ak.stock_hot_search_baidu,
         symbol="A股",
-        date=datetime.now().strftime("%Y%m%d"),
+        date=_cn_now().strftime("%Y%m%d"),
         time="今日",
     )
     if df is None or df.empty:

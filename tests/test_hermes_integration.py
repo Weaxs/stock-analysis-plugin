@@ -576,3 +576,52 @@ def test_installed_plugin_uses_host_interpreter_without_activation(monkeypatch, 
     )
     assert json.loads(hermes_tools.get_quote({"symbol": "AAPL"}))["price"] == 10
     assert calls[0][0] == sys.executable
+
+
+@pytest.mark.parametrize("name", ["render_stock_report", "render_market_report"])
+def test_large_report_travels_through_temp_file(monkeypatch, name):
+    report = {"stock_name": "贵州茅台", "summary": "长" * 16000}
+    captured = []
+
+    def execute(script, argv):
+        path = Path(argv[argv.index("--input") + 1])
+        captured.append((script, argv, path, json.loads(path.read_text(encoding="utf-8"))))
+        return "{}"
+
+    monkeypatch.setattr(hermes_tools, "_run", execute)
+    handler = next(t["handler"] for t in _make_ctx().tools if t["name"] == name)
+    handler({"report": report, "final": None, "template": None, "save": None})
+    script, argv, path, payload = captured[-1]
+    assert script == "report_renderer.py"
+    assert "--input-b64" not in argv and len(" ".join(map(str, argv))) < 1000
+    assert payload == report
+    assert not path.exists()
+    assert "--final" not in argv and "--save" not in argv
+    if name == "render_stock_report":
+        assert argv[argv.index("--template") + 1] == "full"
+
+
+def test_registered_handler_drops_null_args(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append(argv) or "{}")
+    handler = next(t["handler"] for t in _make_ctx().tools if t["name"] == "get_kline")
+    handler({"symbol": "600519", "period": None, "count": None})
+    assert calls[-1] == ["kline", "600519", "--period", "daily", "--count", 60]
+
+
+@pytest.mark.parametrize(
+    ("code", "stdout", "error"),
+    [
+        (2, '{"error": "symbol not found"}', "symbol not found"),
+        (2, "{}", "Python command failed (exit 2); check interpreter/dependencies"),
+        (0, "Traceback: boom", "Python command returned non-JSON output"),
+        (0, "", "Python command returned no JSON"),
+    ],
+)
+def test_run_failure_contract(monkeypatch, code, stdout, error):
+    monkeypatch.setattr(
+        hermes_tools.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, code, stdout=stdout, stderr="secret"),
+    )
+    assert json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"] == error

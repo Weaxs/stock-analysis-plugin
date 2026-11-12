@@ -2,12 +2,14 @@ import { withJsonInput } from "../scripts/json-input.mjs";
 import type { ExtensionAPI } from "pi-agent";
 import { fileURLToPath } from "url";
 
+import { cliJson, failureMessage, withoutNulls } from "../scripts/cli-json.mjs";
 import { commandTimeout } from "../scripts/cli-timeout.mjs";
 import { resolvePython } from "../scripts/venv-python.mjs";
 
 export default (pi: ExtensionAPI) => {
   const tools: Parameters<ExtensionAPI["registerTool"]>[0][] = [];
-  const registerTool: ExtensionAPI["registerTool"] = (tool) => {
+  const registerTool: ExtensionAPI["registerTool"] = (definition) => {
+    const tool = { ...definition, execute: (id: string, params: unknown, ...rest: unknown[]) => definition.execute(id, withoutNulls(params), ...rest) };
     tools.push(tool);
     pi.registerTool({ ...tool, defaultActive: false });
   };
@@ -56,10 +58,8 @@ export default (pi: ExtensionAPI) => {
   const python = resolvePython(baseDir);
   const py = async (script: string, args: string[]) => {
     const result = await pi.exec(python, [`${toolsDir}/${script}`, ...args], { timeout: commandTimeout(script, args) });
-    if (result.killed || !result.stdout.trim()) {
-      return {...result, stdout: JSON.stringify({error: result.killed ? "Python command timed out" : "Python command returned no JSON"})};
-    }
-    return result;
+    const failure = result.killed || result.code !== 0 ? failureMessage(result) : undefined;
+    return { ...result, stdout: cliJson(result.stdout, failure) };
   };
   const asText = (text: string) => ({
     content: [{ type: "text" as const, text }],
@@ -2695,16 +2695,8 @@ export default (pi: ExtensionAPI) => {
       required: ["report"],
     },
     async execute(_id, { report, template = "full", final = false }) {
-      const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
-      const result = await py("report_renderer.py", [
-        "stock",
-        "--template",
-        template,
-        "--input-b64",
-        b64,
-        ...(final ? ["--final"] : []),
-      ]);
-      return asText(result.stdout);
+      return asText(await withJsonInput(report, async (path: string) =>
+        (await py("report_renderer.py", ["stock", "--template", template, "--input", path, ...(final ? ["--final"] : [])])).stdout));
     },
   });
 
@@ -2722,15 +2714,8 @@ export default (pi: ExtensionAPI) => {
       required: ["report"],
     },
     async execute(_id, { report, save, final = false }) {
-      const b64 = Buffer.from(JSON.stringify(report), "utf-8").toString("base64");
-      const result = await py("report_renderer.py", [
-        "market",
-        "--input-b64",
-        b64,
-        ...(final ? ["--final"] : []),
-        ...(save ? ["--save"] : []),
-      ]);
-      return asText(result.stdout);
+      return asText(await withJsonInput(report, async (path: string) =>
+        (await py("report_renderer.py", ["market", "--input", path, ...(final ? ["--final"] : []), ...(save ? ["--save"] : [])])).stdout));
     },
   });
 

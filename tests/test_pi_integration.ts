@@ -117,6 +117,7 @@ const calls: string[][] = [];
 const timeouts: (number | undefined)[] = [];
 let stdoutPayload = "{}";
 let processKilled = false;
+let exitCode = 0;
 const mockPi = {
   registerTool(config: ToolRegistration & { execute: Function }) {
     registeredTools.push({
@@ -132,7 +133,7 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("sector_rotation.py") || args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : 0, killed: processKilled }; },
+  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("sector_rotation.py") || args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py") || args[0].endsWith("report_renderer.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : exitCode, killed: processKilled }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
@@ -400,4 +401,38 @@ for (const name of ["render_stock_report", "render_market_report"]) {
     assert(calls.at(-1)!.includes("--final") === final, `${name}: final argv`);
   }
 }
+if (failures) process.exit(1);
+
+// Large Chinese reports travel through a temporary file, not a Windows-limited argv.
+const largeReport = {stock_name: "贵州茅台", summary: "长".repeat(16000)};
+for (const name of ["render_stock_report", "render_market_report"]) {
+  await registeredTools.find(t => t.name === name)!.execute!("large", {report: largeReport, final: null, template: null, save: null});
+  const transport = analysisInputCalls.at(-1)!;
+  const argv = calls.at(-1)!;
+  assert(argv.join(" ").length < 1000 && !argv.includes("--input-b64"), `${name}: report must not be inlined into argv`);
+  assert(JSON.stringify(transport.input) === JSON.stringify(largeReport), `${name}: report reaches CLI unchanged`);
+  assert(!existsSync(transport.path), `${name}: report transport removed`);
+  assert(!argv.includes("--final") && !argv.includes("--save"), `${name}: null flags fall back to defaults`);
+}
+assert(calls.at(-2)![calls.at(-2)!.indexOf("--template") + 1] === "full", "null template must fall back to full");
+
+await registeredTools.find(t => t.name === "get_kline")!.execute!("nulls", {symbol: "600519", period: null, count: null});
+assert(JSON.stringify(calls.at(-1)!.slice(1)) === JSON.stringify(["kline", "600519", "--period", "daily", "--count", "60"]), "null optional args must use defaults");
+
+const alertItem = (registeredTools.find(t => t.name === "check_alert_rules")!.parameters as any).properties.rules.items;
+assert(alertItem.properties.type.type === "string" && "value" in alertItem.properties, "check_alert_rules: shared rule item schema");
+
+const quoteTool = registeredTools.find(t => t.name === "get_quote")!;
+for (const [code, stdout, error] of [
+  [2, '{"error":"symbol not found"}', "symbol not found"],
+  [2, "{}", "Python command failed (exit 2); check interpreter/dependencies"],
+  [0, "Traceback: boom", "Python command returned non-JSON output"],
+] as const) {
+  exitCode = code;
+  stdoutPayload = stdout;
+  const result = await quoteTool.execute!("failure", {symbol: "600519"});
+  assert(JSON.parse(result.content[0].text).error === error, `Pi failure (${code}, ${stdout}) must produce ${error}`);
+}
+exitCode = 0;
+stdoutPayload = "{}";
 if (failures) process.exit(1);

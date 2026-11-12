@@ -63,6 +63,7 @@ const mod = (await jiti.import("../dsh/index.ts")) as {
   inject: string[];
   apply: (ctx: unknown) => void;
   __setExecutor: (fn: (bin: string, argv: string[]) => Promise<string>) => void;
+  __defaultExecutor: (bin: string, argv: string[]) => Promise<string>;
 };
 
 mod.__setExecutor(async (_bin, argv) => {
@@ -466,6 +467,44 @@ for (const name of ["render_stock_report", "render_market_report"]) {
     assert(execCalls.at(-1)!.args.includes("--final") === final, `${name}: final argv`);
   }
 }
+
+// Large Chinese reports travel through a temporary file, not a Windows-limited argv.
+mod.__setExecutor(async (_bin, argv) => {
+  const [scriptPath, ...rest] = argv;
+  if (scriptPath.endsWith("report_renderer.py")) { const path = rest[rest.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); }
+  execCalls.push({ script: scriptPath, args: rest });
+  return "{}";
+});
+const largeReport = {stock_name: "贵州茅台", summary: "长".repeat(16000)};
+for (const name of ["render_stock_report", "render_market_report"]) {
+  await tools.find(t => t.name === name)!.execute({report: largeReport, final: null, template: null, save: null}, {});
+  const transport = analysisInputCalls.at(-1)!;
+  const argv = execCalls.at(-1)!.args;
+  assert(argv.join(" ").length < 1000 && !argv.includes("--input-b64"), `${name}: report must not be inlined into argv`);
+  assert(JSON.stringify(transport.input) === JSON.stringify(largeReport), `${name}: report reaches CLI unchanged`);
+  assert(!existsSync(transport.path), `${name}: report transport removed`);
+  assert(!argv.includes("--final") && !argv.includes("--save"), `${name}: null flags fall back to defaults`);
+}
+const stockArgs = execCalls.at(-2)!.args;
+assert(stockArgs[stockArgs.indexOf("--template") + 1] === "full", "null template must fall back to full");
+await tools.find(t => t.name === "get_kline")!.execute({symbol: "600519", period: null, count: null}, {});
+assert(JSON.stringify(execCalls.at(-1)!.args) === JSON.stringify(["kline", "600519", "--period", "daily", "--count", "60"]), "null optional args must use defaults");
+
+const alertItem = (tools.find(t => t.name === "check_alert_rules")!.parameters.rules as any).items.properties;
+assert(!!alertItem?.type && !!alertItem?.value, "check_alert_rules: shared rule item schema");
+
+// The real executor turns every failure shape into one JSON error contract.
+for (const [code, error] of [
+  ['process.stdout.write(JSON.stringify({error: "symbol not found"})); process.exit(2)', "symbol not found"],
+  ['process.stdout.write("{}"); process.exit(2)', "Python command failed (exit 2); check interpreter/dependencies"],
+  ['process.stdout.write("Traceback: boom")', "Python command returned non-JSON output"],
+  ['', "Python command returned no JSON"],
+  ['process.stdout.write("x".repeat(33 * 1024 * 1024))', "Python command output exceeded buffer limit"],
+] as const) {
+  const out = await mod.__defaultExecutor(process.execPath, ["-e", code]);
+  assert(JSON.parse(out).error === error, `executor failure must produce ${error}`);
+}
+assert(await mod.__defaultExecutor(process.execPath, ["-e", 'process.stdout.write("{\\"ok\\":true}")']) === '{"ok":true}', "executor must relay valid JSON");
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
