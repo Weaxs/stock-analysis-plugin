@@ -9,6 +9,7 @@ import re
 import sys
 import time as _time
 from contextvars import ContextVar
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _subproc import error_message, scrub_secrets, utf8_stdio
@@ -474,23 +475,88 @@ def get_trending_sentiment() -> dict:
 # --------------- Article Extraction ---------------
 
 
-def extract_article(url: str) -> dict:
+def _extract_pdf(url: str, max_chars: int, response) -> dict:
+    import io
+
+    content = bytearray()
     try:
-        from newspaper import Article
+        from pypdf import PdfReader
+
+        for chunk in response.iter_content(65536):
+            content.extend(chunk)
+            if len(content) > 25 * 1024 * 1024:
+                raise ValueError("PDF exceeds the 25 MiB download limit")
+    finally:
+        response.close()
+    if not content.startswith(b"%PDF-"):
+        raise ValueError("URL did not return a PDF document")
+
+    reader = PdfReader(io.BytesIO(content))
+    parts = []
+    for page in reader.pages:
+        parts.append(page.extract_text() or "")
+        if sum(map(len, parts)) > max_chars:
+            break
+    text = "\n".join(parts)
+    metadata = reader.metadata or {}
+    return {
+        "url": url,
+        "title": str(metadata.get("/Title") or ""),
+        "text": text[:max_chars],
+        "authors": [str(metadata["/Author"])] if metadata.get("/Author") else [],
+        "publish_date": str(metadata["/CreationDate"]) if metadata.get("/CreationDate") else None,
+        "top_image": None,
+        "format": "pdf",
+        "page_count": len(reader.pages),
+        "truncated": len(text) > max_chars,
+    }
+
+
+def extract_article(url: str, max_chars: int = 3000) -> dict:
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or not 1 <= max_chars <= 200000:
+        return {"url": url, "error": "max_chars must be an integer between 1 and 200000"}
+    is_pdf = url.lower().split("?", 1)[0].endswith(".pdf")
+    try:
+        from newspaper import Article, network
+
+        config = network.Configuration()
+        config.allow_binary_content = True
+        config.requests_params.update(timeout=30, stream=True)
+        host = (urlparse(url).hostname or "").lower()
+        if host == "sec.gov" or host.endswith(".sec.gov"):
+            from sec_edgar import identity
+
+            config.browser_user_agent = identity()  # SEC answers 403 to requests without a declared contact
+        response = network.do_request(url, config)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "").lower()
+        is_pdf = is_pdf or "application/pdf" in content_type
+        if is_pdf:
+            return _extract_pdf(url, max_chars, response)
+        # allow_binary_content is on for PDFs only; refuse other binaries before reading the whole body.
+        if content_type.startswith(("image/", "video/", "audio/", "font/")) or (
+            content_type.startswith("application/") and "json" not in content_type and "xml" not in content_type
+        ):
+            response.close()
+            return {"url": url, "error": f"Unsupported binary content-type: {content_type}"}
 
         a = Article(url, language="zh")
-        a.download()
+        a.download(input_html=network.get_html(url, config, response=response))
         a.parse()
+        text = a.text or ""
         return {
             "url": url,
             "title": a.title or "",
-            "text": (a.text or "")[:3000],
+            "text": text[:max_chars],
             "authors": a.authors or [],
             "publish_date": str(a.publish_date) if a.publish_date else None,
             "top_image": a.top_image or None,
+            "format": "html",
+            "truncated": len(text) > max_chars,
         }
-    except ImportError:
-        return {"url": url, "error": "newspaper4k not installed. pip install newspaper4k"}
+    except ImportError as exc:
+        dependency = "pypdf" if exc.name == "pypdf" else "newspaper4k"
+        return {"url": url, "error": f"{dependency} not installed. pip install {dependency}"}
     except Exception as e:
         return {"url": url, "error": error_message(e)}
 
@@ -515,7 +581,7 @@ def cmd_trending(args):
 
 
 def cmd_extract(args):
-    return extract_article(args.url)
+    return extract_article(args.url, max_chars=args.max_chars)
 
 
 def main():
@@ -536,7 +602,8 @@ def main():
     sub.add_parser("trending")
 
     p_ext = sub.add_parser("extract")
-    p_ext.add_argument("url", help="Article URL to extract")
+    p_ext.add_argument("url", help="Article or PDF URL to extract")
+    p_ext.add_argument("--max-chars", type=int, default=3000, help="Maximum extracted characters (1-200000)")
 
     args = parser.parse_args()
     if not args.command:
@@ -552,6 +619,8 @@ def main():
     }
     result = dispatch[args.command](args)
     print(json.dumps(result, ensure_ascii=False, default=str))
+    if isinstance(result, dict) and "error" in result:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

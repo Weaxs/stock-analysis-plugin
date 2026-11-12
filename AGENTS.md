@@ -4,16 +4,17 @@
 
 A multi-host agent plugin for stock analysis, screening, and strategy backtesting across **A / HK / US / JP / KR / TW** markets. The same capability ships as a **Pi Agent** extension, a **Hermes Agent** plugin, an **OpenClaw** plugin, and a **DeepSeek Harness (dsh)** plugin.
 
-The architecture is **one Python core, four thin host adapters**:
+The architecture is **one Python core, four thin plugin adapters plus an MCP stdio host**:
 
 - `tools/*.py` — the shared CLI tools. **This is the single source of truth** for all behavior. Every tool prints JSON to stdout.
-- `pi/index.ts` — Pi extension. `pi.registerTool` ×72, each spawns a `tools/*.py` CLI.
+- `pi/index.ts` — Pi extension. `pi.registerTool` ×73, each spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
-- `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×72). Bundled with esbuild.
-- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×72 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). It also has a Web/Desktop-only dashboard (`client.ts` + `dashboard.ts` + `web/`, TypeScript compiled to browser IIFEs) backed by a resident warm cache of fixed CLI calls and served through snapshot/watchlist routes; it does not add model tools. Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
-- `skills/*/SKILL.md` — 21 workflow / strategy-methodology skills shared by all four hosts.
+- `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×73). Bundled with esbuild.
+- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×73 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). It also has a Web/Desktop-only dashboard (`client.ts` + `dashboard.ts` + `web/`, TypeScript compiled to browser IIFEs) backed by a resident warm cache of fixed CLI calls and served through snapshot/watchlist routes; it does not add model tools. Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
+- `mcp_host/server.py` — MCP stdio JSON-RPC host for WorkBuddy / Claude Desktop / Cursor. It reuses `hermes/schemas.py` and `hermes/tools.py`, kills CLI children on cancellation, and adds no fifth schema copy.
+- `skills/*/SKILL.md` — 21 workflow / strategy-methodology skills shared by the four plugin hosts; MCP clients import skills separately.
 
-> **The invariant that matters most:** the four adapters expose the *same* 72 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one.
+> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 73 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one. MCP inherits the Hermes contract automatically.
 
 ---
 
@@ -61,7 +62,7 @@ Files the skills.sh installer copies into the repo are local tooling — do not 
 
 ---
 
-## Architecture: One Core, Four Adapters
+## Architecture: One Core, Four Plugin Adapters + MCP
 
 All real work happens in `tools/*.py`. The adapters only translate a host-native tool call into a subprocess invocation of a CLI and relay the JSON stdout back. Keep them thin — no business logic in TypeScript or in `hermes/tools.py` beyond argument mapping and subprocess plumbing.
 
@@ -70,7 +71,7 @@ All real work happens in `tools/*.py`. The adapters only translate a host-native
 ```typescript
 // baseDir: __dirname under jiti/CJS-style loaders, else import.meta.url under native ESM.
 // venv python resolved with the Windows/POSIX rule below; each tool spawns the CLI.
-const py = (script: string, args: string[]) => pi.exec(python, [`${toolsDir}/${script}`, ...args]);
+const py = (script: string, args: string[]) => processExecutor(python, [`${toolsDir}/${script}`, ...args], { timeout, signal });
 
 pi.registerTool({
   name: "get_kline",
@@ -159,7 +160,10 @@ npx tsx tests/test_pi_integration.ts                       # Pi registration (ji
 npx tsx tests/test_openclaw_integration.ts                 # OpenClaw registration
 npx tsx tests/test_dsh_integration.ts                      # dsh registration (tools + skills + bundle manifest)
 npx tsx tests/test_dsh_dashboard.ts                        # dsh dashboard warmer + snapshot API + watchlist + client manifest
-npx tsx tests/test_adapter_parity.ts                       # same 72 tools, params, required, enums, descriptions on all four hosts
+npx tsx tests/test_dsh_web_poll.ts                         # browser repoll after an in-flight watchlist edit
+npx tsx tests/test_process_tree.ts                         # Pi/dsh/OpenClaw abort + timeout kill nested process trees
+npx tsx tests/test_adapter_parity.ts                       # same 73 tools + argv/JSON mapping on all four hosts
+.venv/bin/python -m pytest tests/test_mcp_integration.py -v      # MCP schema parity, JSON-RPC and cancellation
 .venv/bin/python -m pytest tests/e2e/test_host_to_python.py -v     # host↔python round-trip
 npx tsx tests/e2e/test_pi_e2e.ts                           # Pi real-subprocess e2e
 npx tsx tests/e2e/test_openclaw_e2e.ts                     # OpenClaw real-subprocess e2e
@@ -173,9 +177,9 @@ npx tsx tests/e2e/test_dsh_e2e.ts                          # dsh real-subprocess
 ## Lint, Format, Typecheck
 
 ```bash
-ruff check tools/ skills/ tests/ hermes/          # lint
-ruff format --check tools/ skills/ tests/ hermes/ # format check (autofix.yml auto-fixes on PRs)
-ruff check --fix tools/ skills/ tests/ hermes/ && ruff format tools/ skills/ tests/ hermes/   # apply locally
+ruff check tools/ skills/ tests/ hermes/ mcp_host/  # lint
+ruff format --check tools/ skills/ tests/ hermes/ mcp_host/ # format check (autofix.yml auto-fixes on PRs)
+ruff check --fix tools/ skills/ tests/ hermes/ mcp_host/ && ruff format tools/ skills/ tests/ hermes/ mcp_host/   # apply locally
 npx tsc --noEmit                                  # TS type check (pi/, openclaw/, dsh/, tests/*.ts)
 ```
 
@@ -226,10 +230,10 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 
 1. Implement the CLI in the appropriate `tools/*.py` (argparse subcommand, JSON stdout, py3.10-compatible).
 2. Add a failing pytest first (`tests/test_<module>.py`), then make it pass (see `tdd`).
-3. Register it in all four adapters: `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params.
+3. Register it in all four adapters: `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params. MCP inherits the Hermes registration.
 4. Wire it into the relevant `skills/*/SKILL.md` workflow if an agent should call it.
 5. Update the README tool table (and tool count if surfaced).
-6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, the four registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_dsh_integration.ts`, `test_hermes_integration.py`), and `test_adapter_parity.ts`.
+6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, the four registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_dsh_integration.ts`, `test_hermes_integration.py`), `test_adapter_parity.ts`, and `test_mcp_integration.py`.
 
 ---
 
@@ -237,7 +241,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 
 ```bash
 npm install                        # also builds repo .venv via postinstall
-ruff check tools/ skills/ tests/ hermes/ && ruff format --check tools/ skills/ tests/ hermes/
+ruff check tools/ skills/ tests/ hermes/ mcp_host/ && ruff format --check tools/ skills/ tests/ hermes/ mcp_host/
 npx tsc --noEmit
 .venv/bin/python -m pytest -q
 npx tsx tests/test_pi_integration.ts && npx tsx tests/test_openclaw_integration.ts && npx tsx tests/test_dsh_integration.ts

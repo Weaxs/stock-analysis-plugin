@@ -54,19 +54,51 @@ class TestNewMarkets:
         for tool in ("get_kline", "get_quote", "get_news", "get_financials", "get_market_indices"):
             assert tool in result["supported"]
 
-    def test_jp_rejects_a_share_only_and_regime(self):
+    def test_jp_rejects_a_share_only_tools_but_supports_regime(self):
         result = capabilities.get_capabilities("JP")
         unsupported = {u["tool"] for u in result["unsupported"]}
         assert "get_chip_distribution" in unsupported
         assert "get_capital_flow" in unsupported
-        assert "detect_market_regime" in unsupported
         assert "get_market_review" in unsupported
+        assert "screen_stocks" in unsupported
+        for m in ("JP", "KR", "TW"):
+            assert "detect_market_regime" in capabilities.get_capabilities(m)["supported"]
 
-    def test_kr_tw_supported(self):
-        for m in ("KR", "TW"):
-            result = capabilities.get_capabilities(m)
-            assert "get_kline" in result["supported"]
-            assert "get_quote" in result["supported"]
+    def test_yfinance_markets_extend_dividends_earnings_and_sec_filings(self):
+        for m in ("US", "JP", "KR", "TW"):
+            assert "get_dividends" in capabilities.get_capabilities(m)["supported"]
+        for m in ("US", "JP"):
+            assert "get_earnings_calendar" in capabilities.get_capabilities(m)["supported"]
+        assert "get_earnings_calendar" not in capabilities.get_capabilities("KR")["supported"]
+        assert "get_announcements" in capabilities.get_capabilities("US")["supported"]
+        assert "get_announcements" not in capabilities.get_capabilities("HK")["supported"]
+
+
+def test_name_resolution_capability_matches_hk_us_support():
+    for market in ("A", "HK", "US"):
+        assert "resolve_stock_name" in capabilities.get_capabilities(market)["supported"]
+    for market in ("JP", "KR", "TW"):
+        assert "resolve_stock_name" in {row["tool"] for row in capabilities.get_capabilities(market)["unsupported"]}
+
+
+def test_matrix_covers_every_registered_tool_exactly():
+
+    from hermes.schemas import TOOL_SCHEMAS
+
+    names = {t["name"] for t in TOOL_SCHEMAS}
+    assert "get_watchlist" in names
+    assert set(capabilities.TOOL_MATRIX) == names
+    for market in capabilities.ALL_MARKETS:
+        result = capabilities.get_capabilities(market)
+        assert len(result["supported"]) + len(result["unsupported"]) == len(names)
+        assert "get_watchlist" in result["supported"]
+
+
+def test_kr_tw_supported():
+    for m in ("KR", "TW"):
+        result = capabilities.get_capabilities(m)
+        assert "get_kline" in result["supported"]
+        assert "get_quote" in result["supported"]
 
 
 class TestShortTermAndSignalTools:

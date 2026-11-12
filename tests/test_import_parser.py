@@ -93,6 +93,13 @@ if __name__ == "__main__":
     sys.exit(r.returncode)
 
 
+class TestInternationalNames:
+    def test_hk_chinese_name_uses_hk_market(self, monkeypatch):
+        monkeypatch.setattr(import_parser, "resolve", lambda name, top=1: [{"code": "00700.HK", "name": "腾讯控股"}])
+        result = import_parser.parse("腾讯")
+        assert result["items"] == [{"symbol": "00700.HK", "market": "HK", "name": "腾讯控股", "resolved_from": "腾讯"}]
+
+
 class TestAsiaSuffixCodes:
     def test_jp_kr_tw_codes(self, monkeypatch):
         monkeypatch.setattr(import_parser, "resolve", lambda name, top=1: [])

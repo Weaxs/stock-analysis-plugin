@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,12 +58,17 @@ function assertApiAccess(req: IncomingMessage) {
 
 export function normalizeWatchlist(input: unknown): string[] {
   if (!Array.isArray(input)) throw new HttpError(400, "symbols 必须是股票代码数组");
-  const symbols = [...new Set(input.map(value => {
+  // Keyed by quote symbol: 600519 and sh600519 (also in older saved files) are one stock; the first spelling stays.
+  const unique = new Map<string, string>();
+  for (const value of input) {
     if (typeof value !== "string") throw new HttpError(400, "股票代码必须是字符串");
-    const symbol = value.trim().toUpperCase();
-    if (!/^[A-Z0-9][A-Z0-9.-]{0,31}$/.test(symbol)) throw new HttpError(400, "股票代码格式不正确");
-    return /^(?:SH|SZ|BJ)\d{6}$/.test(symbol) ? symbol.toLowerCase() : symbol;
-  }))];
+    const upper = value.trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9.-]{0,31}$/.test(upper)) throw new HttpError(400, "股票代码格式不正确");
+    const symbol = /^(?:SH|SZ|BJ)\d{6}$/.test(upper) ? upper.toLowerCase() : upper;
+    const key = dashboardQuoteSymbol(symbol);
+    if (!unique.has(key)) unique.set(key, symbol);
+  }
+  const symbols = [...unique.values()];
   if (symbols.length > MAX_WATCHLIST) throw new HttpError(400, `自选股最多保存 ${MAX_WATCHLIST} 只`);
   return symbols;
 }
@@ -96,6 +101,42 @@ export function writeWatchlist(file: string, input: unknown): string[] {
     rmSync(temp, { force: true });
   }
   return symbols;
+}
+
+async function withWatchlistLock<T>(file: string, work: () => T): Promise<T> {
+  mkdirSync(dirname(file), { recursive: true });
+  const lock = file + ".lock";
+  for (let attempt = 0; ; attempt++) {
+    try {
+      mkdirSync(lock);  // Atomic on local filesystems on both POSIX and Windows.
+      break;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 30_000) rmSync(lock, { recursive: true, force: true });
+      } catch { /* the owner may have released it between attempts */ }
+      if (attempt >= 200) throw new HttpError(503, "自选股正被其他进程更新，请稍后重试");
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  try {
+    return work();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+export async function updateWatchlist(file: string, op: string, input: unknown): Promise<string[]> {
+  const symbols = normalizeWatchlist(input);
+  return withWatchlistLock(file, () => {
+    const current = readWatchlist(file);
+    if (op === "add") return writeWatchlist(file, [...current, ...symbols]);
+    if (op === "remove") {
+      const removed = new Set(symbols.map(dashboardQuoteSymbol));
+      return writeWatchlist(file, current.filter(symbol => !removed.has(dashboardQuoteSymbol(symbol))));
+    }
+    throw new HttpError(400, "不支持自选股操作");
+  });
 }
 
 function sendJson(res: ServerResponse, status: number, value: unknown) {
@@ -325,7 +366,12 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         return value;
       },
     });
-    return list;
+    const unique = new Map<string, Job>();
+    for (const job of list) {
+      const previous = unique.get(job.key);
+      if (!previous || job.priority < previous.priority) unique.set(job.key, job);
+    }
+    return [...unique.values()];
   }
 
   function due(job: Job, now: number): boolean {
@@ -470,12 +516,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         if (req.method === "POST") {
           const body = await readJson(req);
           if (!body?.op) throw new HttpError(400, "必须指定 add 或 remove 操作");
-          const symbols = normalizeWatchlist(body.symbols);
-          const current = readWatchlist(watchlistFile);
-          let saved: string[];
-          if (body.op === "add") saved = writeWatchlist(watchlistFile, [...current, ...symbols]);
-          else if (body.op === "remove") saved = writeWatchlist(watchlistFile, current.filter(symbol => !symbols.includes(symbol)));
-          else throw new HttpError(400, "不支持自选股操作");
+          const saved = await updateWatchlist(watchlistFile, body.op, body.symbols);
           kick();
           return sendJson(res, 200, { symbols: saved });
         }

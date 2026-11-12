@@ -16,6 +16,7 @@ def fixed_today(monkeypatch):
 
     monkeypatch.setattr(value_data, "date", FixedDate)
     monkeypatch.setattr(value_data, "_cn_now", lambda: datetime(2026, 10, 12, 12))
+    monkeypatch.setattr(value_data, "market_now", lambda market: datetime(2026, 10, 12, 12))
 
     def offline(*args, **kwargs):
         raise OSError("test did not configure this HTTP source")
@@ -154,7 +155,8 @@ def test_dividend_ranking_is_report_period_yield(monkeypatch):
             {
                 "代码": ["600519", "000001"],
                 "名称": ["A", "B"],
-                "现金分红-股息率": [2, 5],
+                # Eastmoney returns a fraction: 0.05 means 5%.
+                "现金分红-股息率": [0.02, 0.05],
                 "方案进度": ["实施分配", "实施分配"],
             }
         ),
@@ -165,7 +167,137 @@ def test_dividend_ranking_is_report_period_yield(monkeypatch):
     assert result["yield_basis"] == "provider report-period cash dividend yield, percent"
 
 
+def _fail(*args, **kwargs):
+    raise AssertionError("unexpected provider call")
+
+
+def test_us_dividends_use_yfinance_cash_and_local_quote_currency(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    monkeypatch.setattr(ak, "stock_hk_dividend_payout_em", _fail)
+    ticker = Namespace(
+        dividends=pd.Series(
+            [0.5, 0.5, 0.4],
+            index=pd.DatetimeIndex(["2026-08-01", "2026-02-01", "2025-08-01"], tz="America/New_York", name="Date"),
+        ),
+        info={"currentPrice": 50, "currency": "USD"},
+        calendar={"Ex-Dividend Date": date(2026, 11, 2)},
+    )
+    calls = []
+    monkeypatch.setattr("yfinance.Ticker", lambda s: calls.append(s) or ticker)
+    result = value_data.dividends(Namespace(symbol="BRK.B", mode="history", report_date="", top=20, years=10))
+    assert calls == ["BRK-B"]
+    assert result["market"] == "US"
+    assert result["cash_per_share_ttm"] == 1
+    assert result["dividend_yield_ttm"] == 2
+    assert result["currency"] == "USD"
+    assert result["calendar"] == [{"ex_date": "2026-11-02", "payment_date": None}]
+
+
+def test_jp_dividend_calendar_comes_from_yfinance(monkeypatch):
+    from tools import value_data
+
+    ticker = Namespace(calendar={"Ex-Dividend Date": date(2026, 11, 29), "Dividend Date": date(2026, 12, 1)})
+    monkeypatch.setattr("yfinance.Ticker", lambda s: ticker)
+    result = value_data.dividends(Namespace(symbol="7203.T", mode="calendar", report_date="", top=20, years=10))
+    assert result["market"] == "JP"
+    assert result["calendar"] == [{"ex_date": "2026-11-29", "payment_date": "2026-12-01"}]
+
+
+def test_dividend_ranking_still_rejects_yfinance_markets():
+    from tools import value_data
+
+    with pytest.raises(ValueError, match="A/HK"):
+        value_data.dividends(
+            Namespace(symbol="", mode="ranking", market="US", report_date="2025-12-31", top=1, years=10)
+        )
+
+
+@pytest.mark.parametrize("symbol, zone", [("AAPL", "America/New_York"), ("7203.T", "Asia/Tokyo")])
+def test_us_jp_earnings_calendar_is_provider_schedule_in_market_date(monkeypatch, symbol, zone):
+    import yfinance as yf
+
+    from tools import value_data
+
+    monkeypatch.setattr(value_data, "hk_board_meetings", _fail)
+    monkeypatch.setattr(
+        yf,
+        "Ticker",
+        lambda code: Namespace(
+            get_earnings_dates=lambda **kw: pd.DataFrame(
+                index=pd.DatetimeIndex(["2026-10-29 16:30", "2026-07-30 16:30"], tz="America/New_York")
+            )
+        ),
+    )
+    result = value_data.earnings_calendar(Namespace(symbol=symbol, report_date="", top=50))
+    assert result["market"] == value_data.detect_market(symbol)
+    expected = pd.Timestamp("2026-10-29 16:30", tz="America/New_York").tz_convert(zone).date().isoformat()
+    assert [r["scheduled_date"] for r in result["disclosures"]] == [expected]
+    assert result["disclosures"][0]["confirmation"] == "provider_only"
+    assert result["source"] == "yfinance earnings schedule"
+
+    stamped = value_data.earnings_calendar(Namespace(symbol=symbol, report_date="2026-09-30", top=50))
+    assert stamped["disclosures"] == []
+    assert stamped["unverified_schedules"][0]["scheduled_date"] == expected
+
+
+def test_kr_earnings_calendar_is_rejected_before_network(monkeypatch):
+    from tools import value_data
+
+    monkeypatch.setattr("yfinance.Ticker", _fail)
+    with pytest.raises(ValueError, match="A/HK/US/JP"):
+        value_data.earnings_calendar(Namespace(symbol="005930.KS", report_date="", top=50))
+
+
+def test_us_announcements_delegate_to_sec_filings(monkeypatch):
+    import sec_edgar
+
+    from tools import value_data
+
+    calls = []
+    monkeypatch.setattr(sec_edgar, "filings", lambda *a: calls.append(a) or {"market": "US"})
+    assert value_data.announcements(
+        Namespace(symbol="AAPL", category="annual", start_date="", end_date="2026-10-01", top=5)
+    ) == {"market": "US"}
+    assert calls == [("AAPL", "annual", date(2026, 7, 3), date(2026, 10, 1), 5)]
+
+
+def test_us_announcements_accepts_explicit_numeric_cik(monkeypatch):
+    import sec_edgar
+
+    from tools import value_data
+
+    calls = []
+    monkeypatch.setattr(sec_edgar, "filings", lambda *a: calls.append(a) or {"market": "US"})
+    result = value_data.announcements(
+        Namespace(symbol="CIK320193", category="all", start_date="", end_date="2026-10-01", top=5)
+    )
+    assert result == {"market": "US"}
+    assert calls[0][0] == "320193"
+
+
+def test_us_announcements_reject_bare_numeric_symbol(monkeypatch):
+    import sec_edgar
+
+    from tools import value_data
+
+    monkeypatch.setattr(sec_edgar, "filings", lambda *a: pytest.fail("00700 must not be read as CIK 700"))
+    with pytest.raises(ValueError, match="CIK prefix"):
+        value_data.announcements(Namespace(symbol="00700", category="all", start_date="", end_date="", top=5))
+
+
+@pytest.mark.parametrize("symbol", ["", "00700"])
+def test_yfinance_symbol_rejects_non_ticker_us_fallback(symbol):
+    from tools import value_data
+
+    with pytest.raises(ValueError, match="listed stock symbol"):
+        value_data.yf_symbol(symbol)
+
+
 def test_tracking_error_aligns_daily_returns_without_filling_missing_dates():
+
     from tools import value_data
 
     nav = [

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parse stock list from freeform text / CSV / markdown.
 
-Extracts symbols using regex heuristics + name_resolver for A-share Chinese names.
+Extracts symbols using regex heuristics + name_resolver for A/HK/US Chinese names.
 """
 
 import argparse
@@ -210,8 +210,7 @@ def parse(text: str) -> dict:
             hits = []
         if hits and isinstance(hits, list) and hits[0].get("code"):
             top_hit = hits[0]
-            # ponytail: name_resolver returns nearest fuzzy match even for names not in A-share
-            # (e.g. "腾讯" → "拓新药业" via pinyin). Reject low-confidence hits.
+            # Reject low-confidence fuzzy matches instead of mapping an unknown name to a stock.
             score = top_hit.get("score")
             hit_name = top_hit.get("name", "")
             is_exact = (name in hit_name) or (hit_name in name)
@@ -223,7 +222,7 @@ def parse(text: str) -> dict:
                 items.append(
                     {
                         "symbol": code,
-                        "market": "A",
+                        "market": detect_market(code),
                         "name": hit_name,
                         "resolved_from": name,
                     }

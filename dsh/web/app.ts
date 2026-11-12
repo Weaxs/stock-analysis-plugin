@@ -119,6 +119,8 @@ const state = {
   prices: new Map<string, number | null>(),
   pollTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   inflight: false,
+  // A poll requested while one is in flight (e.g. right after a watchlist edit) runs once that one ends.
+  dirty: false,
   saving: false,
   error: null as string | null,
   lastOk: 0,
@@ -871,8 +873,12 @@ function schedule() {
 
 async function poll(): Promise<void> {
   clearTimeout(state.pollTimer);
-  if (state.inflight) return;
+  if (state.inflight) {
+    state.dirty = true;
+    return;
+  }
   state.inflight = true;
+  state.dirty = false;
   const region = state.region;
   try {
     const snap = await api<Snapshot>(`./api/snapshot?region=${encodeURIComponent(region)}`);
@@ -894,7 +900,7 @@ async function poll(): Promise<void> {
     renderStatus();
   } finally {
     state.inflight = false;
-    if (region !== state.region) void poll();
+    if (region !== state.region || state.dirty) void poll();
     else schedule();
   }
 }

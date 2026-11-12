@@ -164,6 +164,7 @@ EXPECTED_TOOLS = sorted(
         "screen_risk",
         "detect_market_regime",
         "get_market_review",
+        "get_watchlist",
         "run_watchlist_analysis",
         "detect_anomaly",
         "diagnose_data_sources",

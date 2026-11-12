@@ -20,6 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, cached
 from _subproc import scrub_secrets, socket_timeout, utf8_stdio
 from stock_data import _A_INDEX_RE, _cn_code, _cn_now, _yf_hk_symbol, detect_market, normalize_stock_code
+from trading_calendar import _MARKET_TZ, market_now
+
+YF_MARKETS = ("US", "JP", "KR", "TW")
 
 
 def records(frame):
@@ -49,6 +52,24 @@ def capture(result, key, fetch):
         result[key] = fetch()
     except Exception as exc:
         result.setdefault("warnings", []).append(f"{key}: unavailable ({type(exc).__name__})")
+
+
+def yf_symbol(symbol):
+    market = detect_market(symbol)
+    if market == "HK":
+        return _yf_hk_symbol(symbol)
+    if market not in YF_MARKETS or symbol.startswith("^"):
+        raise ValueError("a listed stock symbol is required")
+    if market == "US" and not re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]{0,14}", symbol):
+        raise ValueError("a listed stock symbol is required (HK codes need .HK)")  # "" / "00700" fall back to US
+    return symbol.upper().replace(".", "-") if market == "US" else symbol.upper()
+
+
+def market_date(value, market):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.notna(parsed) and parsed.tzinfo is not None:
+        parsed = parsed.tz_convert(_MARKET_TZ["CN" if market == "A" else market])
+    return parsed.date().isoformat() if pd.notna(parsed) else None
 
 
 def stock_identity(symbol):
@@ -334,32 +355,38 @@ def earnings_calendar(args):
     suffix = {"03-31": "一季", "06-30": "半年报", "09-30": "三季", "12-31": "年报"}
     if not 1 <= args.top <= 500 or (args.report_date and not stamp):
         raise ValueError("report_date must be a valid date and top must be in 1..500")
-    if args.symbol and detect_market(args.symbol) == "HK":
+    market = detect_market(args.symbol) if args.symbol else "A"
+    if market in ("KR", "TW"):
+        raise ValueError("earnings calendar covers A/HK/US/JP only")
+    if market in ("HK", "US", "JP"):
         import yfinance as yf
 
-        _, hk_code = stock_identity(args.symbol)
-        sections = {}
-        for board in ("main", "gem"):
-            capture(sections, board, lambda board=board: hk_board_meetings(board))
-        events = [
-            r
-            for board in ("main", "gem")
-            for r in sections.get(board, [])
-            if r["symbol"] == hk_code + ".HK"
-            and r["scheduled_date"] >= _cn_now().date().isoformat()
-            and (not stamp or r["report_date"] == stamp)
-        ]
-        events = list({(r["scheduled_date"], r["purpose"], r["report_date"]): r for r in events}.values())
-        events.sort(key=lambda r: r["scheduled_date"])
+        code = yf_symbol(args.symbol)
+        today = market_now(market).date().isoformat()
+        sections, events = {}, []
+        if market == "HK":
+            hk_code = stock_identity(args.symbol)[1]
+            for board in ("main", "gem"):
+                capture(sections, board, lambda board=board: hk_board_meetings(board))
+            events = [
+                r
+                for board in ("main", "gem")
+                for r in sections.get(board, [])
+                if r["symbol"] == hk_code + ".HK"
+                and r["scheduled_date"] >= today
+                and (not stamp or r["report_date"] == stamp)
+            ]
+            events = list({(r["scheduled_date"], r["purpose"], r["report_date"]): r for r in events}.values())
+            events.sort(key=lambda r: r["scheduled_date"])
 
         def fetch():
-            frame = yf.Ticker(_yf_hk_symbol(args.symbol)).get_earnings_dates(limit=12)
+            frame = yf.Ticker(code).get_earnings_dates(limit=12)
             if frame is None:
-                raise ValueError("HK earnings schedule unavailable")
-            return sorted({iso(d) for d in frame.index if iso(d)})
+                raise ValueError(f"{market} earnings schedule unavailable")
+            return sorted({market_date(d, market) for d in frame.index if market_date(d, market)})
 
         if not events:
-            capture(sections, "dates", lambda: cached(f"hk-earnings-schedule:{_yf_hk_symbol(args.symbol)}", DAY, fetch))
+            capture(sections, "dates", lambda: cached(f"{market.lower()}-earnings-schedule:{code}", DAY, fetch))
         provider_events = [
             {
                 "symbol": args.symbol,
@@ -370,13 +397,13 @@ def earnings_calendar(args):
                 "date_kind": "provider_earnings_schedule",
             }
             for d in sections.get("dates", [])
-            if d >= _cn_now().date().isoformat()
+            if d >= today
         ]
         if not stamp and not events:
             events = provider_events
         return {
             "symbol": args.symbol,
-            "market": "HK",
+            "market": market,
             "source": "HKEX board-meeting notices"
             if any(r["confirmation"] == "official_board_meeting_notice" for r in events)
             else "yfinance earnings schedule",
@@ -387,11 +414,15 @@ def earnings_calendar(args):
             "forecasts_total": 0,
             "unverified_schedules": provider_events[: args.top] if stamp else [],
             "warnings": sections.get("warnings", [])
-            + [
-                "official dates are scheduled board meetings approving results, not actual disclosure dates; notice list may not be exhaustive",
-                "provider-only schedules have unverified fiscal periods and are not assigned to requested report_date",
-            ],
-            "as_of": _cn_now().date().isoformat(),
+            + (
+                [
+                    "official dates are scheduled board meetings approving results, not actual disclosure dates; notice list may not be exhaustive"
+                ]
+                if market == "HK"
+                else []
+            )
+            + ["provider-only schedules have unverified fiscal periods and are not assigned to requested report_date"],
+            "as_of": today,
         }
     if not stamp or stamp[5:] not in suffix:
         raise ValueError("report_date must be a quarter end for A-share earnings calendars")
@@ -782,7 +813,8 @@ def dividend_ranking(report_date="", market="A"):
             {
                 "symbol": str(r.get("代码", "")).zfill(6),
                 "name": r.get("名称"),
-                "dividend_yield": number(r.get("现金分红-股息率")),
+                # Eastmoney reports this ratio as a fraction (0.0101 = 1.01%).
+                "dividend_yield": round(number(r.get("现金分红-股息率")) * 100, 6),
                 "ex_date": iso(r.get("除权除息日")),
                 "announcement_date": iso(r.get("最新公告日期")),
                 "status": r.get("方案进度"),
@@ -802,11 +834,12 @@ def dividends(args):
         result = dividend_ranking(args.report_date, getattr(args, "market", "A"))
         result["items"] = sorted(result["items"], key=lambda r: r["dividend_yield"], reverse=True)[: args.top]
         return result
-    market, symbol = stock_identity(args.symbol)
+    market = detect_market(args.symbol)
+    market, symbol = (market, yf_symbol(args.symbol)) if market in YF_MARKETS else stock_identity(args.symbol)
     import akshare as ak
     from _subproc import run_tool
 
-    today = _cn_now().date()
+    today = market_now(market).date()
     result = {
         "symbol": args.symbol,
         "market": market,
@@ -843,32 +876,47 @@ def dividends(args):
         import yfinance as yf
 
         sources = {}
-        capture(
-            sources,
-            "calendar",
-            lambda: dataset(f"hk-dividend-calendar:{symbol}", lambda: ak.stock_hk_dividend_payout_em(symbol=symbol)),
-        )
-        calendar = [
-            {
-                "ex_date": iso(r.get("除净日")),
-                "payment_date": iso(r.get("发放日")),
-                "announcement_date": iso(r.get("最新公告日期")),
-                "plan": r.get("分红方案"),
-                "fiscal_year": r.get("财政年度"),
-            }
-            for r in sources.get("calendar", [])
-        ]
+        if market == "HK":
+            capture(
+                sources,
+                "calendar",
+                lambda: dataset(
+                    f"hk-dividend-calendar:{symbol}", lambda: ak.stock_hk_dividend_payout_em(symbol=symbol)
+                ),
+            )
+            calendar = [
+                {
+                    "ex_date": iso(r.get("除净日")),
+                    "payment_date": iso(r.get("发放日")),
+                    "announcement_date": iso(r.get("最新公告日期")),
+                    "plan": r.get("分红方案"),
+                    "fiscal_year": r.get("财政年度"),
+                }
+                for r in sources.get("calendar", [])
+            ]
+            ticker = yf.Ticker(_yf_hk_symbol(args.symbol))
+        else:
+            ticker = yf.Ticker(symbol)
+            capture(sources, "calendar", lambda: ticker.calendar)
+            upcoming = sources.get("calendar") or {}
+            calendar = [
+                {
+                    "ex_date": iso(upcoming.get("Ex-Dividend Date")),
+                    "payment_date": iso(upcoming.get("Dividend Date")),
+                }
+            ]
+            if not calendar[0]["ex_date"]:
+                calendar = []
         if args.mode == "calendar":
             if sources.get("warnings"):
-                raise ValueError("HK dividend calendar unavailable")
+                raise ValueError(f"{market} dividend calendar unavailable")
             return {
                 "symbol": args.symbol,
                 "market": market,
-                "source": "eastmoney",
+                "source": "eastmoney" if market == "HK" else "yfinance",
                 "as_of": today.isoformat(),
                 "calendar": [r for r in calendar if r.get("ex_date") and r["ex_date"] > today.isoformat()],
             }
-        ticker = yf.Ticker(_yf_hk_symbol(args.symbol))
 
         def cash_history():
             raw = ticker.dividends
@@ -879,17 +927,17 @@ def dividends(args):
             )
             return frame.reset_index()
 
-        capture(sources, "cash", lambda: dataset(f"hk-dividend-cash:{symbol}", cash_history))
+        capture(sources, "cash", lambda: dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
         capture(sources, "quote", lambda: ticker.info)
         paid = sources.get("cash", [])
         info = sources.get("quote") or {}
         if sources.get("warnings"):
             result["warnings"] = sources["warnings"]
             if not paid and not calendar:
-                raise ValueError("HK dividend sources unavailable")
+                raise ValueError(f"{market} dividend sources unavailable")
         events = [
             {
-                "ex_date": iso(r.get("Date")),
+                "ex_date": market_date(r.get("Date"), market),
                 "cash_per_share": number(r.get("cash_per_share")),
                 "currency": r.get("currency") or info.get("currency"),
                 "status": "paid",
@@ -897,7 +945,11 @@ def dividends(args):
             for r in paid
         ]
         price = number(info.get("currentPrice") or info.get("regularMarketPrice"))
-        result.update(source="yfinance cash / eastmoney calendar", currency=info.get("currency"), price=price)
+        result.update(
+            source="yfinance cash / eastmoney calendar" if market == "HK" else "yfinance",
+            currency=info.get("currency"),
+            price=price,
+        )
         result["calendar"] = [r for r in calendar if r["ex_date"] and r["ex_date"] > today.isoformat()]
     cutoff = (today - timedelta(days=365.25 * args.years)).isoformat()
     events = sorted(
@@ -1391,9 +1443,25 @@ ANNOUNCEMENT_CATEGORIES = {
 def announcements(args):
     import requests
 
+    if detect_market(args.symbol) == "US":
+        import sec_edgar
+
+        if args.symbol.isdigit():
+            # Bare digits are an unsuffixed HK code as often as a CIK; only CIK-prefixed numbers reach SEC.
+            raise ValueError("numeric symbols need a CIK prefix (CIK320193); HK announcements are not supported")
+        end = date.fromisoformat(args.end_date) if args.end_date else market_now("US").date()
+        start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
+        if start > end or not 1 <= args.top <= 500:
+            raise ValueError("start_date must not exceed end_date and top must be in 1..500")
+        symbol = (
+            re.sub(r"^CIK", "", args.symbol, flags=re.I)
+            if re.fullmatch(r"(?i)CIK[0-9]{1,10}", args.symbol)
+            else args.symbol
+        )
+        return sec_edgar.filings(symbol, args.category, start, end, args.top)
     market, symbol = stock_identity(args.symbol)
     if market != "A" or not 1 <= args.top <= 500 or args.category not in ANNOUNCEMENT_CATEGORIES:
-        raise ValueError("announcements require an A-share stock, valid category and top in 1..500")
+        raise ValueError("announcements require an A-share or US stock, valid category and top in 1..500")
     end = date.fromisoformat(args.end_date) if args.end_date else _cn_now().date()
     start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
     if start > end:

@@ -1,4 +1,5 @@
 import base64
+import contextvars
 import json
 import runpy
 import subprocess
@@ -40,7 +41,10 @@ def _cli_json(stdout: str, failure: str | None = None) -> str:
     return json.dumps({"error": failure})
 
 
-def _run(script: str, argv: list) -> str:
+_RUN_OVERRIDE = contextvars.ContextVar("stock_analysis_hermes_run_override", default=None)
+
+
+def _run_default(script: str, argv: list) -> str:
     # argv list: 参数原样进子进程，不经 shell（Windows 同理）
     python = _find_python()
     timeout = command_timeout(script, argv) + 30
@@ -60,6 +64,11 @@ def _run(script: str, argv: list) -> str:
     if result.returncode != 0:
         failure = f"Python command failed (exit {result.returncode}); check interpreter/dependencies"
     return _cli_json(result.stdout or "", failure)
+
+
+def _run(script: str, argv: list) -> str:
+    override = _RUN_OVERRIDE.get()
+    return (override or _run_default)(script, argv)
 
 
 def get_kline(args: dict, **kwargs) -> str:
@@ -326,7 +335,8 @@ def get_trending_sentiment(args: dict, **kwargs) -> str:
 
 def extract_article(args: dict, **kwargs) -> str:
     url = args["url"]
-    return _run("search_intel.py", ["extract", url])
+    max_chars = args.get("max_chars", 3000)
+    return _run("search_intel.py", ["extract", url, "--max-chars", max_chars])
 
 
 def screen_risk(args: dict, **kwargs) -> str:
@@ -346,6 +356,10 @@ def detect_market_regime(args: dict, **kwargs) -> str:
 def get_market_review(args: dict, **kwargs) -> str:
     market = args.get("market", "A")
     return _run("market_review.py", ["review", "--market", market])
+
+
+def get_watchlist(args: dict, **kwargs) -> str:
+    return _run("watchlist.py", ["list"])
 
 
 def run_watchlist_analysis(args: dict, **kwargs) -> str:

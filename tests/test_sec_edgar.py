@@ -382,3 +382,75 @@ def test_unsearched_recent_history_is_explicitly_truncated(monkeypatch):
     result = sec_edgar.holdings(Namespace(cik="1067983", mode="manager"))
     assert result["history_truncated"] is True
     assert any("not fully searched" in warning for warning in result["warnings"])
+
+
+def _filing_index(get_calls):
+    def get(url, **kwargs):
+        get_calls.append(url)
+        if url.endswith("company_tickers.json"):
+            return response({"0": {"ticker": "AAPL", "cik_str": 320193}})
+        if url.endswith("CIK0000320193.json"):
+            return response(
+                {
+                    "name": "Apple Inc.",
+                    "filings": {
+                        "recent": {
+                            "form": ["4", "8-K", "10-Q", "10-K", "8-K"],
+                            "accessionNumber": [
+                                "0000320193-26-000005",
+                                "0000320193-26-000004",
+                                "0000320193-26-000003",
+                                "0000320193-25-000002",
+                                "0000320193-26-000006",
+                            ],
+                            "filingDate": ["2026-10-01", "2026-09-20", "2026-08-01", "2025-11-01", "2026-10-11"],
+                            "reportDate": ["2026-09-30", "2026-09-18", "2026-06-27", "2025-09-27", "2026-10-09"],
+                            "primaryDocument": ["form4.xml", "a8k.htm", "q.htm", "k.htm", "../evil.htm"],
+                            "primaryDocDescription": ["", "8-K", "10-Q", "10-K", "8-K"],
+                        },
+                        "files": [],
+                    },
+                }
+            )
+        pytest.fail(f"unexpected request {url}")
+
+    return get
+
+
+def test_sec_filings_list_periodic_and_current_reports_in_window(monkeypatch):
+    from datetime import date
+
+    calls = []
+    monkeypatch.setattr("requests.get", _filing_index(calls))
+    result = sec_edgar.filings("AAPL", "all", date(2026, 7, 1), date(2026, 10, 10), 50)
+    assert result["market"] == "US"
+    assert result["source"] == "sec_edgar"
+    assert [r["form"] for r in result["announcements"]] == ["8-K", "10-Q"]
+    first = result["announcements"][0]
+    assert first["date"] == "2026-09-20"
+    assert first["category"] == "current"
+    assert first["document_url"] == "https://www.sec.gov/Archives/edgar/data/320193/000032019326000004/a8k.htm"
+    assert first["pdf_url"] is None
+    assert result["truncated"] is False
+    assert result["body_extracted"] is False
+
+
+def test_sec_filings_category_filter_top_and_unsafe_document(monkeypatch):
+    from datetime import date
+
+    monkeypatch.setattr("requests.get", _filing_index([]))
+    quarterly = sec_edgar.filings("AAPL", "quarterly", date(2025, 1, 1), date(2026, 10, 12), 50)
+    assert [r["form"] for r in quarterly["announcements"]] == ["10-Q"]
+    top = sec_edgar.filings("AAPL", "all", date(2025, 1, 1), date(2026, 10, 12), 1)
+    assert top["total"] == 4 and top["truncated"] is True
+    assert top["announcements"][0]["document_url"] is None
+    assert top["announcements"][0]["filing_url"].endswith("0000320193-26-000006-index.html")
+
+
+@pytest.mark.parametrize("category", ["forecast", "express", "interim", "dividend"])
+def test_sec_filings_reject_categories_without_sec_form(monkeypatch, category):
+    from datetime import date
+
+    monkeypatch.setattr("requests.get", lambda *a, **k: pytest.fail("HTTP before category validation"))
+    with pytest.raises(ValueError, match="SEC"):
+        sec_edgar.filings("AAPL", category, date(2026, 1, 1), date(2026, 10, 1), 10)

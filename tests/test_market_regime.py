@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 from tools.market_regime import _compute_indicators, _get_index_kline, classify_regime, detect_regime
 from tools.stock_data import detect_market
@@ -18,6 +19,23 @@ def test_hk_regime_requests_yahoo_hsi_symbol():
     with patch("tools.market_regime._run_tool", return_value=[{"close": 1}]) as run_tool:
         assert _get_index_kline("HK") == [{"close": 1}]
     run_tool.assert_called_once_with("stock_data.py", ["kline", "^HSI", "--period", "daily", "--count", "80"])
+
+
+@pytest.mark.parametrize("market, code", [("JP", "^N225"), ("KR", "^KS11"), ("TW", "^TWII")])
+def test_asian_markets_request_yahoo_benchmark_index(market, code):
+    with patch("tools.market_regime._run_tool", return_value=[{"close": 1}]) as run_tool:
+        assert _get_index_kline(market) == [{"close": 1}]
+    run_tool.assert_called_once_with("stock_data.py", ["kline", code, "--period", "daily", "--count", "80"])
+
+
+def test_jp_regime_classifies_without_a_share_sector_heat(make_kline_data):
+    bars = make_kline_data(80, "up")
+    with patch("tools.market_regime._run_tool", return_value=bars) as run_tool:
+        result = detect_regime("JP")
+    assert result["market"] == "JP"
+    assert result["index"]["code"] == "^N225"
+    assert result["sector_heat"] is False
+    assert run_tool.call_count == 1
 
 
 def test_hsi_symbol_routes_to_yf_kline_chain():

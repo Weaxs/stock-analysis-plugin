@@ -106,12 +106,8 @@ def gather_analysis(symbol: str, *, session=None) -> dict:
         "news": ("search_intel.py", ["search", _news_query(symbol)]),
         "social_sentiment": ("search_intel.py", ["sentiment", symbol]),
     }
-    if market in ("A", "HK", "US"):
-        tasks["regime"] = ("market_regime.py", ["detect", market])
-    result = _run_all(tasks, symbol, session=session, with_risk=True)
-    if market not in ("A", "HK", "US"):
-        result["regime"] = {"error": f"Market regime unavailable for {market}"}
-    return result
+    tasks["regime"] = ("market_regime.py", ["detect", market])
+    return _run_all(tasks, symbol, session=session, with_risk=True)
 
 
 def gather_technical(symbol: str, kline_count: int = 120, with_quote: bool = False) -> dict:

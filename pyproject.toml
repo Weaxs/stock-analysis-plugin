@@ -48,6 +48,7 @@ dependencies = [
     "pandas>=2.0.0,<4",
     "numpy>=1.24.0",
     "pypinyin>=0.50.0",
+    "pypdf>=5.0.0",
     "requests>=2.33.0",
     "newspaper4k>=0.9.6.1",
     "efinance>=0.5.0",
@@ -65,6 +66,9 @@ Homepage = "https://github.com/Weaxs/stock-analysis-plugin"
 Repository = "https://github.com/Weaxs/stock-analysis-plugin"
 Issues = "https://github.com/Weaxs/stock-analysis-plugin/issues"
 
+[project.scripts]
+stock-analysis-mcp = "mcp_host.server:main"
+
 [project.entry-points."hermes_agent.plugins"]
 stock-analysis = "hermes"
 
@@ -73,7 +77,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hermes"]
+packages = ["hermes", "mcp_host"]
 
 # Nest the payload under our package so it never shadows Hermes's own top-level `tools`.
 [tool.hatch.build.targets.wheel.force-include]

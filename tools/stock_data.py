@@ -112,7 +112,9 @@ def _failover(sources: list, label: str, evidence: bool = False):
     if chain in _STICKY_CHAINS:
         sticky = _disk_cache_get(f"sticky-{chain}")
         if sticky:
-            sources = sorted(sources, key=lambda s: s[0] != sticky)
+            # Single-symbol A quotes always try Tencent first; sticky only reorders the fallbacks behind it.
+            first = "tencent" if chain == "quote_a" else sticky
+            sources = sorted(sources, key=lambda s: (s[0] != first, s[0] != sticky))
     errors = []
     for name, fn in sources:
         try:
@@ -391,7 +393,16 @@ def _quote_tencent(symbol: str) -> dict:
     if hk and (row["price"] is None or row["price"] <= 0):
         raise ValueError(f"tencent returned no quote for {symbol}")
     if normalize_stock_code(symbol)["is_etf"]:
-        row["is_etf"] = True
+        # f[73] is total fund shares and f[78] the intraday IOPV (blank for money/bond ETFs);
+        # premium matches _quote_akshare_etf.
+        iopv = _parse_float(f[78]) if len(f) > 78 else None
+        price = row.get("price")
+        row.update(
+            is_etf=True,
+            fund_shares=_parse_float(f[73]) if len(f) > 73 else None,
+            iopv=iopv,
+            premium_discount_rate=round((price - iopv) / iopv * 100, 4) if price is not None and iopv else None,
+        )
     return row
 
 
@@ -1079,7 +1090,10 @@ def cmd_kline(args):
 
 
 def quote_a(symbol: str, evidence: bool = False) -> dict:
-    """A-share quote with failover: akshare → tushare → efinance → tencent → sina → pytdx. ETFs try fund spot first.
+    """A-share quote with failover: tencent → akshare → tushare → efinance → sina → pytdx; ETFs add fund spot after tencent.
+
+    Tencent answers one symbol per request; the eastmoney spot sources page the whole
+    market (~55 requests) to return one row, so they only serve as fallbacks.
 
     Explicitly-prefixed symbols (sh000001, typically indices) go straight to
     tencent/sina — the eastmoney sources take bare 6-digit codes only, and pytdx
@@ -1090,14 +1104,13 @@ def quote_a(symbol: str, evidence: bool = False) -> dict:
         with socket_timeout(25):
             return _failover(sources, label=f"quote_a:{symbol}", evidence=evidence)
     is_etf = normalize_stock_code(symbol)["is_etf"]
-    sources = []
+    sources = [("tencent", lambda: _quote_tencent(symbol))]
     if is_etf:
         sources.append(("akshare_etf", lambda: _quote_akshare_etf(symbol)))
     sources += [
         ("akshare", lambda: _quote_akshare(symbol)),
         ("tushare", lambda: _quote_tushare(symbol)),
         ("efinance", lambda: _quote_efinance(symbol)),
-        ("tencent", lambda: _quote_tencent(symbol)),
         ("sina", lambda: _quote_sina(symbol)),
         ("pytdx", lambda: _quote_pytdx(symbol)),
     ]
@@ -2126,6 +2139,13 @@ def snapshot_hk() -> list:
         return [{"error": f"HK snapshot unavailable: {type(e).__name__}: {scrub_secrets(str(e))}"[:200]}]
 
 
+def normalize_us_symbol(value) -> str:
+    symbol = str(value).strip().upper()
+    symbol = re.sub(r"^(?:105|106|107)[.]", "", symbol)
+    symbol = re.sub(r"[.](?:OQ|N|A)$", "", symbol)
+    return re.sub(r"[._]", "-", symbol)  # Eastmoney writes class shares as BRK_B; yfinance wants BRK-B
+
+
 def snapshot_us() -> list:
     try:
         import akshare as ak
@@ -2144,8 +2164,7 @@ def snapshot_us() -> list:
         }
         df = df.rename(columns=col_map)
         if "symbol" in df.columns:
-            symbols = df["symbol"].astype(str).str.upper().str.replace(r"\.(?:OQ|N|A)$", "", regex=True)
-            df["symbol"] = symbols.str.replace(".", "-", regex=False)
+            df["symbol"] = df["symbol"].map(normalize_us_symbol)
         df["pe_basis"] = "unknown"
         keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
         return [_clean_row(r) for r in df[keep].to_dict("records")]

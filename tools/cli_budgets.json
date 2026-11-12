@@ -9,6 +9,8 @@
   "risk_screening.py:screen": 450,
   "signal_tracker.py:evaluate": 300,
   "stock_data.py:market_stats": 240,
+  "name_resolver.py:resolve": 360,
+  "import_parser.py:parse": 360,
   "market_review.py:review": 300,
   "anomaly_detect.py:detect": 390,
   "position_context.py:analyze": 300,

@@ -364,3 +364,108 @@ def test_default_today_follows_market_timezone_not_host(monkeypatch):
         "is_trading_day": False,
         "reason": "weekend",
     }
+
+
+def _xshg_2026():
+    import exchange_calendars as xcals
+
+    return {d.date().isoformat() for d in xcals.get_calendar("XSHG").sessions_in_range("2026-01-01", "2026-12-31")}
+
+
+class TestLongHolidayWindow:
+    """Golden Week / Spring Festival close 7-9 days in a row — count*4 calendar days
+    cannot reach the neighbouring session, so prev/next returned [] (stale quotes
+    then went unmarked)."""
+
+    @pytest.fixture(autouse=True)
+    def sina_2026(self, monkeypatch):
+        dates = _xshg_2026()
+        monkeypatch.setattr(tc, "cn_trade_dates", lambda year: dates if year == 2026 else set())
+
+    @pytest.mark.parametrize(
+        ("fn", "start", "expected"),
+        [
+            ("prev_trading_days", "2026-10-08", ["2026-09-30"]),
+            ("prev_trading_days", "2026-10-05", ["2026-09-30"]),
+            ("prev_trading_days", "2026-02-24", ["2026-02-13"]),
+            ("next_trading_days", "2026-09-30", ["2026-10-08"]),
+        ],
+    )
+    def test_reaches_across_holiday(self, fn, start, expected):
+        assert getattr(tc, fn)("CN", 1, start) == expected
+
+
+def test_partial_cn_calendar_does_not_mask_out_of_range_days(monkeypatch):
+    monkeypatch.setattr(tc, "cn_trade_dates", lambda year: {"2026-11-12"})
+    calls = []
+
+    def exchange(code, day):
+        calls.append((code, day))
+        return False
+
+    monkeypatch.setattr(tc, "_is_exchange_trading_day", exchange)
+    info = tc.is_trading_day("CN", "2026-11-13")
+    assert calls == [("XSHG", "2026-11-13")]
+    assert info["is_trading_day"] is False
+    assert info["source"] == "exchange-calendars"
+
+
+def test_hk_cn_calendar_approximation_is_explicitly_assumed(monkeypatch):
+    monkeypatch.setattr(tc, "cn_trade_dates", lambda year: {"2026-07-01"})
+
+    def unavailable(code, day):
+        raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(tc, "_is_exchange_trading_day", unavailable)
+    info = tc.is_trading_day("HK", "2026-07-01")
+    assert info["is_trading_day"] is True
+    assert info["reason"].startswith("assumed_trading_day")
+    assumed = []
+    assert tc.next_trading_days("HK", 1, "2026-06-30", assumed) == ["2026-07-01"]
+    assert assumed == ["2026-07-01"]
+
+
+def test_us_rule_based_open_days_are_listed_as_assumed(us_fallback):
+    import argparse
+
+    info = tc.is_trading_day("US", "2026-11-27")
+    assert info["is_trading_day"] is True
+    assert info["reason"].startswith("assumed_trading_day")
+    out = tc.cmd_next(argparse.Namespace(market="US", count=2, date="2026-11-25"))
+    assert out["next_trading_days"] == ["2026-11-27", "2026-11-30"]
+    assert out["assumed_trading_days"] == ["2026-11-27", "2026-11-30"]
+
+
+def test_zero_day_search_returns_empty_without_calendar_call(monkeypatch):
+    monkeypatch.setattr(tc, "is_trading_day", lambda *args: {"is_trading_day": True})
+    assert tc.next_trading_days("CN", 0, "2026-01-02") == []
+    assert tc.prev_trading_days("CN", 0, "2026-01-02") == []
+
+
+class TestCnCalendarFallback:
+    """Sina unavailable/out of range → the installed exchange_calendars XSHG answers;
+    beyond its recorded years the weekday guess is labelled, never silent."""
+
+    @pytest.fixture(autouse=True)
+    def no_sina(self, monkeypatch):
+        monkeypatch.setattr(tc, "cn_trade_dates", lambda year: set())
+
+    def test_uses_exchange_calendar_holiday(self):
+        info = tc.is_trading_day("CN", "2026-10-01")
+        assert info["is_trading_day"] is False
+        assert info["source"] == "exchange-calendars"
+
+    def test_beyond_calendar_is_flagged_assumed(self):
+        info = tc.is_trading_day("CN", "2099-01-05")
+        assert info["is_trading_day"] is True
+        assert info["reason"].startswith("assumed_trading_day")
+
+    def test_next_cli_lists_assumed_days(self):
+        import argparse
+
+        out = tc.cmd_next(argparse.Namespace(market="CN", count=3, date="2026-12-30"))
+        assert out["next_trading_days"][0] == "2026-12-31"
+        assert "2026-12-31" not in out["assumed_trading_days"]
+        assert set(out["next_trading_days"][1:]) <= set(out["assumed_trading_days"])
+        prev = tc.cmd_prev(argparse.Namespace(market="CN", count=1, date="2026-10-08"))
+        assert prev == {"market": "CN", "prev_trading_days": ["2026-09-30"], "assumed_trading_days": []}

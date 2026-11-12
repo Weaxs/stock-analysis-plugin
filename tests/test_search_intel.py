@@ -1,11 +1,12 @@
 """Tests for tools/search_intel.py — web search engines (incl. SearXNG fallback)."""
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.search_intel import _bocha_search, _searxng_search, search_comprehensive, search_news
+from tools.search_intel import _bocha_search, _searxng_search, extract_article, search_comprehensive, search_news
 
 
 @pytest.fixture(autouse=True)
@@ -256,3 +257,138 @@ def test_comprehensive_retries_healthy_empty_or_query_specific_failure(monkeypat
         result = search_comprehensive("600519")
     assert len(result["dimensions"]) == 6
     assert req.post.call_count == 6
+
+
+@pytest.mark.parametrize("url", ["https://example.com/annual.PDF", "https://example.com/download?id=1"])
+def test_extract_pdf_honors_long_text_limit_and_metadata(url):
+    response = MagicMock()
+    response.headers = {"content-type": "application/pdf"}
+    response.iter_content.return_value = [b"%PDF-1.7\n", b"fixture"]
+    response.raise_for_status.return_value = None
+    pages = [SimpleNamespace(extract_text=lambda: "abcdefgh"), SimpleNamespace(extract_text=lambda: "ijkl")]
+    reader = SimpleNamespace(pages=pages, metadata={"/Title": "年度报告", "/Author": "示例公司"})
+    pypdf = SimpleNamespace(PdfReader=MagicMock(return_value=reader))
+
+    with (
+        patch.dict(sys.modules, {"pypdf": pypdf}),
+        patch("newspaper.network.do_request", return_value=response) as fetch,
+    ):
+        result = extract_article(url, max_chars=10)
+
+    assert result["title"] == "年度报告"
+    assert result["authors"] == ["示例公司"]
+    assert result["text"] == "abcdefgh\ni"
+    assert result["truncated"] is True
+    assert result["page_count"] == 2
+    assert fetch.call_args.args[0] == url
+    config = fetch.call_args.args[1]
+    assert config.allow_binary_content is True
+    assert config.requests_params["stream"] is True
+    assert config.requests_params["timeout"] == 30
+
+
+def test_extract_sec_document_sends_declared_user_agent(monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "stock-analysis test@example.com")
+    response = MagicMock(headers={"content-type": "application/pdf"})
+    response.iter_content.return_value = [b"%PDF-1.7\n"]
+    reader = SimpleNamespace(pages=[SimpleNamespace(extract_text=lambda: "10-K")], metadata={})
+    pypdf = SimpleNamespace(PdfReader=MagicMock(return_value=reader))
+    with (
+        patch.dict(sys.modules, {"pypdf": pypdf}),
+        patch("newspaper.network.do_request", return_value=response) as fetch,
+    ):
+        result = extract_article("https://www.sec.gov/Archives/edgar/data/320193/x.pdf")
+    assert result["text"] == "10-K"
+    assert fetch.call_args.args[1].browser_user_agent == "stock-analysis test@example.com"
+
+
+def test_extract_sec_document_requires_user_agent(monkeypatch):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    with patch("newspaper.network.do_request") as fetch:
+        result = extract_article("https://www.sec.gov/Archives/edgar/data/320193/x.htm")
+    assert "SEC_USER_AGENT" in result["error"]
+    fetch.assert_not_called()
+
+
+def test_extract_html_honors_custom_limit():
+    article = SimpleNamespace(
+        title="标题",
+        text="0123456789abcdef",
+        authors=[],
+        publish_date=None,
+        top_image=None,
+        download=MagicMock(),
+        parse=lambda: None,
+    )
+    response = MagicMock(
+        headers={"content-type": "text/html"}, content=b"<html>fixture</html>", status_code=200, history=[]
+    )
+    with patch("newspaper.Article", return_value=article), patch("newspaper.network.do_request", return_value=response):
+        result = extract_article("https://example.com/story", max_chars=10)
+    assert result["text"] == "0123456789"
+    assert result["truncated"] is True
+    article.download.assert_called_once_with(input_html="<html>fixture</html>")
+
+
+def test_extract_html_detects_gbk_without_charset_header():
+    article = SimpleNamespace(
+        title="标题",
+        text="中文正文",
+        authors=[],
+        publish_date=None,
+        top_image=None,
+        download=MagicMock(),
+        parse=MagicMock(),
+    )
+    html = '<html><head><meta charset="gb2312"></head><body>中文正文</body></html>'
+    response = MagicMock(headers={"content-type": "text/html"}, content=html.encode("gbk"), status_code=200, history=[])
+    direct = SimpleNamespace(get=MagicMock(side_effect=AssertionError("unsafe direct request")))
+    with (
+        patch("newspaper.Article", return_value=article),
+        patch("newspaper.network.do_request", return_value=response),
+        patch.dict(sys.modules, {"requests": direct}),
+    ):
+        result = extract_article("https://example.com/gbk", max_chars=200)
+    assert result["text"] == "中文正文"
+    assert "中文正文" in article.download.call_args.kwargs["input_html"]
+
+
+@pytest.mark.parametrize("content_type", ["video/mp4", "application/zip", "image/png"])
+def test_extract_refuses_non_pdf_binary_without_reading_body(content_type):
+    response = MagicMock(headers={"content-type": content_type})
+    with (
+        patch("newspaper.network.do_request", return_value=response),
+        patch("newspaper.network.get_html") as get_html,
+    ):
+        result = extract_article("https://example.com/file")
+    assert "Unsupported binary content-type" in result["error"]
+    get_html.assert_not_called()
+    response.close.assert_called_once()
+
+
+def test_extract_rejects_private_host_before_fetch():
+    with patch("newspaper.network.session.get") as fetch:
+        result = extract_article("http://127.0.0.1:8000/admin")
+    assert "non-public host" in result["error"]
+    fetch.assert_not_called()
+
+
+def test_extract_cli_validation_error_exits_nonzero():
+    import subprocess
+    from pathlib import Path
+
+    result = subprocess.run(
+        [sys.executable, "tools/search_intel.py", "extract", "https://example.com", "--max-chars", "0"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1
+    assert "max_chars" in result.stdout
+
+
+@pytest.mark.parametrize("limit", [0, 200001, 1.5, True])
+def test_extract_rejects_invalid_text_limit(limit):
+    result = extract_article("https://example.com/story", max_chars=limit)
+    assert "max_chars" in result["error"]
