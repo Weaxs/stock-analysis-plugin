@@ -416,9 +416,9 @@ export default definePluginEntry({
       name: "get_etf_details",
       description: "查询A股ETF净值折溢价、规模、披露持仓及沪深完整PCF申赎篮子；篮子不是实际持仓。include_full_holdings=true另取最近可得半年度/年度披露股票表，含数量/市值/报告期，非实时全资产组合；benchmark用于跟踪误差。",
       parameters: Type.Object({
-        include_full_holdings: Type.Optional(Type.Boolean({ description: "请求半年度/年度披露股票表，默认false" })),
+        include_full_holdings: Type.Optional(Type.Boolean({ description: "显式请求半年度/年度全部披露股票表，默认false；不是实时全资产组合" })),
         symbol: Type.String({ description: "A股ETF代码，如510300" }),
-        benchmark: Type.Optional(Type.String({ description: "可选基准代码，如sh000300；不猜测基准" })),
+        benchmark: Type.Optional(Type.String({ description: "可选基准代码：sh000300/399006/000300.SH、中证H30269/93xxxx或^NDX；格式不符报错，不猜测基准" })),
         days: Type.Optional(Type.Number({ description: "净值窗口交易日数10..252，默认60" })),
       }),
       async execute(_id, p) {
@@ -431,7 +431,7 @@ export default definePluginEntry({
       name: "get_dividends",
       description: "查询A/HK分红历史、除息日历、已实施TTM股息与连续年数。mode=ranking省略symbol，market=A查报告期排行，market=HK查HKEX/LSEG年度股息率排行（report_date须年末）；排行均非当前TTM收益率。缺失不按零。",
       parameters: Type.Object({
-        market: Type.Optional(Type.Union([Type.Literal("A"), Type.Literal("HK")], { description: "仅ranking选择市场，默认A" })),
+        market: Type.Optional(Type.Union([Type.Literal("A"), Type.Literal("HK")], { description: "仅ranking选择市场，默认A；历史/除息日历由symbol决定" })),
         symbol: Type.Optional(Type.String({ description: "history/calendar必填A股或港股.HK代码；ranking省略" })),
         mode: Type.Optional(Type.Union([Type.Literal("history"), Type.Literal("calendar"), Type.Literal("ranking")], { description: "history默认；calendar未来已公布除息事件；ranking按market查询A/HK排行" })),
         report_date: Type.Optional(Type.String({ description: "ranking报告期YYYY-MM-DD，默认上一年年末；HK仅年度年末日期" })),

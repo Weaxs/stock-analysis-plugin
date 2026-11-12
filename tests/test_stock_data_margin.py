@@ -430,6 +430,7 @@ def test_current_day_margin_table_is_not_persisted(monkeypatch):
 
     monkeypatch.setattr(stock_data, "datetime", Clock)
     monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-30"])
+    monkeypatch.setattr("trading_calendar.datetime", Clock)
     source = MagicMock(side_effect=lambda date: _sse_detail(date))
     with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
         assert len(cmd_margin_trading(Namespace(symbol="600519", days=1))) == 1

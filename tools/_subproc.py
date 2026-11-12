@@ -172,6 +172,11 @@ def scrub_secrets(msg: str) -> str:
     return _SECRET_PARAM_RE.sub(r"\1***", msg)
 
 
+def error_message(exc: BaseException, limit: int = 300) -> str:
+    """Exception text for stdout JSON: secrets scrubbed, provider bodies bounded."""
+    return scrub_secrets(str(exc))[:limit]
+
+
 def json_safe(obj):
     """Replace non-finite floats (inf/-inf/nan, e.g. an all-flat P&L profit_loss_ratio)
     with None so json.dumps never emits the non-standard Infinity/NaN tokens that

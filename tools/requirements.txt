@@ -7,10 +7,11 @@ pyyaml>=6.0
 pypinyin>=0.50.0
 requests>=2.33.0
 exchange-calendars>=4.5.0
-newspaper4k>=0.9.6.1
+jinja2>=3.1.6
+# optional providers: failover-only sources; setup-python.mjs only warns when one cannot install
 efinance>=0.5.0
 baostock>=0.8.8
 pytdx>=1.72
 longport>=1.0.0
 finnhub-python>=2.4.0
-jinja2>=3.1.6
+newspaper4k>=0.9.6.1

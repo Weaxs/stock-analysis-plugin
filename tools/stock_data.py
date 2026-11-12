@@ -17,7 +17,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, WEEK, atomic_write, cached  # noqa: E402
-from _subproc import run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
+from _subproc import error_message, run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
+from trading_calendar import market_now  # noqa: E402
 
 # Explicitly exchange-prefixed A-share codes (sh600519 / sz000858 / bj920001).
 # Bare 6-digit codes are always stocks; the prefix is the disambiguation escape
@@ -521,8 +522,7 @@ def _sanitize(obj):
 
 
 def _cn_now() -> datetime:
-    """Naive Asia/Shanghai wall-clock now — A-share "today" must not follow the host timezone."""
-    return datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+    return market_now("CN")
 
 
 def _clean_row(d: dict) -> dict:
@@ -1072,7 +1072,7 @@ def cmd_kline(args):
             data = kline_yf(args.symbol, args.period, args.count, evidence=True)
         return data
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- quote ---------------
@@ -1401,7 +1401,7 @@ def cmd_quote(args):
     try:
         result = quote_a(args.symbol, evidence=True) if market == "A" else quote_yf(args.symbol, evidence=True)
     except Exception as e:
-        result = {"error": str(e)}
+        result = {"error": error_message(e)}
     # Exchange quotes cannot see open-end funds. Stock-only prefixes (SH 60/68, ChiNext 30, BSE) keep the bare error.
     if (
         isinstance(result, dict)
@@ -1504,7 +1504,7 @@ def cmd_fund_quote(args):
         latest = nav_rows[-1]
         nav_date = _fund_nav_date(latest["x"])
         accumulated_by_date = {_fund_nav_date(row[0]): row[1] for row in accumulated_rows}
-        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        today = _cn_now().date().isoformat()
         estimate = {
             "estimated_nav": None,
             "estimated_change_pct": None,
@@ -1543,7 +1543,7 @@ def cmd_fund_quote(args):
             result["warnings"] = warnings
         return result
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- capital_flow ---------------
@@ -1596,7 +1596,7 @@ def cmd_capital_flow(args):
             keep = [c for c in col_map.values() if c in df.columns]
             return [_clean_row(r) for r in df[keep].head(20).to_dict("records")]
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": error_message(e)}
 
     if detect_market(args.symbol) != "A":
         return {"error": "capital_flow only available for A-shares"}
@@ -1647,7 +1647,7 @@ def cmd_capital_flow(args):
         try:
             return _capital_flow_efinance(args.symbol)
         except Exception as e2:
-            return {"error": str(e2)}
+            return {"error": error_message(e2)}
 
 
 # --------------- news ---------------
@@ -1932,7 +1932,7 @@ def cmd_financials(args):
             financials_a(args.symbol, periods, annual) if market == "A" else financials_yf(args.symbol, periods, annual)
         )
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- market_snapshot ---------------
@@ -1953,7 +1953,7 @@ def snapshot_a() -> list:
                 label="snapshot_a",
             )
     except Exception as e:
-        return [{"error": f"A-share snapshot unavailable from all sources: {e}"}]
+        return [{"error": f"A-share snapshot unavailable from all sources: {error_message(e)}"}]
 
 
 def _snapshot_efinance() -> list:
@@ -2164,7 +2164,7 @@ def cmd_market_snapshot(args):
             return snapshot_us()
         return {"error": f"Unknown market: {m}"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- market_indices ---------------
@@ -2262,7 +2262,7 @@ def cmd_market_indices(args):
                 return list(pool.map(fetch_index, symbols.items()))
         return {"error": f"Unknown region: {region}"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- sector_rankings ---------------
@@ -2408,7 +2408,7 @@ def cmd_sector_rankings(args):
         if not rows:
             raise ValueError(f"no {board_type} board rankings data")
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     for r in rows:
         r["board_type"] = board_type
 
@@ -2581,7 +2581,7 @@ def _sector_constituents(args):
     try:
         result = sector_constituents_a(sector, board_type)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     _disk_cache_set(cache_key, result)
     return result
 
@@ -2924,7 +2924,7 @@ def cmd_stock_info(args):
                 }
             )
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- chip_distribution ---------------
@@ -2967,7 +2967,7 @@ def cmd_chip_distribution(args):
                 result["concentration_70"] = round((h70 - l70) / ((h70 + l70) / 2) * 100, 2)
         return result
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- market_stats ---------------
@@ -3053,7 +3053,7 @@ def cmd_market_stats(args):
             return {"error": "No market data"}
         return compute_market_stats(data)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- fundamental_context ---------------
@@ -3120,7 +3120,7 @@ def cmd_fundamental_context(args):
 
         return result
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- short-term sentiment: limit_up_pool / dragon_tiger / hot_stocks (A-share only) ---------------
@@ -3212,7 +3212,7 @@ def cmd_limit_up_pool(args):
         result["pool"] = pool
         return result
     except Exception as e:
-        return {"error": f"limit_up_pool date={requested}: {e}"}
+        return {"error": f"limit_up_pool date={requested}: {error_message(e)}"}
 
 
 def _dragon_tiger_em(raw: str) -> list:
@@ -3290,7 +3290,7 @@ def cmd_dragon_tiger(args):
     try:
         rows = _failover(sources, label=f"dragon_tiger:{raw}")
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     stale = req != data_day
     if not rows:
         result = {"date": date, "count": 0, "items": []}
@@ -3386,7 +3386,7 @@ def cmd_hot_stocks(args):
     try:
         rows = _failover(sources, label="hot_stocks")
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     if not rows:
         return {"count": 0, "items": [], "note": "no hot-rank data available"}
     items = [{k: v for k, v in r.items() if k != "source"} for r in rows[: args.top]]
@@ -3487,7 +3487,7 @@ def cmd_margin_trading(args):
                 return table
 
             try:
-                today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+                today = _cn_now().date().isoformat()
                 table = (
                     cached(f"margin-table:{exchange}:{date_iso}", DAY, fetch_table)
                     if date_iso < today
@@ -3540,7 +3540,7 @@ def cmd_margin_trading(args):
                     row["margin_buy_ratio_note"] = "matching-date CNY turnover unavailable"
         return rows
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 def _northbound_row_is_shell(row: dict) -> bool:
@@ -3597,7 +3597,7 @@ def cmd_northbound_flow(args):
         rows.reverse()
         return rows
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
 
 
 # --------------- CLI ---------------

@@ -18,9 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _subproc import command_timeout, utf8_stdio
+from _subproc import command_timeout, error_message, utf8_stdio
 from _subproc import run_tool as _run_tool
 from signal_tracker import _append_record, _load_records, _store_lock
+from trading_calendar import market_now
 
 
 def _index_change(row):
@@ -81,8 +82,6 @@ def _signal_to_stance(signal: str) -> str | None:
 
 def review_market(market: str = "A", *, run=None) -> dict:
     """Gather market data and compute review for a single market."""
-    from datetime import datetime
-
     tasks = {}
 
     if market == "A":
@@ -135,7 +134,7 @@ def review_market(market: str = "A", *, run=None) -> dict:
 
     output = {
         "market": market,
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": market_now("CN" if market == "A" else market).strftime("%Y-%m-%d"),
         "indices": results.get("indices"),
         "stats": results.get("stats"),
         "sectors": results.get("sectors"),
@@ -169,7 +168,7 @@ def save_review(report: dict, store: Path | None = None) -> dict:
         with _store_lock(store):
             _append_record(store, report)
     except (OSError, ValueError) as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     return {"saved": True, "date": report.get("review_date") or report.get("date")}
 
 
@@ -181,7 +180,7 @@ def cmd_history(args) -> dict:
             records = _load_records(store)
     except (OSError, UnicodeDecodeError) as e:
         # store is a directory / not UTF-8 — same clean-error contract as save_review
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     limit = max(args.limit, 0)
     recent = records[-limit:][::-1] if limit else []
     return {"count": len(recent), "records": recent}

@@ -1207,7 +1207,7 @@ export default (pi: ExtensionAPI) => {
         },
         "benchmark": {
           "type": "string",
-          "description": "可选基准代码，如sh000300；不猜测基准"
+          "description": "可选基准代码：sh000300/399006/000300.SH、中证H30269/93xxxx或^NDX；格式不符报错，不猜测基准"
         },
         "days": {
           "type": "number",

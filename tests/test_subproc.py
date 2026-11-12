@@ -260,3 +260,19 @@ def test_technical_budget_includes_primary_period(argv, count):
     from tools._subproc import command_timeout
 
     assert command_timeout("technical.py", argv) >= count * 150
+
+
+def test_error_message_scrubs_secrets_and_bounds_provider_text():
+    from tools._subproc import error_message
+
+    message = error_message(ValueError("GET /q?token=SECRET123&x=1 " + "<html>" * 200))
+    assert "SECRET123" not in message
+    assert len(message) == 300
+
+
+def test_article_errors_do_not_leak_tokens():
+    from tools.search_intel import extract_article
+
+    article = MagicMock(side_effect=Exception("Max retries exceeded with url: /a?api_key=SECRET123"))
+    with patch.dict(sys.modules, {"newspaper": MagicMock(Article=article)}):
+        assert "SECRET123" not in extract_article("https://example.com/a")["error"]

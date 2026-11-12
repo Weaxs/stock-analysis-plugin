@@ -51,9 +51,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.10 leg guards the declared floor — verified: full dep set installs
-        # and the suite passes on cpython 3.10.19.
-        python-version: ["3.11", "3.10"]
+        # 3.10 leg guards the declared floor; 3.14 matches the Hermes smoke runtime.
+        python-version: ["3.11", "3.10", "3.14"]
     steps:
       - uses: actions/checkout@v7
 
@@ -143,6 +142,9 @@ jobs:
 
       - name: dsh plugin registration
         run: npx tsx tests/test_dsh_integration.ts
+
+      - name: Cross-adapter tool schema parity
+        run: npx tsx tests/test_adapter_parity.ts
 
       - name: dsh dashboard and watchlist regressions
         run: npx tsx tests/test_dsh_dashboard.ts

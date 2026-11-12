@@ -1027,13 +1027,14 @@ def test_cn_now_uses_shanghai_not_host_date(monkeypatch):
     from datetime import timezone
 
     import stock_data  # the module value_data imports _cn_now from
+    import trading_calendar
 
     class UtcEvening(datetime):
         @classmethod
         def now(cls, tz=None):
             return datetime(2026, 10, 11, 17, tzinfo=timezone.utc).astimezone(tz)
 
-    monkeypatch.setattr(stock_data, "datetime", UtcEvening)
+    monkeypatch.setattr(trading_calendar, "datetime", UtcEvening)
     assert stock_data._cn_now().date() == date(2026, 10, 12)
 
 

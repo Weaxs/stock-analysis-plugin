@@ -82,6 +82,10 @@ packages = ["hermes"]
 "templates" = "hermes/_payload/templates"
 "schemas" = "hermes/_payload/schemas"
 
+[tool.coverage.run]
+# Most CLI paths are exercised through subprocess; measure those children too.
+patch = ["subprocess"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

@@ -11,7 +11,7 @@ import time as _time
 from contextvars import ContextVar
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _subproc import scrub_secrets, utf8_stdio
+from _subproc import error_message, scrub_secrets, utf8_stdio
 
 _SEARCH_STATE = ContextVar("search_budget", default=None)
 
@@ -492,7 +492,7 @@ def extract_article(url: str) -> dict:
     except ImportError:
         return {"url": url, "error": "newspaper4k not installed. pip install newspaper4k"}
     except Exception as e:
-        return {"url": url, "error": str(e)}
+        return {"url": url, "error": error_message(e)}
 
 
 # --------------- CLI Commands ---------------

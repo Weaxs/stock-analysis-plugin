@@ -1,15 +1,16 @@
 """Optional Lixinger HK non-financial datasets (same env token as index data)."""
 
 import os
-from datetime import date, timedelta
+from datetime import timedelta
 
 import requests
 from _cache import DAY, cached
+from trading_calendar import market_now
 
 
 def hk_data(symbol, dataset, metrics):
     code = symbol.split(".")[0].zfill(5)
-    end = date.today()
+    end = market_now("HK").date()
     try:
         start = end.replace(year=end.year - 10)
     except ValueError:

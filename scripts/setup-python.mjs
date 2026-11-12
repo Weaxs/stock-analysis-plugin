@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pythonEnvironmentRoot, venvPythonPath } from "./venv-python.mjs";
@@ -67,7 +67,25 @@ try {
     }
   }
 
-  run(venvPython, ["-m", "pip", "install", "-q", "-r", requirements]);
+  try {
+    run(venvPython, ["-m", "pip", "install", "-q", "-r", requirements]);
+  } catch {
+    // A failover provider without a wheel for this platform must not block the core tools.
+    const lines = readFileSync(requirements, "utf8").split(/\r?\n/).map(line => line.trim());
+    const marker = lines.findIndex(line => line.startsWith("# optional providers"));
+    const specs = list => list.filter(line => line && !line.startsWith("#"));
+    const core = specs(marker < 0 ? lines : lines.slice(0, marker));
+    if (core.length) run(venvPython, ["-m", "pip", "install", "-q", ...core]);
+    const skipped = specs(marker < 0 ? [] : lines.slice(marker + 1)).filter(spec => {
+      try {
+        run(venvPython, ["-m", "pip", "install", "-q", spec]);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    if (skipped.length) console.warn(`[stock-analysis-plugin] optional providers skipped: ${skipped.join(", ")}`);
+  }
 } catch (err) {
   console.warn(
     `\n[pi-stock-analysis] Python setup failed: ${err.message}\n` +

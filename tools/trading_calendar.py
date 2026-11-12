@@ -10,10 +10,23 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, cached
-from _subproc import socket_timeout, utf8_stdio
+from _subproc import error_message, socket_timeout, utf8_stdio
 
 # Supported markets. argparse uses type=str.upper so lowercase input is accepted too.
 MARKETS = ["CN", "HK", "US", "JP", "KR", "TW"]
+_MARKET_TZ = {
+    "CN": "Asia/Shanghai",
+    "HK": "Asia/Hong_Kong",
+    "US": "America/New_York",
+    "JP": "Asia/Tokyo",
+    "KR": "Asia/Seoul",
+    "TW": "Asia/Taipei",
+}
+
+
+def market_now(market: str) -> datetime:
+    """Naive market-local wall clock; "today" must not follow the host timezone (often UTC)."""
+    return datetime.now(ZoneInfo(_MARKET_TZ.get(market.upper(), "Asia/Shanghai"))).replace(tzinfo=None)
 
 
 def _is_weekend(d: datetime) -> bool:
@@ -139,7 +152,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
     if date_str:
         d = datetime.strptime(date_str, "%Y-%m-%d")
     else:
-        d = datetime.now()
+        d = market_now(market)
         date_str = d.strftime("%Y-%m-%d")
 
     market = market.upper()
@@ -227,7 +240,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
 
 
 def next_trading_days(market: str, count: int = 5, from_date: str = None) -> list[str]:
-    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else datetime.now()
+    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else market_now(market)
 
     result = []
     max_search = count * 4
@@ -242,7 +255,7 @@ def next_trading_days(market: str, count: int = 5, from_date: str = None) -> lis
 
 
 def prev_trading_days(market: str, count: int = 5, from_date: str = None) -> list[str]:
-    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else datetime.now()
+    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else market_now(market)
 
     result = []
     max_search = count * 4
@@ -298,11 +311,11 @@ def market_phase(market: str, at: str = None) -> dict:
     try:
         tz, sessions = _market_sessions(market)
     except Exception as e:
-        return {"market": market, "error": f"exchange calendar unavailable: {e}"}
+        return {"market": market, "error": f"exchange calendar unavailable: {error_message(e)}"}
     try:
         naive = datetime.strptime(at, "%Y-%m-%dT%H:%M:%S") if at else None
     except ValueError as e:
-        return {"market": market, "error": f"invalid --at (want YYYY-MM-DDTHH:MM:SS): {e}"}
+        return {"market": market, "error": f"invalid --at (want YYYY-MM-DDTHH:MM:SS): {error_message(e)}"}
     local = datetime.now(tz) if naive is None else naive.replace(tzinfo=tz)
     date_str = local.strftime("%Y-%m-%d")
     is_td = bool(is_trading_day(market, date_str).get("is_trading_day"))

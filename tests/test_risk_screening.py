@@ -27,12 +27,12 @@ def test_death_cross_uses_technical_cross_field(monkeypatch):
 
 
 def test_lockups_today_are_included_and_provider_is_bounded(monkeypatch):
-    from datetime import datetime
-
     import pandas as pd
 
+    today = risk_screening.market_now("CN").strftime("%Y-%m-%d")
+
     def fetch(**kwargs):
-        return pd.DataFrame({"解禁日期": [datetime.now().strftime("%Y-%m-%d")]})
+        return pd.DataFrame({"解禁日期": [today]})
 
     monkeypatch.setattr("akshare.stock_restricted_release_queue_em", fetch)
 
@@ -42,7 +42,7 @@ def test_lockups_today_are_included_and_provider_is_bounded(monkeypatch):
 
     monkeypatch.setattr(risk_screening, "_run_tool", run)
     result = risk_screening.check_lockup("600519")
-    assert result["upcoming_30d"] == [datetime.now().strftime("%Y-%m-%d")]
+    assert result["upcoming_30d"] == [today]
     assert result["available"] is True
 
 

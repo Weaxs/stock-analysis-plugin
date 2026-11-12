@@ -7,12 +7,13 @@ import math
 import os
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
 from _subproc import utf8_stdio
+from trading_calendar import market_now
 
 
 def _safe_float(val) -> float | None:
@@ -181,7 +182,7 @@ def _fetch_lockup(symbol: str) -> dict:
         if df.empty:
             return result
 
-        now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        now = market_now("CN").replace(hour=0, minute=0, second=0, microsecond=0)
         cutoff = now + timedelta(days=30)
 
         date_col = None

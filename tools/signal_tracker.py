@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import atomic_write, file_lock
-from _subproc import command_timeout, run_tool, utf8_stdio  # noqa: E402
+from _subproc import command_timeout, error_message, run_tool, utf8_stdio  # noqa: E402
 from stock_data import detect_market  # noqa: E402
 
 _MARKET_TIMEZONES = {
@@ -183,7 +183,7 @@ def cmd_record(args):
             _load_records(store, strict=True)
             _append_record(store, record)
     except (OSError, ValueError) as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     return record
 
 
@@ -310,7 +310,7 @@ def cmd_evaluate(args):
         with _store_lock(store):
             records = _load_records(store, strict=True)
     except (OSError, ValueError) as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     results = []
     evaluated = closed = 0
     changed = False
@@ -400,7 +400,7 @@ def cmd_evaluate(args):
                         entry.update({key: rec.get(key) for key in ("outcome", "return_pct", "exit_date")})
                         closed += 1
         except (OSError, ValueError) as e:
-            return {"error": str(e)}
+            return {"error": error_message(e)}
     return {
         "evaluated": evaluated,
         "closed": closed,
@@ -418,7 +418,7 @@ def cmd_summary(args):
         with _store_lock(store):
             records = _load_records(store, strict=True)
     except (OSError, ValueError) as e:
-        return {"error": str(e)}
+        return {"error": error_message(e)}
     filtered = records
     if args.source:
         filtered = [r for r in filtered if r.get("source") == args.source]

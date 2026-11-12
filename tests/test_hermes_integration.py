@@ -99,7 +99,9 @@ def test_wheel_declares_all_shared_runtime_dependencies():
     manifest = (root / "pyproject.toml").read_text(encoding="utf-8")
     wheel_deps = ast.literal_eval(manifest.split("dependencies = ", 1)[1].split("[project.urls]", 1)[0].strip())
     cli_deps = (root / "tools" / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert {str(Requirement(d)) for d in wheel_deps} == {str(Requirement(d)) for d in cli_deps if d.strip()}
+    assert {str(Requirement(d)) for d in wheel_deps} == {
+        str(Requirement(d)) for d in cli_deps if d.strip() and not d.startswith("#")
+    }
 
 
 EXPECTED_TOOLS = sorted(

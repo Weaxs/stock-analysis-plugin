@@ -122,6 +122,7 @@ class TestLimitUpPoolDateResolution:
                 return utc.astimezone(tz) if tz else datetime(2024, 1, 5, 15, 0)
 
         monkeypatch.setattr("tools.stock_data.datetime", _FixedDatetime)
+        monkeypatch.setattr("trading_calendar.datetime", _FixedDatetime)
         monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
         mock_ak = MagicMock()
         mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()
@@ -138,6 +139,7 @@ class TestLimitUpPoolDateResolution:
                 return cls(2024, 1, 6, 12, 0)  # Saturday noon
 
         monkeypatch.setattr("tools.stock_data.datetime", _FixedDatetime)
+        monkeypatch.setattr("trading_calendar.datetime", _FixedDatetime)
         monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
         mock_ak = MagicMock()
         mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()

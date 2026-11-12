@@ -15,7 +15,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _subproc import json_safe, run_tool, utf8_stdio
+from _subproc import error_message, json_safe, run_tool, utf8_stdio
 from stock_data import detect_market
 from technical import (
     bollinger_series,
@@ -894,7 +894,7 @@ def _benchmark_comparison(
         df = fetch_kline(symbol, start, end)
         _validate_adjustment_basis(df)
     except Exception as e:
-        return {"symbol": symbol, "error": str(e)}
+        return {"symbol": symbol, "error": error_message(e)}
     if len(df) < 2:
         return {"symbol": symbol, "error": f"Insufficient benchmark data: {len(df)} rows"}
     dates = pd.to_datetime(df["date"], errors="coerce")
@@ -1128,7 +1128,7 @@ def main():
             result = {"error": f"Unknown command: {args.command}"}
     except Exception as e:
         # A traceback would leave stdout empty; hosts need valid JSON even on failure.
-        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        print(json.dumps({"error": error_message(e)}, ensure_ascii=False))
         sys.exit(1)
 
     print(json.dumps(json_safe(result), ensure_ascii=False, default=str))

@@ -14,7 +14,7 @@ import {
 } from "@deepseek-ai/dsh-tools";
 // Type-only import: pulls in the `Context.skills` service augmentation.
 import type {} from "@deepseek-ai/dsh-skill";
-import { venvPythonPath } from "../scripts/venv-python.mjs";
+import { resolvePython, venvPythonPath } from "../scripts/venv-python.mjs";
 import { createToolDiscovery } from "./discovery.js";
 import { registerDashboard } from "./dashboard.js";
 
@@ -42,16 +42,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 // Published: <pkg>/dist -> <pkg>. Dev bundle: dsh/dist -> repo root.
 const pkgRoot = [join(here, ".."), join(here, "..", "..")].find(root => existsSync(join(root, "tools"))) ?? join(here, "..");
 const toolsDir = join(pkgRoot, "tools");
-const isWin = process.platform === "win32";
 
 function pythonBin(): string {
   // Staged-payload layout: the venv may still live at the repo root one level up.
-  for (const root of [pkgRoot, join(pkgRoot, "..")]) {
-    const candidate = venvPythonPath(root);
-    if (existsSync(candidate)) return candidate;
-  }
-  // On Windows "python3" is usually the Microsoft Store stub — prefer "python".
-  return isWin ? "python" : "python3";
+  const own = venvPythonPath(pkgRoot);
+  return existsSync(own) ? own : resolvePython(join(pkgRoot, ".."));
 }
 
 async function runPy(script: string, args: string[], timeoutMs?: number, signal?: AbortSignal): Promise<string> {
@@ -333,7 +328,7 @@ export function apply(ctx: Context, config: {toolDiscovery?: boolean} = {}) {
         },
         "benchmark": {
           "type": "string",
-          "description": "可选基准代码，如sh000300；不猜测基准"
+          "description": "可选基准代码：sh000300/399006/000300.SH、中证H30269/93xxxx或^NDX；格式不符报错，不猜测基准"
         },
         "days": {
           "type": "number",
