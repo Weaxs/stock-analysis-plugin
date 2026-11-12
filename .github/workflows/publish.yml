@@ -150,11 +150,26 @@ jobs:
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
 
+      # ClawHub still registers this package as bundle-plugin. Since the
+      # registry tightened bundle validation (openclaw/clawhub#4031), that family
+      # needs a bundle manifest we don't ship, and family changes need an admin
+      # repair (openclaw/clawhub#4086, #4100). Until the row is migrated to
+      # code-plugin, a ClawHub failure must not block the npm twin or the
+      # GitHub release.
       - name: Publish to ClawHub (dry-run)
+        id: clawhub-dry-run
+        continue-on-error: true
         run: clawhub package publish ./openclaw --family bundle-plugin --dry-run
 
       - name: Publish to ClawHub
+        id: clawhub-publish
+        if: steps.clawhub-dry-run.outcome == 'success'
+        continue-on-error: true
         run: clawhub package publish ./openclaw --family bundle-plugin
+
+      - name: Warn when ClawHub was skipped
+        if: steps.clawhub-publish.outcome != 'success'
+        run: echo "::warning::ClawHub publish did not complete; the registry row still needs the bundle-plugin -> code-plugin repair (openclaw/clawhub#4086)"
 
       - name: Publish unscoped variant to npm
         # Same payload under the unscoped name. Runs after ClawHub so the
