@@ -25,6 +25,15 @@ try {
   assert(existsSync(runtime), "existing environment must be preserved under node_modules");
   const python = join(runtime, process.platform === "win32" ? "Scripts/python.exe" : "bin/python3");
   assert.equal(spawnSync(python, ["-c", "import sys; assert sys.prefix != sys.base_prefix"]).status, 0);
+  rmSync(runtime, { recursive: true, force: true });
+  mkdirSync(runtime, { recursive: true });
+  const repair = spawnSync(process.execPath, [join(root, "scripts/setup-python.mjs")], { encoding: "utf8" });
+  assert.equal(repair.status, 1, repair.stderr);
+  assert(existsSync(python), "a half-built environment without pip must be rebuilt");
+  writeFileSync(join(root, "tools/requirements.txt"), "# optional providers\ninvalid requirement !!!\n");
+  const optional = spawnSync(process.execPath, [join(root, "scripts/setup-python.mjs")], { encoding: "utf8" });
+  assert.equal(optional.status, 0, optional.stderr);
+  assert.match(optional.stderr, /optional providers skipped: invalid requirement !!!/);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

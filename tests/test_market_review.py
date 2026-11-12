@@ -90,6 +90,21 @@ class TestReviewMarket:
         assert result["data_quality"]["limitations"]
 
     @patch("tools.market_review._run_tool")
+    def test_review_date_is_market_local(self, mock_run, monkeypatch):
+        from datetime import datetime, timezone
+
+        class UtcFridayEvening(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                moment = datetime(2026, 10, 9, 20, tzinfo=timezone.utc)
+                return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+        mock_run.return_value = None
+        monkeypatch.setitem(mr.market_now.__globals__, "datetime", UtcFridayEvening)
+        assert review_market("A")["date"] == "2026-10-10"
+        assert review_market("US")["date"] == "2026-10-09"
+
+    @patch("tools.market_review._run_tool")
     def test_a_market_structure(self, mock_run):
         mock_run.return_value = None
         result = review_market("A")

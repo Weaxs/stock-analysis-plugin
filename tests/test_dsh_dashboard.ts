@@ -125,7 +125,14 @@ try {
   {
     const file = join(temp, "never", "watchlist.json");
     writeWatchlist(file, ["002444"]);
-    const handler = createDashboardHandler({ runPy: () => new Promise<string>(() => {}), watchlistFile: file, webDir });
+    let started = 0;
+    const signals: (AbortSignal | undefined)[] = [];
+    const hang: RunPy = (_script, _args, _timeoutMs, signal) => {
+      started++;
+      signals.push(signal);
+      return new Promise<string>((_resolve, reject) => signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    };
+    const handler = createDashboardHandler({ runPy: hang, watchlistFile: file, webDir });
     let done = false;
     const pending = call(handler, get("/stock-analysis/api/snapshot?region=cn")).then(out => { done = true; return out; });
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -136,6 +143,13 @@ try {
     assert.equal(snap.watchlist[0].quoteLoading, true);
     assert(snap.pending > 0, "the snapshot reports queued background work");
     handler.dispose();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const afterDispose = started;
+    await handler.tick();
+    assert.equal(started, afterDispose, "a disposed dashboard starts no new Python work");
+    const after = (await call(handler, get("/stock-analysis/api/snapshot?region=cn"))).json();
+    assert(signals.length > 0 && signals.every(signal => signal?.aborted), "dispose aborts running Python children");
+    assert.equal(after.pending, 0, "dispose settles queued and running jobs");
   }
 
   // ---------- warm-up fetches the fixed job set within the worker budget ----------
@@ -256,6 +270,7 @@ try {
     const item = snap.watchlist[0];
     assert.equal(item.quote.price, 100, "a failed refresh keeps the last good quote");
     assert.equal(item.quoteError, "数据暂不可用");
+    assert(snap.market.indices.every((row: { updatedAt?: string | null }) => typeof row.updatedAt === "string"), "index rows carry their update time");
     assert(!JSON.stringify(snap).includes("secret") && !JSON.stringify(snap).includes("/private"), "provider errors are sanitized");
     const attempts = () => flaky.calls.filter(call => call === "stock_data.py:quote AAPL").length;
     const afterFailure = attempts();

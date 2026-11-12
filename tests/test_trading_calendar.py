@@ -341,3 +341,26 @@ def test_calendar_refreshes_when_china_date_changes(monkeypatch):
         Clock.current = datetime(2026, 10, 30)
         assert tc.cn_trade_dates(2026) == {"2026-10-29", "2026-10-30"}
     assert source.call_count == 2
+
+
+class _UtcFridayEvening(datetime):
+    """Host clock on UTC Friday 20:00 — already Saturday 04:00 in China."""
+
+    @classmethod
+    def now(cls, tz=None):
+        from datetime import timezone
+
+        moment = datetime(2026, 10, 9, 20, tzinfo=timezone.utc)
+        return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+
+def test_default_today_follows_market_timezone_not_host(monkeypatch):
+    monkeypatch.setattr(tc, "datetime", _UtcFridayEvening)
+    assert tc.market_now("CN").date().isoformat() == "2026-10-10"
+    assert tc.market_now("US").date().isoformat() == "2026-10-09"
+    assert tc.is_trading_day("CN") == {
+        "date": "2026-10-10",
+        "market": "CN",
+        "is_trading_day": False,
+        "reason": "weekend",
+    }

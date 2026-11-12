@@ -124,6 +124,8 @@ def _search_urls(portfolio_name, budget_seconds=45):
             if match:
                 urls.append(f"https://youzhiyouxing.cn/n/lite-posts/{match.group(1)}")
         return urls
+    except _DisclosureTimeout:
+        raise
     except Exception:
         return []
 
@@ -167,6 +169,8 @@ def advisor_metadata(symbol):
             text,
             re.S,
         )
+        if not rows:
+            raise ValueError("CSISC advisor organization table not found")
         return {
             "organizations": {code: unescape(re.sub(r"<[^>]+>", "", name)).strip() for name, code in rows},
             "retrieved_at": datetime.now(timezone.utc).isoformat(),

@@ -276,7 +276,10 @@ TOOL_SCHEMAS = [
                     "description": "显式请求半年度/年度全部披露股票表，默认false；不是实时全资产组合",
                 },
                 "symbol": {"type": "string", "description": "A股ETF代码，如510300"},
-                "benchmark": {"type": "string", "description": "可选基准代码，如sh000300；不猜测基准"},
+                "benchmark": {
+                    "type": "string",
+                    "description": "可选基准代码：sh000300/399006/000300.SH、中证H30269/93xxxx或^NDX；格式不符报错，不猜测基准",
+                },
                 "days": {"type": "number", "description": "净值窗口交易日数10..252，默认60"},
             },
             "required": ["symbol"],

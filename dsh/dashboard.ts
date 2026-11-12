@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Context } from "@deepseek-ai/cordis";
 
 export const DASHBOARD_BASE = "/stock-analysis";
-export type RunPy = (script: string, args: string[], timeoutMs?: number) => Promise<string>;
+export type RunPy = (script: string, args: string[], timeoutMs?: number, signal?: AbortSignal) => Promise<string>;
 
 export const REGIONS = ["cn", "hk", "us", "jp", "kr", "tw"] as const;
 export type Region = (typeof REGIONS)[number];
@@ -167,7 +167,7 @@ interface Job {
 /** Small priority queue so a burst of trend/stat work never delays quotes. */
 function createPriorityLimiter(limit: number) {
   let active = 0;
-  const waiting: Array<{ priority: number; start: () => void }> = [];
+  const waiting: Array<{ priority: number; start: () => void; cancel: () => void }> = [];
   const next = () => {
     while (active < limit && waiting.length) {
       waiting.sort((a, b) => a.priority - b.priority);
@@ -181,10 +181,13 @@ function createPriorityLimiter(limit: number) {
         waiting.push({
           priority,
           start: () => fn().then(resolve, reject).finally(() => { active--; next(); }),
+          cancel: () => reject(new Error("仪表盘已停止")),
         });
         next();
       });
     },
+    /** Settle queued jobs without starting them. */
+    clear() { for (const job of waiting.splice(0)) job.cancel(); },
     get queued() { return waiting.length + active; },
   };
 }
@@ -221,6 +224,8 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
   const inflight = new Set<Promise<void>>();
   let viewedRegion: Region = "cn";
   let lastSeen = 0;
+  let disposed = false;
+  const abort = new AbortController();
 
   const slot = (key: string): Slot => {
     let value = slots.get(key);
@@ -246,7 +251,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     }
   }
 
-  const py = async (script: string, args: string[], timeoutMs: number) => parseJson(await runPy(script, args, timeoutMs));
+  const py = async (script: string, args: string[], timeoutMs: number) => parseJson(await runPy(script, args, timeoutMs, abort.signal));
 
   function quoteJob(symbol: string, priority: number): Job {
     return {
@@ -364,6 +369,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   /** Start every due job; resolves when the jobs started by this tick finish. */
   async function tick(): Promise<void> {
+    if (disposed) return;
     const symbols = currentSymbols();
     const list = jobs(symbols);
     const keep = new Set(list.map(job => job.key));
@@ -392,11 +398,11 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     const trend = slotView(`trend:${code}`);
     if (region === "cn") {
       const quote = slotView(`quote:${code}`);
-      return { region, code, quote: quote.value, error: quote.error, loading: quote.loading, trend: trend.value };
+      return { region, code, quote: quote.value, error: quote.error, loading: quote.loading, updatedAt: quote.updatedAt, trend: trend.value };
     }
     const indices = slotView(`indices:${region}`);
     const quote = Array.isArray(indices.value) ? indices.value.find((row: { code?: string }) => row?.code === code) ?? null : null;
-    return { region, code, quote, error: indices.error, loading: indices.loading, trend: trend.value };
+    return { region, code, quote, error: indices.error, loading: indices.loading, updatedAt: indices.updatedAt, trend: trend.value };
   }
 
   function snapshot(region: Region) {
@@ -502,7 +508,13 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
   }) as DashboardHandler;
   handler.tick = tick;
   handler.settle = settle;
-  handler.dispose = () => { if (timer) clearInterval(timer); timer = undefined; };
+  handler.dispose = () => {
+    disposed = true;
+    if (timer) clearInterval(timer);
+    timer = undefined;
+    limiter.clear();
+    abort.abort();
+  };
   return handler;
 }
 

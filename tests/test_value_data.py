@@ -1,5 +1,5 @@
 from argparse import Namespace
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import pytest
@@ -15,6 +15,7 @@ def fixed_today(monkeypatch):
             return cls(2026, 10, 12)
 
     monkeypatch.setattr(value_data, "date", FixedDate)
+    monkeypatch.setattr(value_data, "_cn_now", lambda: datetime(2026, 10, 12, 12))
 
     def offline(*args, **kwargs):
         raise OSError("test did not configure this HTTP source")
@@ -1020,3 +1021,152 @@ def test_disclosed_equities_optional_name_does_not_break_json(monkeypatch):
     result = value_data.fund_disclosed_equities("510300")
     assert result["equity_positions"][0]["name"] is None
     json.dumps(result, allow_nan=False)
+
+
+def test_cn_now_uses_shanghai_not_host_date(monkeypatch):
+    from datetime import timezone
+
+    import stock_data  # the module value_data imports _cn_now from
+    import trading_calendar
+
+    class UtcEvening(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 11, 17, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(trading_calendar, "datetime", UtcEvening)
+    assert stock_data._cn_now().date() == date(2026, 10, 12)
+
+
+def test_compact_report_date_reaches_northbound_as_iso(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import value_data
+
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(kwargs["params"])
+        if "sse" in url:
+            return Mock(
+                json=lambda: {
+                    "result": [{"secCode": "600519", "tradeDate": "20260930", "totalHoldings": "10"}],
+                    "pageHelp": {"pageCount": 1},
+                }
+            )
+        return Mock(json=lambda: [{"metadata": {"pagecount": 1}, "data": [{"zqdm": "000001", "cysl": "42"}]}])
+
+    monkeypatch.setattr("requests.get", get)
+    assert value_data.northbound_holdings("600519", "20260930")["as_of"] == "2026-09-30"
+    assert calls[-1]["tradeDate"] == "20260930"
+    assert value_data.northbound_holdings("000001", "20260930")["as_of"] == "2026-09-30"
+    assert calls[-1]["txtDate"] == "2026Q3"
+
+
+def test_daily_cache_keys_do_not_embed_today_but_nav_tracks_end(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    keys = []
+    monkeypatch.setattr(value_data, "cached", lambda key, ttl, fetch: keys.append(key) or {})
+    value_data.etf_basket("510300")
+    value_data.northbound_holdings("600519")
+    value_data.northbound_holdings("600519", "2026-06-30")
+    assert keys == ["etf-basket:510300", "northbound-official:600519:", "northbound-official:600519:2026-06-30"]
+
+    nav_keys = []
+    monkeypatch.setattr(value_data, "dataset", lambda key, fetch: nav_keys.append(key) or [])
+    monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True})
+    value_data.etf_details(Namespace(symbol="510300", benchmark="", days=60))
+    assert "etf-nav:510300:60:2026-10-12" in nav_keys
+
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        ("000922", "sh000922"),
+        ("399006", "sz399006"),
+        ("159915", "sz159915"),
+        ("sh000300", "sh000300"),
+        ("000300.SH", "sh000300"),
+        ("399006.sz", "sz399006"),
+        ("^NDX", "^NDX"),
+    ],
+)
+def test_etf_benchmark_index_codes_get_exchange_prefix(monkeypatch, code, expected):
+    import akshare as ak
+
+    from tools import value_data
+
+    calls = []
+    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "index_stock_cons_csindex", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True})
+    monkeypatch.setattr("_subproc.run_tool", lambda script, args, **k: calls.append(args) or [])
+    result = value_data.etf_details(Namespace(symbol="510300", benchmark=code, days=60))
+    assert [c[1] for c in calls if c[0] == "kline"] == [expected]
+    assert result["tracking_error"]["benchmark"] == expected
+
+
+@pytest.mark.parametrize("code", ["沪深300", "sh 000300", "000300.XX", "sh00030"])
+def test_etf_benchmark_rejects_unknown_format_before_fetching(monkeypatch, code):
+    import akshare as ak
+
+    from tools import value_data
+
+    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pytest.fail("fetched before validation"))
+    with pytest.raises(ValueError, match="benchmark"):
+        value_data.etf_details(Namespace(symbol="510300", benchmark=code, days=60))
+
+
+def test_etf_benchmark_csi_code_uses_csindex_history(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    csi = []
+    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "index_stock_cons_csindex", lambda **k: csi.append(("cons", k["symbol"])) or pd.DataFrame())
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_index_hist_csindex",
+        lambda **k: csi.append(("hist", k["symbol"])) or pd.DataFrame({"日期": ["2026-10-09"], "收盘": [1000.0]}),
+    )
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True})
+
+    def no_kline(script, args, **k):
+        if args[0] == "kline":
+            raise AssertionError("CSI index must not be fetched as a stock kline")
+        return {}
+
+    monkeypatch.setattr("_subproc.run_tool", no_kline)
+    result = value_data.etf_details(Namespace(symbol="510300", benchmark="H30269", days=60))
+    assert result["tracking_error"]["benchmark"] == "H30269"
+    assert ("hist", "H30269") in csi and ("cons", "H30269") in csi
+
+
+def test_etf_benchmark_csi_outage_keeps_other_sections(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    def down(**k):
+        raise ConnectionError("csindex down")
+
+    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "index_stock_cons_csindex", down)
+    monkeypatch.setattr(ak, "stock_zh_index_hist_csindex", down)
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True})
+    monkeypatch.setattr("_subproc.run_tool", lambda *a, **k: {})
+    result = value_data.etf_details(Namespace(symbol="510300", benchmark="H30269", days=60))
+    assert result["tracking_error"]["benchmark"] == "H30269"
+    assert any(w.startswith("benchmark_history: unavailable") for w in result["warnings"])

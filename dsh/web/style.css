@@ -176,6 +176,7 @@ table { width: 100%; border-collapse: collapse; }
 .code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
 .tag { padding: 0 4px; border-radius: 3px; background: var(--surface-subtle); font-size: 10.5px; line-height: 16px; }
 .stale { color: var(--warn); }
+.is-stale .tile-price, .is-stale .tile-pct, .is-stale .iprice, .is-stale .ipct { opacity: .55; }
 .price { font-size: 15px; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; border-radius: 5px; }
 .price.flash-up { animation: flash-up 1.4s cubic-bezier(.16, 1, .3, 1); }
 .price.flash-down { animation: flash-down 1.4s cubic-bezier(.16, 1, .3, 1); }

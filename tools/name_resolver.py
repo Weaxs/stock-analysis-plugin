@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _cache import DAY, cached  # noqa: E402
-from _subproc import utf8_stdio  # noqa: E402
+from _subproc import error_message, utf8_stdio  # noqa: E402
 from stock_data import _akshare_retry  # noqa: E402
 
 
@@ -120,7 +120,7 @@ def main():
     try:
         result = resolve(args.query, args.top)
     except RuntimeError as e:
-        result = {"error": str(e)}
+        result = {"error": error_message(e)}
     print(json.dumps(result, ensure_ascii=False))
 
 

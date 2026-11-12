@@ -744,12 +744,20 @@ class TestNewsSearchIntelFallback:
     def test_success(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0,
-            stdout=json.dumps([{"title": "News 1", "url": "http://example.com"}]),
+            stdout=json.dumps({"query": "q", "results": [{"title": "News 1", "url": "http://example.com"}]}),
         )
         result = _news_search_intel_fallback("600519")
         assert len(result) == 1
         assert result[0]["title"] == "News 1"
         assert result[0]["source"] == "search"
+
+    @patch("subprocess.run")
+    def test_uses_search_budget_timeout(self, mock_run):
+        from tools._subproc import command_timeout
+
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps({"results": []}))
+        assert _news_search_intel_fallback("600519") == []
+        assert mock_run.call_args.kwargs["timeout"] == command_timeout("search_intel.py", ["search"])
 
     @patch("subprocess.run")
     def test_nonzero_returncode(self, mock_run):
@@ -772,7 +780,7 @@ class TestNewsSearchIntelFallback:
     @patch("subprocess.run")
     def test_limits_to_10_items(self, mock_run):
         items = [{"title": f"News {i}", "url": f"http://example.com/{i}"} for i in range(15)]
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(items))
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps({"results": items}))
         result = _news_search_intel_fallback("600519")
         assert len(result) == 10
 
@@ -2483,6 +2491,37 @@ class TestYfHkNormalizationApplied:
         mock_yfinance.Ticker.assert_called_with("1801.HK")
         assert result[0]["title"] == "t"
 
+    def test_news_reads_nested_content_shape(self, mock_yfinance):
+        """yfinance >= 0.2.50 nests news fields under `content`."""
+        mock_yfinance.Ticker.return_value.news = [
+            {
+                "id": "x",
+                "content": {
+                    "title": "Nested",
+                    "canonicalUrl": {"url": "https://n.example"},
+                    "provider": {"displayName": "Reuters"},
+                    "pubDate": "2026-11-11T08:00:00Z",
+                    "contentType": "STORY",
+                },
+            }
+        ]
+        result = cmd_news(Namespace(symbol="AAPL", days=3))
+        assert result == [
+            {
+                "title": "Nested",
+                "publisher": "Reuters",
+                "url": "https://n.example",
+                "published": "2026-11-11T08:00:00Z",
+                "type": "STORY",
+            }
+        ]
+
+    def test_news_without_titles_falls_back_to_search(self, mock_yfinance):
+        mock_yfinance.Ticker.return_value.news = [{"id": "x", "content": {}}]
+        fallback = [{"title": "s", "url": "u", "source": "search"}]
+        with patch("tools.stock_data._news_search_intel_fallback", return_value=fallback):
+            assert cmd_news(Namespace(symbol="AAPL", days=3)) == fallback
+
 
 class TestStockSectorsHkRetry:
     """HK lookups ride the shared _akshare_retry policy (2 retries, 1s delay) —
@@ -3048,6 +3087,29 @@ class TestStickyFailover:
         sources = [("a", self._make_fn(calls, "a", True)), ("b", self._make_fn(calls, "b", True))]
         assert _failover(sources, label="quote:AAPL") == {"src": "a"}
         assert calls == ["a"]
+
+    def test_etf_quote_chain_is_not_sticky(self, tmp_path):
+        """The ETF fund-spot source carries iopv/fund_shares — a one-off fallback win
+        must not demote it for the rest of the TTL."""
+        calls = []
+        sources = [("fund", self._make_fn(calls, "fund", False)), ("alt", self._make_fn(calls, "alt", True))]
+        assert _failover(sources, label="quote_a_etf:510300") == {"src": "alt"}
+        assert not list(tmp_path.glob("sticky-*.json"))
+
+        calls.clear()
+        sources = [("fund", self._make_fn(calls, "fund", True)), ("alt", self._make_fn(calls, "alt", True))]
+        assert _failover(sources, label="quote_a_etf:510300") == {"src": "fund"}
+        assert calls == ["fund"]
+
+    def test_sticky_marker_not_refreshed_when_winner_unchanged(self, tmp_path):
+        """Re-writing the marker on every sticky win would reset its mtime forever, so a
+        stale preference could never age out; only a changed winner is written."""
+        _failover([("a", lambda: None), ("b", lambda: {"ok": 1})], label="quote_a:x")
+        marker = tmp_path / "sticky-quote_a.json"
+        with patch("tools.stock_data._disk_cache_set") as mock_set:
+            _failover([("a", lambda: {"ok": 1}), ("b", lambda: {"ok": 1})], label="quote_a:x")
+        mock_set.assert_not_called()
+        assert json.loads(marker.read_text(encoding="utf-8")) == "b"
 
     def test_short_term_data_chains_are_sticky(self):
         """sector_rankings/dragon_tiger/hot_stocks lead with eastmoney, whose

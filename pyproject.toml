@@ -45,7 +45,7 @@ dependencies = [
     "akshare>=1.20.24; python_version >= '3.11'",
     "akshare>=1.14.0; python_version < '3.11'",
     "yfinance>=0.2.36",
-    "pandas>=2.0.0",
+    "pandas>=2.0.0,<4",
     "numpy>=1.24.0",
     "pypinyin>=0.50.0",
     "requests>=2.33.0",
@@ -73,12 +73,18 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hermes", "tools"]
+packages = ["hermes"]
 
+# Nest the payload under our package so it never shadows Hermes's own top-level `tools`.
 [tool.hatch.build.targets.wheel.force-include]
-"skills" = "skills"
-"templates" = "templates"
-"schemas" = "schemas"
+"tools" = "hermes/_payload/tools"
+"skills" = "hermes/_payload/skills"
+"templates" = "hermes/_payload/templates"
+"schemas" = "hermes/_payload/schemas"
+
+[tool.coverage.run]
+# Most CLI paths are exercised through subprocess; measure those children too.
+patch = ["subprocess"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

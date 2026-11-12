@@ -41,6 +41,7 @@ declare module "typebox" {
     String(opts?: { description?: string }): unknown;
     Number(opts?: { description?: string }): unknown;
     Null(): unknown;
+    Unknown(): unknown;
     Boolean(opts?: { description?: string }): unknown;
     Optional(schema: unknown): unknown;
     Union(schemas: unknown[], opts?: { description?: string }): unknown;

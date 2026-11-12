@@ -23,6 +23,47 @@ def test_cache_hit_expiry_and_failures(monkeypatch, tmp_path):
     assert cache.cached("error", 10, lambda: {"price": 3}) == {"price": 3}
 
 
+def test_new_entry_prunes_expired_files_in_its_namespace(monkeypatch, tmp_path):
+    import os
+
+    import _cache
+
+    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
+    _cache.cached("daily:2026-11-11", 10, lambda: {"day": 11})
+    _cache.cached("other:x", 10, lambda: {"keep": 1})
+    for path in tmp_path.iterdir():
+        os.utime(path, (0, 0))
+    _cache.cached("daily:2026-11-12", 10, lambda: {"day": 12})
+
+    prefix = _cache._namespace_prefix("daily")
+    assert len(list(tmp_path.glob(f"{prefix}-*.json"))) == 1
+    assert not [p for p in tmp_path.glob(f"{prefix}-*.lock") if p.stat().st_mtime == 0]
+    assert len(list(tmp_path.glob(f"{_cache._namespace_prefix('other')}-*.json"))) == 1
+
+
+def test_prune_keeps_a_lock_held_by_a_slow_refetch(monkeypatch, tmp_path):
+    import os
+
+    import _cache
+
+    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
+    now = [1000.0]
+    monkeypatch.setattr(_cache.time, "time", lambda: now[0])
+    _cache.cached("daily:a", 10, lambda: {"day": 1})
+    for path in tmp_path.iterdir():
+        os.utime(path, (0, 0))
+    now[0] = 1011
+
+    def slow_refetch():
+        # Another key in the namespace prunes while this expired entry is being refetched under its lock.
+        _cache.cached("daily:b", 10, lambda: {"day": 2})
+        return {"day": 3}
+
+    _cache.cached("daily:a", 10, slow_refetch)
+    prefix = _cache._namespace_prefix("daily")
+    assert len(list(tmp_path.glob(f"{prefix}-*.lock"))) == 2
+
+
 def test_corrupt_and_partial_cache_are_refetched(monkeypatch, tmp_path):
     import _cache
 

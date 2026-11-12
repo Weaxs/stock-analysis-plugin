@@ -3,7 +3,7 @@ limit_up_pool, dragon_tiger, hot_stocks, sector_rankings --board-type."""
 
 import sys
 from argparse import Namespace
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -111,6 +111,27 @@ class TestLimitUpPoolDateResolution:
         assert result["requested_date"] == "20240101"
         assert result["stale"] is True
 
+    def test_default_date_uses_shanghai_clock_not_host_clock(self, monkeypatch):
+        """Host clock Friday evening (UTC-5) is already Saturday in Shanghai: the default
+        date must be the Shanghai day, so the pool is labeled stale for Saturday."""
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                utc = datetime(2024, 1, 5, 20, 0, tzinfo=timezone.utc)
+                return utc.astimezone(tz) if tz else datetime(2024, 1, 5, 15, 0)
+
+        monkeypatch.setattr("tools.stock_data.datetime", _FixedDatetime)
+        monkeypatch.setattr("trading_calendar.datetime", _FixedDatetime)
+        monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
+        mock_ak = MagicMock()
+        mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = cmd_limit_up_pool(Namespace(date=None))
+        assert result["date"] == "20240105"
+        assert result["requested_date"] == "20240106"
+        assert result["stale"] is True
+
     def test_future_date_clamps_to_today_then_resolves(self, monkeypatch):
         class _FixedDatetime(datetime):
             @classmethod
@@ -118,6 +139,7 @@ class TestLimitUpPoolDateResolution:
                 return cls(2024, 1, 6, 12, 0)  # Saturday noon
 
         monkeypatch.setattr("tools.stock_data.datetime", _FixedDatetime)
+        monkeypatch.setattr("trading_calendar.datetime", _FixedDatetime)
         monkeypatch.setattr("trading_calendar.cn_trade_dates", lambda year: set())
         mock_ak = MagicMock()
         mock_ak.stock_zt_pool_em.return_value = _zt_pool_df()

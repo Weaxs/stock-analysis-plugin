@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _subproc import error_message, utf8_stdio
 from _subproc import run_tool as _run_json  # noqa: E402
-from _subproc import utf8_stdio
 from stock_data import detect_market  # noqa: E402
 
 RULE_TYPES = {
@@ -283,7 +283,7 @@ def main():
     try:
         rules = json.loads(raw)
     except json.JSONDecodeError as e:
-        print(json.dumps({"error": f"invalid rules JSON: {e}"}, ensure_ascii=False))
+        print(json.dumps({"error": f"invalid rules JSON: {error_message(e)}"}, ensure_ascii=False))
         sys.exit(1)
 
     result = check_rules(args.symbol, rules)

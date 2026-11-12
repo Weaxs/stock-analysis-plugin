@@ -36,6 +36,16 @@ def cached_values(namespace, ttl):
             yield entry.get("data")
 
 
+def _prune(path, ttl):
+    """Drop expired siblings of a fresh entry so date-scoped keys cannot grow the cache forever."""
+    cutoff = time.time() - ttl
+    for old in CACHE_DIR.glob(f"{path.name.split('-', 1)[0]}-*"):
+        if old.stem != path.stem and old.suffix in (".json", ".lock"):
+            with contextlib.suppress(OSError):
+                if old.stat().st_mtime < cutoff:
+                    old.unlink()
+
+
 @contextlib.contextmanager
 def file_lock(path, timeout=5):
     """Coordinate processes using a stable lock inode, with bounded waiting."""
@@ -116,6 +126,8 @@ def cached(key: str, ttl: int, fetch):
         # shortcut: slow fetches may outlast lock wait; prefer duplicate work to blocking callers indefinitely.
         with contextlib.suppress(OSError):
             stack.enter_context(file_lock(path.with_suffix(".lock")))
+            # A held lock must look fresh so another key's prune never unlinks it mid-fetch.
+            os.utime(path.with_suffix(".lock"))
         entry = _read(path, ttl)
         if entry and "data" in entry:
             return entry["data"]
@@ -128,6 +140,7 @@ def cached(key: str, ttl: int, fetch):
                 json.dump(
                     {"key": key, "fetched_at": time.time(), "data": result}, stream, ensure_ascii=False, allow_nan=False
                 )
+            _prune(path, ttl)
         except (OSError, ValueError, TypeError):
             pass
         return result

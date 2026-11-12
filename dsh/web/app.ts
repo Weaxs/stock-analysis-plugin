@@ -57,6 +57,7 @@ interface IndexRow {
   quote: Quote | null;
   error: string | null;
   loading: boolean;
+  updatedAt?: string | null;
   trend: TrendRow[] | null;
 }
 
@@ -91,7 +92,7 @@ interface Snapshot {
 }
 
 const POLL_IDLE = 15000;
-const POLL_BUSY = 1500;
+const POLL_BUSY = 5000;
 const REQUEST_TIMEOUT = 15000;
 const CACHE_KEY = "stock-dashboard:v2:snapshot";
 const PREF_KEY = "stock-dashboard:v2:prefs";
@@ -122,6 +123,7 @@ const state = {
   error: null as string | null,
   lastOk: 0,
   fromCache: false,
+  signature: "",
 };
 
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -364,8 +366,19 @@ function renderStatus() {
     node.append(el("span", "live"), document.createTextNode(`${open.map(region => REGION_NAMES[region]).join("、")}交易中 · `));
   }
   node.append(document.createTextNode(state.fromCache ? "显示上次数据，正在更新…" : `${clock(state.lastOk, true)} 已同步`));
+  if (!state.fromCache && [...(snap.ribbon || []), ...snap.market.indices].some(isStale)) {
+    node.append(document.createTextNode(" · "), el("span", "warn", "部分指数更新失败"));
+  }
   if (!state.fromCache && snap.pending > 0) node.append(document.createTextNode(` · 后台更新 ${snap.pending} 项`));
   $("refresh").classList.toggle("busy", !state.fromCache && snap.pending > 0);
+}
+
+function isStale(row: IndexRow): boolean {
+  return Boolean(row.error && row.quote);
+}
+
+function staleTitle(row: IndexRow): string {
+  return `更新失败，显示上次报价${row.updatedAt ? `（${clock(row.updatedAt)}）` : ""}`;
 }
 
 function groupByRegion(list: IndexRow[]): Map<Region, IndexRow[]> {
@@ -407,6 +420,10 @@ function renderRibbon() {
           el("span", `tile-price ${dir(row.quote.change_pct)}`, fmtPrice(row.quote.price, 2)),
           el("span", `tile-pct ${dir(row.quote.change_pct)}`, fmtPct(row.quote.change_pct)),
         );
+        if (isStale(row)) {
+          tile.classList.add("is-stale");
+          tile.title = staleTitle(row);
+        }
       } else if (row.loading) {
         tile.append(skeleton(64), skeleton(40));
       } else {
@@ -694,6 +711,10 @@ function indexPanel(market: Snapshot["market"], phase: Phase | null | undefined)
     if (row.quote && num(row.quote.price) !== null) {
       price.textContent = fmtPrice(row.quote.price, 2);
       pct.textContent = `${fmtSigned(row.quote.change, 2)}  ${fmtPct(row.quote.change_pct)}`;
+      if (isStale(row)) {
+        tr.classList.add("is-stale");
+        tr.title = staleTitle(row);
+      }
     } else if (row.loading) {
       price.append(skeleton(64));
       pct.append(skeleton(80));
@@ -814,6 +835,8 @@ function renderMarket() {
 }
 
 function render(flash = new Map<string, Direction>()) {
+  // Rebuilt charts never fire pointerleave, so an open tooltip would stay stuck.
+  $("tip").hidden = true;
   $("watch-count").textContent = state.snap ? `${state.snap.watchlist.length} / 30` : "";
   renderStatus();
   renderRibbon();
@@ -856,8 +879,15 @@ async function poll(): Promise<void> {
     state.error = null;
     state.lastOk = Date.now();
     if (region === state.region) {
-      applySnapshot(snap);
-      writeJson(CACHE_KEY, { savedAt: Date.now(), snap });
+      const signature = JSON.stringify({ ...snap, fetchedAt: null, pending: null });
+      if (signature === state.signature && !state.fromCache) {
+        state.snap = snap;
+        renderStatus();
+      } else {
+        state.signature = signature;
+        applySnapshot(snap);
+        writeJson(CACHE_KEY, { savedAt: Date.now(), snap });
+      }
     }
   } catch (error) {
     state.error = (error as Error).message;

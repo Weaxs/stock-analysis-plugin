@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import utf8_stdio
+from _subproc import error_message, utf8_stdio
 from market_review import save_review
 
 try:
@@ -55,12 +55,12 @@ def render(kind: str, template: str, report: dict) -> dict:
     try:
         tpl = _env().get_template(tpl_path)
     except Exception as e:
-        return {"error": f"failed to load template {tpl_path}: {e}"}
+        return {"error": f"failed to load template {tpl_path}: {error_message(e)}"}
 
     try:
         content = tpl.render(**report)
     except Exception as e:
-        return {"error": f"render failed: {e}", "template": tpl_path}
+        return {"error": f"render failed: {error_message(e)}", "template": tpl_path}
 
     return {
         "meta": {

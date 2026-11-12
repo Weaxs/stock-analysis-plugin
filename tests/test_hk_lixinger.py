@@ -120,16 +120,11 @@ def test_hk_valuation_permission_failure_uses_baidu_without_mixing(monkeypatch):
 
 
 def test_lixinger_request_does_not_exceed_ten_year_window(monkeypatch):
-    from datetime import date
+    from datetime import datetime
 
     import lixinger
 
-    class MonthEnd(date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 10, 31)
-
-    monkeypatch.setattr(lixinger, "date", MonthEnd)
+    monkeypatch.setattr(lixinger, "market_now", lambda market: datetime(2026, 10, 31, 12))
     monkeypatch.setenv("LIXINGER_TOKEN", "test-token")
     calls = []
 

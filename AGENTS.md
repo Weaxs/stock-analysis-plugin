@@ -159,6 +159,7 @@ npx tsx tests/test_pi_integration.ts                       # Pi registration (ji
 npx tsx tests/test_openclaw_integration.ts                 # OpenClaw registration
 npx tsx tests/test_dsh_integration.ts                      # dsh registration (tools + skills + bundle manifest)
 npx tsx tests/test_dsh_dashboard.ts                        # dsh dashboard warmer + snapshot API + watchlist + client manifest
+npx tsx tests/test_adapter_parity.ts                       # same 72 tools, params, required, enums, descriptions on all four hosts
 .venv/bin/python -m pytest tests/e2e/test_host_to_python.py -v     # host↔python round-trip
 npx tsx tests/e2e/test_pi_e2e.ts                           # Pi real-subprocess e2e
 npx tsx tests/e2e/test_openclaw_e2e.ts                     # OpenClaw real-subprocess e2e
@@ -228,7 +229,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 3. Register it in all four adapters: `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params.
 4. Wire it into the relevant `skills/*/SKILL.md` workflow if an agent should call it.
 5. Update the README tool table (and tool count if surfaced).
-6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, and the four registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_dsh_integration.ts`, `test_hermes_integration.py`).
+6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, the four registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_dsh_integration.ts`, `test_hermes_integration.py`), and `test_adapter_parity.ts`.
 
 ---
 

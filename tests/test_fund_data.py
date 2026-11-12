@@ -576,3 +576,27 @@ assert time.monotonic() - started < 1
     completed = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=1)
     assert completed.returncode == 0, completed.stderr
     assert time.monotonic() - started < 1
+
+
+def test_tiaa_search_budget_timeout_is_not_swallowed(monkeypatch):
+    from tools import tiaa_disclosures
+
+    monkeypatch.setattr(
+        "search_intel.search_news",
+        lambda *a, **k: {"results": [], "engines_errors": {"tavily": "time budget exhausted"}},
+    )
+    with pytest.raises(tiaa_disclosures._DisclosureTimeout):
+        tiaa_disclosures._search_urls("长钱账户")
+
+
+def test_tiaa_advisor_page_without_rows_is_error_not_cached(monkeypatch):
+    from unittest.mock import Mock
+
+    from tools import tiaa_disclosures
+
+    monkeypatch.setattr(tiaa_disclosures.requests, "get", lambda *a, **k: Mock(content=b"<html>changed</html>"))
+    with pytest.raises(ValueError):
+        tiaa_disclosures.advisor_metadata("TIAA001001")
+    body = "<tr><td>1</td><td>嘉实财富管理有限公司</td><td>A001</td></tr>".encode()
+    monkeypatch.setattr(tiaa_disclosures.requests, "get", lambda *a, **k: Mock(content=body))
+    assert tiaa_disclosures.advisor_metadata("TIAA001001")["advisor_org"] == "嘉实财富管理有限公司"

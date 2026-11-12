@@ -6,7 +6,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PACKAGE_DIR = Path(__file__).resolve().parent
+# Installed wheels carry the payload in hermes/_payload; a dev checkout keeps it at the repo root.
+PROJECT_ROOT = _PACKAGE_DIR / "_payload" if (_PACKAGE_DIR / "_payload").is_dir() else _PACKAGE_DIR.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 # Hermes owns the top-level tools package; load our shared helper without shadowing it.
 command_timeout = runpy.run_path(str(TOOLS_DIR / "_subproc.py"))["command_timeout"]
@@ -24,6 +26,20 @@ def _find_python() -> str:
     return sys.executable
 
 
+def _cli_json(stdout: str, failure: str | None = None) -> str:
+    # Failed, empty, or non-JSON CLI output becomes a JSON error; a CLI-provided JSON error is kept.
+    try:
+        payload = json.loads(stdout)
+    except ValueError:
+        failure = failure or (
+            "Python command returned non-JSON output" if stdout.strip() else "Python command returned no JSON"
+        )
+    else:
+        if failure is None or (isinstance(payload, dict) and isinstance(payload.get("error"), str)):
+            return stdout
+    return json.dumps({"error": failure})
+
+
 def _run(script: str, argv: list) -> str:
     # argv list: 参数原样进子进程，不经 shell（Windows 同理）
     python = _find_python()
@@ -37,20 +53,13 @@ def _run(script: str, argv: list) -> str:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": f"Command timed out after {timeout}s"})
-    except Exception as e:
-        return json.dumps({"error": f"Python command failed ({type(e).__name__})"})
+        return json.dumps({"error": "Python command timed out"})
+    except Exception:
+        return json.dumps({"error": "Python command failed; check interpreter/dependencies"})
+    failure = None
     if result.returncode != 0:
-        try:
-            payload = json.loads(result.stdout)
-            if isinstance(payload, dict) and isinstance(payload.get("error"), str):
-                return result.stdout
-        except ValueError:
-            pass
-        return json.dumps(
-            {"error": f"Python command failed (exit {result.returncode}); check interpreter/dependencies"}
-        )
-    return result.stdout
+        failure = f"Python command failed (exit {result.returncode}); check interpreter/dependencies"
+    return _cli_json(result.stdout or "", failure)
 
 
 def get_kline(args: dict, **kwargs) -> str:
@@ -363,24 +372,14 @@ def get_market_capabilities(args: dict, **kwargs) -> str:
 
 
 def render_stock_report(args: dict, **kwargs) -> str:
-    report = args["report"]
     template = args.get("template", "full")
-    payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return _run(
-        "report_renderer.py",
-        ["stock", "--template", template, "--input-b64", payload, *(["--final"] if args.get("final") else [])],
-    )
+    extra = ["--template", template, *(["--final"] if args.get("final") else [])]
+    return _run_analysis("stock", args["report"], script="report_renderer.py", extra=extra)
 
 
 def render_market_report(args: dict, **kwargs) -> str:
-    report = args["report"]
-    payload = base64.b64encode(json.dumps(report, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    argv = ["market", "--input-b64", payload]
-    if args.get("final"):
-        argv.append("--final")
-    if args.get("save"):
-        argv.append("--save")
-    return _run("report_renderer.py", argv)
+    extra = [*(["--final"] if args.get("final") else []), *(["--save"] if args.get("save") else [])]
+    return _run_analysis("market", args["report"], script="report_renderer.py", extra=extra)
 
 
 def get_review_history(args: dict, **kwargs) -> str:
@@ -552,13 +551,13 @@ def get_insider_trades(args: dict, **kwargs) -> str:
     )
 
 
-def _run_analysis(command: str, args: dict, *, script="stateless_analysis.py") -> str:
+def _run_analysis(command: str, args: dict, *, script="stateless_analysis.py", extra=()) -> str:
     try:
         with tempfile.TemporaryDirectory(prefix="stock-analysis-") as directory:
             path = Path(directory) / "input.json"
             path.write_text(json.dumps(args, ensure_ascii=False, allow_nan=False), encoding="utf-8")
             path.chmod(0o600)
-            return _run(script, [command, "--input", str(path)])
+            return _run(script, [command, "--input", str(path), *extra])
     except Exception:
         return json.dumps({"error": "Analysis input transport failed"})
 
