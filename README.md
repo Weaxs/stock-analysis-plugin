@@ -7,7 +7,7 @@
 
 给 AI Agent 用的股票研究工具箱，覆盖 **A 股、港股、美股、日股、韩股、台股**。装进你常用的 Agent 后，直接用自然语言查行情、做个股分析、全市场选股、写策略回测、做盘后复盘。
 
-同一套 Python 工具同时支持 [Pi Agent](https://github.com/anthropics/pi-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[OpenClaw](https://docs.openclaw.ai/)、[DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness)，也能作为 MCP 服务器接入 Claude Desktop、Cursor、WorkBuddy。
+同一套 Python 工具同时支持 [Pi Agent](https://github.com/earendil-works/pi)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[OpenClaw](https://github.com/openclaw/openclaw)、[DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness)，也能作为 MCP 服务器接入 Claude Desktop、Cursor、WorkBuddy。
 
 ![dsh 股票仪表盘：六市场自选股行情、指数带、A 股涨跌分布与行业涨跌榜](https://raw.githubusercontent.com/Weaxs/stock-analysis-plugin/main/docs/images/dsh-dashboard-light.png)
 
@@ -589,7 +589,7 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 - [akshare](https://github.com/akfamily/akshare) — A 股数据源
 - [yfinance](https://github.com/ranaroussi/yfinance) — 港股 / 美股数据源
 - [pytdx](https://github.com/rainx/pytdx) — 通达信 TDX 协议（A 股免费兜底）
-- [longport](https://github.com/longportapp/openapi-sdk) — Longbridge OpenAPI（港股 / 美股）
+- [longport](https://github.com/longbridge/openapi) — Longbridge OpenAPI（港股 / 美股）
 - [exchange-calendars](https://github.com/gerrymanoim/exchange_calendars) — 全球交易日历
 
 ## License
