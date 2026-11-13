@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -34,7 +35,7 @@ def exact_json_number(text):
     return Fraction(Decimal(text))
 
 
-def invoke_raw(raw, exact=True, command="rebalance", timeout=30):
+def invoke_raw(raw, exact=True, command="rebalance", timeout=30, env=None):
     result = subprocess.run(
         [sys.executable, str(SCRIPT), command],
         input=raw,
@@ -42,6 +43,7 @@ def invoke_raw(raw, exact=True, command="rebalance", timeout=30):
         text=True,
         encoding="utf-8",
         timeout=timeout,
+        env=env,
     )
     assert not result.stderr, result.stderr
     if exact:
@@ -1191,7 +1193,9 @@ def test_portfolio_stress_maximum_varied_calendar_is_bounded():
         "stress_scenarios": [{"name": "unchanged"}],
     }
     start = time.monotonic()
-    code, result = invoke_raw(json.dumps(payload), command="portfolio", timeout=150)
+    # A wall-clock bound must time the tool, not CI's subprocess coverage (settrace on py<3.12 is ~2x slower).
+    untraced = {key: value for key, value in os.environ.items() if not key.startswith("COVERAGE_")}
+    code, result = invoke_raw(json.dumps(payload), command="portfolio", timeout=150, env=untraced)
     elapsed = time.monotonic() - start
     assert code == 0
     assert len(result["correlations"]) == 4950
