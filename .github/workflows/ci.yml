@@ -28,10 +28,10 @@ jobs:
         run: pip install ruff==0.15.20
 
       - name: Ruff check
-        run: ruff check tools/ skills/ tests/ hermes/
+        run: ruff check tools/ skills/ tests/ hermes/ mcp_host/
 
       - name: Ruff format check
-        run: ruff format --check tools/ skills/ tests/ hermes/
+        run: ruff format --check tools/ skills/ tests/ hermes/ mcp_host/
 
       - uses: actions/setup-node@v7
         with:
@@ -143,11 +143,17 @@ jobs:
       - name: dsh plugin registration
         run: npx tsx tests/test_dsh_integration.ts
 
+      - name: dsh tool discovery
+        run: npx tsx tests/test_dsh_discovery.ts
+
       - name: Cross-adapter tool schema parity
         run: npx tsx tests/test_adapter_parity.ts
 
       - name: dsh dashboard and watchlist regressions
         run: npx tsx tests/test_dsh_dashboard.ts
+
+      - name: dsh browser poll regression
+        run: npx tsx tests/test_dsh_web_poll.ts
 
       - name: dsh current SDK compatibility
         run: npx tsx tests/test_dsh_sdk_compat.ts
@@ -160,6 +166,12 @@ jobs:
 
       - name: Hermes plugin registration
         run: pytest tests/test_hermes_integration.py -v
+
+      - name: JS host process-tree cancellation
+        run: npx tsx tests/test_process_tree.ts
+
+      - name: MCP stdio registration and cancellation
+        run: pytest tests/test_mcp_integration.py -v
 
       - name: Run host↔python round-trip tests
         run: pytest tests/e2e/test_host_to_python.py -v
