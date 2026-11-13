@@ -1296,12 +1296,13 @@ def etf_details(args):
     }
     end = _cn_now().date()
     start = end - timedelta(days=args.days * 2)
+    # akshare 1.20.41 renamed fund_etf_fund_info_em; py3.10 is capped below 1.20.40 and keeps the old name
     capture(
         result,
         "nav_history",
         lambda: dataset(
             f"etf-nav:{symbol}:{args.days}:{end.isoformat()}",
-            lambda: ak.fund_etf_fund_info_em(
+            lambda: (getattr(ak, "fund_exchange_nav_hist_em", None) or ak.fund_etf_fund_info_em)(
                 fund=symbol, start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d")
             ),
         ),
