@@ -79,8 +79,8 @@
 
 | 代码格式 | 示例 | 市场 | 行情报价 Failover 链（K 线差异见下方） |
 |----------|------|------|---------------------|
-| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | 腾讯 → akshare → tushare → efinance → 新浪 → pytdx |
-| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | 腾讯 → akshare（ETF/全市场接口）→ tushare → efinance → 新浪 → pytdx |
+| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | 腾讯 → akshare → tushare → efinance → 新浪 |
+| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | 腾讯 → akshare（ETF/全市场接口）→ tushare → efinance → 新浪 |
 | 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪 |
 | `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → 腾讯 → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
@@ -428,7 +428,7 @@ python tools/sec_edgar.py holdings 0000320193 --mode issuer   # 发行人 CIK �
 运行 `pip install -r tools/requirements.txt`。使用 virtualenv / conda 时，确保 Agent 启动时用的是同一个 Python 环境。
 
 **A 股数据获取失败？**
-报价会依次尝试腾讯、akshare、tushare、efinance、新浪和 pytdx，K 线另有 baostock 兜底。都失败时，检查网络、升级 akshare（`pip install --upgrade akshare`），或配置 `TUSHARE_TOKEN` 增加一个可靠数据源。
+报价会依次尝试腾讯、akshare、tushare、efinance 和新浪，K 线另有 baostock 兜底。都失败时，检查网络、升级 akshare（`pip install --upgrade akshare`），或配置 `TUSHARE_TOKEN` 增加一个可靠数据源。
 
 **港股 / 美股数据有延迟？**
 yfinance 免费数据通常延迟约 15 分钟。配置 Longbridge（`LONGBRIDGE_APP_KEY` 等）或 Finnhub（`FINNHUB_API_KEY`）可获得更实时的数据。
@@ -557,7 +557,6 @@ pip install -r tools/requirements.txt
 | exchange-calendars | 交易日历（A/HK/US/JP/KR/TW） |
 | newspaper4k / pypdf | HTML 新闻与公告 PDF 正文提取 |
 | pypinyin | 股票名称拼音搜索 |
-| pytdx | A 股 TDX 行情（免费兜底源） |
 | longport | 港股 / 美股 Longbridge SDK |
 
 </details>
@@ -588,7 +587,6 @@ GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运�
 - [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) — A 股每日分析工具，本项目的综合分析流程参考了其设计思路
 - [akshare](https://github.com/akfamily/akshare) — A 股数据源
 - [yfinance](https://github.com/ranaroussi/yfinance) — 港股 / 美股数据源
-- [pytdx](https://github.com/rainx/pytdx) — 通达信 TDX 协议（A 股免费兜底）
 - [longport](https://github.com/longbridge/openapi) — Longbridge OpenAPI（港股 / 美股）
 - [exchange-calendars](https://github.com/gerrymanoim/exchange_calendars) — 全球交易日历
 

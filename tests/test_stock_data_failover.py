@@ -35,7 +35,6 @@ from tools.stock_data import (
     _quote_alphavantage,
     _quote_finnhub,
     _quote_longbridge,
-    _quote_pytdx,
     _quote_sina,
     _quote_tencent,
     _quote_tushare,
@@ -952,56 +951,6 @@ class TestQuoteTushare:
             _quote_tushare("600519")
 
 
-class TestQuotePytdx:
-    def test_returns_data(self):
-        mock_api_cls = MagicMock()
-        mock_api = MagicMock()
-        mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value = True
-        mock_api.get_security_quotes.return_value = [
-            {
-                "name": "贵州茅台",
-                "price": 1800.0,
-                "last_close": 1780.0,
-                "vol": 5000,
-                "high": 1810.0,
-                "low": 1780.0,
-                "open": 1790.0,
-            }
-        ]
-        with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}):
-            result = _quote_pytdx("600519")
-        assert result["price"] == 1800.0
-        assert result["change_pct"] == pytest.approx(1.1236, rel=0.01)
-        mock_api.disconnect.assert_called_once()
-
-    def test_connect_false_raises_connection_error_not_typeerror(self):
-        """connect() returning False (server unreachable) must surface a clear ConnectionError."""
-        mock_api_cls = MagicMock()
-        mock_api = MagicMock()
-        mock_api_cls.return_value = mock_api
-        mock_api.connect.return_value = False
-        with (
-            patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}),
-            pytest.raises(ConnectionError, match="pytdx.*connect"),
-        ):
-            _quote_pytdx("600519")
-
-    def test_connect_exception_falls_over_to_next_server(self):
-        """A raising connect() on one server must not abort — the next server is tried."""
-        mock_api_cls = MagicMock()
-        mock_api = MagicMock()
-        mock_api_cls.return_value = mock_api
-        mock_api.connect.side_effect = [OSError("timed out"), True]
-        mock_api.get_security_quotes.return_value = [
-            {"name": "x", "price": 1.0, "last_close": 1.0, "vol": 1, "high": 1.0, "low": 1.0, "open": 1.0}
-        ]
-        with patch.dict(sys.modules, {"pytdx": MagicMock(), "pytdx.hq": MagicMock(TdxHq_API=mock_api_cls)}):
-            result = _quote_pytdx("600519")
-        assert result["price"] == 1.0
-        assert mock_api.connect.call_count == 2
-
-
 class TestToBaostockCode:
     """Bare six-digit symbols are stocks; explicit exchange prefixes identify indices."""
 
@@ -1225,13 +1174,12 @@ class TestQuoteAFailover:
         stock_spot.assert_not_called()
         etf_spot.assert_not_called()
 
-    @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_sina")
     @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_akshare_after_tencent_down(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+    def test_akshare_after_tencent_down(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
         mock_tx.side_effect = ValueError("down")
         mock_ak.return_value = {"price": 1800}
         result = quote_a("600519")
@@ -1239,28 +1187,25 @@ class TestQuoteAFailover:
         mock_ts.assert_not_called()
         mock_sina.assert_not_called()
 
-    @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_sina")
     @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_falls_through_to_efinance(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+    def test_falls_through_to_efinance(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
         mock_tx.side_effect = ValueError("down")
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
         mock_ef.return_value = {"price": 1800}
         result = quote_a("600519")
         assert result == {"price": 1800}
-        mock_ptdx.assert_not_called()
 
-    @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_sina")
     @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
         """The issue #25 scenario: eastmoney dead + no tushare token, tencent still answers."""
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
@@ -1269,22 +1214,19 @@ class TestQuoteAFailover:
         result = quote_a("600519")
         assert result == {"price": 1258.75}
         mock_sina.assert_not_called()
-        mock_ptdx.assert_not_called()
 
-    @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_sina")
     @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
         mock_ak.side_effect = ValueError("ak down")
         mock_ts.side_effect = ValueError("ts down")
         mock_ef.side_effect = ValueError("ef down")
         mock_tx.side_effect = ValueError("tx down")
         mock_sina.side_effect = ValueError("sina down")
-        mock_ptdx.side_effect = ValueError("ptdx down")
-        with pytest.raises(RuntimeError, match="ptdx down"):
+        with pytest.raises(RuntimeError, match="sina down"):
             quote_a("600519")
 
     @patch("tools.stock_data._quote_akshare")
@@ -1570,11 +1512,10 @@ class TestAkshareETF:
         assert result["price"] == 4.05
         assert result["is_etf"] is True
 
-    @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_stock_quote_has_no_etf_source(self, mock_ak, mock_ts, mock_ef, mock_ptdx):
+    def test_stock_quote_has_no_etf_source(self, mock_ak, mock_ts, mock_ef):
         """Non-ETF A-share quote chain unchanged: no fund spot attempt."""
         mock_ak.return_value = {"price": 1800}
         result = quote_a("600519")
