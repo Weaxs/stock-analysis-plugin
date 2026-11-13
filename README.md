@@ -5,143 +5,95 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%3E=3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
 
-A 股 / 港股 / 美股 / 日股 / 韩股 / 台股综合分析、多因子选股和策略回测工具集，可作为 [Pi Agent](https://github.com/anthropics/pi-agent) Extension、[Hermes Agent](https://github.com/NousResearch/hermes-agent) Plugin、[OpenClaw](https://docs.openclaw.ai/) Plugin、[DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) Plugin，或 MCP stdio 服务器使用。
+给 AI Agent 用的股票研究工具箱，覆盖 **A 股、港股、美股、日股、韩股、台股**。装进你常用的 Agent 后，直接用自然语言查行情、做个股分析、全市场选股、写策略回测、做盘后复盘。
 
-底层共享同一套 Python CLI 工具和 SKILL.md 工作流，上层适配四个插件平台及 MCP stdio；MCP 复用 Hermes 的工具定义。
+同一套 Python 工具同时支持 [Pi Agent](https://github.com/anthropics/pi-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[OpenClaw](https://docs.openclaw.ai/)、[DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness)，也能作为 MCP 服务器接入 Claude Desktop、Cursor、WorkBuddy。
 
-## 目录
+![dsh 股票仪表盘：六市场自选股行情、指数带、A 股涨跌分布与行业涨跌榜](https://raw.githubusercontent.com/Weaxs/stock-analysis-plugin/main/docs/images/dsh-dashboard-light.png)
 
-- [功能概览](#功能概览)
-- [安装](#安装)
-  - [Pi Agent Extension](#pi-agent-extension)
-  - [Hermes Agent Plugin](#hermes-agent-plugin)
-  - [OpenClaw Plugin](#openclaw-plugin)
-  - [dsh (DeepSeek Harness) Plugin](#dsh-deepseek-harness-plugin)
-  - [MCP stdio](#mcp-stdio)
-  - [Python 依赖](#python-依赖)
-- [快速开始](#快速开始)
-- [Skills 一览](#skills-一览)
-- [工具列表](#工具列表)
-- [策略回测 DSL](#策略回测-dsl)
-- [市场路由规则](#市场路由规则)
-- [独立 CLI 使用](#独立-cli-使用)
-- [CI 真实宿主测试](#ci-真实宿主测试)
-- [项目结构](#项目结构)
-- [致谢](#致谢)
-- [常见问题](#常见问题)
-- [License](#license)
+<sub>dsh Web / Desktop 中的「股票仪表盘」，真实行情截图。</sub>
 
-## 功能概览
+## 能做什么
 
-- **73 个工具** — 行情数据、技术分析、K 线形态、资金流向、估值历史、财报日历、股东/ETF/股息、新闻舆情、风险筛查、市场状态等
-- **21 个 Skills** — 综合分析、全市场选股、策略回测 + 18 个策略、复盘与研究方法论（缠论、波浪、龙头、情绪周期等）
-- **策略回测引擎** — YAML DSL 定义策略，参数化条件组合，自动诊断，按需进行有限轮参数优化
-- **多数据源 Failover** — 11 个数据源自动容灾切换（akshare / tushare / efinance / 腾讯行情 / 新浪行情 / pytdx / baostock / yfinance / finnhub / longbridge / alphavantage），A 股 K 线等链路带粘性优选（最近成功的数据源下次优先尝试）；单票报价始终先尝试腾讯，既有东财 sticky 不抢占
-- **社交舆情增强** — A 股（东财股吧 + 雪球）/ 美港股（Reddit / X / Polymarket），市场自动路由
-- **多宿主适配** — 同一套工具支持 Pi Agent、Hermes Agent、OpenClaw、dsh，以及 WorkBuddy / Claude Desktop / Cursor 等 MCP 客户端
+- **个股分析**：「帮我分析贵州茅台」——行情、技术面、财务、资金流、新闻与舆情汇总成一份研报，并标注哪些数据缺失或过期。
+- **全市场选股**：「A 股里找 PE < 30、市值 > 100 亿的成长股」——多因子硬筛，再由模型排序给出候选。
+- **策略回测**：用 YAML 描述买卖条件，回测、诊断，按需调参。
+- **盘后复盘**：指数、涨跌家数、板块轮动、涨停池、龙虎榜和市场情绪温度。
+- **价值投资数据**：估值分位、股息、股东结构、ETF 折溢价、财报日历、公告，以及美股 SEC 13F / Form 4。
+- **持仓与风控**：组合集中度、压力测试、调仓计划和仓位计算；只计算你本次传入的数据，不保存账户。
+- **策略视角**：缠论、波浪理论、龙头战法、情绪周期等 18 套方法论，以 Skill 形式按需调用。
+- **dsh 仪表盘**：在 dsh Web / Desktop 侧栏看自选股和六个市场的行情，后台预热，打开即显示。
 
-## 安装
+一共 73 个工具、21 个 Skills，11 个数据源自动容灾。大部分功能不需要任何 API Key。
 
-> 所有 npm 包同时以 scoped（`@weaxs/*`）和非 scoped 同名两种名字发布，内容一致，任选其一即可。
+## 快速开始
 
-插件包地址：
+需要本机有 **Python ≥ 3.10**。npm 安装的插件会自动在包目录下创建 `.venv` 并装好依赖。
 
-| 平台 | 包名 | 地址 | 安装命令 |
-|------|------|------|----------|
-| Pi Agent | `@weaxs/stock-analysis-plugin`（或 `stock-analysis-plugin`） | [npm](https://www.npmjs.com/package/@weaxs/stock-analysis-plugin) | `npm install @weaxs/stock-analysis-plugin` |
-| Hermes Agent | `stock-analysis-plugin` | [PyPI](https://pypi.org/project/stock-analysis-plugin/) | `pip install stock-analysis-plugin` |
-| OpenClaw | `@weaxs/openclaw-stock-analysis`（或 `openclaw-stock-analysis`） | [npm](https://www.npmjs.com/package/@weaxs/openclaw-stock-analysis) | `openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis` |
-| DeepSeek Harness (dsh) | `@weaxs/dsh-stock-analysis`（或 `dsh-stock-analysis`） | [npm](https://www.npmjs.com/package/@weaxs/dsh-stock-analysis) | `dsh plugin --profile <profile> add @weaxs/dsh-stock-analysis` |
-| MCP stdio | `stock-analysis-plugin` | [PyPI](https://pypi.org/project/stock-analysis-plugin/) / 源码 | `pip install stock-analysis-plugin`，运行 `stock-analysis-mcp` |
+| 你在用 | 安装 | 详细说明 |
+|--------|------|----------|
+| Pi Agent | `npm install @weaxs/stock-analysis-plugin`（在 `~/.pi/agent/extensions` 下） | [Pi 接入指南](docs/pi-integration.md) |
+| Hermes Agent | `pip install stock-analysis-plugin` | [Hermes 接入指南](docs/hermes-integration.md) |
+| OpenClaw | `openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis` | [OpenClaw 接入指南](docs/openclaw-integration.md) |
+| DeepSeek Harness (dsh) | `dsh plugin --profile <profile> add @weaxs/dsh-stock-analysis` | [dsh 插件说明](dsh/README.md) |
+| Claude Desktop / Cursor / WorkBuddy（MCP） | `pip install stock-analysis-plugin`，运行 `stock-analysis-mcp` | [MCP 接入指南](docs/mcp.md) |
 
-各平台的详细安装步骤见下方对应小节。
+所有 npm 包同时以 scoped（`@weaxs/*`）和非 scoped 同名发布，内容一致。
 
-### Pi Agent Extension
+装好后试试：
 
-```bash
-# 全局安装
-cd ~/.pi/agent/extensions
-npm install @weaxs/stock-analysis-plugin
-
-# 或项目级安装
-mkdir -p .pi/extensions && cd .pi/extensions
-npm install @weaxs/stock-analysis-plugin
+```
+帮我分析贵州茅台（600519）
+从 A 股中筛选低估值高成长的股票：PE < 30、PB < 5、市值 > 100 亿
+用 RSI 超卖反弹策略回测茅台，时间段 2024 年全年
+用缠论分析一下 600519 当前的走势结构
+今天 A 股复盘
 ```
 
-> 也可以直接 `git clone git@github.com:Weaxs/stock-analysis-plugin.git` 使用源码版本。
+也可以显式调用 Skill，例如 `/skill:stock-analysis`、`/skill:wave-theory`。
 
-Pi 启动后自动加载，输入 `/skills` 确认。详见 [Pi Agent 接入指南](docs/pi-integration.md)（[English](docs/pi-integration.en.md)）。
+### 各宿主的注意事项
 
-新版 Pi（已核验 1.5.2）提供原生 `tool_search` 时，插件自动启用按需工具发现，73 项能力保留注册，仅命中工具加载完整定义。缺少原生发现接口的旧版 Pi 或 SDK 宿主保持全量暴露。可直接用中文关键词或工具名检索，例如 `实时行情`、`get_quote`、`get_financials`；Pi 1.5 之前的版本只能匹配英文关键词。
+**Pi**：也可以项目级安装到 `.pi/extensions`，或直接 clone 源码使用。启动后输入 `/skills` 确认已加载。Pi 1.5.2 及以上提供原生 `tool_search` 时，插件只在命中时加载完整工具定义；可用中文关键词或工具名搜索，例如 `实时行情`、`get_quote`。
 
-### Hermes Agent Plugin
+**Hermes**：通过 `hermes_agent.plugins` entry point 自动发现，无需复制目录；也可以在 Python 中 `from hermes import register; register(ctx)`。
 
-```bash
-pip install stock-analysis-plugin
-```
+**dsh**：dsh 用 pnpm 安装插件，默认不执行第三方安装脚本。若 `.venv` 没有建起来，在 profile 的 `pnpm-workspace.yaml` 中给 `@weaxs/dsh-stock-analysis` 配置 `allowBuilds`，否则会回退系统 `python3`。新版 dsh 默认通过 `stock_tool_search` 按需加载工具，可用 `toolDiscovery: false` 关闭。
 
-安装后 Hermes 通过 `hermes_agent.plugins` entry point 自动发现并注册，无需手动复制目录。
+**MCP**：源码方式运行 `.venv/bin/python mcp_host/server.py`，或 `python -m mcp_host`。客户端配置示例见 [MCP 接入指南](docs/mcp.md)。
 
-或在 Python 中直接注册：
+## dsh 股票仪表盘
 
-```python
-from hermes import register
-register(ctx)
-```
+装了 dsh 插件的 Web / Desktop 会在侧栏出现「股票仪表盘」：
 
-详见 [Hermes Agent 接入指南](docs/hermes-integration.md)（[English](docs/hermes-integration.en.md)）。
+- **自选股行情表**：最新价、涨跌幅、今日区间、成交额和 30 日走势，可排序、按市场筛选；最多 30 只，支持六个市场。
+- **市场概览**：顶部六市场指数带和 A 股涨跌分布；下方可切换市场查看指数，A 股另有涨跌统计和行业领涨、领跌榜。
+- **打开即显示**：插件在后台常驻预热行情，页面只读内存快照；交易时段约 30 秒更新一次。
+- **与 Agent 共享**：Agent 可以用 `get_watchlist` 读取同一份自选股。
 
-### OpenClaw Plugin
+刷新节奏、数据来源和存储位置见 [dsh 插件说明](dsh/README.md#股票仪表盘web--desktop)。
 
-```bash
-openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
-```
+## 支持的市场
 
-OpenClaw Gateway 启动后自动加载并注册 73 个 tool。安装时 postinstall 会自动建 `.venv` 并装好 Python 依赖（前提：本机有 `python3 >= 3.10`）。
+| 代码格式 | 示例 | 市场 | 行情报价 Failover 链（K 线差异见下方） |
+|----------|------|------|---------------------|
+| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | 腾讯 → akshare → tushare → efinance → 新浪 → pytdx |
+| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | 腾讯 → akshare（ETF/全市场接口）→ tushare → efinance → 新浪 → pytdx |
+| 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪 |
+| `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → 腾讯 → finnhub → longbridge |
+| 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
+| `.T` 结尾 | `7203.T` | 日股 | yfinance |
+| `.KS` / `.KQ` 结尾 | `005930.KS`, `036020.KQ` | 韩股 | yfinance |
+| `.TW` / `.TWO` 结尾 | `2330.TW`, `6510.TWO` | 台股 | yfinance |
 
-详见 [OpenClaw 接入指南](docs/openclaw-integration.md)，或 plugin 自身说明 [`openclaw/README.md`](openclaw/README.md)。
+各数据源按优先级自动尝试，失败后切换到下一个；未配置 API Key 的数据源自动跳过。A 股单票报价优先使用腾讯和新浪，不依赖东财域名，境外网络通常也能用。港股备用源、指数前缀、K 线复权口径等细节见 [数据源与数据口径](docs/data-sources.md)。
 
-### dsh (DeepSeek Harness) Plugin
+## 可选配置
 
-```bash
-dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
-dsh --profile <你的profile>
-```
+不配置任何环境变量也能使用。下面这些配置后会加入容灾链，或启用搜索、舆情和 SEC 数据：
 
-作为 dsh bundle 安装：`dsh plugin add` 会把 `cordis.patch.yml` 叠加进 profile 组合，注册 73 个 tool + 21 个 skill。postinstall 自动建 `.venv`（pnpm 需在 profile 的 `pnpm-workspace.yaml` 里给本包配 `allowBuilds`，否则回退系统 `python3`）。
-
-支持 dsh 前端的宿主还会在侧栏提供「股票仪表盘」：可排序、按市场筛选的自选股行情表（今日区间、成交额、30 日走势），顶部六市场指数带与 A 股涨跌分布，下方各市场指数、A 股涨跌统计和行业涨跌榜。插件在后台常驻预热并缓存行情，页面只读内存快照，打开即显示；交易时段有页面打开时约 30 秒更新一次。数据仍复用共享 Python CLI；Agent 可用 `get_watchlist` 读取同一份自选股列表。
-
-新版 dsh 的原生函数调用模式默认通过 `stock_tool_search` 按 Agent 搜索、加载所需工具，支持中文关键词或工具名；旧接口、搜索入口不可用时保留全量暴露。可设置 `toolDiscovery: false` 关闭，配置与 PTC 模式边界见下方接入文档。
-
-详见 [`dsh/README.md`](dsh/README.md)。
-
-### MCP stdio
-
-WorkBuddy、Claude Desktop、Cursor 等客户端可通过 MCP 使用同一批 73 个工具。源码运行 `.venv/bin/python mcp_host/server.py`；PyPI 安装后运行 `stock-analysis-mcp` 或 `python -m mcp_host`。支持并发调用、取消时终止 Python 子进程，stdout 只输出 JSON-RPC。配置示例见 [MCP 接入指南](docs/mcp.md)。
-
-### Python 依赖
-
-```bash
-pip install -r tools/requirements.txt
-```
-
-主要依赖：
-
-| 包 | 用途 |
-|---|------|
-| akshare | A 股数据源（行情、资金流、财务、新闻，含 A 股 ETF） |
-| yfinance | 港股 / 美股 / 日股 / 韩股 / 台股数据源 |
-| pandas / numpy | 数据处理和数值计算 |
-| exchange-calendars | 交易日历（A/HK/US/JP/KR/TW） |
-| newspaper4k / pypdf | HTML 新闻与公告 PDF 正文提取 |
-| pypinyin | 股票名称拼音搜索 |
-| pytdx | A 股 TDX 行情（免费兜底源） |
-| longport | 港股 / 美股 Longbridge SDK |
-
-> A 股单票实时报价优先使用**腾讯（qt.gtimg.cn）**，避免东财全市场分页；**新浪（hq.sinajs.cn）**作为后续免鉴权兜底。两者不依赖东财域名，在境外或受限网络下通常仍可用。港股实时行情使用腾讯作为 yfinance 之后的免 key 备用源。
-
-### 环境变量
+<details>
+<summary>环境变量列表</summary>
 
 **数据源（可选，配置后自动加入 Failover 链）：**
 
@@ -154,13 +106,13 @@ pip install -r tools/requirements.txt
 | `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股 K 线 / 行情） |
 | `FINNHUB_API_KEY` | Finnhub（港股 / 美股） |
 | `XUEQIU_TOKEN` | 雪球（A 股个股所属板块反查，东财不可用时的兜底） |
+| `LIXINGER_TOKEN` | 理杏仁：指数 PB 与港股非金融公司财务、每日估值（需对应权限） |
+| `SEC_USER_AGENT` | SEC EDGAR 身份声明：应用名称与真实联系邮箱，13F / Form 4 必需 |
 
 **搜索引擎（可选，配置任一即可）：**
 
 | 环境变量 | 用途 |
 |---------|------|
-| `LIXINGER_TOKEN` | 理杏仁可选数据源：指数 PB 与港股非金融公司财务/每日估值（需对应权限） |
-| `SEC_USER_AGENT` | SEC EDGAR 身份声明：应用名称与真实联系邮箱，13F/Form 4 必需 |
 | `TAVILY_API_KEY` | Tavily 搜索 |
 | `BRAVE_API_KEY` | Brave 搜索 |
 | `SERPAPI_KEY` | SerpAPI |
@@ -174,43 +126,7 @@ pip install -r tools/requirements.txt
 | `SENTIMENT_API_URL` | 舆情 API 地址（默认 `https://api.adanos.org`） |
 | `SENTIMENT_API_KEY` | 舆情 API 密钥 |
 
-## 快速开始
-
-### 综合分析
-
-```
-/skill:stock-analysis
-
-帮我分析贵州茅台（600519）
-```
-
-Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息面，输出多维度研报。
-
-### 全市场选股
-
-```
-/skill:stock-screener
-
-帮我从 A 股中筛选出低估值+高成长的股票，要求 PE < 30、PB < 5、市值 > 100 亿
-```
-
-### 策略回测
-
-```
-/skill:strategy-backtest
-
-用 RSI 超卖反弹策略回测茅台，时间段 2024 年全年
-```
-
-### 特定策略视角
-
-```
-/skill:chan-theory
-用缠论分析一下 600519 当前的走势结构
-
-/skill:wave-theory
-用波浪理论分析 AAPL 的浪形位置
-```
+</details>
 
 ## Skills 一览
 
@@ -247,7 +163,22 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 
 ## 工具列表
 
-### 数据获取
+73 个工具按用途分组：
+
+| 类别 | 数量 | 主要内容 |
+|------|------|----------|
+| 数据获取 | 28 | K 线、报价、基金净值、资金流、财务、板块、涨停池、龙虎榜、两融、估值历史、股东、ETF、股息、公告、SEC |
+| 分析计算 | 9 | 技术指标、K 线形态、量价、异动、信号胜率、趋势与行业轮动研究 |
+| 筛选与回测 | 8 | 多因子选股、风险筛查、策略回测、市场状态、日度复盘、自选股批量分析 |
+| 搜索与舆情 | 5 | 新闻搜索、综合情报、社交情绪、正文提取 |
+| 辅助 | 7 | 名称/拼音解析、交易日历、交易时段、数据源诊断、股票列表解析 |
+| 上下文与报告 | 8 | 自选股上下文、持仓分析、告警规则、信号记录与评估、研报渲染 |
+| 无状态研究与风险计算 | 8 | 同行比较、公告变更、组合风险、调仓计划、仓位计算、事件研究、回测稳健性 |
+
+<details>
+<summary>完整工具列表（73 个）</summary>
+
+#### 数据获取
 
 | 工具 | 说明 |
 |------|------|
@@ -280,7 +211,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_northbound_flow` | 北向资金市场级净买入序列（东财沪深港通历史数据；2024-08-16 起交易所停止披露日度净买额，仅 2024-08 之前历史数据可查，仅 A 股） |
 | `get_fundamental_context` | 基本面综合上下文 |
 
-### 分析计算
+#### 分析计算
 
 | 工具 | 说明 |
 |------|------|
@@ -294,15 +225,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `evaluate_signal` | 历史信号胜率回测 |
 | `detect_anomaly` | 当日技术、量价与资金异动扫描 |
 
-`trend_temperature` 是独立趋势温度指标：`(EMA20-EMA60)/ATR14`，ATR 使用包含跳空的真实波幅简单均值。附分数、EMA差方向 `direction`、七档研究标签、前一期信息、数据日期和价格口径；`validation_status=not_validated`，真实股票试验未支持默认温度交易映射。方向按零轴计算，“平”标签不代表零方向；默认需 60 根预热，零 ATR 或坏行情返回不可用。±0.5/±1.5/±3 的分档尚未校准，不是趋势动物公式、肥尾指标、上涨概率或自动买卖信号，也不修改原综合评分。无需个人持仓存储；[公式、边界及回测说明](skills/bull-trend/references/trend-temperature.md)。
+趋势温度 `trend_temperature`、多期限趋势 `trend_horizons`、月度右侧趋势策略和市场环境入场实验均为 `not_validated` 的研究工具，公式、边界与验证局限见 [工具行为与可靠性 · 趋势研究](docs/tool-behavior.md#趋势研究)。
 
-月度右侧趋势策略，通过 `analyze_trend_strategy(symbols, ...)` 调用：月初200日线上行入场、真实旧仓优先、63日波动预算；[输入格式与完整规则](skills/bull-trend/references/monthly-trend-strategy.md)。扩展及历史样本尚未通过完整效果门槛；直接提供股票代码即可自动取日K，输出信号与预算计划；实际成交/股数和共享资金回测另行核实，不自动保存持仓或下单。
-
-趋势研究另返回 `trend_horizons`（daily、建议count=360）：21/63/252根日K过去对数收益，在月初首根有效日K收盘观察并保持；显示期限组成、方向及观察日期，不强凑七档。与回测 `monthly_momentum` 共用计算，仍为 `not_validated`；[方法、预热与验证局限](skills/bull-trend/references/trend-horizons.md)。
-
-市场只约束新开仓的三期限实验可运行 [market_trend.py](skills/bull-trend/scripts/market_trend.py)，输入带预热的个股/同市场宽基daily OHLCV JSON，复用同一Python核心。月度入场、次日开盘、已有持仓按个股趋势退出；不会自动保存持仓或下单。[使用与当前验证边界](skills/bull-trend/references/trend-horizons.md#市场环境入场实验)。
-
-### 筛选与回测
+#### 筛选与回测
 
 | 工具 | 说明 |
 |------|------|
@@ -315,7 +240,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_watchlist` | 读取 dsh 仪表盘自选股，按首选写法返回代码；`600519` / `sh600519` 等价去重 |
 | `run_watchlist_analysis` | 批量自选股分析 |
 
-### 搜索与舆情
+#### 搜索与舆情
 
 | 工具 | 说明 |
 |------|------|
@@ -325,7 +250,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_trending_sentiment` | 社交媒体热门趋势聚合（Reddit / X / Polymarket） |
 | `extract_article` | 网页 / 公告 PDF 正文提取；`max_chars` 默认 3000、上限 200000，返回 `truncated` |
 
-### 辅助
+#### 辅助
 
 | 工具 | 说明 |
 |------|------|
@@ -337,7 +262,7 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `get_market_capabilities` | 查询各市场支持的工具边界 |
 | `parse_stock_list` | 从自然语言、CSV 或 Markdown 解析股票列表 |
 
-### 上下文与报告
+#### 上下文与报告
 
 | 工具 | 说明 |
 |------|------|
@@ -350,17 +275,9 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `render_stock_report` | 将结构化个股报告渲染为 Markdown，展示 evidence 与 data_quality 限制 |
 | `render_market_report` | 将结构化市场复盘渲染为 Markdown（save=true 时归档到本地 JSONL） |
 
-批量自选股分析和摘要的 `success` 表示至少获取了有效行情价格、K 线收盘价或技术评分；全部关键数据失败时计入 `failed`，部分结果仍保留。采集脚本复用返回的 K 线计算技术指标，并按股票所属市场查询大盘状态；六个市场均按标的市场查询大盘状态；非 A 股板块榜单不可用，板块热点明确返回 false。
+批量分析的成功判定、信号存储与结算、风险筛查缺失值、选股与回测字段语义见 [工具行为与可靠性](docs/tool-behavior.md#自选股批量分析信号与筛选)。
 
-同一次自选股分析会共享报价、日 K 线和按市场获取的大盘状态（包含可选市场复盘）；风险与异动分析复用本次快照，资金流汇总和明细仍分开采集。采集任务使用共享的 6 线程 CLI 池，每支股票完成后即可接续异动分析，最终顺序保持调用方顺序。报价不跨调用保存。独立仓位/风控/筛选采集步骤并行执行。 两融历史明细按交易所/日期复用完整表，当日表和空表不缓存；CN 交易日历完整快照缓存一天。搜索按原优先级降级，单次查询的切换预算为 45 秒，综合搜索共用 90 秒预算；各请求使用剩余预算内的超时，严格总时限仍由宿主控制。同次综合搜索会跳过已确认不可用的引擎，下次独立调用重试。
-
-信号记录支持同一存储文件的多进程读写；评估期间新增的信号会保留。价格必须为正的有限数值，持有期限为正整数，日期格式为 YYYY-MM-DD。存储文件含损坏 JSON 行或无效信号时，记录、评估和汇总返回错误，原文件保持原样。
-
-信号评估仅在历史 K 线覆盖记录日时结算，缺少历史窗口则返回 `skipped_no_data` 并保持未结算。风险筛查返回 `data_complete` 和 `warnings`；数据不足时评级可为 `unknown`，`risk_score`、`veto_buy` 可为 null。告警的 `evaluated` 条目含 `error` 时表示无法检查，不能将未触发理解为已通过检查。
-
-选股的 `filters_applied` 只列实际执行的条件，显式条件缺少数据时报错。回测的 `period` 是实际数据期间，`requested_period` 保留请求期间，`warnings` 提示覆盖差异；买入预算包含佣金，年化收益和回撤按实际数据及初始资金计算。
-
-### 无状态研究与风险计算
+#### 无状态研究与风险计算
 
 | 工具 | 说明 |
 |------|------|
@@ -373,34 +290,15 @@ Agent 会自动调用行情 → 技术面 → 基本面 → 资金面 → 消息
 | `validate_backtest` | 复用现有引擎，滚动训练选候选、样本外验证，比较参数及多个标的 |
 | `compare_analysis_snapshots` | 比较调用方传入的快照，区分新增、删除、变化、数据失效和恢复 |
 
-这些工具不保存自选股、账户或分析历史，也不提供调度/通知。现有数据工具采集行情和财务，宿主传入本次持仓、正文或快照；[完整输入约定与解读工作流](skills/stock-analysis/references/stateless-analysis.md)供四个宿主共用。
+这些工具不保存自选股、账户或分析历史，也不提供调度/通知。输入格式、仓位预算示例与解读边界见 [工具行为与可靠性 · 无状态研究](docs/tool-behavior.md#无状态研究与风险计算)。
 
-大输入经权限受限的临时 JSON 文件传给 Python，调用结束后清理，避免 Windows 命令行长度限制；CLI 也支持 stdin 和 `--input` 文件。公告 HTML/PDF 可用 `extract_article` 从公网提取并检查 `truncated`；无文本层 PDF 的 OCR 仍不包含，只有标题或链接不能声称已读全文。
+</details>
 
-例如仓位预算（所有金额同币种，lot_size 由用户或交易规则确认）：
+字段语义、部分失败和缺失数据的处理方式见 [工具行为与可靠性](docs/tool-behavior.md)。
 
-```json
-{
-  "equity": 100000, "cash": 20000,
-  "entry_price": 100, "stop_price": 95,
-  "risk_fraction": 0.01, "lot_size": 100,
-  "fee_rate": 0.001, "slippage_rate": 0.001
-}
-```
+## 策略回测
 
-将上述 JSON 保存为 `input.json` 后运行：
-
-```bash
-python tools/stateless_analysis.py position_size --input input.json
-```
-
-对应宿主工具是 `calculate_position_size`。其余 CLI 子命令依次为 `peers/disclosure/portfolio/rebalance/event_study/robustness/snapshot`。事件研究可直接传 `symbol/benchmark/start_date/end_date/event_dates`；回测验证可传 `symbols/start_date/end_date/strategies`，由 Python 复用行情接口，避免模型重新抄写历史 K 线。显式价格/datasets 模式仍支持离线计算，两种模式互斥。
-
-跨币种组合必须提供显式汇率；价格盈亏不含历史汇兑损益。组合压力测试是用户指定市场/行业/个股/汇率冲击的确定性 what-if，个股冲击覆盖行业、行业覆盖市场，汇率独立乘算，不是预测或最大亏损保证。调仓工具按目标权重和整手生成计划，先卖后买；现金不足时同比例缩减买单并以 `cash_limited/unfilled` 标记，计划数量不代表成交。稳健性工具仅支持 next_open、每窗口重新从现金开始，样本内敏感性不等于样本外表现。
-
-## 策略回测 DSL
-
-策略以 YAML 格式定义，支持参数化和条件组合：
+策略用 YAML 描述，支持参数化和条件组合：
 
 ```yaml
 name: "RSI Oversold Bounce"
@@ -440,91 +338,23 @@ position:
   max_positions: 1
 ```
 
-行情 JSON 保留原有数组/字典形状，添加 `source`、UTC `fetched_at` 和 `data_as_of`。采集时间不是报价时间，提供方未给时间时为 null；仅提供交易日时保留 YYYY-MM-DD，不补造具体时刻；K 线 data_as_of 是该条的日期标签，周/月线标签不是实际末次成交时间；`as_of_basis=trading_calendar` 表示交易日历推断。A 股复权口径延续 qfq/none；其他市场按来源标为 total_return/qfq/unknown，不把 unknown 当已验证复权。
-
-其他可用键：
-
-- `exit.trailing_stop`：移动止损，价格自持仓期间最高收盘价回撤达到该比例即卖出（如 `0.08` = 峰值回撤 8% 触发）；与 `stop_loss` 同时设置时先判固定止损。`stop_loss` 必须为负数、`take_profit` 必须为正数、`trailing_stop` 须在 (0, 1) 内；`position.max_positions` 当前仅支持 1，其他配置明确报错。
-- `benchmark`（顶层）：基准对比标的代码（如 `"sh000300"` 沪深300；指数代码必须带 sh/sz 交易所前缀，裸 6 位数字会被当作个股），设置后回测结果附带 `benchmark` 块（基准买入持有收益与 `excess_return` 超额收益）。基准与策略采用同一首日执行口径（next_open 用 open、same_close 用 close），无预热时以策略首条权益日期为起点；实际覆盖不符或首末价格非法时返回 error，不输出超额。
-- `simulation.execution`：默认 `next_open`，前日收盘信号、次日开盘加滑点成交；显式 `same_close` 复现旧收盘成交假设。交易同时返回 signal_date/date。延迟的入场信号在新收盘失效时撤单，风险退出 pending 保留至成交。`start` 前可得历史仅用于指标预热，取数长度随策略最大 lookback 增加，交易与权益仍按请求区间统计；`warnings` 出现 `Entry indicator is unavailable` 时必须披露指标不可用及数据质量，不能声称完成预热。零成交量阻止成交；一字板限制只在输入提供同口径历史 limit_up/limit_down 时执行。`execution` 列出阻止成交次数、未成交订单及限制；止损是收盘信号，未模拟盘口排队、部分成交、结算和市场冲击。回测仅接受单一 `qfq`/`total_return`/`none` 复权口径，unknown 或混合口径明确报错。
-- `simulation`（顶层）：交易成本。`slippage`（滑点，买卖双边，默认 0.001）、`commission`（佣金，买卖双边，默认 0.0015）、`stamp_tax`（印花税，仅卖出收取，默认 0；A股为 0.0005，各市场税率不同且会调整，按当下实际费率填写）。费率均须在 [0, 1) 区间，越界报错。回测结果附带 `costs` 块（实际生效费率与实付费用合计 `commission_paid`/`stamp_tax_paid`）。
-
-### 可用指标
-
-| 指标 | 说明 | 需要 period |
-|------|------|-------------|
-| `rsi` | RSI 相对强弱指数；预热不足不可用，全涨窗口为 100，全平为 50 | 是（默认 14） |
-| `ma` / `ema` | 简单 / 指数移动平均 | 是（默认 20） |
-| `macd_dif` / `macd_dea` / `macd` | MACD 三线 | 否 |
-| `volume_ratio` | 当根成交量 / 前 N 根平均成交量（不含当根） | 是（默认 5） |
-| `price_change` | 涨跌幅（%） | 否 |
-| `bollinger_position` | 布林带位置（0=下轨, 1=上轨） | 是（默认 20） |
-| `trend_score` | 独立实验趋势强度，默认 (EMA20−EMA60)/ATR14；fast_period/slow_period 控制 EMA | period 为 ATR 根数（默认 14） |
-| `monthly_momentum` | 月初首根有效日K收盘观察过去 period 根对数收益，保持到下一观察；零成交量不计根数 | 是（默认63，要求正整数） |
-| `close` / `volume` | 收盘价 / 成交量 | 否 |
-
-### 可用运算符
-
-`>` `<` `>=` `<=` `==` `cross_above`（上穿） `cross_below`（下穿）
-
-示例策略见 `strategies/examples/`。
-
-## 市场路由规则
-
-| 代码格式 | 示例 | 市场 | 行情报价 Failover 链（K 线差异见下方） |
-|----------|------|------|---------------------|
-| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | 腾讯 → akshare → tushare → efinance → 新浪 → pytdx |
-| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | 腾讯 → akshare（ETF/全市场接口）→ tushare → efinance → 新浪 → pytdx |
-| 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪 |
-| `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → 腾讯 → finnhub → longbridge |
-| 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → alphavantage |
-| `.T` 结尾 | `7203.T` | 日股 | yfinance |
-| `.KS` / `.KQ` 结尾 | `005930.KS`, `036020.KQ` | 韩股 | yfinance |
-| `.TW` / `.TWO` 结尾 | `2330.TW`, `6510.TWO` | 台股 | yfinance |
-
-> 各数据源按优先级自动尝试，前一个失败后自动切换到下一个。未配置相关 env var 的数据源会被跳过。
-> 港股腾讯备用源使用 `r_hk` 通道（`hk` 通道延迟约 15 分钟），仅用于实时报价，K 线仍走 yfinance → finnhub → longbridge。支持 `00700.HK` / `0700.HK` / `700.hk`，成交量单位为股，成交额及市值为港元；PB、换手率、量比在此备用源中返回 null，不套用 A 股字段。
-> 裸 6 位代码一律按**个股**处理（`000001` 是平安银行）；指数需带交易所前缀（`sh000001` = 上证指数），显式前缀代码直接走腾讯/新浪（东财源只认裸代码）。
-> **A 股 K 线口径**：股票/ETF 仅接受前复权数据，链路为 akshare → tushare（仅股票）→ efinance → 腾讯（仅 qfq 数据）→ baostock；带前缀的股票/ETF 先去前缀再走同一链路。新浪和 pytdx 的未复权 K 线不参与股票/ETF 容灾。显式指数 `sh000xxx` / `sz399xxx` 保留原始点位，走腾讯 → 新浪 → baostock。上述路由表的完整链路仍适用于实时行情。
-> K 线响应保留原有 JSON 数组，每条 A 股记录新增 `adjusted`：股票/ETF 为 `"qfq"`，指数为 `"none"`。Tushare 日线通过 `adj_factor` 前复权，周/月线使用 `stk_week_month_adj` 的 qfq 字段；复权权限不足、因子缺失或源只返回原始价格时继续切换，所有可用复权源都失败时返回 JSON `error`，不降级到未复权股票价格。Tushare 复权接口需至少 2000 积分，见[复权因子](https://tushare.pro/document/2?doc_id=28)与[复权周/月线](https://tushare.pro/document/2?doc_id=365)。
-> **粘性优选**：A 股链路（K 线 / 行情 / 市场快照 / 板块成分）会记住最近一次成功的数据源（缓存在系统临时目录，24h 有效），下次调用优先从它开始（单票报价例外：固定先试腾讯，粘性源只在其后的备用源中优先）；若它已失效则自动顺延并更新记录。港美股链路不做粘性——一次 yfinance 瞬时失败不应让后续全天的 quote 降质。
-> 日/韩/台股仅 yfinance 一个数据源（免费数据延迟约 15 分钟）；港股 / 美股 / 日股 / 韩股 / 台股的 ETF 与其所在市场股票走相同链路。
-
-
-## 低频价投与增量数据
-
-```bash
-python tools/value_data.py valuation_history 600519 --years 5
-python tools/stock_data.py financials 600519 --annual --periods 10
-python tools/value_data.py earnings_calendar --report-date 2026-09-30 --symbol 600519
-python tools/value_data.py shareholder_structure 600519 --report-date 2026-06-30
-python tools/value_data.py shareholder_structure 0700.HK
-python tools/value_data.py index_valuation 000300 --years 5
-python tools/value_data.py etf_details 510300 --benchmark sh000300 --days 60
-python tools/value_data.py etf_details 510300 --include-full-holdings
-python tools/stock_data.py margin_trading 600519 --days 10 --include-ratio
-python tools/value_data.py dividends --symbol 600519
-python tools/value_data.py dividends --symbol 0700.HK --mode calendar
-python tools/value_data.py dividends --mode ranking --report-date 2025-12-31
-python tools/value_data.py dividends --mode ranking --market HK --report-date 2025-12-31
-python tools/value_data.py earnings_calendar --symbol 0700.HK
-```
-
-财报、基本信息、股票代码/名称映射及估值/股东/ETF/分红等慢变数据缓存到 `~/.stock-analysis/cache`（可通过 `STOCK_CACHE_DIR` 指定可写目录，适用于沙箱/只读用户目录），TTL 一天；板块成分/映射一周。行情报价不缓存。缓存写入失败时直接返回已获取数据；缓存文件原子替换，过期/损坏重拉，错误和显式部分失败不缓存；不以过期数据伪装最新数据。原有临时目录的粘性路由和反向成分缓存保留。 同键缓存缺失与 SEC ZIP 下载通过跨进程文件锁协调，等待最多 5 秒；普通缓存锁不可用或超时后仍可直接抓取，持久写入/ZIP 下载则返回错误，避免无界等待。有效缓存命中不要求目录可写。
-
-估值使用可得数据的正值样本分位（`<=当前值`），返回 10/25/50/75/90 分位 Band 与实际起止日期；亏损 PE 分位为 null。当前 AKShare 已无 issue 中提到的 `stock_a_indicator_lg`，个股采用百度 PE-TTM/PB 历史，指数采用乐咕乐股；中证全指等通过中证官方历史接口取得多年滚动 PE，近期总股本 PE1 仍单独保留；PB 缺失时可配置 `LIXINGER_TOKEN` 补充理杏仁总市值加权（mcw）历史，返回每个指标的来源与口径，不拼接不同方法的同一指标。未配置或无权限时 PB 保持未知。A 股 `annual=true, periods=10` 请求十年年报；HK 按源实际可得年数返回，不补造缺失比率。
-
-股东数据保留报告期、公告日或港交所披露日：A 股北向优先返回沪深交易所披露的季度合计数量，省略报告期时查最新已公布季度；十大流通股东中的 HKSCC 推断保留在 `northbound_nominee`，仅作明确标注的兜底，缺席不是零；HK 南向取自港交所 Stock Connect CCASS 记录，不等同完整实益股东名册。A 股财报预约/修订是计划，业绩预告是已公告预估，不是实际业绩。HK 单股优先使用 HKEX 主板/GEM 已公告业绩审批董事会排期，标记 `confirmation=official_board_meeting_notice`、`date_kind=scheduled_board_meeting`；这是计划会议日，不是实际披露日。可按已知财政期末过滤；找不到匹配公告时保留 Yahoo 供应商未来排期，`confirmation=provider_only`，未知报告期不归入指定期次，而另列 `unverified_schedules`。日期转为香港日期，公告表也不承诺覆盖所有港股。
-
-ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；新增 `basket` 返回沪深交易所发布的完整当日 PCF（跨境代码原样保留），包含申赎单位、每篮子证券数量、现金替代规则与比例；校验基金代码、实际日期和全部组件数量，失败只提示不可用，不冒充完整。PCF 是申赎对价，不是实际持仓，证券数量也不是净值权重。`include_full_holdings=true` 时另取最近可得半年度/年度披露股票表，显式指定年份/月并请求较高行数上限，包含股票数量（股）、市值（人民币元）和实际报告期；返回全部收到的表格行，但不声称覆盖债券/现金等全资产或实时持仓，也不以 PCF 数量验证实际持仓。默认不取数百行明细。提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
-
-股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。A 股排行/选股使用指定报告期已实施方案股息率；HK 指定 `market=HK` 时使用 HKEX/LSEG 公布的年度股息率（百分数），不是当前价 TTM；HK `report_date` 仅支持数据源可得年度的年末。港股股息选股因子也使用同一年度口径。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
-
-数据源参考：[AKShare股票接口](https://akshare.akfamily.xyz/data/stock/stock.html)、[指数接口](https://github.com/akfamily/akshare/blob/main/docs/data/index/index.md)、[基金接口](https://github.com/akfamily/akshare/blob/main/docs/data/fund/fund_public.md)、[港交所南向持股](https://www.hkexnews.hk/sdw/search/mutualmarket.aspx?t=hk)、[HKEX 年度股息率](https://www.hkex.com.hk/Listing/Sustainability/Shareholder-Value-in-Focus/Dividend-Yield-Ratio?sc_lang=en)、[理杏仁指数基本面接口](https://www.lixinger.com/api/open-api/html-doc/cn/index/fundamental)。
+可用指标包括 RSI、MA/EMA、MACD、量比、布林带位置、趋势强度和月度动量，运算符支持比较和 `cross_above` / `cross_below`。止损、移动止损、基准对比、成交口径和交易成本见 [回测 DSL 参考](docs/backtest-dsl.md)，示例策略在 `strategies/examples/`。
 
 ## 独立 CLI 使用
 
-Python 工具可脱离 Agent 独立使用，所有输出为 JSON：
+不接 Agent 也能直接用，所有命令输出 JSON：
+
+```bash
+python tools/stock_data.py quote 600519
+python tools/stock_data.py kline AAPL --period weekly --count 30
+python tools/technical.py analyze 600519
+python tools/screener.py screen --market A --top 20
+python tools/backtest.py run strategies/examples/rsi_oversold.yaml 600519 --start 2024-01-01 --end 2025-01-01
+python tools/market_regime.py detect A
+```
+
+<details>
+<summary>更多命令</summary>
 
 ```bash
 # 行情数据
@@ -560,21 +390,80 @@ python tools/risk_screening.py screen 600519
 
 # 市场状态
 python tools/market_regime.py detect A
+
+# 估值、财报、股东、ETF 与分红
+python tools/value_data.py valuation_history 600519 --years 5
+python tools/stock_data.py financials 600519 --annual --periods 10
+python tools/value_data.py earnings_calendar --report-date 2026-09-30 --symbol 600519
+python tools/value_data.py shareholder_structure 600519 --report-date 2026-06-30
+python tools/value_data.py shareholder_structure 0700.HK
+python tools/value_data.py index_valuation 000300 --years 5
+python tools/value_data.py etf_details 510300 --benchmark sh000300 --days 60
+python tools/value_data.py etf_details 510300 --include-full-holdings
+python tools/stock_data.py margin_trading 600519 --days 10 --include-ratio
+python tools/value_data.py dividends --symbol 600519
+python tools/value_data.py dividends --symbol 0700.HK --mode calendar
+python tools/value_data.py dividends --mode ranking --report-date 2025-12-31
+python tools/value_data.py dividends --mode ranking --market HK --report-date 2025-12-31
+python tools/value_data.py earnings_calendar --symbol 0700.HK
+
+# 公告与港股长期财务
+python tools/value_data.py announcements 600519 --category forecast --start-date 2026-01-01 --end-date 2026-10-13 --top 50
+python tools/stock_data.py financials 0700.HK --annual --periods 10
+python tools/value_data.py valuation_history 0700.HK --years 10
+
+# SEC 13F / Form 4（SEC_USER_AGENT 必须配置为应用名称 + 你的真实联系邮箱）
+python tools/sec_edgar.py holdings 0001067983
+python tools/sec_edgar.py insider_trades AAPL --days 90 --top 10
+python tools/sec_edgar.py holdings 0000320193 --mode issuer   # 发行人 CIK 反查持仓机构
 ```
 
-## CI 真实宿主测试
+</details>
 
-GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。在仓库 **Settings → Secrets and variables → Actions** 中配置以下三项，所有 E2E 共用：
+## 常见问题
 
-| 名称 | 存放位置 | 内容 |
-|---|---|---|
-| `OPENAI_BASE_URL` | Variable 或 Secret | OpenAI 兼容的 API base URL，包含服务商要求的路径（例如 `/v1`） |
-| `OPENAI_API_KEY` | Secret | 对应的 API key |
-| `OPENAI_MODEL` | Variable 或 Secret | 支持 tool calling 的模型 ID |
+**Python 工具报错 `ModuleNotFoundError`？**
+运行 `pip install -r tools/requirements.txt`。使用 virtualenv / conda 时，确保 Agent 启动时用的是同一个 Python 环境。
 
-`e2e-llm` 也使用这三项配置，Hermes（含报告质量评测）、Pi、OpenClaw 和 dsh 通过四个 matrix 作业并行运行，互不因失败而取消；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
+**A 股数据获取失败？**
+报价会依次尝试腾讯、akshare、tushare、efinance、新浪和 pytdx，K 线另有 baostock 兜底。都失败时，检查网络、升级 akshare（`pip install --upgrade akshare`），或配置 `TUSHARE_TOKEN` 增加一个可靠数据源。
 
-## 项目结构
+**港股 / 美股数据有延迟？**
+yfinance 免费数据通常延迟约 15 分钟。配置 Longbridge（`LONGBRIDGE_APP_KEY` 等）或 Finnhub（`FINNHUB_API_KEY`）可获得更实时的数据。
+
+**如何自定义选股条件？**
+写一个 YAML，再运行 `python tools/screener.py screen --config my_filter.yaml --top 30`：
+
+```yaml
+name: "我的选股策略"
+filters:
+  pe_min: 5
+  pe_max: 25
+  pb_max: 3
+  market_cap_min: 20e9
+sort_by: "composite_score"
+sort_order: "desc"
+```
+
+**如何编写回测策略？**
+参考 `strategies/examples/` 和 [回测 DSL 参考](docs/backtest-dsl.md)，也可以直接让 Agent 帮你写。
+
+## 参与开发
+
+所有业务逻辑都在 `tools/*.py`，每个工具是一个输出 JSON 的 CLI。`pi/`、`hermes/`、`openclaw/`、`dsh/` 四个适配器只负责把宿主的工具调用转成子进程调用，`mcp_host/` 复用 Hermes 的工具定义。Skills 放在 `skills/*/SKILL.md`，四个宿主共用。
+
+```bash
+npm install                                   # 同时构建仓库 .venv
+.venv/bin/python -m pytest -q                 # Python 单元测试（离线）
+npx tsc --noEmit                              # TypeScript 类型检查
+npx tsx tests/test_adapter_parity.ts          # 四个宿主的 73 个工具和参数映射一致
+npm run build:openclaw && npm run build:dsh   # 构建 OpenClaw / dsh bundle
+```
+
+开发约定、完整测试命令和跨平台注意事项见 [AGENTS.md](AGENTS.md)。
+
+<details>
+<summary>项目结构</summary>
 
 ```
 stock-analysis/
@@ -628,7 +517,7 @@ stock-analysis/
 └── tsconfig.json
 ```
 
-### 数据流
+数据流：
 
 ```
 用户 (自然语言)
@@ -638,7 +527,7 @@ Agent (Pi / Hermes / OpenClaw / dsh / MCP)
     │
     ├── 加载 SKILL.md → 分析框架 / 流程指引
     │
-    ├── 调用工具 → pi/index.ts、hermes/tools.py、openclaw/index.ts、dsh/index.ts 或 mcp_host/server.py → python3 tools/xxx.py → JSON
+    ├── 调用工具 → pi/index.ts、hermes/tools.py、openclaw/index.ts、dsh/index.ts 或 mcp_host/server.py → python tools/xxx.py → JSON
     │
     ▼
 Agent (LLM 分析 + 生成报告)
@@ -646,6 +535,51 @@ Agent (LLM 分析 + 生成报告)
     ▼
 用户看到结构化分析结果
 ```
+
+</details>
+
+<details>
+<summary>Python 依赖</summary>
+
+```bash
+pip install -r tools/requirements.txt
+```
+
+主要依赖：
+
+| 包 | 用途 |
+|---|------|
+| akshare | A 股数据源（行情、资金流、财务、新闻，含 A 股 ETF） |
+| yfinance | 港股 / 美股 / 日股 / 韩股 / 台股数据源 |
+| pandas / numpy | 数据处理和数值计算 |
+| exchange-calendars | 交易日历（A/HK/US/JP/KR/TW） |
+| newspaper4k / pypdf | HTML 新闻与公告 PDF 正文提取 |
+| pypinyin | 股票名称拼音搜索 |
+| pytdx | A 股 TDX 行情（免费兜底源） |
+| longport | 港股 / 美股 Longbridge SDK |
+
+</details>
+
+<details>
+<summary>报告质量评测与 CI 真实宿主测试</summary>
+
+```bash
+.venv/bin/python -m pytest tests/test_analysis_quality.py -q
+# 需要 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL；只调用模型，数据源使用固定夹具
+.venv/bin/python -m pytest tests/e2e/test_analysis_quality.py -m integration_llm -v
+```
+
+GitHub Actions 的 `e2e-host` 使用 Pi、Hermes、OpenClaw、dsh 的真实运行时执行工具调用。在仓库 **Settings → Secrets and variables → Actions** 中配置以下三项，所有 E2E 共用：
+
+| 名称 | 存放位置 | 内容 |
+|---|---|---|
+| `OPENAI_BASE_URL` | Variable 或 Secret | OpenAI 兼容的 API base URL，包含服务商要求的路径（例如 `/v1`） |
+| `OPENAI_API_KEY` | Secret | 对应的 API key |
+| `OPENAI_MODEL` | Variable 或 Secret | 支持 tool calling 的模型 ID |
+
+`e2e-llm` 也使用这三项配置，Hermes（含报告质量评测）、Pi、OpenClaw 和 dsh 通过四个 matrix 作业并行运行，互不因失败而取消；同仓库 PR 和主分支推送会运行，fork PR 不读取 API key。`e2e-host` 缺少任一项时会失败。URL 和 model 同时存在于 Variable 与 Secret 时，优先使用 Secret。
+
+</details>
 
 ## 致谢
 
@@ -656,100 +590,6 @@ Agent (LLM 分析 + 生成报告)
 - [longport](https://github.com/longportapp/openapi-sdk) — Longbridge OpenAPI（港股 / 美股）
 - [exchange-calendars](https://github.com/gerrymanoim/exchange_calendars) — 全球交易日历
 
-## 常见问题
-
-### Q: Python 工具报错 `ModuleNotFoundError`？
-
-```bash
-pip install -r tools/requirements.txt
-```
-
-如果使用 virtualenv / conda，确保 Agent 启动时能访问到对应的 Python 环境。
-
-### Q: A 股数据获取失败？
-
-系统会自动按 腾讯 → akshare → tushare → efinance → 新浪 → pytdx 顺序尝试报价（K 线另有 baostock 兜底；A 股 K 线等链路含粘性优选；单票报价固定先尝试腾讯，东财 sticky 不抢占）。腾讯 / 新浪源不依赖东财域名，在境外或受限网络下通常仍可用。如果所有源都失败，检查：网络问题、akshare 版本过低（`pip install --upgrade akshare`）、或非交易时间。配置 `TUSHARE_TOKEN` 可增加一个可靠数据源。
-
-### Q: 港股 / 美股数据有延迟？
-
-yfinance 免费数据通常有 15 分钟延迟。配置 Longbridge（`LONGBRIDGE_APP_KEY` 等）或 Finnhub（`FINNHUB_API_KEY`）可获取更实时的数据，且作为 failover 备用源。
-
-### Q: 如何自定义筛选条件？
-
-创建 YAML 配置：
-
-```yaml
-name: "我的选股策略"
-filters:
-  pe_min: 5
-  pe_max: 25
-  pb_max: 3
-  market_cap_min: 20e9
-sort_by: "composite_score"
-sort_order: "desc"
-```
-
-CLI 使用：`python tools/screener.py screen --config my_filter.yaml --top 30`
-
-### Q: 如何编写自定义回测策略？
-
-参考 `strategies/examples/` 下的示例和 [策略回测 DSL](#策略回测-dsl) 章节。也可以直接让 Agent 帮你编写 YAML 策略。
-
 ## License
 
 MIT
-
-### 公告与港美股研究数据（#49–#51）
-
-```bash
-python3 tools/value_data.py announcements 600519 --category forecast --start-date 2026-01-01 --end-date 2026-10-13 --top 50
-python3 tools/stock_data.py financials 0700.HK --annual --periods 10
-python3 tools/value_data.py valuation_history 0700.HK --years 10
-# SEC_USER_AGENT 必须配置为应用名称 + 你的真实联系邮箱
-python3 tools/sec_edgar.py holdings 0001067983
-python3 tools/sec_edgar.py insider_trades AAPL --days 90 --top 10
-```
-
-公告类别为 `all/forecast/express/annual/interim/quarterly/reduction/issuance/inquiry/dividend`。默认最近 90 天，最多 500 条；通过巨潮官方股票目录取得 orgId，沪深京统一使用官方 `szse` 查询栏目。业绩快报和问询使用标题关键词查询。A 股返回 PDF 原文链接，可用 `extract_article`（pypdf）继续提取正文；美股返回 SEC `document_url/filing_url`。`total/truncated` 表示供应商匹配数量及截断，查询无结果与请求失败分开。
-
-港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。Yahoo 顶层快照的 `snapshot_units` 明确：`pe=trailing`，`roe/profit_margin/dividend_yield=ratio`（小数），`debt_to_equity=percent`（百分数）；不得把 D/E 百分数当作小数倍数。
-
-SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通过环境变量提供。单进程最多每秒 2 次请求（多个并行进程需控制账户/IP 总量不超过 SEC 的每秒 10 次），并缓存 ticker/CIK、申报元数据和 XML 解析结果。13F 返回机构最近季度的原始申报，不是实时完整组合；通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准，2023-01-03 起金额单位为美元，更早申报为千美元。修订文件另列原文链接，避免错误合并补充与重述；发行人 CIK 反查现已通过 `mode=issuer` 支持：从结构化 Schedule 13D/G 校验发行人 CIK、提取 CUSIP，再扫描官方最新已发布 13F 批量窗口。`auto` 默认有当前或已检索历史 13F 时查机构，否则查发行人；Berkshire 等兼具两种身份时显式选择 `issuer`。修订按 `RESTATEMENT` 替换与 `NEW HOLDINGS` 补充重建；无法判断的修订或缺少基础版时总量为 null，并给出 `unresolved_manager_count`。
-
-Form 4 的 `days` 是申报日期窗口，`top=1..20` 限制文件数，返回全部已解析交易。保留多人联报、衍生品、交易代码、脚注、直接/间接持有和修订信息；仅 P/S 标为买/卖，其余行为不推断方向，价格未披露为 null。读取 `truncated/warnings`，原件与修订不要重复计数。风险组合工具 `screen_risk` 仍为 A 股专用。
-
-接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
-
-股票 CIK 反查示例：
-
-```bash
-python3 tools/sec_edgar.py holdings 0000320193 --mode issuer
-# 原机构查询保持可用
-python3 tools/sec_edgar.py holdings 0001067983 --mode manager
-```
-
-首次下载当前 SEC 包约 100 MB；ZIP 按周缓存，CUSIP 反查结果按天缓存，流式扫描不解压整个持仓表、不增加数据库依赖。返回 `report_date`（持仓日期）、`filing_window_end`（公开申报窗口截止）、`cusip_evidence`（原文映射依据），不把文件披露窗口当作持仓日期。`mapping_complete=false` 表示最近十份结构化 13D/G 可能未覆盖所有证券类别或 CUSIP 变更；缺映射直接报错，不做名称模糊匹配。`complete_for_mapped_cusips` 仅在该报告期没有未解决申报链时为 true，不代表实时全部股东。期权与本金持仓在 `positions` 保留，`shares` 合计只计无 PUT/CALL 的 SH 股票。不能将跨机构合计当作已去重的全市场持股。
-
-13F CLI 预算为 300 秒，宿主另留 30 秒接收输出；其他命令按共享预算表执行。机构查询优先寻找最新已知报告期的原始 13F：较新修订对应的原始版未找到时明确报错，历史分片仍未完全检索时返回 `history_truncated` 与警告。发行人 CUSIP 查询会跳过不可访问/无效 XML，继续核对后续原文；没有任何可验证映射时才报缺失。
-
-## 分析可靠性验证
-
-命令预算集中于 `tools/cli_budgets.json`：通用采集默认 120 秒、市场快照 240 秒、选股 top 须为正整数，预算按候选数及 6 个 worker 的批次计算（默认 20 个候选为 1830 秒）、13F 300 秒、名称解析与文本导入（首次拉取港美名录）360 秒；技术分析、市场状态、回测和风险筛查按实际嵌套调用另留预算；各宿主额外留 30 秒接收 CLI 输出。综合采集保留安全 JSON 错误及 error_code（timeout/empty_output/invalid_json/process_failed/tool_error），不会把失败当成有效空数据。
-
-最终报告的固定证据案例覆盖完整、缺失、过期、同口径冲突及样本不足：
-
-```bash
-.venv/bin/python -m pytest tests/test_analysis_quality.py -q
-# 需要 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL；只调用模型，数据源使用固定夹具
-.venv/bin/python -m pytest tests/e2e/test_analysis_quality.py -m integration_llm -v
-```
-
-真实模型评测同时要求结构化证据检查与独立上下文的结论审稿通过：审稿检查正文事实、限制说明是否诚实，以及是否过度外推。未运行审稿、结果缺失或模糊都不能算通过；报告自行声明通过不被采信。另有人工核对的正确报告及两类反例用于验证审稿器（正确引用但正文捏造现价、3笔交易却保证长期胜率）。空回答也失败。离线渲染和规则检查不代表真实模型通过，也不证明策略未来有效。信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
-
-信号结算仅在价格口径可核实时进行：原始价格可直接比较；自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算；多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算，日内顺序未知的双触发仍 stop 优先；无止损的旧 HLC 记录可继续用 high/low/close 判定目标和到期，但若提供 open 也必须是正有限数值，有止损但缺 open 则拒绝结算。重复日期返回 skipped_no_data，复权乘除使用 Decimal。复权日线需该报价日的 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例；记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点，旧信号缺少报价时点且记录日因子变化时也保持未结算。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
-
-市场复盘数据不足时温度/姿态为 null，信号 unknown，data_quality.limitations 说明限制。自选股异动采集失败时 anomaly_status=unavailable、anomaly_count=null，保留警告并计入 summary.partial，不能当成无异常。
-
-L1 与 L2 综合分均在排序前按可用因子重新归一化；缺失或非有限因子不作零分处理，因子组内部也仅平均有效输入。factor_coverage.ratio 保留原始权重覆盖率，effective_weights 是实际归一化后的权重，高分仍需结合覆盖率判断。估值比较需同时读取 `pe_basis`；有限非正 PE/PB 的价值子分为 0，不能因数值更低而获得最高价值分。
-
-L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_samples` 记录实际样本数，非正/非有限收盘价先剔除，空输入为 0；质量因子按 `report_date` 分组归一，避免年度累计与单季累计直接比较。资金流 5/10/20 日窗口不足返回 null，不按 0 或完整窗口处理。HK 快照统一带 `.HK`，US 快照移除东财交易所后缀并把类别股点号转为 Yahoo 连字符。主板 ST/*ST 按 5% 识别涨跌停，其他板块比例不变。
