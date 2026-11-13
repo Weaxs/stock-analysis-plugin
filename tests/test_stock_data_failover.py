@@ -2710,7 +2710,7 @@ class TestCmdStockInfoBoards:
 
 class TestCmdStockInfoETF:
     """A-share ETF stock_info: is_etf flag plus latest fund NAV fields; the nav leg is
-    best-effort (fund_etf_fund_info_em, narrow date window) and degrades silently."""
+    best-effort (fund_exchange_nav_hist_em, narrow date window) and degrades silently."""
 
     def _fund_info_df(self):
         import pandas as pd
@@ -2734,7 +2734,7 @@ class TestCmdStockInfoETF:
     def test_etf_stock_info_has_nav_fields(self):
         mock_ak = MagicMock()
         mock_ak.stock_individual_info_em.return_value = self._etf_info_df()
-        mock_ak.fund_etf_fund_info_em.return_value = self._fund_info_df()
+        mock_ak.fund_exchange_nav_hist_em.return_value = self._fund_info_df()
         with (
             patch.dict(sys.modules, {"akshare": mock_ak}),
             patch("tools.stock_data.resolve_stock_sectors", return_value={"symbol": "510300", "market": "A"}),
@@ -2745,14 +2745,14 @@ class TestCmdStockInfoETF:
         assert result["nav"] == 4.05  # latest row wins
         assert result["accumulated_nav"] == 4.15
         assert result["nav_date"] == "2026-09-21"
-        mock_ak.fund_etf_fund_info_em.assert_called_once()
-        assert mock_ak.fund_etf_fund_info_em.call_args.kwargs["fund"] == "510300"
+        mock_ak.fund_exchange_nav_hist_em.assert_called_once()
+        assert mock_ak.fund_exchange_nav_hist_em.call_args.kwargs["fund"] == "510300"
 
     def test_etf_stock_info_nav_failure_degrades(self):
         """A failed nav fetch must not lose the rest of the info payload."""
         mock_ak = MagicMock()
         mock_ak.stock_individual_info_em.return_value = self._etf_info_df()
-        mock_ak.fund_etf_fund_info_em.side_effect = ConnectionError("blocked")
+        mock_ak.fund_exchange_nav_hist_em.side_effect = ConnectionError("blocked")
         with (
             patch.dict(sys.modules, {"akshare": mock_ak}),
             # skip the retry sleeps — the failure path is what is under test
@@ -2773,7 +2773,7 @@ class TestCmdStockInfoETF:
         mock_ak.stock_individual_info_em.return_value = pd.DataFrame(
             {"item": ["股票简称", "行业"], "value": ["贵州茅台", "酿酒行业"]}
         )
-        mock_ak.fund_etf_fund_info_em.side_effect = AssertionError("fund api must not be called for stock")
+        mock_ak.fund_exchange_nav_hist_em.side_effect = AssertionError("fund api must not be called for stock")
         with (
             patch.dict(sys.modules, {"akshare": mock_ak}),
             patch("tools.stock_data.resolve_stock_sectors", return_value={"symbol": "600519", "market": "A"}),
@@ -2782,7 +2782,7 @@ class TestCmdStockInfoETF:
         assert result["name"] == "贵州茅台"
         for key in ("is_etf", "nav", "accumulated_nav", "nav_date"):
             assert key not in result
-        mock_ak.fund_etf_fund_info_em.assert_not_called()
+        mock_ak.fund_exchange_nav_hist_em.assert_not_called()
 
 
 # --------------- tencent / sina providers + sticky ordering (issue #25) ---------------
