@@ -21,55 +21,10 @@ npm install
 
 如果 venv 没建起来（比如 Python 缺失），plugin 会回退到系统 `python3`，请自行 `pip install -r tools/requirements.txt`。
 
-## 工具列表
+## 工具与 Skills
 
-### 行情数据
-- `get_kline` — K线 OHLCV（A/HK/US/JP/KR/TW）
-- `get_quote` — 股票实时报价；场外基金用 `get_fund_quote`，TIAAxxxxxx 返回投顾组合识别、`advisor_org` 与无统一净值提示；长钱/海外长钱/稳钱另有有知有行 `official_disclosures`（`partial=true`，非实时完整持仓）；其他组合搜索可用时为 `search_partial`，否则 `unsupported_provider`
-- `get_fund_quote` — 场外公募基金净值；`nav` 为已披露日终净值（非实时价），含 `accumulated_nav` / `change_pct` / `nav_date`；`estimated_nav` 可能为 null，QDII 可能滞后 1-2 交易日
-- `get_capital_flow` — A股资金流（个股 / 多日 / 板块）
-- `get_news` — 财经新闻
-- `get_financials` — 关键财务指标
+73 个工具覆盖行情与基金净值、技术分析与 K 线形态、资金流与板块、估值/股东/ETF/股息、公告与 SEC、多因子选股、策略回测、市场复盘、新闻舆情、持仓风险与调仓计算。完整列表见[主仓库 README · 工具列表](https://github.com/Weaxs/stock-analysis-plugin#工具列表)，Skills 见 [Skills 一览](https://github.com/Weaxs/stock-analysis-plugin#skills-一览)。
 
-### 分析
-- `get_technical_analysis` — MA/MACD/RSI/BOLL/KDJ + 综合评分
-- `analyze_pattern` — 12+ 种 K 线形态识别
-- `calculate_ma` — 独立均线计算
-- `get_volume_analysis` — 量价分析
-- `analyze_portfolio_risk` — 组合敞口、相关性、止损与确定性压力测试
-- `plan_portfolio_rebalance` — 目标权重、整手和现金约束下的调仓清单
+## 其他宿主
 
-### 市场全景
-- `get_market_indices` — 主要指数（CN/HK/US/JP/KR/TW）
-- `get_sector_rankings` — A股板块涨跌幅排行
-- `get_sector_constituents` — A股板块成分股查询（板块名模糊匹配）
-- `resolve_stock_sectors` — 个股所属板块查询（A股行业+概念 / 港股 GICS）
-- `get_market_stats` — A股大盘统计
-- `get_stock_info` — 股票基本信息
-- `get_chip_distribution` — A股筹码分布
-- `get_fundamental_context` — A股深度基本面
-- `detect_market_regime` — 市场阶段检测
-- `get_market_review` — 大盘日度复盘
-
-### 筛选与回测
-- `screen_stocks` — 全市场多因子筛选（AlphaSift L1）
-- `run_backtest` — 策略回测（AlphaEvo）
-- `evaluate_signal` — 信号历史准确率
-- `screen_risk` — 7维度风险筛查
-- `run_watchlist_analysis` — 自选股批量分析
-- `detect_anomaly` — 异动信号扫描
-
-### 工具类
-- `resolve_stock_name` — A股名称/拼音 → 代码
-- `check_trading_day` / `get_trading_days` — 交易日历
-
-### 情报搜索（需 API Key）
-- `search_stock_news` — Tavily/Brave/SerpAPI 新闻搜索
-- `search_comprehensive_intel` — 6 维度综合情报
-- `get_social_sentiment` — Reddit/X/Polymarket 情绪
-- `get_trending_sentiment` — 社交热门趋势
-- `extract_article` — 文章正文提取
-
-## 平行 Host
-
-同一份业务逻辑也以 [Pi Agent extension](../pi/index.ts) 和 [Hermes plugin](../hermes/) 形式分发；选你用的那个生态即可。
+同一套工具也以 Pi Agent extension、Hermes plugin、DeepSeek Harness (dsh) plugin 和 MCP stdio 服务器形式分发，见[主仓库 README · 快速开始](https://github.com/Weaxs/stock-analysis-plugin#快速开始)。

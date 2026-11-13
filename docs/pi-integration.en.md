@@ -1,58 +1,55 @@
 # Pi Agent Integration Guide
 
-This guide explains how to use `stock-analysis-plugin` as a [Pi Agent](https://pi.dev) Extension.
+Use `stock-analysis-plugin` as a [Pi Agent](https://pi.dev) extension.
 
 ## Prerequisites
 
 - Node.js >= 22.19.0
 - Python >= 3.10
-- Pi Agent installed and running
+- Pi Agent installed and working
 
 ## Installation
 
-### Option 1: Pi Package Manager (Recommended)
+### Recommended: Pi package manager
 
 ```bash
 pi install npm:@weaxs/stock-analysis-plugin
 ```
 
-The installation automatically runs the `postinstall` script which:
+The `postinstall` script finds `python3` (`python` on Windows, >= 3.10), creates a `.venv` in the plugin directory and installs `tools/requirements.txt`.
 
-1. Locates `python3` on your system (requires >= 3.10)
-2. Creates a `.venv` virtual environment in the plugin directory
-3. Installs Python dependencies from `tools/requirements.txt`
-
-### Option 2: Global Extension (Git)
-
-```bash
-cd ~/.pi/agent/extensions
-git clone git@github.com:Weaxs/stock-analysis-plugin.git
-cd stock-analysis-plugin
-npm install
-```
-
-### Option 3: Project-level Extension
-
-```bash
-mkdir -p .pi/extensions && cd .pi/extensions
-git clone git@github.com:Weaxs/stock-analysis-plugin.git
-cd stock-analysis-plugin
-npm install
-```
-
-Project-level extensions are only available within that project's Pi Agent sessions.
-
-### Option 4: settings.json Configuration
+You can also declare it in `settings.json` and let Pi install it on startup:
 
 ```json
 {
-  "packages": [
-    "npm:@weaxs/stock-analysis-plugin@0.1.0"
-  ]
+  "packages": ["npm:@weaxs/stock-analysis-plugin"]
 }
 ```
 
-## Verifying the Installation
+### From source
+
+```bash
+# Global: available in every session
+cd ~/.pi/agent/extensions
+# Or project-level: only in this project's sessions
+# mkdir -p .pi/extensions && cd .pi/extensions
+
+git clone https://github.com/Weaxs/stock-analysis-plugin.git
+cd stock-analysis-plugin
+npm install
+```
+
+## Verify
+
+Start Pi and type `/skills`. You should see 21 Skills, such as `stock-analysis`, `stock-screener` and `strategy-backtest`. Then ask:
+
+```
+Get the real-time quote for AAPL
+```
+
+The agent should call `get_quote` and return market data.
+
+## On-demand tool discovery
 
 Pi 1.5.2 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 73 tools directly exposed.
 
@@ -62,137 +59,75 @@ The plugin preserves Pi's restored active tools across reloads. If an SDK reload
 
 Search with exact tool names such as `get_quote`, `get_financials`, `screen_stocks`, and `run_backtest`, or with keywords: since Pi 1.5 the native ranker segments Chinese, so Chinese terms like `实时行情` match the tools' Chinese descriptions; older Pi only matches English terms. The plugin supplies this guidance to the model only when discovery is enabled. Loaded tools remain active for the session, so the active set can grow during long conversations.
 
-After starting Pi Agent, type:
+## Optional configuration
 
-```
-/skills
-```
+Everything works without API keys. Environment variables for data sources, search, sentiment and SEC are listed in [README · 可选配置](../README.md#可选配置); set them in the shell that starts Pi:
 
-You should see 21 registered Skills (e.g., `stock-analysis`, `stock-screener`, `strategy-backtest`, etc.).
-
-You can also test by invoking a tool directly:
-
-```
-Get the real-time quote for AAPL
+```bash
+export TAVILY_API_KEY="your-key"
+pi
 ```
 
-The agent should call the `get_quote` tool and return market data.
+### Wisburg research data
 
-## Environment Variables
+The `wisburg-research` Skill searches research reports, earnings calls and filings through Wisburg's hosted MCP server. Without it, the Skill falls back to `search_comprehensive_intel`. Get an API key from [Wisburg](https://wisburg.com), then add the server:
 
-Environment variables are grouped by function — configure as needed:
+```bash
+export WISBURG_API_KEY="your-wisburg-key"
+pi mcp add wisburg-mcp-server --url https://mcp.wisburg.com/mcp --bearer-token-env-var WISBURG_API_KEY
+pi mcp list
+```
 
-### News & Search (configure at least one)
-
-| Variable | Purpose | URL |
-|----------|---------|-----|
-| `TAVILY_API_KEY` | Tavily search | https://tavily.com |
-| `BRAVE_API_KEY` | Brave search | https://brave.com/search/api/ |
-| `SERPAPI_KEY` | SerpAPI | https://serpapi.com |
-| `BOCHA_API_KEY` | Bocha AI search | — |
-
-### Social Sentiment
-
-| Variable | Purpose | Notes |
-|----------|---------|-------|
-| `SENTIMENT_API_KEY` | Social sentiment API auth | Eastmoney + Xueqiu sentiment |
-| `SENTIMENT_API_URL` | Sentiment API endpoint | Default: `https://api.adanos.org` |
-
-### US / HK Market Data Sources
-
-| Variable | Purpose | Notes |
-|----------|---------|-------|
-| `FINNHUB_API_KEY` | Finnhub (US quotes, financials) | https://finnhub.io |
-| `ALPHAVANTAGE_API_KEY` | Alpha Vantage (US klines) | https://www.alphavantage.co |
-| `LONGBRIDGE_APP_KEY` | Longbridge (HK quotes) | https://open.longportapp.com |
-| `LONGBRIDGE_APP_SECRET` | Longbridge App Secret | Same as above |
-| `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Access Token | Same as above |
-
-### A-share Enhanced Data Source (Optional)
-
-| Variable | Purpose | Notes |
-|----------|---------|-------|
-| `TUSHARE_TOKEN` | Tushare (A-share fallback source) | https://tushare.pro |
-
-> Note: A-share basic data is fetched via akshare (free, no key required). Tushare is only used as a fallback/enhanced source.
-
-### Wisburg Research Data
-
-Wisburg is integrated via **MCP Server**, not environment variables. Add the Wisburg MCP service to your Pi Agent MCP configuration:
+Or write it to `~/.pi/agent/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "wisburg-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/wisburg-mcp-server"],
-      "env": {
-        "WISBURG_API_KEY": "your-wisburg-key"
-      }
+      "url": "https://mcp.wisburg.com/mcp",
+      "headers": { "Authorization": "Bearer ${WISBURG_API_KEY}" }
     }
   }
 }
 ```
 
-Once configured, the `wisburg-research` Skill automatically calls Wisburg MCP tools (prefixed with `mcp__wisburg-mcp-server__`), providing:
-- Institutional research reports (Goldman Sachs, Morgan Stanley, CICC, etc.)
-- Earnings call transcripts, financial filings (A/HK/US markets)
-- Research feed, market daily digest
-- A-share investor Q&A (semantic search)
-
-Set them before starting Pi Agent:
-
-```bash
-# Direct export
-export TAVILY_API_KEY="your-key-here"
-
-# Or via .env file
-echo 'TAVILY_API_KEY=your-key-here' >> ~/.pi/.env
-```
+Run `/reload` in the session afterwards and check the connection with `/mcp`.
 
 ## Troubleshooting
 
 ### Python dependency installation failed
 
-If `npm install` fails to set up the Python environment, install manually:
+If `npm install` could not build the Python environment, install it manually in the plugin directory:
 
 ```bash
-cd ~/.pi/agent/extensions/stock-analysis-plugin
 python3 -m venv .venv
-.venv/bin/pip install -r tools/requirements.txt
+.venv/bin/python -m pip install -r tools/requirements.txt          # macOS / Linux
+# .venv\Scripts\python.exe -m pip install -r tools/requirements.txt  # Windows
 ```
 
 ### Tool call timeout
 
-Some tools (e.g., `screen_stocks` for full-market screening) may take longer to execute. If you encounter timeouts, try reducing the `top` parameter or check your network connection.
+Tools such as full-market screening (`screen_stocks`) take longer. Lower `top` or check your network.
 
-### Upgrading the plugin
+### Upgrading
 
 ```bash
-# Installed via Pi package manager:
+# Installed via the Pi package manager
 pi install npm:@weaxs/stock-analysis-plugin@latest
 
-# Installed via Git:
-cd ~/.pi/agent/extensions/stock-analysis-plugin
-git pull
-npm install
+# Installed from source
+git pull && npm install
 ```
 
-## npm Package Contents
-
-When installed via npm, the package only contains files needed for the Pi Extension:
+## npm package contents
 
 ```
 @weaxs/stock-analysis-plugin/
-├── pi/
-│   └── index.ts          # Extension entry — registers tools and skills
-├── tools/                # Python CLI tools
+├── pi/index.ts           # Pi extension entry: 73 tools and 21 Skills
+├── tools/                # shared Python CLIs
 ├── skills/               # SKILL.md files
-├── schemas/              # Strategy schemas
-├── strategies/           # Strategy examples
-├── scripts/
-│   └── setup-python.mjs  # postinstall script for Python setup
-└── package.json          # pi.extensions + pi.skills config
+├── schemas/ templates/ strategies/
+├── scripts/              # postinstall and subprocess helpers
+├── hermes/ mcp_host/     # bundled Hermes adapter and MCP server
+└── docs/mcp.md
 ```
-
-> Hermes-related files (`hermes/`, `pyproject.toml`) are not included in the npm package.
