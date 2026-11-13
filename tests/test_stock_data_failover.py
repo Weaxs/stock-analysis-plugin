@@ -362,6 +362,7 @@ class TestKlineFinnhub:
             "t": [timestamp],
         }
         monkeypatch.setattr(stock_data, "_kline_yfinance", MagicMock(side_effect=ValueError("offline")))
+        monkeypatch.setattr(stock_data, "_kline_tencent", MagicMock(side_effect=ValueError("offline")))
         try:
             with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key", "TZ": tz}):
                 time.tzset()
@@ -601,6 +602,7 @@ class TestKlineYfFailover:
         result = kline_yf("AAPL", "daily", 10)
         assert result == [{"close": 200}]
 
+    @patch("tools.stock_data._kline_tencent", MagicMock(side_effect=ValueError("tencent down")))
     @patch("tools.stock_data._kline_alphavantage")
     @patch("tools.stock_data._kline_longbridge")
     @patch("tools.stock_data._kline_finnhub")
@@ -631,6 +633,7 @@ class TestQuoteYfFailover:
         result = quote_yf("AAPL")
         assert result == {"price": 150}
 
+    @patch("tools.stock_data._quote_tencent", MagicMock(side_effect=ValueError("tencent down")))
     @patch("tools.stock_data._quote_alphavantage")
     @patch("tools.stock_data._quote_longbridge")
     @patch("tools.stock_data._quote_finnhub")
@@ -1437,6 +1440,7 @@ class TestKlineYfFailoverExtended:
         assert result == [{"close": 300}]
         mock_av.assert_not_called()
 
+    @patch("tools.stock_data._kline_tencent", MagicMock(side_effect=ValueError("tencent down")))
     @patch("tools.stock_data._kline_alphavantage")
     @patch("tools.stock_data._kline_longbridge")
     @patch("tools.stock_data._kline_finnhub")
@@ -1449,6 +1453,7 @@ class TestKlineYfFailoverExtended:
         result = kline_yf("AAPL", "daily", 10)
         assert result == [{"close": 400}]
 
+    @patch("tools.stock_data._kline_tencent", MagicMock(side_effect=ValueError("tencent down")))
     @patch("tools.stock_data._kline_alphavantage")
     @patch("tools.stock_data._kline_longbridge")
     @patch("tools.stock_data._kline_finnhub")
@@ -2930,7 +2935,7 @@ def test_quote_yfinance_success_does_not_call_tencent(symbol):
     get.assert_not_called()
 
 
-@pytest.mark.parametrize("symbol", ["AAPL", "7203.T", "005930.KS", "2330.TW"])
+@pytest.mark.parametrize("symbol", ["7203.T", "005930.KS", "2330.TW"])
 def test_non_hk_quote_failure_does_not_call_tencent(symbol):
     with (
         patch("tools.stock_data._quote_yfinance", side_effect=ValueError("yf down")),
@@ -2978,6 +2983,102 @@ def test_tencent_short_hk_quote_has_null_optional_fields():
     assert result["pb"] is None
     assert result["market_cap"] is None
     assert result["turnover"] is None
+
+
+def _tencent_us_quote():
+    fields = {1: "苹果", 2: "AAPL.OQ", 3: "354.88", 4: "355.36", 5: "357.81", 6: "31874978"}
+    fields.update({30: "2026-11-12 16:00:01", 31: "-0.48", 32: "-0.14", 33: "359.37", 34: "354.41"})
+    fields.update({37: "11361383723", 38: "0.22", 39: "39.52", 45: "51571.80748", 46: "Apple Inc."})
+    return MagicMock(content=_tencent_quote_payload(fields, "usAAPL"))
+
+
+def test_tencent_us_quote_uses_dollar_units_and_new_york_time():
+    with patch("requests.get", return_value=_tencent_us_quote()) as get:
+        result = _quote_tencent("AAPL")
+    get.assert_called_once_with("https://qt.gtimg.cn/q=usAAPL", timeout=10)
+    assert (result["price"], result["change_pct"], result["prev_close"]) == (354.88, -0.14, 355.36)
+    assert result["turnover"] == 11361383723
+    assert result["market_cap"] == pytest.approx(5.157180748e12)
+    assert (result["pb"], result["turnover_rate"], result["volume_ratio"]) == (None, None, None)
+    assert result["data_as_of"] == "2026-11-12T16:00:01-05:00"
+
+
+def test_tencent_us_class_share_uses_dot():
+    with patch("requests.get", return_value=_tencent_us_quote()) as get:
+        _quote_tencent("BRK-B")
+    assert get.call_args.args[0] == "https://qt.gtimg.cn/q=usBRK.B"
+
+
+@pytest.mark.parametrize("symbol", ["^GSPC", "AAPL,sh600519", "TOOLONGNAME"])
+def test_tencent_invalid_us_symbol_does_not_request(symbol):
+    with patch("requests.get") as get, pytest.raises(ValueError, match="invalid US symbol"):
+        _quote_tencent(symbol)
+    get.assert_not_called()
+
+
+def test_tencent_hk_kline_reads_forward_adjusted_endpoint():
+    body = {
+        "code": 0,
+        "data": {"hk00700": {"qfqday": [["2026-11-13", "393.0", "386.6", "395.2", "385.6", "31493353"]]}},
+    }
+    with patch("requests.get", return_value=MagicMock(json=lambda: body)) as get:
+        result = _kline_tencent("0700.HK", "daily", 1)
+    assert get.call_args.args[0] == "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
+    assert get.call_args.kwargs["params"]["param"] == "hk00700,day,,,1,qfq"
+    assert result == [
+        {
+            "date": "2026-11-13",
+            "open": 393.0,
+            "high": 395.2,
+            "low": 385.6,
+            "close": 386.6,
+            "volume": 31493353.0,
+            "adjusted": "qfq",
+        }
+    ]
+
+
+def test_tencent_hk_kline_rejects_raw_only_series():
+    body = {"code": 0, "data": {"hk00700": {"day": [["2026-11-13", "393.0", "386.6", "395.2", "385.6", "1"]]}}}
+    with patch("requests.get", return_value=MagicMock(json=lambda: body)), pytest.raises(ValueError):
+        _kline_tencent("00700.HK", "daily", 1)
+
+
+def test_tencent_us_kline_uses_exchange_code_from_quote():
+    rows = [["2026-11-12", "357.81", "354.88", "359.37", "354.41", "31874978", {"FHcontent": "每股分配0.27美元"}]]
+    kline = MagicMock(json=lambda: {"code": 0, "data": {"usAAPL.OQ": {"qfqweek": rows}}})
+    with patch("requests.get", side_effect=[_tencent_us_quote(), kline]) as get:
+        result = _kline_tencent("AAPL", "weekly", 1)
+    assert get.call_args.args[0] == "https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get"
+    assert get.call_args.kwargs["params"]["param"] == "usAAPL.OQ,week,,,1,qfq"
+    assert (result[0]["close"], result[0]["adjusted"]) == (354.88, "qfq")
+
+
+def test_hk_kline_falls_back_to_tencent_before_keyed_sources():
+    with (
+        patch("tools.stock_data._kline_yfinance", side_effect=ValueError("yf down")),
+        patch("tools.stock_data._kline_tencent", return_value=[{"close": 386.6, "adjusted": "qfq"}]) as tx,
+        patch("tools.stock_data._kline_finnhub") as fh,
+    ):
+        result = cmd_kline(Namespace(symbol="00700.HK", period="daily", count=1))
+    tx.assert_called_once_with("00700.HK", "daily", 1)
+    fh.assert_not_called()
+    assert (result[0]["source"], result[0]["adjusted"]) == ("tencent", "qfq")
+
+
+def test_us_chain_tries_tencent_after_keyed_sources_and_before_alphavantage():
+    with (
+        patch("tools.stock_data._quote_yfinance", side_effect=ValueError("yf down")),
+        patch("tools.stock_data._quote_finnhub", side_effect=ValueError("fh down")) as fh,
+        patch("tools.stock_data._quote_longbridge", side_effect=ValueError("lb down")) as lb,
+        patch("tools.stock_data._quote_tencent", return_value={"price": 354.88}) as tx,
+        patch("tools.stock_data._quote_alphavantage") as av,
+    ):
+        assert quote_yf("AAPL") == {"price": 354.88}
+    fh.assert_called_once()
+    lb.assert_called_once()
+    tx.assert_called_once_with("AAPL")
+    av.assert_not_called()
 
 
 class TestKlineTencent:

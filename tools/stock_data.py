@@ -336,9 +336,9 @@ def _unix_quote_time(value) -> str | None:
     return None
 
 
-def _quote_time(value: str, fmt: str) -> str | None:
+def _quote_time(value: str, fmt: str, tz=timezone(timedelta(hours=8))) -> str | None:
     try:
-        return datetime.strptime(value, fmt).replace(tzinfo=timezone(timedelta(hours=8))).isoformat()
+        return datetime.strptime(value, fmt).replace(tzinfo=tz).isoformat()
     except ValueError:
         return None
 
@@ -347,9 +347,14 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
     """Build the quote row from one Tencent `~`-separated payload (already split).
     Shared by _quote_tencent (single) and _tencent_batch_quotes (snapshot leg)."""
     f += [""] * (50 - len(f))  # pad optional tail fields (pe/pb/market_cap/volume_ratio…) on short payloads
-    hk = detect_market(symbol) == "HK"
+    market = detect_market(symbol)
+    foreign = market in ("HK", "US")  # HK and US share currency-unit turnover and lack the A-share ratio fields
     turnover = _parse_float(f[37])
     market_cap = _parse_float(f[45])
+    if market == "US":
+        as_of = _quote_time(f[30], "%Y-%m-%d %H:%M:%S", ZoneInfo("America/New_York"))
+    else:
+        as_of = _quote_time(f[30], "%Y/%m/%d %H:%M:%S" if foreign else "%Y%m%d%H%M%S")
     return {
         "symbol": symbol,
         "name": f[1],
@@ -357,7 +362,7 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
         "change": _parse_float(f[31]),
         "change_pct": _parse_float(f[32]),
         "volume": _parse_float(f[6]),  # A: 手; HK: shares, same as yfinance
-        "turnover": turnover * (1 if hk else 1e4) if turnover is not None else None,
+        "turnover": turnover * (1 if foreign else 1e4) if turnover is not None else None,
         "high": _parse_float(f[33]),
         "low": _parse_float(f[34]),
         "open": _parse_float(f[5]),
@@ -365,34 +370,54 @@ def _tencent_payload_row(f: list, symbol: str) -> dict:
         "market_cap": market_cap * 1e8 if market_cap is not None else None,
         "pe": _parse_float(f[39]),
         "pe_basis": "unknown",
-        # Tencent's HK map labels f[47] DY and f[49] WK52_Low; neither is an A-share ratio.
-        "pb": None if hk else _parse_float(f[46]),
-        "turnover_rate": None if hk else _parse_float(f[38]),
-        "volume_ratio": None if hk else _parse_float(f[49]),
+        # Tencent's HK map labels f[47] DY and f[49] WK52_Low, and US f[46] is the English name.
+        "pb": None if foreign else _parse_float(f[46]),
+        "turnover_rate": None if foreign else _parse_float(f[38]),
+        "volume_ratio": None if foreign else _parse_float(f[49]),
         "amplitude": _parse_float(f[43]),
-        "data_as_of": _quote_time(f[30], "%Y/%m/%d %H:%M:%S" if hk else "%Y%m%d%H%M%S"),
+        "data_as_of": as_of,
     }
 
 
-def _quote_tencent(symbol: str) -> dict:
-    """Tencent A/HK quote via qt.gtimg.cn, with a GBK-encoded `~` payload.
+def _tencent_hk_code(symbol: str) -> str:
+    if not re.fullmatch(r"[0-9]{1,5}\.HK", symbol, re.IGNORECASE):
+        raise ValueError(f"invalid HK symbol: {symbol}")
+    return f"hk{symbol[:-3].zfill(5)}"
 
-    A-share turnover is 万元; HK turnover is already HKD. Market cap is 亿元
-    (CNY/HKD respectively); normalize monetary fields to currency units."""
+
+def _tencent_us_code(symbol: str) -> str:
+    """Tencent spells class shares with a dot (BRK.B) where Yahoo uses a dash (BRK-B)."""
+    if not re.fullmatch(r"[A-Za-z]{1,6}(?:[.-][A-Za-z])?", symbol):
+        raise ValueError(f"invalid US symbol: {symbol}")
+    return "us" + symbol.upper().replace("-", ".")
+
+
+def _tencent_fields(code: str) -> list:
     import requests
 
-    hk = detect_market(symbol) == "HK"
-    if hk and not re.fullmatch(r"[0-9]{1,5}\.HK", symbol, re.IGNORECASE):
-        raise ValueError(f"invalid HK symbol: {symbol}")
-    # Tencent's hk feed is delayed 15 minutes; r_hk uses the same fields for live quotes.
-    code = f"r_hk{symbol[:-3].zfill(5)}" if hk else _cn_code(symbol)
     resp = requests.get(f"https://qt.gtimg.cn/q={code}", timeout=10)
     resp.raise_for_status()
-    f = _gbk_var_payload(resp.content).split("~")
+    return _gbk_var_payload(resp.content).split("~")
+
+
+def _quote_tencent(symbol: str) -> dict:
+    """Tencent A/HK/US quote via qt.gtimg.cn, with a GBK-encoded `~` payload.
+
+    A-share turnover is 万元; HK/US turnover is already HKD/USD. Market cap is 亿
+    in the quote currency; normalize monetary fields to currency units."""
+    market = detect_market(symbol)
+    if market == "HK":
+        # Tencent's hk feed is delayed 15 minutes; r_hk uses the same fields for live quotes.
+        code = f"r_{_tencent_hk_code(symbol)}"
+    elif market == "US":
+        code = _tencent_us_code(symbol)
+    else:
+        code = _cn_code(symbol)
+    f = _tencent_fields(code)
     if len(f) < 35 or not f[1]:
         raise ValueError(f"tencent returned no quote for {symbol}")
     row = _clean_row(_tencent_payload_row(f, symbol))
-    if hk and (row["price"] is None or row["price"] <= 0):
+    if market != "A" and (row["price"] is None or row["price"] <= 0):
         raise ValueError(f"tencent returned no quote for {symbol}")
     if normalize_stock_code(symbol)["is_etf"]:
         # f[73] is total fund shares and f[78] the intraday IOPV (blank for money/bond ETFs);
@@ -410,14 +435,29 @@ def _quote_tencent(symbol: str) -> dict:
 
 def _kline_tencent(symbol: str, period: str, count: int) -> list:
     """Tencent kline via web.ifzq.gtimg.cn. Rows are [date, open, close, high, low,
-    volume(手)] ascending; raw series are accepted only for explicit indices."""
+    volume] ascending (A: 手, HK/US: shares); raw series are accepted only for explicit indices.
+    HK/US stocks need the hk/us endpoints: the generic one ignores qfq for them."""
     import requests
 
     p_map = {"daily": "day", "weekly": "week", "monthly": "month"}
     p = p_map.get(period, "day")
-    code = _TENCENT_HK_INDEX.get(symbol.upper()) or _cn_code(symbol)
+    market = detect_market(symbol)
+    hk_index = symbol.upper() in _TENCENT_HK_INDEX
+    endpoint = "fqkline"
+    if hk_index:
+        code = _TENCENT_HK_INDEX[symbol.upper()]
+    elif market == "HK":
+        endpoint, code = "hkfqkline", _tencent_hk_code(symbol)
+    elif market == "US":
+        # usfqkline only adjusts the exchange-suffixed code (AAPL.OQ) that the quote API reports.
+        f = _tencent_fields(_tencent_us_code(symbol))
+        if len(f) < 3 or not f[2]:
+            raise ValueError(f"tencent returned no quote for {symbol}")
+        endpoint, code = "usfqkline", f"us{f[2]}"
+    else:
+        code = _cn_code(symbol)
     resp = requests.get(
-        "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+        f"https://web.ifzq.gtimg.cn/appstock/app/{endpoint}/get",
         params={"param": f"{code},{p},,,{count},qfq"},
         timeout=10,
     )
@@ -425,10 +465,11 @@ def _kline_tencent(symbol: str, period: str, count: int) -> list:
     if data.get("code") != 0:
         raise ValueError(f"tencent kline failed: {data.get('msg', '')}")
     node = data.get("data", {}).get(code, {})
-    raw = _A_INDEX_RE.fullmatch(symbol) or code.startswith("hk")
+    raw = _A_INDEX_RE.fullmatch(symbol) or hk_index
     rows = node.get(p) if raw else node.get(f"qfq{p}")
     if not rows:
         raise ValueError("tencent kline returned empty data for required adjustment")
+    extra = {} if market == "A" else {"adjusted": "none" if raw else "qfq"}
     return [
         _clean_row(
             {
@@ -438,6 +479,7 @@ def _kline_tencent(symbol: str, period: str, count: int) -> list:
                 "low": _parse_float(r[4]),
                 "close": _parse_float(r[2]),
                 "volume": _parse_float(r[5]),
+                **extra,
             }
         )
         for r in rows[-count:]
@@ -1047,22 +1089,30 @@ def _quote_alphavantage(symbol: str) -> dict:
     )
 
 
-def _yf_failover(symbol: str, yfinance, finnhub, longbridge, alphavantage, label: str, evidence: bool = False):
-    """Shared HK/US/JP/KR/TW failover chain: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only).
+def _yf_failover(symbol: str, yfinance, tencent, finnhub, longbridge, alphavantage, label: str, evidence: bool = False):
+    """Shared HK/US/JP/KR/TW failover chain. HK: yfinance → tencent → finnhub → longbridge;
+    US: yfinance → finnhub → longbridge → tencent → alphavantage; JP/KR/TW: yfinance only.
 
+    Keyless Tencent backs up HK first (finnhub's free tier has no HK). For US, configured
+    keyed sources go first and Tencent precedes alphavantage to spare its 25 calls/day.
     Each provider is a zero-arg callable; callers bind their own symbol/period/count.
     """
     market = detect_market(symbol)
     sources = [("yfinance", yfinance)]
-    if market in ("HK", "US"):
-        sources += [("finnhub", finnhub), ("longbridge", longbridge)]
-    if market == "US":
-        sources.append(("alphavantage", alphavantage))
+    if market == "HK":
+        sources += [("tencent", tencent), ("finnhub", finnhub), ("longbridge", longbridge)]
+    elif market == "US":
+        sources += [
+            ("finnhub", finnhub),
+            ("longbridge", longbridge),
+            ("tencent", tencent),
+            ("alphavantage", alphavantage),
+        ]
     return _failover(sources, label=label, evidence=evidence)
 
 
 def kline_yf(symbol: str, period: str, count: int, evidence: bool = False) -> list:
-    """HK/US/JP/KR/TW kline. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
+    """HK/US/JP/KR/TW kline; see _yf_failover for the chain."""
     if symbol.upper() in _TENCENT_HK_INDEX:
         with socket_timeout(25):
             sources = [("tencent", lambda: _kline_tencent(symbol, period, count))]
@@ -1070,6 +1120,7 @@ def kline_yf(symbol: str, period: str, count: int, evidence: bool = False) -> li
     return _yf_failover(
         symbol,
         lambda: _kline_yfinance(symbol, period, count),
+        lambda: _kline_tencent(symbol, period, count),
         lambda: _kline_finnhub(symbol, period, count),
         lambda: _kline_longbridge(symbol, period, count),
         lambda: _kline_alphavantage(symbol, period, count),
@@ -1256,24 +1307,14 @@ def _quote_finnhub(symbol: str) -> dict:
 
 
 def quote_yf(symbol: str, evidence: bool = False) -> dict:
-    """HK adds Tencent after yfinance; US/JP/KR/TW keep their existing failover chains."""
+    """HK/US/JP/KR/TW quote; see _yf_failover for the chain."""
     if symbol.upper() in _TENCENT_HK_INDEX:
         sources = [("tencent", lambda: {"symbol": symbol, **_quote_tencent_hk_index(symbol.upper())})]
         return _failover(sources, label=f"quote_hk_index:{symbol}", evidence=evidence)
-    if detect_market(symbol) == "HK":
-        return _failover(
-            [
-                ("yfinance", lambda: _quote_yfinance(symbol)),
-                ("tencent", lambda: _quote_tencent(symbol)),
-                ("finnhub", lambda: _quote_finnhub(symbol)),
-                ("longbridge", lambda: _quote_longbridge(symbol)),
-            ],
-            label=f"quote:{symbol}",
-            evidence=evidence,
-        )
     return _yf_failover(
         symbol,
         lambda: _quote_yfinance(symbol),
+        lambda: _quote_tencent(symbol),
         lambda: _quote_finnhub(symbol),
         lambda: _quote_longbridge(symbol),
         lambda: _quote_alphavantage(symbol),
