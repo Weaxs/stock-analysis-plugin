@@ -11,25 +11,31 @@
 
 ## 安装方式
 
-### 方式一：通过 ClawHub 安装（推荐）
+### 方式一：通过 npm 安装（推荐）
 
 ```bash
-openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
+openclaw plugins install npm:openclaw-stock-analysis
+openclaw plugins inspect stock-analysis --runtime --json   # 记下 installPath
+cd <installPath> && node scripts/setup-python.mjs
 ```
 
-`clawhub:` 前缀强制走 ClawHub registry。安装时 npm 的 `postinstall` 会自动执行 `scripts/setup-python.mjs`：
+不带前缀的包名默认从 ClawHub 解析，不会回落到 npm，所以要写 `npm:`。同一份包也以 `@weaxs/openclaw-stock-analysis` 发布。
+
+OpenClaw 安装 npm 插件时带 `--ignore-scripts`，不会执行 `postinstall`，需要手动运行一次 `scripts/setup-python.mjs`：
 
 1. 查找系统中的 `python3`（需 >= 3.10）
 2. 在插件目录下创建 `.venv` 虚拟环境
 3. 安装 `tools/requirements.txt` 中的 Python 依赖
 
-### 方式二：通过 npm 直接安装
+没有 `.venv` 时插件会回退系统 `python3`，缺依赖的工具会报错。
+
+### 方式二：通过 ClawHub 安装
 
 ```bash
-openclaw plugins install @weaxs/openclaw-stock-analysis
+openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
 ```
 
-OpenClaw 文档说明 bare specs（不带 `clawhub:` 前缀）会回落到 npm registry。在 ClawHub 还未完全收敛之前，这是更稳的路径。
+ClawHub 上只有 scoped 名。ClawHub 发布目前不稳定，可能落后于 npm 版本。装完同样检查 `.venv`，没有就按方式一运行 `setup-python.mjs`。
 
 ### 方式三：源码 / 内置 plugin
 
@@ -68,11 +74,11 @@ OpenClaw 应会调用 `get_quote` 工具并返回行情数据。
 检查两点：
 
 1. `openclaw.plugin.json` 的 `id` 字段是否就是你 `inspect` 时传的名字（本插件是 `stock-analysis`）
-2. 包名（`@weaxs/openclaw-stock-analysis`）跟 plugin id 是两回事；`inspect` 用的是 plugin id
+2. 包名（`openclaw-stock-analysis`）跟 plugin id 是两回事；`inspect` 用的是 plugin id
 
 ### Python 依赖安装失败
 
-如果 `postinstall` 时 Python 环境创建失败（常见于 CI 镜像缺 `python3`），手动恢复：
+如果 `setup-python.mjs` 创建 Python 环境失败（常见于 CI 镜像缺 `python3`），手动恢复：
 
 ```bash
 cd <plugin-install-dir>
@@ -81,7 +87,7 @@ python3 -m venv .venv
 # .venv\Scripts\python.exe -m pip install -r tools/requirements.txt  # Windows
 ```
 
-OpenClaw plugin 装在哪里取决于 Gateway 的安装策略——通常是 `~/.openclaw/plugins/<id>/` 或工作区下，可用 `openclaw plugins inspect stock-analysis --runtime --json` 查 `installPath` 字段。
+插件目录看 `openclaw plugins inspect stock-analysis --runtime --json` 的 `installPath`：npm / ClawHub 安装在 OpenClaw 托管的 npm 项目里，本地压缩包装在 `~/.openclaw/extensions/` 下。
 
 ### `pluginApi` 版本不兼容
 
@@ -94,19 +100,18 @@ OpenClaw plugin 装在哪里取决于 Gateway 的安装策略——通常是 `~/
 ### 升级插件
 
 ```bash
-# ClawHub 安装的：
-openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis@latest
-
-# npm 安装的：
-openclaw plugins install @weaxs/openclaw-stock-analysis@latest
+openclaw plugins update stock-analysis
+cd <installPath> && node scripts/setup-python.mjs
 ```
+
+升级会替换插件目录，之后重新运行一次 `setup-python.mjs`。
 
 ## npm 包内容
 
 通过 npm / ClawHub 安装时，包内仅包含 OpenClaw plugin 所需文件：
 
 ```
-@weaxs/openclaw-stock-analysis/
+openclaw-stock-analysis/
 ├── index.ts                # plugin 源码入口
 ├── dist/                   # esbuild 打包产物
 ├── openclaw.plugin.json    # contracts manifest

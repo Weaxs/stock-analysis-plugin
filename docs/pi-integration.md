@@ -13,8 +13,10 @@
 ### 推荐：Pi 包管理
 
 ```bash
-pi install npm:@weaxs/stock-analysis-plugin
+pi install npm:stock-analysis-plugin
 ```
+
+默认装到全局（`~/.pi/agent/npm/`），加 `-l` 只装到当前项目（写入 `.pi/settings.json`）。同一份包也以 `@weaxs/stock-analysis-plugin` 发布，内容一致。
 
 安装时 `postinstall` 会找到本机的 `python3`（Windows 为 `python`，需 >= 3.10），在插件目录下创建 `.venv` 并安装 `tools/requirements.txt` 中的依赖。
 
@@ -22,7 +24,7 @@ pi install npm:@weaxs/stock-analysis-plugin
 
 ```json
 {
-  "packages": ["npm:@weaxs/stock-analysis-plugin"]
+  "packages": ["npm:stock-analysis-plugin"]
 }
 ```
 
@@ -113,7 +115,7 @@ python3 -m venv .venv
 
 ```bash
 # Pi 包管理安装的
-pi install npm:@weaxs/stock-analysis-plugin@latest
+pi update --extension npm:stock-analysis-plugin   # 项目级安装再加 -a
 
 # 源码安装的
 git pull && npm install
@@ -122,7 +124,7 @@ git pull && npm install
 ## npm 包内容
 
 ```
-@weaxs/stock-analysis-plugin/
+stock-analysis-plugin/
 ├── pi/index.ts           # Pi Extension 入口，注册 73 个工具和 21 个 Skill
 ├── tools/                # 共享 Python CLI
 ├── skills/               # SKILL.md
