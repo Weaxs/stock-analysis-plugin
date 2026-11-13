@@ -183,8 +183,8 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # Plugin manifest
-│   ├── schemas.py        # JSON Schema definitions for 72 tools
-│   └── tools.py          # 72 handlers calling CLI via subprocess
+│   ├── schemas.py        # JSON Schema definitions for 73 tools
+│   └── tools.py          # 73 handlers calling CLI via subprocess
 └── tools/                # Python CLI tools
 ```
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { createJiti } from "jiti";
 
@@ -61,6 +61,7 @@ const EXPECTED_TOOLS = [
   "screen_risk",
   "detect_market_regime",
   "get_market_review",
+  "get_watchlist",
   "run_watchlist_analysis",
   "detect_anomaly",
   "diagnose_data_sources",
@@ -77,29 +78,12 @@ const EXPECTED_TOOLS = [
   "parse_stock_list",
 ].sort();
 
-const EXPECTED_SKILLS = [
-  "bottom-volume",
-  "box-oscillation",
-  "bull-trend",
-  "chan-theory",
-  "dragon-head",
-  "emotion-cycle",
-  "event-driven",
-  "expectation-repricing",
-  "growth-quality",
-  "hot-theme",
-  "ma-crossover",
-  "market-review",
-  "one-yang-three-yin",
-  "sector-rotation",
-  "shrink-pullback",
-  "stock-analysis",
-  "stock-screener",
-  "strategy-backtest",
-  "volume-breakout",
-  "wave-theory",
-  "wisburg-research",
-].sort();
+// Derived from disk: a new skills/<name>/SKILL.md must reach Pi without a list edit.
+const skillsRoot = fileURLToPath(new URL("../skills", import.meta.url));
+const EXPECTED_SKILLS = readdirSync(skillsRoot, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && existsSync(`${skillsRoot}/${d.name}/SKILL.md`))
+  .map((d) => d.name)
+  .sort();
 
 interface ToolRegistration {
   name: string;
@@ -115,6 +99,7 @@ let skillPaths: string[] = [];
 const analysisInputCalls: {path: string; input: unknown}[] = [];
 const calls: string[][] = [];
 const timeouts: (number | undefined)[] = [];
+const signals: (AbortSignal | undefined)[] = [];
 let stdoutPayload = "{}";
 let processKilled = false;
 let exitCode = 0;
@@ -133,11 +118,11 @@ const mockPi = {
       skillPaths = result.skillPaths ?? [];
     }
   },
-  exec: async (_python: string, args: string[], options?: { timeout?: number }) => { calls.push(args); if (args[0].endsWith("sector_rotation.py") || args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py") || args[0].endsWith("report_renderer.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : exitCode, killed: processKilled }; },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));
-const extensionModule = jiti("../pi/index.ts") as { default: Function };
+const extensionModule = jiti("../pi/index.ts") as { default: Function; __setProcessExecutor: Function; __defaultProcessExecutor: Function };
+extensionModule.__setProcessExecutor(async (_python: string, args: string[], options?: { timeout?: number; signal?: AbortSignal }) => { calls.push(args); signals.push(options?.signal); if (args[0].endsWith("sector_rotation.py") || args[0].endsWith("stateless_analysis.py") || args[0].endsWith("trend_strategy.py") || args[0].endsWith("report_renderer.py")) { const path = args[args.indexOf("--input") + 1]; analysisInputCalls.push({path, input: JSON.parse(readFileSync(path, "utf8"))}); } timeouts.push(options?.timeout); return { stdout: stdoutPayload, code: processKilled ? 1 : exitCode, killed: processKilled }; });
 extensionModule.default(mockPi);
 
 let failures = 0;
@@ -435,4 +420,26 @@ for (const [code, stdout, error] of [
 }
 exitCode = 0;
 stdoutPayload = "{}";
+
+await registeredTools.find(t => t.name === "extract_article")!.execute!("article", {url: "https://example.com/a.pdf"});
+assert(JSON.stringify(calls.at(-1)!.slice(1)) === JSON.stringify(["extract", "https://example.com/a.pdf", "--max-chars", "3000"]), "extract_article defaults max_chars to 3000");
+await registeredTools.find(t => t.name === "get_watchlist")!.execute!("watchlist", {});
+assert(calls.at(-1)![0].endsWith("watchlist.py") && JSON.stringify(calls.at(-1)!.slice(1)) === JSON.stringify(["list"]), "get_watchlist runs watchlist.py list");
+
+// Pi passes the call's AbortSignal as execute's third argument; Esc must reach the Python child.
+{
+  const controller = new AbortController();
+  signals.length = 0;
+  await registeredTools.find(t => t.name === "get_quote")!.execute!("cancel", {symbol: "600519"}, controller.signal);
+  await registeredTools.find(t => t.name === "compare_analysis_snapshots")!.execute!("cancel", {previous: {}, current: {}}, controller.signal);
+  assert(signals.length === 2 && signals.every(s => s === controller.signal), "Pi tools must forward the execute signal to the process executor");
+}
+
+const largeResult = await extensionModule.__defaultProcessExecutor(process.execPath, ["-e", "process.stdout.write('x'.repeat(33 * 1024 * 1024))"], { timeout: 60_000 });
+const { failureMessage } = await import("../scripts/cli-json.mjs");
+assert(failureMessage(largeResult) === "Python command output exceeded buffer limit", "Pi output overflow must not be reported as a timeout");
+
+const manifestSkills = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).pi.skills as string[])
+  .map((p) => p.split("/").at(-2)!).sort();
+assert(JSON.stringify(manifestSkills) === JSON.stringify(EXPECTED_SKILLS), "package.json pi.skills must list every skills/*/SKILL.md");
 if (failures) process.exit(1);

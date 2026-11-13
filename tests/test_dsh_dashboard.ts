@@ -3,7 +3,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePython } from "../scripts/venv-python.mjs";
 import { Readable } from "node:stream";
+import { execFileSync, spawn } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createDashboardHandler,
@@ -94,6 +96,8 @@ function fakePython(options: { phase?: string; fail?: (script: string, args: str
 try {
   // ---------- watchlist storage ----------
   assert.deepEqual(normalizeWatchlist([" aapl ", "AAPL", "00700.hk", "sh600519"]), ["AAPL", "00700.HK", "sh600519"]);
+  // One A-share under bare and exchange-prefixed spellings is one row and one quota slot.
+  assert.deepEqual(normalizeWatchlist(["600519", "sh600519", "SH600519", "bj920001", "920001"]), ["600519", "bj920001"]);
   assert.throws(() => normalizeWatchlist("AAPL"), /数组/);
   assert.throws(() => normalizeWatchlist(["AAPL;rm"]), /代码/);
   assert.throws(() => normalizeWatchlist(Array.from({ length: 31 }, (_, i) => `S${i}`)), /30/);
@@ -110,6 +114,14 @@ try {
   const watchlistFile = join(temp, "nested", "watchlist.json");
   writeWatchlist(watchlistFile, ["aapl", "00700.hk"]);
   assert.deepEqual(readWatchlist(watchlistFile), ["AAPL", "00700.HK"]);
+  const parityFile = join(temp, "parity", "watchlist.json");
+  mkdirSync(dirname(parityFile), { recursive: true });
+  writeFileSync(parityFile, JSON.stringify({ symbols: ["600519", "sh600519", "00700.hk"] }), "utf8");
+  const pythonWatchlist = JSON.parse(execFileSync(resolvePython(repoRoot), [join(repoRoot, "tools", "watchlist.py"), "list"], {
+    encoding: "utf8",
+    env: { ...process.env, STOCK_WATCHLIST_FILE: parityFile },
+  }));
+  assert.deepEqual(pythonWatchlist.symbols, readWatchlist(parityFile), "Python and dashboard preserve the same first spelling");
   writeFileSync(watchlistFile, "{broken", "utf8");
   assert.throws(() => readWatchlist(watchlistFile), /损坏/);
   {
@@ -308,7 +320,9 @@ try {
     assert.deepEqual(out.json().symbols, ["600519", "AAPL", "00700.HK", "7203.T"]);
     await handler.settle();
     assert(py.calls.includes("stock_data.py:quote 7203.T"), "new symbols are fetched right away");
-    const removed = await call(handler, post("/stock-analysis/api/watchlist", { op: "remove", symbols: ["600519"] }));
+    const dup = await call(handler, post("/stock-analysis/api/watchlist", { op: "add", symbols: ["sh600519"] }));
+    assert.deepEqual(dup.json().symbols, ["600519", "AAPL", "00700.HK", "7203.T"], "prefixed spelling of a saved A-share is not added twice");
+    const removed = await call(handler, post("/stock-analysis/api/watchlist", { op: "remove", symbols: ["sh600519"] }));
     assert.deepEqual(removed.json().symbols, ["AAPL", "00700.HK", "7203.T"]);
     const listed = await call(handler, get("/stock-analysis/api/watchlist"));
     assert.deepEqual(listed.json().symbols, ["AAPL", "00700.HK", "7203.T"]);
@@ -327,6 +341,38 @@ try {
     ]);
     assert.deepEqual(readWatchlist(mergeFile), ["600519", "AAPL", "MSFT"], "incremental adds cannot erase another tab's update");
     await merge.settle();
+
+    const indexFile = join(temp, "index-watchlist", "watchlist.json");
+    writeWatchlist(indexFile, ["sh000001"]);
+    const indexPy = fakePython();
+    const indexDashboard = createDashboardHandler({ runPy: indexPy.runPy, watchlistFile: indexFile, webDir });
+    await indexDashboard.tick();
+    await indexDashboard.settle();
+    assert.equal(indexPy.calls.filter(key => key === "stock_data.py:quote sh000001").length, 1);
+    assert.equal(indexPy.calls.filter(key => key.startsWith("stock_data.py:kline sh000001 ")).length, 1);
+    await indexDashboard.dispose();
+
+    const crossFile = join(temp, "cross-process", "watchlist.json");
+    writeWatchlist(crossFile, []);
+    const moduleUrl = new URL("../dsh/dashboard.ts", import.meta.url).href;
+    async function writer(prefix: string): Promise<void> {
+      const source = `import { updateWatchlist } from ${JSON.stringify(moduleUrl)};
+        const start = Date.now() + 200;
+        while (Date.now() < start) await new Promise(resolve => setTimeout(resolve, 5));
+        for (let i = 0; i < 10; i++) await updateWatchlist(process.env.WATCHLIST_TEST_FILE, "add", [process.env.WATCHLIST_PREFIX + i]);`;
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", source], {
+          env: { ...process.env, WATCHLIST_TEST_FILE: crossFile, WATCHLIST_PREFIX: prefix },
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        let stderr = "";
+        child.stderr.on("data", chunk => { stderr += String(chunk); });
+        child.on("error", reject);
+        child.on("exit", code => code === 0 ? resolve() : reject(new Error(stderr || `writer exited ${code}`)));
+      });
+    }
+    await Promise.all([writer("A"), writer("B")]);
+    assert.equal(readWatchlist(crossFile).length, 20, "two processes cannot erase each other's additions");
   }
 
   // ---------- request validation and same-origin guard ----------

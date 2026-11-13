@@ -18,6 +18,9 @@ INDEX_MAP = {
     "A": ("000001", "上证综指"),
     "HK": ("^HSI", "恒生指数"),
     "US": ("^GSPC", "标普500"),
+    "JP": ("^N225", "日经225"),
+    "KR": ("^KS11", "韩国KOSPI"),
+    "TW": ("^TWII", "台湾加权指数"),
 }
 
 REGIME_CN = {
@@ -166,7 +169,7 @@ def _detect_sector_heat(market: str) -> bool:
 def detect_regime(market: str = "A") -> dict:
     market = market.upper()
     if market not in INDEX_MAP:
-        return {"error": f"Unsupported market: {market}. Use A/HK/US"}
+        return {"error": f"Unsupported market: {market}. Use {'/'.join(INDEX_MAP)}"}
 
     code, name = INDEX_MAP[market]
     klines = _get_index_kline(market)
@@ -229,7 +232,7 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     p_detect = sub.add_parser("detect")
-    p_detect.add_argument("market", nargs="?", default="A", choices=["A", "HK", "US"])
+    p_detect.add_argument("market", nargs="?", default="A", choices=list(INDEX_MAP))
 
     args = parser.parse_args()
     if not args.command:

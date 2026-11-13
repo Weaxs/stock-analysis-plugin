@@ -4,14 +4,17 @@
 import argparse
 import json
 import math
+import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import utf8_stdio
+from _subproc import error_message, utf8_stdio
 from gather import Collection, gather_analysis
+from stock_data import _cn_code
 
 
 def has_analysis_data(data) -> bool:
@@ -65,9 +68,39 @@ def analyze_watchlist(symbols: list[str], workers: int = 3, *, session=None, on_
     }
 
 
+def get_watchlist() -> dict:
+    configured = os.environ.get("STOCK_WATCHLIST_FILE")
+    data_root = Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh")
+    path = Path(configured) if configured else data_root / "stock-analysis" / "watchlist.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"symbols": [], "count": 0}
+
+    values = payload.get("symbols") if isinstance(payload, dict) else None
+    if not isinstance(values, list):
+        raise ValueError("Watchlist file must contain a symbols array")
+    symbols, keys = [], set()
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("Watchlist symbols must be strings")
+        upper = value.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9.-]{0,31}", upper):
+            raise ValueError("Watchlist contains an invalid symbol")
+        symbol = upper.lower() if re.fullmatch(r"(?:SH|SZ|BJ)[0-9]{6}", upper) else upper
+        # Same key as dsh dashboardQuoteSymbol: 600519 and sh600519 are one stock.
+        key = _cn_code(symbol) if re.fullmatch(r"[0-9]{6}", symbol) else symbol
+        if key not in keys:
+            keys.add(key)
+            symbols.append(symbol)
+    return {"symbols": symbols, "count": len(symbols)}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Batch watchlist analysis")
     sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("list", help="Read the dsh dashboard watchlist")
 
     p_analyze = sub.add_parser("analyze")
     p_analyze.add_argument("symbols", help="Comma-separated stock codes")
@@ -81,12 +114,17 @@ def main():
             print(json.dumps({"error": "No valid symbols provided"}))
             sys.exit(1)
         result = analyze_watchlist(codes, workers=args.workers)
-        json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
-        print()
-        if "error" in result:
-            sys.exit(1)
+    elif args.command == "list":
+        try:
+            result = get_watchlist()
+        except (OSError, ValueError) as exc:
+            result = {"error": error_message(exc)}
     else:
         parser.print_help()
+        sys.exit(1)
+    json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
+    print()
+    if "error" in result:
         sys.exit(1)
 
 

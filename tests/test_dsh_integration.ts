@@ -4,7 +4,7 @@
 // (defineTool is identity, so the options object is captured verbatim).
 // Verifies:
 //   - the plugin exports the cordis function-plugin form (name/inject/apply)
-//   - all 72 tools register, aligned with the canonical cross-host tool list
+//   - all 73 tools register, aligned with the canonical cross-host tool list
 //     (openclaw.plugin.json contracts.tools — the repo invariant says every
 //     host exposes the same set)
 //   - the dsh bundle manifest (package.json dsh.bundle.patch + cordis.patch.yml)
@@ -62,8 +62,8 @@ const mod = (await jiti.import("../dsh/index.ts")) as {
   name: string;
   inject: string[];
   apply: (ctx: unknown) => void;
-  __setExecutor: (fn: (bin: string, argv: string[]) => Promise<string>) => void;
-  __defaultExecutor: (bin: string, argv: string[]) => Promise<string>;
+  __setExecutor: (fn: (bin: string, argv: string[], timeoutMs?: number, signal?: AbortSignal) => Promise<string>) => void;
+  __defaultExecutor: (bin: string, argv: string[], timeoutMs?: number, signal?: AbortSignal) => Promise<string>;
 };
 
 mod.__setExecutor(async (_bin, argv) => {
@@ -225,10 +225,11 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   search_comprehensive_intel: { symbol: "600519" },
   get_social_sentiment: { symbol: "AAPL" },
   get_trending_sentiment: {},
-  extract_article: { url: "https://example.com" },
+  extract_article: { url: "https://example.com", max_chars: 20000 },
   screen_risk: { symbol: "600519" },
   detect_market_regime: {},
   get_market_review: {},
+  get_watchlist: {},
   run_watchlist_analysis: { symbols: "600519,000001" },
   detect_anomaly: { symbol: "600519" },
   diagnose_data_sources: {},
@@ -505,6 +506,19 @@ for (const [code, error] of [
   assert(JSON.parse(out).error === error, `executor failure must produce ${error}`);
 }
 assert(await mod.__defaultExecutor(process.execPath, ["-e", 'process.stdout.write("{\\"ok\\":true}")']) === '{"ok":true}', "executor must relay valid JSON");
+
+// Cancellation: exec.signal reaches the Python child for argv and JSON-input tools alike.
+{
+  const seen: (AbortSignal | undefined)[] = [];
+  mod.__setExecutor(async (_bin, _argv, _timeout, signal) => { seen.push(signal); return "{}"; });
+  const controller = new AbortController();
+  await tools.find(t => t.name === "get_quote")!.execute({symbol: "600519"}, {signal: controller.signal});
+  await tools.find(t => t.name === "compare_analysis_snapshots")!.execute({previous: {}, current: {}}, {signal: controller.signal});
+  assert(seen.length === 2 && seen.every(s => s === controller.signal), "dsh tools must forward exec.signal to the Python child");
+  const started = Date.now();
+  const aborted = await mod.__defaultExecutor(process.execPath, ["-e", "setTimeout(() => {}, 20000)"], 60_000, AbortSignal.timeout(200));
+  assert(typeof JSON.parse(aborted).error === "string" && Date.now() - started < 10_000, "aborting the signal must stop the child");
+}
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

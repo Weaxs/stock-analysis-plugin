@@ -135,6 +135,7 @@ def _snapshot():
             "price": 10.0,
             "change_pct": 3.0,
             "volume": 1e6,
+            "turnover": 1e9,
             "turnover_rate": 2.0,
             "pe": 10.0,
             "pb": 1.0,
@@ -147,6 +148,7 @@ def _snapshot():
             "price": 20.0,
             "change_pct": 1.0,
             "volume": 8e5,
+            "turnover": 8e8,
             "turnover_rate": 1.5,
             "pe": 20.0,
             "pb": 2.0,
@@ -159,6 +161,7 @@ def _snapshot():
             "price": 30.0,
             "change_pct": 0.5,
             "volume": 5e5,
+            "turnover": 5e8,
             "turnover_rate": 1.0,
             "pe": 30.0,
             "pb": 3.0,
@@ -454,11 +457,11 @@ class TestNonFiniteSanitization:
     json.dumps would otherwise emit bare NaN/Infinity tokens that strict JSON
     parsers in the host adapters reject."""
 
-    @pytest.mark.parametrize("missing_volume", [None, float("inf")])
-    def test_missing_factor_leg_preserves_remaining_usable_scores(self, monkeypatch, missing_volume):
+    @pytest.mark.parametrize("missing_turnover", [None, float("inf")])
+    def test_missing_factor_leg_preserves_remaining_usable_scores(self, monkeypatch, missing_turnover):
         snapshot = _snapshot()
         for row in snapshot:
-            row["volume"] = missing_volume
+            row["turnover"] = missing_turnover
         monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
         monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
         result = screen("A", 20, None)
@@ -481,7 +484,7 @@ class TestNonFiniteSanitization:
     def test_l2_path_with_sanitized_scores(self, monkeypatch):
         snapshot = _snapshot()
         for row in snapshot:
-            row["volume"] = None
+            row["turnover"] = None
         monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
         monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
         monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
@@ -680,8 +683,8 @@ def test_l1_missing_factors_do_not_count_as_zero_before_ranking(monkeypatch):
         screener,
         "fetch_snapshot",
         lambda market: [
-            {"symbol": "AAA", "price": 10, "change_pct": 1, "volume": 100},
-            {"symbol": "BBB", "price": 10, "change_pct": 5, "volume": 500},
+            {"symbol": "AAA", "price": 10, "change_pct": 1, "turnover": 1000},
+            {"symbol": "BBB", "price": 10, "change_pct": 5, "turnover": 5000},
         ],
     )
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
@@ -831,3 +834,21 @@ def test_candidate_collects_independent_sources_concurrently(monkeypatch, make_k
     assert result["roe"] == 10
     assert result["main_net_5d"] == 123
     assert result["vol20_samples"] == 20
+
+
+class TestLiquidityUsesTurnover:
+    """Share volume favours low-priced stocks; liquidity must rank on 成交额 (turnover)."""
+
+    def test_turnover_not_share_volume(self, monkeypatch):
+        snapshot = _snapshot()
+        # AAA: cheap with huge share count; CCC: few shares but the largest money traded.
+        for row, volume, turnover in zip(snapshot, [9e7, 5e5, 1e5], [9e7, 1e8, 3e8], strict=True):
+            row.update(volume=volume, turnover=turnover, turnover_rate=1.0)
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        result = screen("A", 20, None)
+        liq = {c["symbol"]: c["scores"]["liquidity"] for c in result["candidates"]}
+        assert liq["CCC"] > liq["BBB"] > liq["AAA"]
+        ccc = next(c for c in result["candidates"] if c["symbol"] == "CCC")
+        assert ccc["turnover"] == 3e8
+        assert "liquidity" in ccc["factor_coverage"]["available"]

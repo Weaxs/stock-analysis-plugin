@@ -50,7 +50,10 @@ class TestRun:
 
 
 class TestGatherAnalysis:
-    @pytest.mark.parametrize("symbol,market", [("600519", "A"), ("00700.HK", "HK"), ("AAPL", "US")])
+    @pytest.mark.parametrize(
+        "symbol,market",
+        [("600519", "A"), ("00700.HK", "HK"), ("AAPL", "US"), ("7203.T", "JP"), ("005930.KS", "KR"), ("2330.TW", "TW")],
+    )
     @patch("tools.gather._run")
     def test_regime_uses_stock_market(self, mock_run, symbol, market):
         def fetch(script, args, **kwargs):
@@ -58,13 +61,6 @@ class TestGatherAnalysis:
 
         mock_run.side_effect = fetch
         assert gather_analysis(symbol)["regime"]["market"] == market
-
-    @pytest.mark.parametrize("symbol", ["7203.T", "005930.KS", "2330.TW"])
-    @patch("tools.gather._run")
-    def test_unsupported_regime_is_explicit(self, mock_run, symbol):
-        mock_run.return_value = None
-        assert "error" in gather_analysis(symbol)["regime"]
-        assert all(c.args[0] != "market_regime.py" for c in mock_run.call_args_list)
 
     @patch("tools.gather._run")
     def test_returns_all_keys(self, mock_run):

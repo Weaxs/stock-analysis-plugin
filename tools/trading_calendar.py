@@ -162,7 +162,7 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
 
     if market == "CN":
         trading_dates = cn_trade_dates(d.year)
-        if trading_dates:
+        if trading_dates and min(trading_dates) <= date_str <= max(trading_dates):
             is_td = date_str in trading_dates
             return {
                 "date": date_str,
@@ -170,6 +170,18 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
                 "is_trading_day": is_td,
                 "reason": "trading_day" if is_td else "holiday",
             }
+        # A partial year must not make out-of-coverage weekdays look like confirmed holidays.
+        try:
+            is_td = _is_exchange_trading_day("XSHG", date_str)
+            return {
+                "date": date_str,
+                "market": market,
+                "is_trading_day": is_td,
+                "reason": "trading_day" if is_td else "holiday",
+                "source": "exchange-calendars",
+            }
+        except Exception:
+            pass  # beyond the years XSHG records (or not installed): label the weekday guess
         return {
             "date": date_str,
             "market": market,
@@ -190,13 +202,18 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
         except Exception:
             pass
         trading_dates = cn_trade_dates(d.year)
-        if trading_dates:
+        if trading_dates and min(trading_dates) <= date_str <= max(trading_dates):
             is_td = date_str in trading_dates
             return {
                 "date": date_str,
                 "market": market,
                 "is_trading_day": is_td,
-                "reason": "trading_day" if is_td else "holiday (approx, based on CN calendar)",
+                "reason": (
+                    "assumed_trading_day (approx, based on CN calendar)"
+                    if is_td
+                    else "assumed_holiday (approx, based on CN calendar)"
+                ),
+                "source": "cn-calendar-approximation",
             }
         return {"date": date_str, "market": market, "is_trading_day": True, "reason": "assumed_trading_day"}
 
@@ -214,7 +231,12 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
             pass
         if (d.month, d.day) in _us_holidays(d.year):
             return {"date": date_str, "market": market, "is_trading_day": False, "reason": "US_holiday"}
-        return {"date": date_str, "market": market, "is_trading_day": True, "reason": "trading_day"}
+        return {
+            "date": date_str,
+            "market": market,
+            "is_trading_day": True,
+            "reason": "assumed_trading_day (rule-based US calendar)",
+        }
 
     elif market in ("JP", "KR", "TW"):
         exchange_map = {"JP": "XTKS", "KR": "XKRX", "TW": "XTAI"}
@@ -239,34 +261,31 @@ def is_trading_day(market: str, date_str: str = None) -> dict:
     return {"date": date_str, "market": market, "error": f"Unknown market: {market}"}
 
 
-def next_trading_days(market: str, count: int = 5, from_date: str = None) -> list[str]:
-    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else market_now(market)
-
+def _walk_trading_days(market: str, count: int, d: datetime, step: timedelta, assumed: list | None) -> list[str]:
+    if count <= 0:
+        return []
     result = []
-    max_search = count * 4
+    max_search = count * 4 + 20  # CN Golden Week / Spring Festival close up to 9 days in a row
     for _ in range(max_search):
-        d += timedelta(days=1)
+        d += step
         info = is_trading_day(market, d.strftime("%Y-%m-%d"))
         if info.get("is_trading_day"):
             result.append(d.strftime("%Y-%m-%d"))
+            if assumed is not None and info.get("reason", "").startswith("assumed_trading_day"):
+                assumed.append(result[-1])  # counted as a session only because no calendar covered it
             if len(result) >= count:
                 break
     return result
 
 
-def prev_trading_days(market: str, count: int = 5, from_date: str = None) -> list[str]:
+def next_trading_days(market: str, count: int = 5, from_date: str = None, assumed: list | None = None) -> list[str]:
     d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else market_now(market)
+    return _walk_trading_days(market, count, d, timedelta(days=1), assumed)
 
-    result = []
-    max_search = count * 4
-    for _ in range(max_search):
-        d -= timedelta(days=1)
-        info = is_trading_day(market, d.strftime("%Y-%m-%d"))
-        if info.get("is_trading_day"):
-            result.append(d.strftime("%Y-%m-%d"))
-            if len(result) >= count:
-                break
-    return result
+
+def prev_trading_days(market: str, count: int = 5, from_date: str = None, assumed: list | None = None) -> list[str]:
+    d = datetime.strptime(from_date, "%Y-%m-%d") if from_date else market_now(market)
+    return _walk_trading_days(market, count, d, timedelta(days=-1), assumed)
 
 
 def cmd_check(args):
@@ -355,13 +374,15 @@ def market_phase(market: str, at: str = None) -> dict:
 
 
 def cmd_next(args):
-    days = next_trading_days(args.market, args.count, args.date)
-    return {"market": args.market, "next_trading_days": days}
+    assumed = []
+    days = next_trading_days(args.market, args.count, args.date, assumed)
+    return {"market": args.market, "next_trading_days": days, "assumed_trading_days": assumed}
 
 
 def cmd_prev(args):
-    days = prev_trading_days(args.market, args.count, args.date)
-    return {"market": args.market, "prev_trading_days": days}
+    assumed = []
+    days = prev_trading_days(args.market, args.count, args.date, assumed)
+    return {"market": args.market, "prev_trading_days": days, "assumed_trading_days": assumed}
 
 
 def cmd_phase(args):

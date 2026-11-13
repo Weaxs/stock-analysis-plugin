@@ -9,11 +9,7 @@ import { readFileSync as readAnalysisFixture } from "node:fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { createJiti } from "jiti";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { resolvePython } from "../../scripts/venv-python.mjs";
-
-const execFileAsync = promisify(execFile);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
@@ -36,18 +32,6 @@ const mockPi = {
     registered.push(cfg);
   },
   on() {},
-  exec: async (cmd: string, args: string[] = []) => {
-    // pi/index.ts calls pi.exec(python, [script, ...args]) — argv form, no shell.
-    try {
-      const { stdout, stderr } = await execFileAsync(cmd, args, {
-        maxBuffer: 32 * 1024 * 1024,
-      });
-      return { stdout, stderr, code: 0, killed: false };
-    } catch (error: any) {
-      if (typeof error.code !== "number") throw error;
-      return { stdout: error.stdout, stderr: error.stderr, code: error.code, killed: error.killed ?? false };
-    }
-  },
 };
 
 const jiti = createJiti(fileURLToPath(import.meta.url));

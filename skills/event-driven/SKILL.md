@@ -28,7 +28,7 @@ gather 工具返回：
 - `stock_info` — 公司基本信息
 - `sector_rankings` — 板块排名
 
-A 股事件原文先调用 `get_announcements`：业绩预告用 `forecast`、快报用 `express`、减持用 `reduction`、增发用 `issuance`、问询及回复用 `inquiry`、分红用 `dividend`，指定 `start_date/end_date`。返回 PDF 链接而非正文；读取原文后再量化，`truncated=true` 时缩小日期范围。
+事件原文先调用 `get_announcements`：A 股业绩预告用 `forecast`、快报用 `express`、减持用 `reduction`、增发用 `issuance`、问询及回复用 `inquiry`、分红用 `dividend`；美股用 SEC 申报（`all` 含 8-K/6-K/DEF 14A，需 SEC_USER_AGENT），不支持的类别会报错。指定 `start_date/end_date`；PDF/HTML 原文用 `extract_article` 提取并检查 `truncated`，读取后再量化，列表截断时缩小日期范围。
 
 新闻摘要只用于发现事件。金额、期限、合同对手、业绩变化或政策原文必须由公告/原文确认；只有摘要时不做精确量化。
 
@@ -100,4 +100,4 @@ A 股事件原文先调用 `get_announcements`：业绩预告用 `forecast`、�
 
 ### 补充数据覆盖
 
-get_earnings_calendar 查询 A 股仍需 report_date；HK 提供 symbol，可选财政期末 report_date；优先 HKEX 已公告业绩审批董事会排期 confirmation=official_board_meeting_notice、date_kind=scheduled_board_meeting，不能称实际披露日。供应商备选日期为 provider_only，未知期次在请求特定报告期时另列 unverified_schedules，不能强行匹配。
+get_earnings_calendar 查询 A 股仍需 report_date；HK 提供 symbol，可选财政期末 report_date；优先 HKEX 已公告业绩审批董事会排期 confirmation=official_board_meeting_notice、date_kind=scheduled_board_meeting，不能称实际披露日。US/JP 提供 symbol，日期来自 yfinance、confirmation=provider_only，非官方确认；KR/TW 不可用。未知期次在请求特定报告期时另列 unverified_schedules，不能强行匹配。

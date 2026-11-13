@@ -282,6 +282,61 @@ def form4(cik, filing):
     return rows
 
 
+# Announcement categories mapped to SEC form types; categories without an SEC equivalent are rejected.
+FILING_FORMS = {
+    "annual": {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"},
+    "quarterly": {"10-Q", "10-Q/A"},
+    "current": {"8-K", "8-K/A", "6-K", "6-K/A"},
+    "issuance": {"S-1", "S-1/A", "S-3", "S-3/A", "F-1", "F-1/A", "F-3", "F-3/A", "424B2", "424B3", "424B4", "424B5"},
+    "reduction": {"144"},
+    "inquiry": {"UPLOAD", "CORRESP"},
+}
+FILING_FORMS["all"] = set().union(*FILING_FORMS.values()) | {"DEF 14A", "DEFA14A"}
+
+
+def filings(symbol, category, start, end, top):
+    forms = FILING_FORMS.get(category)
+    if forms is None:
+        raise ValueError(
+            f"category {category} has no SEC form equivalent; use all/annual/quarterly/issuance/reduction/inquiry"
+        )
+    identity()
+    cik = resolve_cik(symbol)
+    _, rows, incomplete = submissions(cik, forms, start.isoformat())
+    rows = [r for r in rows if r.get("filingDate", "") <= end.isoformat()]
+    items = []
+    for row in rows[:top]:
+        base = archive_base(cik, row)
+        document = row.get("primaryDocument") or ""
+        form = row["form"]
+        items.append(
+            {
+                "title": f"{form} {row.get('primaryDocDescription') or ''}".strip(),
+                "date": row.get("filingDate"),
+                "report_date": row.get("reportDate") or None,
+                "form": form,
+                "category": next((k for k, v in FILING_FORMS.items() if k != "all" and form in v), "other"),
+                "accession": row["accessionNumber"],
+                "document_url": f"{base}/{document}" if re.fullmatch(r"[\w.-]+", document) else None,
+                "filing_url": f"{base}/{row['accessionNumber']}-index.html",
+                "pdf_url": None,
+            }
+        )
+    return {
+        "symbol": symbol,
+        "cik": cik,
+        "market": "US",
+        "source": "sec_edgar",
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "total": len(rows),
+        "announcements": items,
+        "truncated": incomplete or len(rows) > top,
+        "body_extracted": False,
+        "requested_category": category,
+    }
+
+
 def insider_trades(args):
     identity()
     if not 1 <= args.days <= 365 or not 1 <= args.top <= 20:

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tools.watchlist import analyze_watchlist
+from tools.watchlist import analyze_watchlist, get_watchlist
 
 
 class TestAnalyzeWatchlist:
@@ -114,6 +114,42 @@ class TestMain:
             with pytest.raises(SystemExit) as exc_info:
                 tools.watchlist.main()
             assert exc_info.value.code == 1
+
+    def test_list_command_reads_dsh_watchlist(self, monkeypatch, tmp_path, capsys):
+        path = tmp_path / "watchlist.json"
+        path.write_text(json.dumps({"version": 1, "symbols": ["600519", "sh600519", "00700.HK"]}), encoding="utf-8")
+        monkeypatch.setenv("STOCK_WATCHLIST_FILE", str(path))
+        import tools.watchlist
+
+        with patch("sys.argv", ["watchlist.py", "list"]):
+            tools.watchlist.main()
+        assert json.loads(capsys.readouterr().out) == {"symbols": ["600519", "00700.HK"], "count": 2}
+
+    def test_bare_symbol_flows_to_analysis_unchanged(self, monkeypatch, tmp_path):
+        path = tmp_path / "watchlist.json"
+        path.write_text(json.dumps({"symbols": ["600519"]}), encoding="utf-8")
+        monkeypatch.setenv("STOCK_WATCHLIST_FILE", str(path))
+        seen = []
+        monkeypatch.setattr(
+            "tools.watchlist.gather_analysis",
+            lambda symbol, **kwargs: seen.append(symbol) or {"quote": {"price": 100}},
+        )
+        result = analyze_watchlist(get_watchlist()["symbols"])
+        assert seen == ["600519"]
+        assert result["summary"]["success"] == 1
+
+    def test_missing_watchlist_is_empty(self, monkeypatch, tmp_path):
+
+        monkeypatch.setenv("STOCK_WATCHLIST_FILE", str(tmp_path / "missing.json"))
+        assert get_watchlist() == {"symbols": [], "count": 0}
+
+    def test_dsh_home_watchlist_default(self, monkeypatch, tmp_path):
+        path = tmp_path / "stock-analysis" / "watchlist.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"symbols": ["AAPL"]}), encoding="utf-8")
+        monkeypatch.delenv("STOCK_WATCHLIST_FILE", raising=False)
+        monkeypatch.setenv("DSH_HOME", str(tmp_path))
+        assert get_watchlist()["symbols"] == ["AAPL"]
 
     def test_empty_symbols_exits(self, capsys):
         import tools.watchlist

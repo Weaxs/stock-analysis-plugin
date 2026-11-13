@@ -405,6 +405,9 @@ class TestSnapshotSymbolNormalization:
             ("snapshot_hk", "stock_hk_spot_em", "HK", "00700", "00700.HK"),
             ("snapshot_hk", "stock_hk_spot_em", "HK", "00700.HK", "00700.HK"),
             ("snapshot_us", "stock_us_spot_em", "US", "AAPL.OQ", "AAPL"),
+            ("snapshot_us", "stock_us_spot_em", "US", "105.AAPL", "AAPL"),
+            ("snapshot_us", "stock_us_spot_em", "US", "105.AMZN", "AMZN"),
+            ("snapshot_us", "stock_us_spot_em", "US", "106.BA", "BA"),
             ("snapshot_us", "stock_us_spot_em", "US", "BRK.B.N", "BRK-B"),
             ("snapshot_us", "stock_us_spot_em", "US", "XYZ.A", "XYZ"),
         ],
@@ -1145,18 +1148,33 @@ class TestKlineAFailover:
 
 
 class TestQuoteAFailover:
+    @pytest.mark.parametrize("symbol", ["600519", "510300"])
+    def test_single_symbol_source_before_full_market_spot(self, symbol):
+        """akshare's stock/ETF spot pages the whole market (~55 requests) for one row;
+        the single-symbol tencent endpoint answers first."""
+        with (
+            patch("tools.stock_data._quote_tencent", return_value={"price": 1.0}) as tencent,
+            patch("tools.stock_data._quote_akshare") as stock_spot,
+            patch("tools.stock_data._quote_akshare_etf") as etf_spot,
+        ):
+            assert quote_a(symbol) == {"price": 1.0}
+        tencent.assert_called_once_with(symbol)
+        stock_spot.assert_not_called()
+        etf_spot.assert_not_called()
+
     @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_sina")
     @patch("tools.stock_data._quote_tencent")
     @patch("tools.stock_data._quote_efinance")
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
-    def test_akshare_success(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+    def test_akshare_after_tencent_down(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+        mock_tx.side_effect = ValueError("down")
         mock_ak.return_value = {"price": 1800}
         result = quote_a("600519")
         assert result == {"price": 1800}
         mock_ts.assert_not_called()
-        mock_tx.assert_not_called()
+        mock_sina.assert_not_called()
 
     @patch("tools.stock_data._quote_pytdx")
     @patch("tools.stock_data._quote_sina")
@@ -1165,6 +1183,7 @@ class TestQuoteAFailover:
     @patch("tools.stock_data._quote_tushare")
     @patch("tools.stock_data._quote_akshare")
     def test_falls_through_to_efinance(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina, mock_ptdx):
+        mock_tx.side_effect = ValueError("down")
         mock_ak.side_effect = ValueError("down")
         mock_ts.side_effect = ValueError("down")
         mock_ef.return_value = {"price": 1800}
@@ -1421,6 +1440,11 @@ class TestNewMarketKlineChain:
 class TestAkshareETF:
     """A-share ETFs (51/15xxxx etc.) must route to fund APIs, not stock APIs."""
 
+    @pytest.fixture(autouse=True)
+    def _tencent_down(self, monkeypatch):
+        """These cases exercise the eastmoney legs behind the single-symbol tencent source."""
+        monkeypatch.setattr("tools.stock_data._quote_tencent", MagicMock(side_effect=ValueError("tencent down")))
+
     def _etf_hist_df(self):
         import pandas as pd
 
@@ -1495,18 +1519,18 @@ class TestAkshareETF:
         mock_ak.assert_called_once()
 
     def test_stock_sticky_does_not_demote_etf_fund_spot(self):
-        """A stock-side sticky winner (tencent) must not leak into ETF queries: ETFs
+        """A stock-side sticky winner (sina) must not leak into ETF queries: ETFs
         use their own sticky chain key, so akshare_etf keeps its declared priority."""
         with (
             patch("tools.stock_data._quote_akshare", side_effect=ValueError("em down")),
             patch("tools.stock_data._quote_tushare", side_effect=ValueError("no token")),
             patch("tools.stock_data._quote_efinance", side_effect=ValueError("em down")),
-            patch("tools.stock_data._quote_tencent", return_value={"price": 100}),
+            patch("tools.stock_data._quote_sina", return_value={"price": 100}),
         ):
-            assert quote_a("600519") == {"price": 100}  # tencent wins → sticky-quote_a
+            assert quote_a("600519") == {"price": 100}  # sina wins → sticky-quote_a
         with (
             patch("tools.stock_data._quote_akshare_etf", return_value={"price": 4.05, "is_etf": True}) as mock_etf,
-            patch("tools.stock_data._quote_tencent", return_value={"price": 4.04}),
+            patch("tools.stock_data._quote_sina", return_value={"price": 4.04}),
         ):
             result = quote_a("510300")
         mock_etf.assert_called_once()  # fund spot still tried first despite the stock-side sticky
@@ -2698,7 +2722,7 @@ class TestCmdStockInfoETF:
 
 def _tencent_quote_payload(fields: dict, vname: str = "sh600519") -> bytes:
     """Build a gtimg `v_<vname>="..."` body with the given field indices set."""
-    f = [""] * 50
+    f = [""] * max(50, max(fields) + 1)
     f[0] = "1"
     for idx, val in fields.items():
         f[idx] = val
@@ -2764,6 +2788,22 @@ class TestQuoteTencent:
         mock_get.return_value = MagicMock(content=_tencent_quote_payload(self._FIELDS))
         assert _quote_tencent("510300")["is_etf"] is True
         assert "is_etf" not in _quote_tencent("600519")
+
+    @patch("requests.get")
+    def test_etf_carries_iopv_and_premium(self, mock_get):
+        """Tencent ETF payloads carry IOPV at f[78] — the single-symbol leg keeps the
+        fund_etf_spot_em contract (premium positive = 溢价) without the full-market page."""
+        fields = {**self._FIELDS, 3: "4.114", 73: "45817687700", 78: "4.1178"}
+        mock_get.return_value = MagicMock(content=_tencent_quote_payload(fields, "sh510300"))
+        result = _quote_tencent("510300")
+        assert result["iopv"] == 4.1178
+        assert result["fund_shares"] == 45817687700  # get_etf_details reads this when Tencent answers
+        assert result["premium_discount_rate"] == pytest.approx((4.114 - 4.1178) / 4.1178 * 100, abs=1e-4)
+        mock_get.return_value = MagicMock(content=_tencent_quote_payload({**fields, 78: ""}, "sh511880"))
+        money = _quote_tencent("511880")
+        assert money["iopv"] is None and money["premium_discount_rate"] is None
+        mock_get.return_value = MagicMock(content=_tencent_quote_payload(self._FIELDS))
+        assert "iopv" not in _quote_tencent("600519")
 
     @patch("requests.get")
     def test_unknown_symbol_raises(self, mock_get):
@@ -3048,7 +3088,19 @@ class TestStickyFailover:
         assert _failover(sources, label="quote_a:x") == {"src": "a"}
         assert calls == ["a"]
 
+    @pytest.mark.parametrize("sticky", ["akshare", "efinance", "sina"])
+    def test_sticky_does_not_preempt_single_symbol_tencent(self, tmp_path, sticky):
+        (tmp_path / "sticky-quote_a.json").write_text(json.dumps(sticky), encoding="utf-8")
+        calls = []
+        sources = [
+            ("tencent", self._make_fn(calls, "tencent", True)),
+            (sticky, self._make_fn(calls, sticky, True)),
+        ]
+        assert _failover(sources, label="quote_a:600519") == {"src": "tencent"}
+        assert calls == ["tencent"]
+
     def test_sticky_persisted_to_disk(self, tmp_path):
+
         _failover([("a", lambda: None), ("b", lambda: {"ok": 1})], label="quote_a:x")
         assert json.loads((tmp_path / "sticky-quote_a.json").read_text(encoding="utf-8")) == "b"
 

@@ -43,7 +43,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 python3 scripts/gather.py <symbol>
 ```
 
-解析返回的 JSON 数据。如果某个字段为 `null` 或包含 `error`，表示该数据不可用，基于可用数据继续分析。大盘状态按股票所属市场查询；日/韩/台市场暂不支持，标明缺失，不能套用 A 股状态。
+解析返回的 JSON 数据。如果某个字段为 `null` 或包含 `error`，表示该数据不可用，基于可用数据继续分析。大盘状态按股票所属市场查询，A/HK/US/JP/KR/TW 均使用各自指数；非 A 股板块热点不可用时 sector_heat=false，不能套用 A 股状态或把 false 解读成无热点。
 
 解读实时行情前先调 `get_trading_phase` 确认该市场当前盘中阶段（盘前/早盘/午间休市/午盘/交易中/盘后/休市），避免把休市时的静态快照当作盘中信号解读。
 
@@ -126,7 +126,7 @@ python3 scripts/gather.py <symbol>
 - 股东变化：`get_shareholder_structure`。A 股北向值是财报十大流通股东中的 HKSCC 名义持股，缺席不等于零，不能当成日度北向买卖；港股南向值按港交所披露日期使用。
 - 大盘估值：`get_index_valuation(symbol="000300", years=5)`；中证近期 PE1 不冒充 PE-TTM、PB 或多年分位。
 - ETF：`get_etf_details(symbol="510300", benchmark="sh000300")`。折溢价须看净值/行情日期；披露持仓不是完整实时申赎篮子，指数成分与基金持仓分别呈现。跟踪误差必须给出用户认可的基准。
-- 股息：`get_dividends` 区分历史、未来已公布除息日历和 A 股报告期排行；预案不计入已实现 TTM 股息。名义每股现金未重算送转股口径，遇送转股时不得据此精确比较持有收益。
+- 股息：`get_dividends` 区分历史、未来已公布除息日历和排行；history/calendar 支持 A/HK/US/JP/KR/TW，排行仍仅 A/HK。预案不计入已实现 TTM 股息。名义每股现金未重算送转股口径，遇送转股时不得据此精确比较持有收益。
 - 两融：`get_margin_trading(include_ratio=true)` 的 `margin_buy_ratio_pct` 只使用同日成交额；null 表示不可计算。
 
 慢变数据存于 `~/.stock-analysis/cache`：财报、基本信息及新历史数据按天，板块映射按周；行情仍实时查询。输出中的报告期/数据日期决定能否用于判断，缓存命中不代表数据已更新。
@@ -138,5 +138,7 @@ get_shareholder_structure 的 northbound 优先使用沪深官方季度总量；
 实际披露股票持仓可用 get_etf_details(include_full_holdings=true) 获取半年度/年度表；按 as_of 解释，数量为股、市值为人民币元。默认不取大量明细；不是实时全资产组合，不与 PCF 对价数量混同。
 
 信号价格使用原始报价口径，自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算。多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算；日内顺序未知的双触发仍 stop 优先。复权 K 线需有该报价日的可核实 adjustment_factor，才能换算入场/目标/止损及收益；缺失时 skipped_price_basis 并保持未结算，不得猜测拆股或除权比例，重复日期返回 skipped_no_data。记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点；旧信号缺少报价时点且记录日因子发生变化时必须保持未结算。evaluate_signals 返回 complete/deferred/warnings；预算耗尽时已完成结果保存，未处理记录下次重试。当前仅日线 Tushare、Alpha Vantage 提供可验证换算系数，其余复权来源可能跳过结算。
+
+用户说“我的自选股”且未提供代码时，先调用 get_watchlist 读取 dsh 侧栏列表，再把 symbols 传给 run_watchlist_analysis 或 build_watchlist_context；空列表要如实说明，不自行补股票池。
 
 自选股上下文异动检查失败时 anomaly_status=unavailable、anomaly_count=null，并提供 anomaly_error/warnings；summary.partial 不得写成无异常或完整成功。

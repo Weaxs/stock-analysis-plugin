@@ -148,12 +148,13 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
         mom_parts.append(_minmax(df["volume_ratio"]))
     df["momentum_score"] = pd.concat(mom_parts, axis=1).mean(axis=1) if mom_parts else np.nan
 
-    # Liquidity: higher turnover_rate and volume → higher score
+    # Liquidity: higher turnover_rate and money traded → higher score. Share volume would
+    # favour low-priced stocks, so the cross-stock leg ranks turnover (成交额).
     liq_parts = []
     if "turnover_rate" in df.columns:
         liq_parts.append(_minmax(df["turnover_rate"]))
-    if "volume" in df.columns:
-        liq_parts.append(_minmax(df["volume"].astype(float)))
+    if "turnover" in df.columns:
+        liq_parts.append(_minmax(df["turnover"].astype(float)))
     df["liquidity_score"] = pd.concat(liq_parts, axis=1).mean(axis=1) if liq_parts else np.nan
 
     groups = df[[f"{group}_score" for group in L1_WEIGHTS]].rename(columns=lambda name: name.removesuffix("_score"))
@@ -465,6 +466,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "price",
             "change_pct",
             "volume",
+            "turnover",
             "turnover_rate",
             "pe",
             "pe_basis",
@@ -489,7 +491,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         factor_inputs = {
             "value": ("pe", "pb", "dividend_yield"),
             "momentum": ("change_pct", "volume_ratio"),
-            "liquidity": ("turnover_rate", "volume"),
+            "liquidity": ("turnover_rate", "turnover"),
         }
         weights = L1_WEIGHTS
         available = [

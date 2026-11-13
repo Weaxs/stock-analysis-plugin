@@ -94,8 +94,8 @@ const jiti = createJiti(fileURLToPath(import.meta.url), {
 
 const mod = await jiti.import("../openclaw/index.ts") as {
   default: unknown;
-  __setExecutor: (fn: (bin: string, argv: string[]) => Promise<string>) => void;
-  __defaultExecutor: (bin: string, argv: string[]) => Promise<string>;
+  __setExecutor: (fn: (bin: string, argv: string[], signal?: AbortSignal) => Promise<string>) => void;
+  __defaultExecutor: (bin: string, argv: string[], signal?: AbortSignal) => Promise<string>;
 };
 
 mod.__setExecutor(async (bin, argv) => {
@@ -254,10 +254,11 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   search_comprehensive_intel: { symbol: "600519" },
   get_social_sentiment: { symbol: "AAPL" },
   get_trending_sentiment: {},
-  extract_article: { url: "https://example.com" },
+  extract_article: { url: "https://example.com", max_chars: 20000 },
   screen_risk: { symbol: "600519" },
   detect_market_regime: {},
   get_market_review: {},
+  get_watchlist: {},
   run_watchlist_analysis: { symbols: "600519,000001" },
   detect_anomaly: { symbol: "600519" },
   diagnose_data_sources: {},
@@ -508,6 +509,19 @@ for (const [code, error] of [
   assert(JSON.parse(out).error === error, `executor failure must produce ${error}`);
 }
 assert(await mod.__defaultExecutor(process.execPath, ["-e", 'process.stdout.write("{\\"ok\\":true}")']) === '{"ok":true}', "executor must relay valid JSON");
+
+// OpenClaw calls execute(toolCallId, params, signal?, onUpdate?); cancellation must reach the Python child.
+{
+  const seen: (AbortSignal | undefined)[] = [];
+  mod.__setExecutor(async (_bin, _argv, signal) => { seen.push(signal); return "{}"; });
+  const controller = new AbortController();
+  await (tools.find(t => t.name === "get_quote")!.execute as Function)("cancel", {symbol: "600519"}, controller.signal);
+  await (tools.find(t => t.name === "compare_analysis_snapshots")!.execute as Function)("cancel", {previous: {}, current: {}}, controller.signal);
+  assert(seen.length === 2 && seen.every(s => s === controller.signal), "OpenClaw tools must forward the execute signal to the Python child");
+  const started = Date.now();
+  const aborted = await mod.__defaultExecutor(process.execPath, ["-e", "setTimeout(() => {}, 20000)"], AbortSignal.timeout(200));
+  assert(typeof JSON.parse(aborted).error === "string" && Date.now() - started < 10_000, "aborting the signal must stop the child");
+}
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

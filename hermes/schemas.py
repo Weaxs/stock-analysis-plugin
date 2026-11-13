@@ -152,11 +152,14 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_announcements",
-        "description": "查询A股巨潮公告标题、日期、类型和原文PDF链接；按日期范围/类别筛选，默认近90天，top=1..500。第一版不提取正文，truncated提示截断。",
+        "description": "查询A股巨潮公告与美股SEC EDGAR申报标题、日期、类型和原文链接；按日期范围/类别筛选，默认近90天，top=1..500。A股返回PDF链接，美股返回document_url/filing_url并需SEC_USER_AGENT；正文用extract_article提取，truncated提示截断。美股category=all含8-K/6-K/DEF14A，不支持forecast/express/interim/dividend。",
         "parameters": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "A股代码"},
+                "symbol": {
+                    "type": "string",
+                    "description": "A股代码、美股ticker或CIK（6位数字CIK须加CIK前缀，如CIK320193）",
+                },
                 "category": {
                     "type": "string",
                     "enum": [
@@ -171,7 +174,7 @@ TOOL_SCHEMAS = [
                         "inquiry",
                         "dividend",
                     ],
-                    "description": "公告类别，默认all",
+                    "description": "公告类别，默认all；美股仅支持all/annual/quarterly/reduction/issuance/inquiry，8-K/6-K/DEF14A经all查询",
                 },
                 "start_date": {"type": "string", "description": "开始日期YYYY-MM-DD，默认结束日期前90天"},
                 "end_date": {"type": "string", "description": "结束日期YYYY-MM-DD，默认今天"},
@@ -236,15 +239,18 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_earnings_calendar",
-        "description": "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日），缺失时返回供应商日期。HK可按已知财政期末过滤，未知期次另列。",
+        "description": "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日）；US/JP需symbol并返回yfinance供应商预计日期（provider_only，非官方确认）。HK可按已知财政期末过滤，未知期次与US/JP请求report_date时另列unverified_schedules；KR/TW不可用。",
         "parameters": {
             "type": "object",
             "properties": {
                 "report_date": {
                     "type": "string",
-                    "description": "A股必填季度期末YYYY-MM-DD；HK可选已公告财政期末，未知期次另列",
+                    "description": "A股必填季度期末YYYY-MM-DD；HK可选已公告财政期末；US/JP不按此匹配财政期，日期另列unverified_schedules",
                 },
-                "symbol": {"type": "string", "description": "A股代码可选（省略查全市场）；HK必须提供港股.HK代码"},
+                "symbol": {
+                    "type": "string",
+                    "description": "A股代码可选（省略查全市场）；HK/US/JP必须提供对应市场股票代码",
+                },
                 "top": {"type": "number", "description": "每类最多返回条数1..500，默认50"},
             },
             "required": [],
@@ -287,7 +293,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_dividends",
-        "description": "查询A/HK分红历史、除息日历、已实施TTM股息与连续年数。mode=ranking省略symbol，market=A查报告期排行，market=HK查HKEX/LSEG年度股息率排行（report_date须年末）；排行均非当前TTM收益率。缺失不按零。",
+        "description": "查询A/HK/US/JP/KR/TW分红历史、除息日历、已实施TTM股息与连续年数；history/calendar由symbol决定市场，US/JP/KR/TW使用yfinance。mode=ranking省略symbol，仅A/HK：A查报告期排行，HK查HKEX/LSEG年度股息率排行（report_date须年末）；排行均非当前TTM收益率。缺失不按零。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -296,7 +302,10 @@ TOOL_SCHEMAS = [
                     "enum": ["A", "HK"],
                     "description": "仅ranking选择市场，默认A；历史/除息日历由symbol决定",
                 },
-                "symbol": {"type": "string", "description": "history/calendar必填A股或港股.HK代码；ranking省略"},
+                "symbol": {
+                    "type": "string",
+                    "description": "history/calendar必填A/HK/US/JP/KR/TW股票代码（如600519、00700.HK、AAPL、7203.T、005930.KS、2330.TW）；ranking省略",
+                },
                 "mode": {
                     "type": "string",
                     "description": "history默认；calendar未来已公布除息事件；ranking按market查询A/HK排行",
@@ -669,7 +678,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "screen_stocks",
-        "description": "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，可用 l2 开启质量/成长/动量/波动率/资金流增强。显式筛选条件缺少数据时报error，filters_applied只列实际执行的条件。候选factor_coverage列出可用/缺失因子、加权覆盖率和effective_weights；L1与L2均按可用因子归一化后排序，缺失/非有限值不按零分计；L2另返回effective_scores供结合市场系数复算final，按可用因子重归一化，高分不代表数据完整。选股预算按候选数量及采集批次计算，top须为正整数。",
+        "description": "全市场股票筛选（AlphaSift L1 多因子硬筛 + 市场情绪调节）。按PE/PB/市值/换手率/涨跌幅/量比等因子过滤和评分，流动性分使用成交额turnover（不可作过滤条件），可用 l2 开启质量/成长/动量/波动率/资金流增强。显式筛选条件缺少数据时报error，filters_applied只列实际执行的条件。候选factor_coverage列出可用/缺失因子、加权覆盖率和effective_weights；L1与L2均按可用因子归一化后排序，缺失/非有限值不按零分计；L2另返回effective_scores供结合市场系数复算final，按可用因子重归一化，高分不代表数据完整。选股预算按候选数量及采集批次计算，top须为正整数。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -762,7 +771,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "resolve_stock_name",
-        "description": "股票名称智能解析 — 输入中文名（贵州茅台）、拼音（guizhou maotai/gzmt）、部分代码，返回匹配的股票代码。仅支持A股。用户给出中文名/拼音/部分代码时先调本工具换成代码再调其他工具",
+        "description": "股票名称智能解析 — 输入中文名（贵州茅台/腾讯控股/苹果）、拼音或部分代码，返回匹配代码。支持A股、港股和美股；港美数据来自东财名录，单市场失败不影响其他市场。用户给出中文名/拼音/部分代码时先调本工具换成代码再调其他工具",
         "parameters": {
             "type": "object",
             "properties": {
@@ -799,7 +808,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_trading_days",
-        "description": "获取最近/未来N个交易日列表。支持CN/HK/US/JP/KR/TW",
+        "description": "获取最近/未来N个交易日列表。支持CN/HK/US/JP/KR/TW；超出日历覆盖的推测日期列入assumed_trading_days，不得当作已确认交易日",
         "parameters": {
             "type": "object",
             "properties": {
@@ -946,13 +955,17 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "extract_article",
-        "description": "网页文章全文提取 — 输入URL，提取文章标题、正文（最多3000字）、作者、发布日期等。配合 get_news/search_stock_news 的搜索结果做深度阅读",
+        "description": "网页或公告PDF正文提取 — 输入公网URL，提取标题、正文、作者、发布日期等；HTML/PDF默认3000字，可用max_chars调整到200000，PDF最大25MiB。配合 get_news/get_announcements/search_stock_news 与 analyze_disclosure_changes 使用",
         "parameters": {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "文章URL",
+                    "description": "文章或公告PDF URL",
+                },
+                "max_chars": {
+                    "type": "number",
+                    "description": "最多提取字符数，1..200000，默认3000",
                 },
             },
             "required": ["url"],
@@ -978,13 +991,13 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "detect_market_regime",
-        "description": "市场状态检测 — 分析大盘指数判断当前市场阶段（上涨趋势/下跌趋势/横盘震荡/高波动/板块热点），并推荐适合的分析策略",
+        "description": "市场状态检测 — 分析A/HK/US/JP/KR/TW大盘指数判断当前市场阶段（上涨趋势/下跌趋势/横盘震荡/高波动），并推荐适合的分析策略；板块热点仅A股，其他市场sector_heat=false",
         "parameters": {
             "type": "object",
             "properties": {
                 "market": {
                     "type": "string",
-                    "enum": ["A", "HK", "US"],
+                    "enum": ["A", "HK", "US", "JP", "KR", "TW"],
                     "description": "市场代码，默认 A",
                 },
             },
@@ -1003,6 +1016,11 @@ TOOL_SCHEMAS = [
                 },
             },
         },
+    },
+    {
+        "name": "get_watchlist",
+        "description": "读取 dsh 仪表盘自选股列表，按保存的首选写法返回 symbols 和 count；600519/sh600519 等价去重。默认读取 ~/.dsh/stock-analysis/watchlist.json，可用 DSH_HOME 或 STOCK_WATCHLIST_FILE 改路径；文件不存在返回空列表，损坏返回错误",
+        "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "run_watchlist_analysis",
@@ -1197,7 +1215,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "parse_stock_list",
-        "description": "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker、日股 xxxx.T、韩股 xxxxxx.KS/KQ、台股 xxxx.TW，并调用 name_resolver 处理中文股票名",
+        "description": "自选股/文本导入解析 — 从自然语言、CSV、Markdown 表格提取股票，自动识别 A 股 6 位代码、港股 xxxxx.HK、美股 ticker、日股 xxxx.T、韩股 xxxxxx.KS/KQ、台股 xxxx.TW，并调用 name_resolver 处理中文股票名（支持A/HK/US）",
         "parameters": {
             "type": "object",
             "properties": {
