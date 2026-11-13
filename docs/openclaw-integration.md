@@ -1,6 +1,6 @@
 # OpenClaw 接入指南
 
-本文介绍如何将 `stock-analysis-plugin` 作为 [OpenClaw](https://docs.openclaw.ai/) Plugin 使用。
+本文介绍如何将 `stock-analysis-plugin` 作为 [OpenClaw](https://github.com/openclaw/openclaw) Plugin 使用。
 
 ## 前置条件
 
