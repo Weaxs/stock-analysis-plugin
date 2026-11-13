@@ -54,6 +54,7 @@ from tools.stock_data import (
     _xq_symbol,
     _yf_hk_symbol,
     cmd_capital_flow,
+    cmd_kline,
     cmd_market_indices,
     cmd_market_stats,
     cmd_news,
@@ -228,6 +229,68 @@ def test_non_cn_indices_fetch_in_parallel_and_keep_symbol_order(mock_yfinance):
     assert [row["code"] for row in result] == ["^DJI", "^IXIC", "^GSPC", "^RUT"]
     assert result[0]["price"] == 101
     assert result[0]["change_pct"] == 1
+
+
+def _hstech_tencent_quote():
+    fields = ["0"] * 50
+    fields[1], fields[3], fields[4], fields[5] = "恒生科技指数", "3838.330", "3931.930", "3918.210"
+    fields[30], fields[31], fields[32], fields[33], fields[34] = (
+        "2026/11/13 13:26:58",
+        "-93.600",
+        "-2.38",
+        "3938.390",
+        "3838.030",
+    )
+    return MagicMock(content=('v_r_hkHSTECH="' + "~".join(fields) + '";').encode("gbk"))
+
+
+def test_hk_indices_read_hang_seng_tech_from_tencent(mock_yfinance):
+    mock_yfinance.Ticker.return_value.info = {"regularMarketPrice": 23786.48, "regularMarketChangePercent": -0.93}
+    with patch("requests.get", return_value=_hstech_tencent_quote()) as get:
+        result = cmd_market_indices(Namespace(region="hk"))
+
+    assert [row["code"] for row in result] == ["^HSI", "^HSCE", "^HSTECH"]
+    assert "^HSTECH" not in [c.args[0] for c in mock_yfinance.Ticker.call_args_list]
+    assert get.call_args.args[0] == "https://qt.gtimg.cn/q=r_hkHSTECH"
+    tech = result[2]
+    assert (tech["price"], tech["change"], tech["change_pct"], tech["prev_close"]) == (3838.33, -93.6, -2.38, 3931.93)
+    assert (tech["high"], tech["low"], tech["open"], tech["source"]) == (3938.39, 3838.03, 3918.21, "tencent")
+    assert tech["data_as_of"] == "2026-11-13T13:26:58+08:00"
+
+
+def test_hang_seng_tech_quote_uses_tencent(mock_yfinance):
+    with (
+        patch("requests.get", return_value=_hstech_tencent_quote()) as get,
+        patch("tools.stock_data._quote_stale_marker", return_value=None) as marker,
+    ):
+        result = cmd_quote(Namespace(symbol="^HSTECH"))
+
+    mock_yfinance.Ticker.assert_not_called()
+    marker.assert_called_once_with("HK")
+    assert get.call_args.args[0] == "https://qt.gtimg.cn/q=r_hkHSTECH"
+    assert (result["symbol"], result["price"], result["change_pct"], result["source"]) == (
+        "^HSTECH",
+        3838.33,
+        -2.38,
+        "tencent",
+    )
+
+
+def test_hang_seng_tech_kline_uses_tencent_raw_points(mock_yfinance):
+    rows = [
+        ["2026-11-12", "3950", "3931.93", "3960", "3900", "100"],
+        ["2026-11-13", "3918.21", "3838.33", "3938.39", "3838.03", "90"],
+    ]
+    body = {"code": 0, "data": {"hkHSTECH": {"day": rows}}}
+    with patch("requests.get", return_value=MagicMock(json=lambda: body)) as get:
+        result = cmd_kline(Namespace(symbol="^HSTECH", period="daily", count=2))
+
+    mock_yfinance.Ticker.assert_not_called()
+    assert get.call_args.kwargs["params"]["param"].startswith("hkHSTECH,day,")
+    assert [(row["date"], row["close"], row["source"]) for row in result] == [
+        ("2026-11-12", 3931.93, "tencent"),
+        ("2026-11-13", 3838.33, "tencent"),
+    ]
 
 
 class TestKlineYfinance:

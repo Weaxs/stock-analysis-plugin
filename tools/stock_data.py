@@ -25,6 +25,8 @@ from trading_calendar import market_now  # noqa: E402
 # hatch for index codes (sh000001 = 上证指数, not 平安银行).
 _A_PREFIXED_RE = re.compile(r"(?:sh|sz|bj)\d{6}", re.IGNORECASE)
 _A_INDEX_RE = re.compile(r"(?:sh000\d{3}|sz399\d{3})", re.IGNORECASE)
+# Yahoo has no Hang Seng Tech index; Tencent serves its live quote and daily history.
+_TENCENT_HK_INDEX = {"^HSTECH": "hkHSTECH"}
 
 
 def detect_market(symbol: str) -> str:
@@ -413,7 +415,7 @@ def _kline_tencent(symbol: str, period: str, count: int) -> list:
 
     p_map = {"daily": "day", "weekly": "week", "monthly": "month"}
     p = p_map.get(period, "day")
-    code = _cn_code(symbol)
+    code = _TENCENT_HK_INDEX.get(symbol.upper()) or _cn_code(symbol)
     resp = requests.get(
         "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
         params={"param": f"{code},{p},,,{count},qfq"},
@@ -423,7 +425,8 @@ def _kline_tencent(symbol: str, period: str, count: int) -> list:
     if data.get("code") != 0:
         raise ValueError(f"tencent kline failed: {data.get('msg', '')}")
     node = data.get("data", {}).get(code, {})
-    rows = node.get(p) if _A_INDEX_RE.fullmatch(symbol) else node.get(f"qfq{p}")
+    raw = _A_INDEX_RE.fullmatch(symbol) or code.startswith("hk")
+    rows = node.get(p) if raw else node.get(f"qfq{p}")
     if not rows:
         raise ValueError("tencent kline returned empty data for required adjustment")
     return [
@@ -1060,6 +1063,10 @@ def _yf_failover(symbol: str, yfinance, finnhub, longbridge, alphavantage, label
 
 def kline_yf(symbol: str, period: str, count: int, evidence: bool = False) -> list:
     """HK/US/JP/KR/TW kline. Failover: yfinance → finnhub/longbridge (HK/US) → alphavantage (US only)."""
+    if symbol.upper() in _TENCENT_HK_INDEX:
+        with socket_timeout(25):
+            sources = [("tencent", lambda: _kline_tencent(symbol, period, count))]
+            return _failover(sources, label=f"kline_hk_index:{symbol}", evidence=evidence)
     return _yf_failover(
         symbol,
         lambda: _kline_yfinance(symbol, period, count),
@@ -1250,6 +1257,9 @@ def _quote_finnhub(symbol: str) -> dict:
 
 def quote_yf(symbol: str, evidence: bool = False) -> dict:
     """HK adds Tencent after yfinance; US/JP/KR/TW keep their existing failover chains."""
+    if symbol.upper() in _TENCENT_HK_INDEX:
+        sources = [("tencent", lambda: {"symbol": symbol, **_quote_tencent_hk_index(symbol.upper())})]
+        return _failover(sources, label=f"quote_hk_index:{symbol}", evidence=evidence)
     if detect_market(symbol) == "HK":
         return _failover(
             [
@@ -1410,7 +1420,11 @@ def _quote_tiaa(symbol: str) -> dict:
 def cmd_quote(args):
     if re.fullmatch(r"TIAA\d{6}", args.symbol, re.IGNORECASE):
         return _quote_tiaa(args.symbol.upper())
-    market = detect_market(args.symbol)
+    # detect_market reads every ^index as US; known region indices keep their own calendar for freshness.
+    market = next(
+        (region.upper() for region, symbols in _REGION_INDEX_SYMBOLS.items() if args.symbol.upper() in symbols),
+        None,
+    ) or detect_market(args.symbol)
     try:
         result = quote_a(args.symbol, evidence=True) if market == "A" else quote_yf(args.symbol, evidence=True)
     except Exception as e:
@@ -2198,6 +2212,31 @@ _REGION_INDEX_SYMBOLS = {
 }
 
 
+def _quote_tencent_hk_index(symbol: str) -> dict:
+    """Tencent r_hk index quote, using the same `~` field positions as _tencent_payload_row.
+    Volume is omitted: the index feed's volume field has no confirmed unit."""
+    import requests
+
+    resp = requests.get(f"https://qt.gtimg.cn/q=r_{_TENCENT_HK_INDEX[symbol]}", timeout=10)
+    resp.raise_for_status()
+    f = _gbk_var_payload(resp.content).split("~")
+    price = _parse_float(f[3]) if len(f) > 34 else None
+    if price is None or price <= 0:
+        raise ValueError(f"tencent returned no quote for {symbol}")
+    return {
+        "price": price,
+        "change": _parse_float(f[31]),
+        "change_pct": _parse_float(f[32]),
+        "high": _parse_float(f[33]),
+        "low": _parse_float(f[34]),
+        "open": _parse_float(f[5]),
+        "prev_close": _parse_float(f[4]),
+        "source": "tencent",
+        "data_as_of": _quote_time(f[30], "%Y/%m/%d %H:%M:%S"),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def cmd_market_indices(args):
     region = args.region.lower()
     try:
@@ -2255,6 +2294,8 @@ def cmd_market_indices(args):
             def fetch_index(item):
                 sym, name = item
                 try:
+                    if sym in _TENCENT_HK_INDEX:
+                        return _clean_row({"code": sym, "name": name, **_quote_tencent_hk_index(sym)})
                     info = yf.Ticker(sym).info
                     return _clean_row(
                         {
