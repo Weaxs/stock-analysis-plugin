@@ -1,23 +1,23 @@
 # Hermes Agent Integration Guide
 
-This guide explains how to use `stock-analysis-plugin` as a [Hermes Agent](https://hermes-agent.nousresearch.com) Plugin.
+Use `stock-analysis-plugin` as a [Hermes Agent](https://hermes-agent.nousresearch.com) plugin.
 
 ## Prerequisites
 
 - Python >= 3.10
-- Hermes Agent installed and running
+- Hermes Agent installed and working
 
 ## Installation
 
-### Option 1: pip Install (Recommended)
+### Recommended: pip
+
+Install into the Python environment Hermes runs in:
 
 ```bash
-pip install git+https://github.com/Weaxs/stock-analysis-plugin.git
+pip install stock-analysis-plugin
 ```
 
-After installation, Hermes auto-discovers the plugin via the `hermes_agent.plugins` entry point. No manual config needed.
-
-Enable it in `~/.hermes/config.yaml`:
+Hermes discovers the plugin through the `hermes_agent.plugins` entry point. Enable it in `~/.hermes/config.yaml`:
 
 ```yaml
 plugins:
@@ -25,23 +25,24 @@ plugins:
     - stock-analysis
 ```
 
-### Option 2: Hermes CLI
+For the development version: `pip install git+https://github.com/Weaxs/stock-analysis-plugin.git`.
+
+### Hermes CLI
 
 ```bash
 hermes plugins install Weaxs/stock-analysis-plugin --enable
 ```
 
-### Option 3: Project-local Plugin
+### Project-local plugin
 
 ```bash
 # Requires HERMES_ENABLE_PROJECT_PLUGINS=true
 mkdir -p .hermes/plugins
-git clone git@github.com:Weaxs/stock-analysis-plugin.git .hermes/plugins/stock-analysis
-cd .hermes/plugins/stock-analysis
-pip install -r tools/requirements.txt
+git clone https://github.com/Weaxs/stock-analysis-plugin.git .hermes/plugins/stock-analysis
+pip install -r .hermes/plugins/stock-analysis/tools/requirements.txt
 ```
 
-### NixOS Declarative Installation
+### NixOS declarative installation
 
 ```nix
 services.hermes-agent = {
@@ -49,7 +50,7 @@ services.hermes-agent = {
     (pkgs.fetchFromGitHub {
       owner = "Weaxs";
       repo = "stock-analysis-plugin";
-      rev = "v0.1.0";
+      rev = "v<version>";
       sha256 = "...";
     })
   ];
@@ -57,135 +58,78 @@ services.hermes-agent = {
 };
 ```
 
-## Verifying the Installation
+## Verify
 
-After starting Hermes Agent, use `/plugins` to view loaded plugins — you should see `stock-analysis`.
+Start Hermes and run `/plugins`; `stock-analysis` should be listed. Then ask:
 
-## Environment Variables
-
-Environment variables are grouped by function — configure as needed:
-
-### News & Search (configure at least one)
-
-| Variable | Purpose | URL |
-|----------|---------|-----|
-| `TAVILY_API_KEY` | Tavily search | https://tavily.com |
-| `BRAVE_API_KEY` | Brave search | https://brave.com/search/api/ |
-| `SERPAPI_KEY` | SerpAPI | https://serpapi.com |
-| `BOCHA_API_KEY` | Bocha AI search | — |
-
-### Social Sentiment
-
-| Variable | Purpose | Notes |
-|----------|---------|-------|
-| `SENTIMENT_API_KEY` | Social sentiment API auth | Eastmoney + Xueqiu sentiment |
-| `SENTIMENT_API_URL` | Sentiment API endpoint | Default: `https://api.adanos.org` |
-
-### US / HK Market Data Sources
-
-| Variable | Purpose | Notes |
-|----------|---------|-------|
-| `FINNHUB_API_KEY` | Finnhub (US quotes, financials) | https://finnhub.io |
-| `ALPHAVANTAGE_API_KEY` | Alpha Vantage (US klines) | https://www.alphavantage.co |
-| `LONGBRIDGE_APP_KEY` | Longbridge (HK quotes) | https://open.longportapp.com |
-| `LONGBRIDGE_APP_SECRET` | Longbridge App Secret | Same as above |
-| `LONGBRIDGE_ACCESS_TOKEN` | Longbridge Access Token | Same as above |
-
-### A-share Enhanced Data Source (Optional)
-
-| Variable | Purpose | Notes |
-|----------|---------|-------|
-| `TUSHARE_TOKEN` | Tushare (A-share fallback source) | https://tushare.pro |
-
-> Note: A-share basic data is fetched via akshare (free, no key required). Tushare is only used as a fallback/enhanced source.
-
-### Wisburg Research Data
-
-Wisburg is integrated via **MCP Server**, not environment variables. Add the Wisburg MCP service to your Hermes Agent MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "wisburg-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/wisburg-mcp-server"],
-      "env": {
-        "WISBURG_API_KEY": "your-wisburg-key"
-      }
-    }
-  }
-}
+```
+Get the real-time quote for AAPL
 ```
 
-Once configured, the `wisburg-research` Skill automatically calls Wisburg MCP tools (prefixed with `mcp__wisburg-mcp-server__`), providing:
-- Institutional research reports (Goldman Sachs, Morgan Stanley, CICC, etc.)
-- Earnings call transcripts, financial filings (A/HK/US markets)
-- Research feed, market daily digest
-- A-share investor Q&A (semantic search)
+The agent should call `get_quote` and return market data.
 
-Configure in Hermes Agent:
+## Optional configuration
+
+Everything works without API keys. Environment variables for data sources, search, sentiment and SEC are listed in [README · 可选配置](../README.md#可选配置). Export them before starting Hermes, or add them to `~/.hermes/.env`:
 
 ```bash
-# Option 1: Direct export
-export TAVILY_API_KEY="your-key-here"
-
-# Option 2: .env file in project root
-echo 'TAVILY_API_KEY=your-key-here' >> .env
+echo 'TAVILY_API_KEY=your-key' >> ~/.hermes/.env
 ```
+
+### Wisburg research data
+
+The `wisburg-research` Skill searches research reports, earnings calls and filings through Wisburg's hosted MCP server. Without it, the Skill falls back to `search_comprehensive_intel`. Get an API key from [Wisburg](https://wisburg.com), add it to `~/.hermes/.env`, then add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  wisburg-mcp-server:
+    url: "https://mcp.wisburg.com/mcp"
+    headers:
+      Authorization: "Bearer ${WISBURG_API_KEY}"
+```
+
+Restart Hermes or run `/reload-mcp` afterwards.
 
 ## Troubleshooting
 
 ### ImportError: No module named 'hermes'
 
-Install via pip:
+The plugin is not installed in the Python environment Hermes uses. Reinstall with that environment's Python:
 
 ```bash
-pip install git+https://github.com/Weaxs/stock-analysis-plugin.git
-```
-
-### Missing Python dependencies
-
-Core dependencies are installed automatically with pip. For optional features, install the full requirements:
-
-```bash
-pip install -r tools/requirements.txt
+python -m pip install stock-analysis-plugin
 ```
 
 ### A-share data fetch failures
 
-The underlying data source is [akshare](https://github.com/akfamily/akshare). Failures may occur due to network issues or outdated versions:
+The A-share data comes from [akshare](https://github.com/akfamily/akshare); failures are usually network issues or an outdated version:
 
 ```bash
-pip install --upgrade akshare
+python -m pip install --upgrade akshare
 ```
 
-### Upgrading the plugin
+### Upgrading
 
 ```bash
-# pip install
-pip install --upgrade git+https://github.com/Weaxs/stock-analysis-plugin.git
+# Installed via pip
+python -m pip install --upgrade stock-analysis-plugin
 
-# Hermes CLI
+# Installed via the Hermes CLI
 hermes plugins update stock-analysis
 
-# Git clone
-cd /path/to/stock-analysis-plugin
-git pull
-pip install -r tools/requirements.txt
+# Installed from source
+git pull && pip install -r tools/requirements.txt
 ```
 
-## pip Package Contents
-
-When installed via pip, the package contains only files needed for the Hermes Plugin:
+## pip package contents
 
 ```
 stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
-│   ├── plugin.yaml       # Plugin manifest
-│   ├── schemas.py        # JSON Schema definitions for 73 tools
-│   └── tools.py          # 73 handlers calling CLI via subprocess
-└── tools/                # Python CLI tools
+│   ├── plugin.yaml       # plugin manifest
+│   ├── schemas.py        # JSON Schemas for 73 tools
+│   ├── tools.py          # 73 handlers that run the CLIs as subprocesses
+│   └── _payload/         # tools/, skills/, schemas/, templates/
+└── mcp_host/             # MCP stdio server (stock-analysis-mcp)
 ```
-
-> Pi-related files (`pi/`, `package.json`, `scripts/`) are not included in the pip package.
