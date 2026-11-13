@@ -328,8 +328,9 @@ def test_etf_size_history_and_nav_date_comparability(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *a, **k: MagicMock(text=text))
     monkeypatch.setattr(
         ak,
-        "fund_etf_fund_info_em",
+        "fund_exchange_nav_hist_em",
         lambda **k: pd.DataFrame({"净值日期": ["2026-10-09"], "单位净值": [2], "累计净值": [2], "日增长率": [1]}),
+        raising=False,
     )
     monkeypatch.setattr(
         ak,
@@ -361,8 +362,9 @@ def test_etf_details_cli_reads_disclosed_equities_with_current_akshare(monkeypat
     monkeypatch.setattr(value_data, "cached", lambda _key, _ttl, fetch: fetch())
     monkeypatch.setattr(
         ak,
-        "fund_etf_fund_info_em",
+        "fund_exchange_nav_hist_em",
         lambda **kwargs: pd.DataFrame({"净值日期": ["2026-10-09"], "单位净值": [2], "日增长率": [1]}),
+        raising=False,
     )
     monkeypatch.setattr(
         ak,
@@ -545,8 +547,9 @@ def test_etf_foreign_security_codes_are_not_padded_into_a_share_codes(monkeypatc
     )
     monkeypatch.setattr(
         ak,
-        "fund_etf_fund_info_em",
+        "fund_exchange_nav_hist_em",
         lambda **k: pd.DataFrame({"净值日期": ["2026-10-09"], "单位净值": [2], "日增长率": [1]}),
+        raising=False,
     )
     monkeypatch.setattr(
         ak,
@@ -995,7 +998,7 @@ def test_etf_details_keeps_valid_basket_when_other_sources_fail(monkeypatch):
     def unavailable(**kwargs):
         raise OSError("offline")
 
-    monkeypatch.setattr(ak, "fund_etf_fund_info_em", unavailable)
+    monkeypatch.setattr(ak, "fund_exchange_nav_hist_em", unavailable, raising=False)
     monkeypatch.setattr(ak, "fund_portfolio_hold_em", unavailable)
     monkeypatch.setattr(value_data, "fund_size_history", lambda *a: unavailable())
     monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True, "components": [{"code": "600519"}]})
@@ -1003,6 +1006,29 @@ def test_etf_details_keeps_valid_basket_when_other_sources_fail(monkeypatch):
     result = value_data.etf_details(Namespace(symbol="510300", benchmark="", days=60))
     assert result["basket"]["complete"] is True
     assert result["warnings"]
+
+
+def test_etf_details_nav_falls_back_to_pre_rename_akshare(monkeypatch):
+    import akshare as ak
+
+    from tools import value_data
+
+    calls = []
+    monkeypatch.delattr(ak, "fund_exchange_nav_hist_em", raising=False)
+    monkeypatch.setattr(
+        ak,
+        "fund_etf_fund_info_em",
+        lambda **k: calls.append(k["fund"]) or pd.DataFrame({"净值日期": ["2026-10-09"], "单位净值": [2]}),
+        raising=False,
+    )
+    monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(value_data, "cached", lambda _key, _ttl, fetch: fetch())
+    monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
+    monkeypatch.setattr(value_data, "etf_basket", lambda *a: {"complete": True})
+    monkeypatch.setattr("_subproc.run_tool", lambda *a, **k: {})
+    result = value_data.etf_details(Namespace(symbol="510300", benchmark="", days=60))
+    assert calls == ["510300"]
+    assert result["nav"] == 2
 
 
 def test_pcf_includes_fund_level_cash_and_previous_nav(monkeypatch):
@@ -1234,7 +1260,7 @@ def test_etf_benchmark_index_codes_get_exchange_prefix(monkeypatch, code, expect
     from tools import value_data
 
     calls = []
-    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "fund_exchange_nav_hist_em", lambda **k: pd.DataFrame(), raising=False)
     monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
     monkeypatch.setattr(ak, "index_stock_cons_csindex", lambda **k: pd.DataFrame())
     monkeypatch.setattr(value_data, "fund_size_history", lambda *a: [])
@@ -1251,7 +1277,9 @@ def test_etf_benchmark_rejects_unknown_format_before_fetching(monkeypatch, code)
 
     from tools import value_data
 
-    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pytest.fail("fetched before validation"))
+    monkeypatch.setattr(
+        ak, "fund_exchange_nav_hist_em", lambda **k: pytest.fail("fetched before validation"), raising=False
+    )
     with pytest.raises(ValueError, match="benchmark"):
         value_data.etf_details(Namespace(symbol="510300", benchmark=code, days=60))
 
@@ -1262,7 +1290,7 @@ def test_etf_benchmark_csi_code_uses_csindex_history(monkeypatch):
     from tools import value_data
 
     csi = []
-    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "fund_exchange_nav_hist_em", lambda **k: pd.DataFrame(), raising=False)
     monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
     monkeypatch.setattr(ak, "index_stock_cons_csindex", lambda **k: csi.append(("cons", k["symbol"])) or pd.DataFrame())
     monkeypatch.setattr(
@@ -1292,7 +1320,7 @@ def test_etf_benchmark_csi_outage_keeps_other_sections(monkeypatch):
     def down(**k):
         raise ConnectionError("csindex down")
 
-    monkeypatch.setattr(ak, "fund_etf_fund_info_em", lambda **k: pd.DataFrame())
+    monkeypatch.setattr(ak, "fund_exchange_nav_hist_em", lambda **k: pd.DataFrame(), raising=False)
     monkeypatch.setattr(ak, "fund_portfolio_hold_em", lambda **k: pd.DataFrame())
     monkeypatch.setattr(ak, "index_stock_cons_csindex", down)
     monkeypatch.setattr(ak, "stock_zh_index_hist_csindex", down)

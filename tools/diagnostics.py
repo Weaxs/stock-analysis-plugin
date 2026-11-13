@@ -34,7 +34,7 @@ PROVIDERS = {
         "optional index PE/PB history; subscription permissions not probed",
     ),
     "efinance": ("efinance", [], ["A"], None),
-    "tencent": ("requests", [], ["A"], "qt.gtimg.cn quote/kline, no auth (issue #25)"),
+    "tencent": ("requests", [], ["A", "HK", "US"], "qt.gtimg.cn quote/kline, no auth (issue #25)"),
     "sina": (
         "requests",
         [],
