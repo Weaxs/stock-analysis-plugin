@@ -2940,12 +2940,13 @@ def cmd_stock_info(args):
             if is_etf:
                 try:
                     # ETF 最新净值（天天基金-场内基金历史净值明细）。窄日期窗口 → 单页返回
+                    # akshare 1.20.41 改名为 fund_exchange_nav_hist_em；py3.10 只能装到 <1.20.40，仍是旧名
                     end = _cn_now()
                     start = end - timedelta(days=30)
                     nav_df = _cached_frame(
                         f"etf-basic-nav:{args.symbol}",
                         lambda: _akshare_retry(
-                            ak.fund_etf_fund_info_em,
+                            getattr(ak, "fund_exchange_nav_hist_em", None) or ak.fund_etf_fund_info_em,
                             fund=args.symbol,
                             start_date=start.strftime("%Y%m%d"),
                             end_date=end.strftime("%Y%m%d"),
