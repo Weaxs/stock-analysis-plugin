@@ -7,11 +7,13 @@ A 股 / 港股 / 美股 / 日股 / 韩股 / 台股的行情、技术分析、选
 ## 安装
 
 ```bash
-dsh plugin --profile <你的profile> add @weaxs/dsh-stock-analysis
+dsh plugin --profile <你的profile> add dsh-stock-analysis
 dsh --profile <你的profile>
 ```
 
 `dsh plugin add` 是 pnpm 的薄封装：安装后 dsh 会读取本包 `package.json` 里的 `dsh.bundle.patch`，把 `cordis.patch.yml` 作为一层叠加进 profile 组合。可用 `dsh --profile <你的profile> --dump-config` 验证 layer 已生效。
+
+同一份插件也以 `@weaxs/dsh-stock-analysis` 发布；装 scoped 版时，下文配置里的包名也换成 `@weaxs/dsh-stock-analysis`。
 
 从源码安装（本仓库根目录）：
 
@@ -28,7 +30,7 @@ dsh plugin --profile <你的profile> add ./dsh
 
 ```yaml
 allowBuilds:
-  "@weaxs/dsh-stock-analysis": true
+  "dsh-stock-analysis": true
 ```
 
 如果 venv 最终没建起来，plugin 会回退到系统 `python3`（Windows 为 `python`），此时请自行 `pip install -r tools/requirements.txt`。
@@ -54,7 +56,7 @@ dsh 0.2.2 及以上（工具注册支持按步骤的 `when` 条件）默认增�
 如需关闭发现，在 profile 中本插件条目的配置中设置：
 
 ```yaml
-- name: "@weaxs/dsh-stock-analysis"
+- name: "dsh-stock-analysis"
   config:
     toolDiscovery: false
 ```

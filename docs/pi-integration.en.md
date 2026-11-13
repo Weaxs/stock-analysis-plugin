@@ -13,8 +13,10 @@ Use `stock-analysis-plugin` as a [Pi Agent](https://pi.dev) extension.
 ### Recommended: Pi package manager
 
 ```bash
-pi install npm:@weaxs/stock-analysis-plugin
+pi install npm:stock-analysis-plugin
 ```
+
+This installs globally (`~/.pi/agent/npm/`); add `-l` to install for the current project only (written to `.pi/settings.json`). The same package is also published as `@weaxs/stock-analysis-plugin` with identical contents.
 
 The `postinstall` script finds `python3` (`python` on Windows, >= 3.10), creates a `.venv` in the plugin directory and installs `tools/requirements.txt`.
 
@@ -22,7 +24,7 @@ You can also declare it in `settings.json` and let Pi install it on startup:
 
 ```json
 {
-  "packages": ["npm:@weaxs/stock-analysis-plugin"]
+  "packages": ["npm:stock-analysis-plugin"]
 }
 ```
 
@@ -113,7 +115,7 @@ Tools such as full-market screening (`screen_stocks`) take longer. Lower `top` o
 
 ```bash
 # Installed via the Pi package manager
-pi install npm:@weaxs/stock-analysis-plugin@latest
+pi update --extension npm:stock-analysis-plugin   # add -a for a project-level install
 
 # Installed from source
 git pull && npm install
@@ -122,7 +124,7 @@ git pull && npm install
 ## npm package contents
 
 ```
-@weaxs/stock-analysis-plugin/
+stock-analysis-plugin/
 ├── pi/index.ts           # Pi extension entry: 73 tools and 21 Skills
 ├── tools/                # shared Python CLIs
 ├── skills/               # SKILL.md files

@@ -243,13 +243,13 @@ jobs:
 
       - name: Publish unscoped variant to npm
         # The bundle manifest references the plugin by package name, so the
-        # unscoped variant's patch, browser module id (and README install command)
-        # must name the unscoped package — otherwise a profile installing it would
-        # resolve the scoped name at boot and fail.
+        # unscoped variant's patch and browser module id must name the unscoped
+        # package — otherwise a profile installing it would resolve the scoped name
+        # at boot and fail. README already documents the unscoped name first.
         working-directory: dsh
         run: |
           npm pkg set name=dsh-stock-analysis
-          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml research.patch.yml README.md dist/client.js
+          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml research.patch.yml dist/client.js
           grep -q 'name: "dsh-stock-analysis"' cordis.patch.yml
           grep -q 'id: "dsh-stock-analysis"' dist/client.js
           npm publish --access public --provenance

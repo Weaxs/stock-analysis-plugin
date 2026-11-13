@@ -1,6 +1,6 @@
 # stock-analysis-plugin
 
-[![npm](https://img.shields.io/npm/v/@weaxs/stock-analysis-plugin?label=npm&logo=npm)](https://www.npmjs.com/package/@weaxs/stock-analysis-plugin)
+[![npm](https://img.shields.io/npm/v/stock-analysis-plugin?label=npm&logo=npm)](https://www.npmjs.com/package/stock-analysis-plugin)
 [![PyPI](https://img.shields.io/pypi/v/stock-analysis-plugin?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/stock-analysis-plugin/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%3E=3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
@@ -28,17 +28,17 @@
 
 ## 快速开始
 
-需要本机有 **Python ≥ 3.10**。npm 安装的插件会自动在包目录下创建 `.venv` 并装好依赖。
+需要本机有 **Python ≥ 3.10**。插件安装时会在包目录下创建 `.venv` 并装好依赖；dsh 和 OpenClaw 默认不执行安装脚本，处理方法见下方注意事项。
 
 | 你在用 | 安装 | 详细说明 |
 |--------|------|----------|
-| Pi Agent | `npm install @weaxs/stock-analysis-plugin`（在 `~/.pi/agent/extensions` 下） | [Pi 接入指南](docs/pi-integration.md) |
+| Pi Agent | `pi install npm:stock-analysis-plugin` | [Pi 接入指南](docs/pi-integration.md) |
 | Hermes Agent | `pip install stock-analysis-plugin` | [Hermes 接入指南](docs/hermes-integration.md) |
-| OpenClaw | `openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis` | [OpenClaw 接入指南](docs/openclaw-integration.md) |
-| DeepSeek Harness (dsh) | `dsh plugin --profile <profile> add @weaxs/dsh-stock-analysis` | [dsh 插件说明](dsh/README.md) |
+| OpenClaw | `openclaw plugins install npm:openclaw-stock-analysis` | [OpenClaw 接入指南](docs/openclaw-integration.md) |
+| DeepSeek Harness (dsh) | `dsh plugin --profile <profile> add dsh-stock-analysis` | [dsh 插件说明](dsh/README.md) |
 | Claude Desktop / Cursor / WorkBuddy（MCP） | `pip install stock-analysis-plugin`，运行 `stock-analysis-mcp` | [MCP 接入指南](docs/mcp.md) |
 
-所有 npm 包同时以 scoped（`@weaxs/*`）和非 scoped 同名发布，内容一致。
+每个 npm 包也以 `@weaxs/` scoped 名发布（如 `@weaxs/dsh-stock-analysis`），内容一致。装的是 scoped 版时，配置里引用包名的地方也用 scoped 名。
 
 装好后试试：
 
@@ -54,11 +54,13 @@
 
 ### 各宿主的注意事项
 
-**Pi**：也可以项目级安装到 `.pi/extensions`，或直接 clone 源码使用。启动后输入 `/skills` 确认已加载。Pi 1.5.2 及以上提供原生 `tool_search` 时，插件只在命中时加载完整工具定义；可用中文关键词或工具名搜索，例如 `实时行情`、`get_quote`。
+**Pi**：加 `-l` 只装到当前项目，或直接 clone 源码使用。启动后输入 `/skills` 确认已加载。Pi 1.5.2 及以上提供原生 `tool_search` 时，插件只在命中时加载完整工具定义；可用中文关键词或工具名搜索，例如 `实时行情`、`get_quote`。
 
 **Hermes**：通过 `hermes_agent.plugins` entry point 自动发现，无需复制目录；也可以在 Python 中 `from hermes import register; register(ctx)`。
 
-**dsh**：dsh 用 pnpm 安装插件，默认不执行第三方安装脚本。若 `.venv` 没有建起来，在 profile 的 `pnpm-workspace.yaml` 中给 `@weaxs/dsh-stock-analysis` 配置 `allowBuilds`，否则会回退系统 `python3`。新版 dsh 默认通过 `stock_tool_search` 按需加载工具，可用 `toolDiscovery: false` 关闭。
+**OpenClaw**：OpenClaw 安装 npm 插件时带 `--ignore-scripts`，不会自动建 `.venv`。装完后在插件目录（`openclaw plugins inspect stock-analysis --runtime --json` 的 `installPath`）运行一次 `node scripts/setup-python.mjs`。ClawHub 上只有 scoped 名：`clawhub:@weaxs/openclaw-stock-analysis`。
+
+**dsh**：dsh 用 pnpm 安装插件，默认不执行第三方安装脚本。若 `.venv` 没有建起来，在 profile 的 `pnpm-workspace.yaml` 中给 `dsh-stock-analysis` 配置 `allowBuilds`，否则会回退系统 `python3`。新版 dsh 默认通过 `stock_tool_search` 按需加载工具，可用 `toolDiscovery: false` 关闭。
 
 **MCP**：源码方式运行 `.venv/bin/python mcp_host/server.py`，或 `python -m mcp_host`。客户端配置示例见 [MCP 接入指南](docs/mcp.md)。
 

@@ -5,8 +5,12 @@ A股 / 港股 / 美股 / 日股 / 韩股 / 台股 行情、技术分析、筛选
 ## 安装
 
 ```bash
-openclaw plugins install clawhub:@weaxs/openclaw-stock-analysis
+openclaw plugins install npm:openclaw-stock-analysis
+openclaw plugins inspect stock-analysis --runtime --json   # 记下 installPath
+cd <installPath> && node scripts/setup-python.mjs
 ```
+
+同一份包也以 `@weaxs/openclaw-stock-analysis` 发布；ClawHub 上只有这个 scoped 名（`clawhub:@weaxs/openclaw-stock-analysis`）。
 
 或从源码（仓库根目录）：
 
@@ -17,7 +21,7 @@ npm install
 
 ### Python 运行时
 
-工具实际逻辑在 `tools/*.py`，依赖 `akshare`、`pandas`、`numpy`、`requests`。仓库根 `package.json` 的 postinstall（`scripts/setup-python.mjs`）会自动建 `.venv` 并装好依赖，无需手工操作。前提：本机有 `python3 >= 3.10`。
+工具实际逻辑在 `tools/*.py`，依赖 `akshare`、`pandas`、`numpy`、`requests`。`scripts/setup-python.mjs` 会在插件目录建 `.venv` 并装好依赖，前提：本机有 `python3 >= 3.10`。OpenClaw 安装插件时不执行 `postinstall`，所以装完和升级后要像上面那样手动运行一次；源码安装时由仓库根 `npm install` 自动执行。
 
 如果 venv 没建起来（比如 Python 缺失），plugin 会回退到系统 `python3`，请自行 `pip install -r tools/requirements.txt`。
 
