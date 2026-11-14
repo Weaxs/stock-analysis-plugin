@@ -42,7 +42,6 @@ PROVIDERS = {
         "hq.sinajs.cn quote + daily kline, no auth; full-market snapshot via akshare (issue #25)",
     ),
     "xueqiu": ("akshare", ["XUEQIU_TOKEN"], ["A"], "industry board fallback via akshare"),
-    "pytdx": ("pytdx", [], ["A"], "connects to public Tencent servers"),
     "baostock": ("baostock", [], ["A"], None),
     "yfinance": ("yfinance", [], ["HK", "US", "JP", "KR", "TW"], "quote may be delayed 15-20min"),
     "finnhub": ("finnhub", ["FINNHUB_API_KEY"], ["HK", "US"], None),

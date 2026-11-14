@@ -779,69 +779,6 @@ def _quote_tushare(symbol: str) -> dict:
     )
 
 
-# Public TDX quote servers, tried in order — a datacenter IP often gets only
-# some of them refused, so a single hardcoded endpoint is a needless failure mode.
-_TDX_SERVERS = [
-    ("119.147.212.81", 7709),  # Tencent, Shenzhen
-    ("180.153.18.170", 7709),  # Shanghai
-    ("202.108.253.130", 7709),  # Beijing
-    ("59.173.18.69", 7709),  # Wuhan
-]
-
-
-def _pytdx_connect(api) -> None:
-    """Connect to the first reachable TDX server.
-
-    pytdx's connect() returns True/False instead of raising (and is not a context
-    manager), so wrap it here to keep a failed connection from surfacing as a
-    misleading TypeError downstream.
-    """
-    errors = []
-    for ip, port in _TDX_SERVERS:
-        try:
-            if api.connect(ip, port):
-                return
-            errors.append(f"{ip}:{port} refused")
-        except Exception as e:
-            errors.append(f"{ip}:{port} {e}")
-    raise ConnectionError(f"pytdx failed to connect to any TDX server ({'; '.join(errors)})")
-
-
-def _quote_pytdx(symbol: str) -> dict:
-    """pytdx realtime quote from TDX market servers."""
-    from pytdx.hq import TdxHq_API
-
-    market = 1 if symbol.startswith(("6", "9", "5")) else 0
-
-    api = TdxHq_API()
-    try:
-        _pytdx_connect(api)
-        data = api.get_security_quotes([(market, symbol)])
-    finally:
-        api.disconnect()
-
-    if not data:
-        raise ValueError("pytdx quote returned empty")
-
-    q = data[0]
-    prev_close = q.get("last_close")
-    price = q.get("price")
-    return _clean_row(
-        {
-            "symbol": symbol,
-            "name": q.get("name", ""),
-            "price": price,
-            "change": (price - prev_close) if price and prev_close else None,
-            "change_pct": ((price / prev_close) - 1) * 100 if price and prev_close else None,
-            "volume": q.get("vol"),
-            "high": q.get("high"),
-            "low": q.get("low"),
-            "open": q.get("open"),
-            "prev_close": prev_close,
-        }
-    )
-
-
 def _kline_yfinance(symbol: str, period: str, count: int) -> list:
     import yfinance as yf
 
@@ -1148,14 +1085,13 @@ def cmd_kline(args):
 
 
 def quote_a(symbol: str, evidence: bool = False) -> dict:
-    """A-share quote with failover: tencent → akshare → tushare → efinance → sina → pytdx; ETFs add fund spot after tencent.
+    """A-share quote with failover: tencent → akshare → tushare → efinance → sina; ETFs add fund spot after tencent.
 
     Tencent answers one symbol per request; the eastmoney spot sources page the whole
     market (~55 requests) to return one row, so they only serve as fallbacks.
 
     Explicitly-prefixed symbols (sh000001, typically indices) go straight to
-    tencent/sina — the eastmoney sources take bare 6-digit codes only, and pytdx
-    can't place prefixed codes either. ETF quotes use their own sticky chain key
+    tencent/sina — the eastmoney sources take bare 6-digit codes only. ETF quotes use their own sticky chain key
     (quote_a_etf) so a stock-side winner never demotes the fund-spot source."""
     if _A_PREFIXED_RE.fullmatch(symbol):
         sources = [("tencent", lambda: _quote_tencent(symbol)), ("sina", lambda: _quote_sina(symbol))]
@@ -1170,7 +1106,6 @@ def quote_a(symbol: str, evidence: bool = False) -> dict:
         ("tushare", lambda: _quote_tushare(symbol)),
         ("efinance", lambda: _quote_efinance(symbol)),
         ("sina", lambda: _quote_sina(symbol)),
-        ("pytdx", lambda: _quote_pytdx(symbol)),
     ]
     chain = "quote_a_etf" if is_etf else "quote_a"
     with socket_timeout(25):
