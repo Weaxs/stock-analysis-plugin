@@ -55,17 +55,9 @@ python tools/stateless_analysis.py position_size --input input.json
 
 命令预算集中于 `tools/cli_budgets.json`：通用采集默认 120 秒、市场快照 240 秒、选股 top 须为正整数，预算按候选数及 6 个 worker 的批次计算（默认 20 个候选为 1830 秒）、13F 300 秒、名称解析与文本导入（首次拉取港美名录）360 秒；技术分析、市场状态、回测和风险筛查按实际嵌套调用另留预算；各宿主额外留 30 秒接收 CLI 输出。综合采集保留安全 JSON 错误及 error_code（timeout/empty_output/invalid_json/process_failed/tool_error），不会把失败当成有效空数据。
 
-## 分析质量验证
+## 信号结算与评分口径
 
-最终报告的固定证据案例覆盖完整、缺失、过期、同口径冲突及样本不足：
-
-```bash
-.venv/bin/python -m pytest tests/test_analysis_quality.py -q
-# 需要 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL；只调用模型，数据源使用固定夹具
-.venv/bin/python -m pytest tests/e2e/test_analysis_quality.py -m integration_llm -v
-```
-
-真实模型评测同时要求结构化证据检查与独立上下文的结论审稿通过：审稿检查正文事实、限制说明是否诚实，以及是否过度外推。未运行审稿、结果缺失或模糊都不能算通过；报告自行声明通过不被采信。另有人工核对的正确报告及两类反例用于验证审稿器（正确引用但正文捏造现价、3笔交易却保证长期胜率）。空回答也失败。离线渲染和规则检查不代表真实模型通过，也不证明策略未来有效。信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
+信号建议可沿用 source 标识策略版本，按来源复盘胜率、平均收益和样本量；未扣成本、未匹配基准的观察记录不能当作策略回测。
 
 信号结算仅在价格口径可核实时进行：原始价格可直接比较；自动记录的默认 `record_date` 与 `price_date` 均按标的市场时区确定（显式 `date` 不变），并保存原始 `price_as_of`；`price_date` 晚于 `record_date` 时拒绝记录与结算；多头 target 必须高于 entry、stop 必须低于 entry，空头相反，否则拒绝记录。开盘先触 stop 按 open 结算，先触 target 按 target 保守结算，日内顺序未知的双触发仍 stop 优先；无止损的旧 HLC 记录可继续用 high/low/close 判定目标和到期，但若提供 open 也必须是正有限数值，有止损但缺 open 则拒绝结算。重复日期返回 skipped_no_data，复权乘除使用 Decimal。复权日线需该报价日的 adjustment_factor（复权价/原始价），当前日线 Tushare、Alpha Vantage 可提供。缺失系数或口径未知时返回 skipped_price_basis，保持未结算，不猜测除权比例；记录日无 K 线时仅在前后因子一致（或已有明确报价日）时使用最近锚点，旧信号缺少报价时点且记录日因子变化时也保持未结算。换算后的 exit_price 是记录时价格单位的等价值，实际市场价可不同，evaluation_price_basis 保留依据。evaluate_signals 的 CLI 预算为 300 秒，内部提前结束采集并保存已完成结果，complete/deferred/warnings 指示需要重试的记录；预算耗尽后调整未结算记录的处理顺序，下轮优先处理尚未尝试的记录，避免慢请求长期阻塞后续信号。
 
