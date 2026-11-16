@@ -42,6 +42,7 @@ class TestRunToolArgv:
             mock_run.return_value = MagicMock(returncode=0, stdout="{}")
             result = run_tool("stock_data.py", ["quote", "600519"])
         cmd = mock_run.call_args[0][0]
+        assert not {"start_new_session", "creationflags"} & mock_run.call_args.kwargs.keys()
         assert isinstance(cmd, list)
         assert cmd[0] == "/sentinel/python"
         assert cmd[1].endswith("stock_data.py")
@@ -276,3 +277,31 @@ def test_article_errors_do_not_leak_tokens():
     article = MagicMock(side_effect=Exception("Max retries exceeded with url: /a?api_key=SECRET123"))
     with patch.dict(sys.modules, {"newspaper": MagicMock(Article=article)}):
         assert "SECRET123" not in extract_article("https://example.com/a")["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.kill(pid, 0) terminates processes on Windows")
+def test_run_tree_timeout_kills_grandchildren(tmp_path):
+    import os
+    import time
+
+    from tools._subproc import run_tree
+
+    pid_file = tmp_path / "child.pid"
+    parent = (
+        "import pathlib, subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n"
+        "time.sleep(30)\n"
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_tree([sys.executable, "-c", parent], timeout=2)
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    os.kill(pid, 9)
+    pytest.fail("grandchild survived the timeout")

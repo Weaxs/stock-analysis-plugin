@@ -27,18 +27,18 @@ def _session(*messages, raw=""):
     # Keep stdin open until every request is answered: closing it is the MCP shutdown signal.
     body = raw + "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages)
     expected = raw.count("\n") + sum("id" in m for m in messages)
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         [sys.executable, str(SERVER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8"
-    )
-    try:
-        proc.stdin.write(body)
-        proc.stdin.flush()
-        responses = [json.loads(proc.stdout.readline()) for _ in range(expected)]  # stdout lines are JSON-RPC only
-        proc.stdin.close()
-        assert proc.stdout.read() == ""
-        assert proc.wait(30) == 0
-    finally:
-        proc.kill()
+    ) as proc:
+        try:
+            proc.stdin.write(body)
+            proc.stdin.flush()
+            responses = [json.loads(proc.stdout.readline()) for _ in range(expected)]  # stdout lines are JSON-RPC only
+            proc.stdin.close()
+            assert proc.stdout.read() == ""
+            assert proc.wait(30) == 0
+        finally:
+            proc.kill()
     assert all(r["jsonrpc"] == "2.0" for r in responses)
     return responses
 
@@ -162,8 +162,8 @@ def test_cancel_send_race_never_emits_late_response(tmp_path, monkeypatch):
 
     in_r, in_w = os.pipe()
     out_r, out_w = os.pipe()
-    stdout = os.fdopen(out_w, "wb")
-    worker = threading.Thread(target=server.serve, args=(os.fdopen(in_r, "rb"), stdout), daemon=True)
+    stdin, stdout = os.fdopen(in_r, "rb"), os.fdopen(out_w, "wb")
+    worker = threading.Thread(target=server.serve, args=(stdin, stdout), daemon=True)
     worker.start()
     feed, read = os.fdopen(in_w, "wb"), os.fdopen(out_r, "rb")
 
@@ -179,6 +179,8 @@ def test_cancel_send_race_never_emits_late_response(tmp_path, monkeypatch):
     worker.join(10)
     stdout.close()
     remaining = read.read()
+    read.close()
+    stdin.close()
     assert not worker.is_alive()
     assert first["id"] == 21
     assert remaining == b""
@@ -202,8 +204,8 @@ def test_cancel_kills_nested_cli_process_tree(tmp_path, monkeypatch):
 
     in_r, in_w = os.pipe()
     out_r, out_w = os.pipe()
-    stdout = os.fdopen(out_w, "wb")
-    worker = threading.Thread(target=server.serve, args=(os.fdopen(in_r, "rb"), stdout), daemon=True)
+    stdin, stdout = os.fdopen(in_r, "rb"), os.fdopen(out_w, "wb")
+    worker = threading.Thread(target=server.serve, args=(stdin, stdout), daemon=True)
     worker.start()
     feed, read = os.fdopen(in_w, "wb"), os.fdopen(out_r, "rb")
     pids = []
@@ -242,6 +244,7 @@ def test_cancel_kills_nested_cli_process_tree(tmp_path, monkeypatch):
         stdout.close()
         worker.join(10)
         read.close()
+        stdin.close()
 
 
 def _alive(pid):
@@ -285,8 +288,8 @@ def test_cancelled_notification_kills_child_and_suppresses_response(tmp_path, mo
 
     in_r, in_w = os.pipe()
     out_r, out_w = os.pipe()
-    stdout = os.fdopen(out_w, "wb")
-    worker = threading.Thread(target=server.serve, args=(os.fdopen(in_r, "rb"), stdout), daemon=True)
+    stdin, stdout = os.fdopen(in_r, "rb"), os.fdopen(out_w, "wb")
+    worker = threading.Thread(target=server.serve, args=(stdin, stdout), daemon=True)
     worker.start()
     feed, read = os.fdopen(in_w, "wb"), os.fdopen(out_r, "rb")
 
@@ -311,4 +314,33 @@ def test_cancelled_notification_kills_child_and_suppresses_response(tmp_path, mo
     worker.join(10)
     assert not worker.is_alive()
     stdout.close()
-    assert read.read() == b""  # no late response for the cancelled id
+    remaining = read.read()
+    read.close()
+    stdin.close()
+    assert remaining == b""  # no late response for the cancelled id
+
+
+def test_parallel_calls_share_bounded_python_slots(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "mcp_host"))
+    import server
+
+    lock = threading.Lock()
+    running, peak = 0, 0
+
+    def slot(call, script, argv):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.05)
+        with lock:
+            running -= 1
+        return "{}"
+
+    monkeypatch.setattr(server, "_run_slot", slot)
+    workers = [threading.Thread(target=server._run, args=("stock_data.py", ["quote", "X"])) for _ in range(12)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(10)
+    assert peak == 4

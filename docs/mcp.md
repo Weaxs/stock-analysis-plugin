@@ -1,6 +1,6 @@
 # MCP 接入指南（WorkBuddy / Claude Desktop / Cursor）
 
-`mcp_host/server.py` 是本插件的 MCP stdio 服务器：一行一条 JSON-RPC 2.0 消息，只用 Python 标准库。它复用 Hermes 适配器的 JSON Schema（`hermes/schemas.py`）和参数映射（`hermes/tools.py`），所以 73 个工具的名称、参数和输出与其他宿主一致。
+`mcp_host/server.py` 是本插件的 MCP stdio 服务器：一行一条 JSON-RPC 2.0 消息，只用 Python 标准库。它复用所有宿主共用的 JSON Schema（`tools/tool_schemas.json`，经 `hermes/schemas.py` 读取）和参数映射（`hermes/tools.py`），所以 73 个工具的名称、参数和输出与其他宿主一致。
 
 ## 前置条件
 

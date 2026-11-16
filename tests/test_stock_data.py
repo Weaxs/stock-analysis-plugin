@@ -282,20 +282,19 @@ def test_non_a_history_derives_margins_from_available_income_rows(monkeypatch):
     assert result["periods"][0]["gross_margin"] == 40
 
 
-def test_user_directory_sector_cache_survives_legacy_temp_cleanup(monkeypatch, tmp_path):
+def test_sector_constituents_cache_only_in_user_directory(monkeypatch, tmp_path):
     from argparse import Namespace
 
     from tools import stock_data
 
-    monkeypatch.setattr(stock_data, "_DATA_CACHE_DIR", tmp_path / "legacy")
+    monkeypatch.setattr(stock_data, "_DATA_CACHE_DIR", tmp_path / "state")
     monkeypatch.setattr(
         stock_data,
         "sector_constituents_a",
         lambda *a, **k: {"sector": "白酒", "board_type": "industry", "constituents": [{"code": "600519"}]},
     )
     stock_data.cmd_sector_constituents(Namespace(sector="白酒", board_type="industry"))
-    for path in (tmp_path / "legacy").glob("*.json"):
-        path.unlink()
+    assert not (tmp_path / "state").exists()
     assert stock_data._stock_boards_from_cache("600519") == [
         {"name": "白酒", "source": "cache", "board_type": "industry"}
     ]

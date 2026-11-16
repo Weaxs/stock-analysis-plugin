@@ -12,7 +12,11 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = _PACKAGE_DIR / "_payload" if (_PACKAGE_DIR / "_payload").is_dir() else _PACKAGE_DIR.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 # Hermes owns the top-level tools package; load our shared helper without shadowing it.
-command_timeout = runpy.run_path(str(TOOLS_DIR / "_subproc.py"))["command_timeout"]
+_subproc = runpy.run_path(str(TOOLS_DIR / "_subproc.py"))
+command_timeout = _subproc["command_timeout"]
+run_tree = _subproc["run_tree"]
+terminate_tree = _subproc["terminate_tree"]
+TREE_POPEN = _subproc["TREE_POPEN"]
 
 
 def _find_python() -> str:
@@ -49,13 +53,7 @@ def _run_default(script: str, argv: list) -> str:
     python = _find_python()
     timeout = command_timeout(script, argv) + 30
     try:
-        result = subprocess.run(
-            [python, TOOLS_DIR / script, *map(str, argv)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
+        result = run_tree([python, TOOLS_DIR / script, *map(str, argv)], timeout=timeout)
     except subprocess.TimeoutExpired:
         return json.dumps({"error": "Python command timed out"})
     except Exception:

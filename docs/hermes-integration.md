@@ -128,7 +128,7 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) 入口
 │   ├── plugin.yaml       # 插件清单
-│   ├── schemas.py        # 73 个工具的 JSON Schema
+│   ├── schemas.py        # 读取 tools/tool_schemas.json（73 个工具的 JSON Schema）
 │   ├── tools.py          # 73 个 handler，以子进程调用 CLI
 │   └── _payload/         # tools/、skills/、schemas/、templates/
 └── mcp_host/             # MCP stdio 服务器（stock-analysis-mcp）

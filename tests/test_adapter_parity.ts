@@ -1,9 +1,10 @@
 // Cross-adapter parity: all four hosts must expose the same tools with the same
 // description, top-level property names, required set, enum/type and property
-// descriptions. Pi is the reference; openclaw uses real typebox (JSON Schema),
-// dsh uses its per-property `required: true` DSL, hermes is read from schemas.py.
+// descriptions. Every host reads tools/tool_schemas.json; this pins each host's
+// conversion of it (openclaw -> typebox, dsh -> per-property `required: true` DSL).
 // The same sample calls then run through every host with the Python executor
-// stubbed: each host must hand Python the same script, argv and JSON input.
+// stubbed: the shared JS mapping (scripts/tool-calls.mjs) and Hermes's Python
+// mapping (hermes/tools.py) must hand Python the same script, argv and JSON input.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -104,8 +105,8 @@ const piSchemas: Record<string, JsonSchema> = {};
 }
 
 {
-  const code = "import json,runpy,sys; print(json.dumps(runpy.run_path(sys.argv[1])['TOOL_SCHEMAS']))";
-  const out = execFileSync(resolvePython(repoRoot), ["-c", code, join(repoRoot, "hermes/schemas.py")], { encoding: "utf8" });
+  const code = "import json,sys; sys.path.insert(0, sys.argv[1]); from hermes.schemas import TOOL_SCHEMAS; print(json.dumps(TOOL_SCHEMAS))";
+  const out = execFileSync(resolvePython(repoRoot), ["-c", code, repoRoot], { encoding: "utf8" });
   for (const t of JSON.parse(out) as { name: string; description: string; parameters: never }[]) {
     hosts.hermes[t.name] = fromJsonSchema(t.description, t.parameters);
   }

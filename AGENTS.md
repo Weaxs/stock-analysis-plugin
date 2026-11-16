@@ -7,14 +7,15 @@ A multi-host agent plugin for stock analysis, screening, and strategy backtestin
 The architecture is **one Python core, four thin plugin adapters plus an MCP stdio host**:
 
 - `tools/*.py` — the shared CLI tools. **This is the single source of truth** for all behavior. Every tool prints JSON to stdout.
-- `pi/index.ts` — Pi extension. `pi.registerTool` ×73, each spawns a `tools/*.py` CLI.
+- `tools/tool_schemas.json` — the 73 tools' names, descriptions and JSON Schema parameters, read by every host. `scripts/tool-calls.mjs` maps each tool to its CLI argv for the three JS hosts; Hermes keeps the Python twin in `hermes/tools.py`.
+- `pi/index.ts` — Pi extension. Registers every schema via `pi.registerTool`, each call spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
-- `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` ×73). Bundled with esbuild.
-- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` ×73 via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). It also has a Web/Desktop-only dashboard (`client.ts` + `dashboard.ts` + `web/`, TypeScript compiled to browser IIFEs) backed by a resident warm cache of fixed CLI calls and served through snapshot/watchlist routes; it does not add model tools. Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
-- `mcp_host/server.py` — MCP stdio JSON-RPC host for WorkBuddy / Claude Desktop / Cursor. It reuses `hermes/schemas.py` and `hermes/tools.py`, kills CLI children on cancellation, and adds no fifth schema copy.
+- `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` per schema, converted to typebox). Bundled with esbuild.
+- `dsh/` — dsh bundle (`package.json` `dsh.bundle` + `cordis.patch.yml` + `index.ts` cordis `apply(ctx)` with `defineTool` per schema (converted to the dsh DSL) via `@deepseek-ai/dsh-tools`; skills via `ctx.skills.register`). It also has a Web/Desktop-only dashboard (`client.ts` + `dashboard.ts` + `web/`, TypeScript compiled to browser IIFEs) backed by a resident warm cache of fixed CLI calls and served through snapshot/watchlist routes; it does not add model tools. Bundled with esbuild, `@deepseek-ai/*` external (peer deps).
+- `mcp_host/server.py` — MCP stdio JSON-RPC host for WorkBuddy / Claude Desktop / Cursor. It reuses `hermes/schemas.py` (loads `tools/tool_schemas.json`) and `hermes/tools.py`, kills CLI children on cancellation, and adds no fifth schema copy.
 - `skills/*/SKILL.md` — 21 workflow / strategy-methodology skills shared by the four plugin hosts; MCP clients import skills separately.
 
-> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 73 tools over the *same* Python CLIs. A change to a tool's name, parameters, or JSON output shape must be applied to **all four adapters and the relevant SKILL.md together** — never just one. MCP inherits the Hermes contract automatically.
+> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 73 tools over the *same* Python CLIs. A change to a tool's name or parameters goes into `tools/tool_schemas.json`, its argv into both `scripts/tool-calls.mjs` and `hermes/tools.py`, together with the relevant SKILL.md — never just one. MCP inherits the Hermes contract automatically; `tests/test_adapter_parity.ts` fails on any drift.
 
 ---
 
@@ -73,15 +74,14 @@ All real work happens in `tools/*.py`. The adapters only translate a host-native
 // venv python resolved with the Windows/POSIX rule below; each tool spawns the CLI.
 const py = (script: string, args: string[]) => processExecutor(python, [`${toolsDir}/${script}`, ...args], { timeout, signal });
 
-pi.registerTool({
-  name: "get_kline",
-  description: "…",
-  parameters: { type: "object", properties: { /* … */ }, required: ["symbol"] },
-  async execute(_id, { symbol, period = "daily", count = 60 }) {
-    const result = await py("stock_data.py", ["kline", symbol, "--period", period, "--count", String(count)]);
-    return { content: [{ type: "text" as const, text: result.stdout }], details: {} };
-  },
-});
+for (const { name, description, parameters } of TOOL_SCHEMAS) {
+  registerTool({ name, description, parameters, async execute(_id, params) {
+    return asText(await callTool(name, params, async (script, args) => (await py(script, args)).stdout));
+  } });
+}
+
+// scripts/tool-calls.mjs — shared by Pi, OpenClaw and dsh:
+get_kline: { script: "stock_data.py", argv: (p) => ["kline", p.symbol, "--period", p.period ?? "daily", "--count", String(p.count ?? 60)] },
 ```
 
 ### Hermes — `hermes/tools.py`
@@ -97,7 +97,7 @@ def get_kline(args: dict, **kwargs) -> str:
 ### OpenClaw — `openclaw/index.ts`
 
 ```typescript
-// definePluginEntry + typebox schemas. The executor is indirected via
+// definePluginEntry; typeboxSchema() converts tools/tool_schemas.json. The executor is indirected via
 // __setExecutor() so tests can stub it without touching node:child_process.
 // toolsDir has a dev vs published fallback; venv has a repo-root vs staged-payload fallback.
 ```
@@ -106,8 +106,8 @@ def get_kline(args: dict, **kwargs) -> str:
 
 ```typescript
 // Cordis function-plugin form: `export const name/inject` + `apply(ctx)`.
-// Each tool is defineTool() (dsh's JSON-Schema-subset DSL — `required: true`
-// per property, enums as `enum: [...]`) registered via ctx.tools.register;
+// Each schema is converted to defineTool()'s DSL (dslProperties: `required: true`
+// per property, explicit object openness, oneOf for anyOf) and registered via ctx.tools.register;
 // execute() returns the CLI's raw JSON text and output.render relays it as
 // one text block. The package is a dsh *bundle*: package.json carries
 // `dsh.bundle.patch` and cordis.patch.yml inserts the entry into a profile.
@@ -200,8 +200,8 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 
 ## Implementation Discipline
 
-- **Match the existing adapter you're editing** — read the sibling registrations first and copy their style, argument mapping, and error shape. The four adapters are deliberately parallel; keep them parallel.
-- **One tool = four registrations + docs.** Adding/renaming/re-paraming a tool touches `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py`, the relevant `skills/*/SKILL.md`, and the README tool table — together, in one change. Don't land a tool in one host only.
+- **Match the existing mapping you're editing** — read the sibling entries in `scripts/tool-calls.mjs` and `hermes/tools.py` first and copy their style, argument mapping, and error shape. Host files only convert schemas and relay output; keep tool-specific logic out of them.
+- **One tool = one schema + two argv mappings + docs.** Adding/renaming/re-paraming a tool touches `tools/tool_schemas.json`, `scripts/tool-calls.mjs`, `hermes/tools.py`, the relevant `skills/*/SKILL.md`, and the README tool table — together, in one change.
 - **Keep the JSON contract stable.** Host adapters and tests parse `tools/` stdout. Changing a key is a breaking change across all four hosts — update all consumers and tests in the same change, or add the new key alongside the old.
 - Minimal, scoped diffs. Don't "improve" unrelated code or do cross-cutting refactors unless asked.
 - New config keys / tool params need corresponding test coverage (pytest for the core, tsx for the adapter registration).
@@ -219,7 +219,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 
 ## Code Review Rules
 
-- **Adapter sync** — flag any tool name/param/JSON-shape change that landed in fewer than all four adapters + SKILL.md + README. Safe path: one PR updates every host together.
+- **Adapter sync** — flag any tool name/param/JSON-shape change that skips `tools/tool_schemas.json`, either argv mapping, SKILL.md or README. Safe path: one PR updates them together.
 - **Cross-platform paths** — flag hardcoded `bin/python3`/`Scripts/python.exe`, `__dirname` without the ESM fallback, `URL.pathname`, or pip-shim invocations. Safe path: reuse `scripts/venv-python.mjs` and the existing dev/published and venv/fallback chains.
 - **Host↔Python contract** — flag `tools/` changes that emit non-JSON on stdout, emit secrets/stack traces, or rename output keys without updating all adapters and tests. Safe path: JSON-only stdout, additive key changes, coverage in pytest + tsx.
 - **Dependency additions** — flag new entries to `tools/requirements.txt` / `pyproject.toml` that duplicate stdlib or an installed dep (ponytail rung 5).
@@ -230,7 +230,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 
 1. Implement the CLI in the appropriate `tools/*.py` (argparse subcommand, JSON stdout, py3.10-compatible).
 2. Add a failing pytest first (`tests/test_<module>.py`), then make it pass (see `tdd`).
-3. Register it in all four adapters: `pi/index.ts`, `openclaw/index.ts`, `dsh/index.ts`, `hermes/tools.py` + `hermes/schemas.py` — same name, same params. MCP inherits the Hermes registration.
+3. Add its schema to `tools/tool_schemas.json`, its argv to `scripts/tool-calls.mjs` (Pi/OpenClaw/dsh) and a handler to `hermes/tools.py` (Hermes/MCP) — same name, same params.
 4. Wire it into the relevant `skills/*/SKILL.md` workflow if an agent should call it.
 5. Update the README tool table (and tool count if surfaced).
 6. Verify: `ruff check …`, `npx tsc --noEmit`, pytest, the four registration tests (`test_pi_integration.ts`, `test_openclaw_integration.ts`, `test_dsh_integration.ts`, `test_hermes_integration.py`), `test_adapter_parity.ts`, and `test_mcp_integration.py`.

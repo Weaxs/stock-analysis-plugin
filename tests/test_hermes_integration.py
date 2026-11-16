@@ -82,9 +82,7 @@ def test_report_final_flag_reaches_shared_cli(name, final, monkeypatch):
 
 def test_technical_analysis_preserves_independent_temperature(monkeypatch):
     payload = (Path(__file__).parent / "fixtures/trend_temperature.json").read_text(encoding="utf-8")
-    monkeypatch.setattr(
-        hermes_tools.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload)
-    )
+    monkeypatch.setattr(hermes_tools, "run_tree", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=payload))
     assert hermes_tools.get_technical_analysis({"symbol": "TEST"}) == payload
     description = next(schema["description"] for schema in TOOL_SCHEMAS if schema["name"] == "get_technical_analysis")
     assert "实验性" in description and "非星球指标" in description
@@ -358,7 +356,7 @@ class TestRunArgv:
             calls.append({"cmd": cmd, "kwargs": kwargs})
             return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
 
-        monkeypatch.setattr(hermes_tools.subprocess, "run", fake_run)
+        monkeypatch.setattr(hermes_tools, "run_tree", fake_run)
         return calls
 
     def test_malicious_input_is_single_argv_element(self, captured):
@@ -384,8 +382,8 @@ class TestRunArgv:
 
     def test_error_contract_preserved(self, monkeypatch):
         monkeypatch.setattr(
-            hermes_tools.subprocess,
-            "run",
+            hermes_tools,
+            "run_tree",
             lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom"),
         )
         assert "Python command failed" in json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"]
@@ -394,7 +392,7 @@ class TestRunArgv:
         def timeout(cmd, **kwargs):
             raise subprocess.TimeoutExpired(cmd, 120)
 
-        monkeypatch.setattr(hermes_tools.subprocess, "run", timeout)
+        monkeypatch.setattr(hermes_tools, "run_tree", timeout)
         assert "timed out" in json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"]
 
 
@@ -498,8 +496,8 @@ def test_disclosure_cli_dispatch(monkeypatch, name, args, script, argv):
 def test_disclosure_error_json_reaches_hermes(monkeypatch):
     payload = '{"error": "Set SEC_USER_AGENT to your application name and real contact email"}'
     monkeypatch.setattr(
-        hermes_tools.subprocess,
-        "run",
+        hermes_tools,
+        "run_tree",
         lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout=payload, stderr=""),
     )
     assert hermes_tools.get_us_holdings({"cik": "1067983"}) == payload
@@ -518,7 +516,7 @@ def test_cold_issuer_lookup_has_time_for_valid_200_second_download(monkeypatch):
             raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
         return subprocess.CompletedProcess(cmd, 0, stdout='{"query_type":"issuer","institutions":[]}', stderr="")
 
-    monkeypatch.setattr(hermes_tools.subprocess, "run", run)
+    monkeypatch.setattr(hermes_tools, "run_tree", run)
     result = json.loads(hermes_tools.get_us_holdings({"cik": "320193", "mode": "issuer"}))
     assert result["query_type"] == "issuer"
 
@@ -538,7 +536,7 @@ def test_host_budgets_and_evidence_relay(monkeypatch, script, argv, expected):
         assert kwargs["timeout"] == expected
         return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
 
-    monkeypatch.setattr(hermes_tools.subprocess, "run", run)
+    monkeypatch.setattr(hermes_tools, "run_tree", run)
     assert hermes_tools._run(script, argv) == payload
 
 
@@ -573,8 +571,8 @@ def test_installed_plugin_uses_host_interpreter_without_activation(monkeypatch, 
     monkeypatch.setattr(hermes_tools, "PROJECT_ROOT", tmp_path)
     calls = []
     monkeypatch.setattr(
-        hermes_tools.subprocess,
-        "run",
+        hermes_tools,
+        "run_tree",
         lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0, stdout='{"price":10}'),
     )
     assert json.loads(hermes_tools.get_quote({"symbol": "AAPL"}))["price"] == 10
@@ -623,8 +621,8 @@ def test_registered_handler_drops_null_args(monkeypatch):
 )
 def test_run_failure_contract(monkeypatch, code, stdout, error):
     monkeypatch.setattr(
-        hermes_tools.subprocess,
-        "run",
+        hermes_tools,
+        "run_tree",
         lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, code, stdout=stdout, stderr="secret"),
     )
     assert json.loads(hermes_tools.get_quote({"symbol": "X"}))["error"] == error
