@@ -40,7 +40,7 @@ TOOL_MATRIX = {
     },
     "get_us_holdings": {"markets": ["US"], "reason": "SEC manager holdings or verified issuer-CUSIP reverse lookup"},
     "get_insider_trades": {"markets": ["US"], "reason": "SEC issuer Form 4 only"},
-    "get_valuation_history": {"markets": ["A", "HK"], "reason": "A/HK historical valuation providers only"},
+    "get_valuation_history": {"markets": ["A", "HK", "US"], "reason": "A/HK providers; US derived from SEC filings"},
     "get_index_valuation": {"markets": ["A"], "reason": "Chinese index valuation only"},
     "get_earnings_calendar": {
         "markets": ["A", "HK", "US", "JP"],
@@ -66,9 +66,9 @@ TOOL_MATRIX = {
     # A-share only
     "get_capital_flow": {"markets": ["A"], "reason": "A-share only (akshare data)"},
     "get_chip_distribution": {"markets": ["A"], "reason": "A-share only"},
-    "get_sector_rankings": {"markets": ["A"], "reason": "A-share only"},
+    "get_sector_rankings": {"markets": ["A", "US"], "reason": "A-share boards; US sector ETF proxies"},
     "get_sector_constituents": {"markets": ["A"], "reason": "A-share only"},
-    "get_market_stats": {"markets": ["A"], "reason": "A-share only"},
+    "get_market_stats": {"markets": ["A", "HK", "US"], "reason": "full-market snapshot breadth; limits A-share only"},
     "get_fundamental_context": {"markets": ["A"], "reason": "A-share only"},
     "resolve_stock_name": {"markets": ["A", "HK", "US"], "reason": "A/HK/US name indexes only"},
     "get_limit_up_pool": {"markets": ["A"], "reason": "A-share only"},

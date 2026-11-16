@@ -135,5 +135,6 @@ def test_hk_announcements_use_hkex_title_search_and_category_filter(monkeypatch)
             "type": "Announcements and Notices - [Final Results]",
         }
     ]
+    assert (result["total"], result["total_basis"]) == (1, "matched_in_loaded_rows")
     assert calls[0][1]["name"] == "00700"
     assert calls[1][1]["stockId"] == 7609

@@ -99,3 +99,57 @@ def financials_hk(symbol, periods, annual):
     if len(history) < periods:
         result["warnings"] = ["Requested financial history incomplete; only actual available periods returned"]
     return result
+
+
+# Field codes from https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial
+# (no operating income, capex or D&A there; those come from the Yahoo fill).
+DCF_FIELDS = {
+    "revenue": ("ps.toi",),
+    "pretax_income": ("ps.tp",),
+    "income_tax": ("ps.ite",),
+    "operating_cash_flow": ("cfs.ncffoa",),
+    "cash": ("cfs.bocaceatpe",),
+    "total_debt": (
+        "bs.stl",
+        "bs.stpl",
+        "bs.stbp",
+        "bs.stlcofcb",
+        "bs.stsn",
+        "bs.ltl",
+        "bs.ltpl",
+        "bs.sn",
+        "bs.bp",
+        "bs.ltlcofcb",
+    ),
+    "lease_liabilities": ("bs.stll", "bs.ltll"),
+    "minority_interest": ("bs.etmsh",),
+    "shares_outstanding": ("bs.tsc",),
+}
+
+
+def dcf_inputs_hk(symbol, periods):
+    metrics = [f"q.{field}.t" for fields in DCF_FIELDS.values() for field in fields]
+    code = symbol.split(".")[0].zfill(5)
+    rows = []
+    for row in sorted(hk_data(symbol, "fs", metrics), key=lambda r: r.get("date", ""), reverse=True):
+        if row.get("reportType") != "annual_report" or not row.get("date") or row.get("stockCode", code) != code:
+            continue
+        entry = {"period_end": row["date"][:10], "currency": row.get("currency")}
+        for key, fields in DCF_FIELDS.items():
+            values = [
+                value
+                for field in fields
+                if (value := row.get("q", {}).get(field.split(".")[0], {}).get(field.split(".")[1], {}).get("t"))
+                is not None
+            ]
+            entry[key] = sum(values) if values else None
+        rows.append(entry)
+    if not rows:
+        raise ValueError("Lixinger returned no annual HK statements")
+    return {
+        "source": "lixinger",
+        "periods": rows[:periods],
+        "warnings": [
+            "Lixinger HK statements; total_debt sums borrowings, bonds, notes and convertibles and excludes leases."
+        ],
+    }

@@ -73,6 +73,13 @@ def test_dcf_values_fcff_terminal_and_equity_bridge():
     assert len(result["sensitivity"]) == 9
 
 
+def test_dcf_terminal_share_is_null_for_negative_enterprise_value():
+    code, result = invoke("dcf", dcf_payload(operating_margin=[-0.5]))
+    assert code == 0
+    assert result["valuation"]["enterprise_value"] < 0
+    assert result["valuation"]["terminal_value_pct"] is None
+
+
 @pytest.mark.parametrize(
     "override",
     [

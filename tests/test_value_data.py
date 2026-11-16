@@ -425,7 +425,8 @@ def test_csi_fallback_never_labels_total_share_pe_as_ttm(monkeypatch):
 @pytest.mark.parametrize(
     "argv",
     [
-        ["valuation_history", "AAPL"],
+        ["valuation_history", "7203.T"],
+        ["valuation_history", "AAPL", "--years", "11"],
         ["valuation_history", "600519", "--years", "0"],
         ["index_valuation", "000300", "--years", "11"],
         ["earnings_calendar", "--report-date", "2026-02-30"],
@@ -1333,3 +1334,29 @@ def test_etf_benchmark_csi_outage_keeps_other_sections(monkeypatch):
     result = value_data.etf_details(Namespace(symbol="510300", benchmark="H30269", days=60))
     assert result["tracking_error"]["benchmark"] == "H30269"
     assert any(w.startswith("benchmark_history: unavailable") for w in result["warnings"])
+
+
+def test_us_valuation_history_uses_filed_facts_and_split_adjusted_shares(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import sec_edgar
+
+    from tools import value_data
+
+    facts = {
+        "ttm_net_income": [{"filed": "2026-02-01", "end": "2025-12-31", "val": 10}],
+        "equity": [{"filed": "2026-02-01", "end": "2025-12-31", "val": 50}],
+        "shares": [{"filed": "2026-02-01", "end": "2026-01-20", "val": 10}],
+        "share_basis": "cover_shares_outstanding",
+    }
+    ticker = MagicMock()
+    ticker.history.return_value = pd.DataFrame(
+        {"Close": [4.0, 5.0]}, index=pd.to_datetime(["2026-01-30", "2026-03-06"])
+    )
+    ticker.splits = pd.Series([2.0], index=pd.to_datetime(["2026-03-02"]))
+    monkeypatch.setattr(sec_edgar, "valuation_facts", lambda symbol: facts)
+    monkeypatch.setattr("yfinance.Ticker", lambda symbol: ticker)
+    result = value_data.valuation_history(Namespace(symbol="AAPL", years=1))
+    assert result["source"] == "sec_companyfacts+yfinance"
+    assert result["history"] == [{"date": "2026-03-06", "pe_ttm": 10.0, "pb": 2.0}]
+    assert result["share_basis"] == "cover_shares_outstanding"

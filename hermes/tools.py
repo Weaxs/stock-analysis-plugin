@@ -145,7 +145,17 @@ def get_sector_rankings(args: dict, **kwargs) -> str:
     board_type = args.get("board_type", "industry")
     return _run(
         "stock_data.py",
-        ["sector_rankings", "--top", top, "--direction", direction, "--board-type", board_type],
+        [
+            "sector_rankings",
+            "--top",
+            top,
+            "--direction",
+            direction,
+            "--board-type",
+            board_type,
+            "--market",
+            args.get("market", "A"),
+        ],
     )
 
 
@@ -171,7 +181,7 @@ def get_chip_distribution(args: dict, **kwargs) -> str:
 
 
 def get_market_stats(args: dict, **kwargs) -> str:
-    return _run("stock_data.py", ["market_stats"])
+    return _run("stock_data.py", ["market_stats", "--market", args.get("market", "A")])
 
 
 def get_limit_up_pool(args: dict, **kwargs) -> str:

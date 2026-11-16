@@ -40,6 +40,12 @@ SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通�
 
 Form 4 的 `days` 是申报日期窗口，`top=1..20` 限制文件数，返回全部已解析交易。保留多人联报、衍生品、交易代码、脚注、直接/间接持有和修订信息；仅 P/S 标为买/卖，其余行为不推断方向，价格未披露为 null。读取 `truncated/warnings`，原件与修订不要重复计数。风险组合工具 `screen_risk` 仍为 A 股专用。
 
+港美股 DCF 输入（`get_financials include_dcf_inputs=true`）：美股以 SEC companyfacts 为主源，港股配置 `LIXINGER_TOKEN` 时以理杏仁年报为主源（理杏仁港股无营业利润、资本开支、折旧摊销字段），主源缺失字段仅在同一财年末（±10 天）且币种一致时用 Yahoo 补齐，`field_sources` 标明每个字段来源，`missing_fields` 列出仍缺字段。`total_debt` 三个来源都不含租赁（Yahoo 用 Current Debt + Long Term Debt，不用含租赁的 Total Debt），租赁负债在 `lease_liabilities` 单列。
+
+美股估值历史（`get_valuation_history`）由 SEC companyfacts 派生：TTM `NetIncomeLoss`（10-Q 单季加由 10-K 推出的第四季）、`StockholdersEquity` 和封面股本，均按 SEC 申报日起生效，取每个期间最早申报值，避免用后来的重述回填；Yahoo 周收盘按拆股调整后的价格乘以同口径股本得到市值。多类股公司按所有类别股本合计、单一类别价格计算；无封面股本时退回加权稀释股本（`share_basis`）。
+
+港美股市场宽度（`get_market_stats market=HK|US`）沿用东方财富全市场快照计算涨跌家数和成交额，无涨跌停制度，涨跌停字段为 null；美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`，不是交易所官方行业数据。港股行业排行暂无可靠的公开行业指数源，未补。
+
 接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
 
 首次下载当前 SEC 包约 100 MB；ZIP 按周缓存，CUSIP 反查结果按天缓存，流式扫描不解压整个持仓表、不增加数据库依赖。返回 `report_date`（持仓日期）、`filing_window_end`（公开申报窗口截止）、`cusip_evidence`（原文映射依据），不把文件披露窗口当作持仓日期。`mapping_complete=false` 表示最近十份结构化 13D/G 可能未覆盖所有证券类别或 CUSIP 变更；缺映射直接报错，不做名称模糊匹配。`complete_for_mapped_cusips` 仅在该报告期没有未解决申报链时为 true，不代表实时全部股东。期权与本金持仓在 `positions` 保留，`shares` 合计只计无 PUT/CALL 的 SH 股票。不能将跨机构合计当作已去重的全市场持股。

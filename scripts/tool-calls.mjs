@@ -126,6 +126,8 @@ export const TOOL_CALLS = {
       p.direction ?? "top",
       "--board-type",
       p.board_type ?? "industry",
+      "--market",
+      p.market ?? "A",
     ],
   },
   get_sector_constituents: {
@@ -151,7 +153,7 @@ export const TOOL_CALLS = {
   },
   get_market_stats: {
     script: "stock_data.py",
-    argv: () => ["market_stats"],
+    argv: (p) => ["market_stats", "--market", p.market ?? "A"],
   },
   get_limit_up_pool: {
     script: "stock_data.py",

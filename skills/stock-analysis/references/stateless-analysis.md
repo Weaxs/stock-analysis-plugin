@@ -51,7 +51,7 @@ lot_size 来自用户或可核实交易规则，尤其港股不能统一猜100�
 
 ## DCF 估值：calculate_dcf_valuation
 
-港美股可先调用 `get_financials(symbol, annual=true, periods=5, include_dcf_inputs=true)` 取年度收入、营业利润、税、现金流、资本开支、现金、债务、少数股东权益和股本。美股优先 SEC companyfacts，失败时用 Yahoo；港股使用 Yahoo 标准化年报。缺失字段保持 null，MUST 向用户索取或另行核实，不能补默认值。
+港美股可先调用 `get_financials(symbol, annual=true, periods=5, include_dcf_inputs=true)` 取年度收入、营业利润、税、现金流、资本开支、现金、债务、少数股东权益和股本。美股优先 SEC companyfacts，港股配置 `LIXINGER_TOKEN` 时优先理杏仁；主源缺失字段按同财年同币种用 Yahoo 补齐，并在 `field_sources` 标注。仍缺的字段列在 `missing_fields` 且为 null，MUST 向用户索取或另行核实，不能补默认值。`total_debt` 不含租赁；租赁负债在 `lease_liabilities`，是否计入 `debt` 由调用方明确。
 
 必需 `currency,units,base_revenue,revenue_growth,operating_margin,tax_rate,sales_to_capital,wacc,terminal_growth,terminal_wacc,terminal_roic,diluted_shares`。逐年数组长度相同且为1..10年；比例均为小数。可选 `cash,debt,minority_interests,nonoperating_assets,other_claims,current_price`。所有金额和股数口径一致。
 

@@ -187,7 +187,7 @@
 | `get_announcements` | A 股巨潮公告 / 港股 HKEXnews / 美股 SEC 申报：类别/日期范围/标题与原文链接；美股需 SEC_USER_AGENT |
 | `get_us_holdings` | SEC 机构组合 / 发行人 CIK 反查机构：精确 CUSIP 映射、季度数据与修订处理（需 SEC_USER_AGENT） |
 | `get_insider_trades` | SEC 股票 ticker/发行人 CIK 的 Form 4 内部人交易、代码和脚注 |
-| `get_valuation_history` | A/HK PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口 |
+| `get_valuation_history` | A/HK/US PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口（美股由 SEC 申报与周收盘派生） |
 | `get_index_valuation` | 中国指数 PE/PB 历史水位；中证官方多年滚动 PE；可选理杏仁补充 PB |
 | `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 董事会排期；US/JP yfinance 预计日期（provider_only，非官方确认） |
 | `get_shareholder_structure` | A 股股东户数/十大流通股东变化/报告期北向名义持股；HK 南向持股 |
@@ -202,10 +202,10 @@
 | `get_stock_info` | 股票基本信息 |
 | `get_chip_distribution` | 筹码分布 |
 | `get_market_indices` | 主要指数行情 |
-| `get_sector_rankings` | 板块涨跌排行（行业/概念） |
+| `get_sector_rankings` | 板块涨跌排行（A 股行业/概念；美股 SPDR 行业 ETF 代理） |
 | `get_sector_constituents` | 板块成分股查询（仅 A 股，板块名模糊匹配） |
 | `resolve_stock_sectors` | 个股所属板块查询（A 股行业+概念 / 港股 GICS） |
-| `get_market_stats` | 市场统计（涨跌家数、涨停等） |
+| `get_market_stats` | 市场统计（A/HK/US 涨跌家数、成交额；涨停仅 A 股） |
 | `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_hot_stocks` | 全市场人气热搜榜（东财→百度，仅 A 股） |

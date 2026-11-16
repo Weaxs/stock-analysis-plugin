@@ -1917,7 +1917,7 @@ def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
         "capital_expenditure": (1, "Capital Expenditure"),
         "depreciation_amortization": (1, "Depreciation And Amortization"),
         "cash": (2, "Cash And Cash Equivalents"),
-        "total_debt": (2, "Total Debt"),
+        "lease_liabilities": (2, "Capital Lease Obligations"),
         "minority_interest": (2, "Minority Interest"),
         "shares_outstanding": (2, "Ordinary Shares Number"),
     }
@@ -1928,17 +1928,22 @@ def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
     rows = []
     for end in ends:
         entry = {"period_end": end, "currency": currency}
-        for key, (index, label) in fields.items():
+
+        def cell(index, label, end=end):
             table = tables[index]
             column = next((col for col in getattr(table, "columns", []) if str(col)[:10] == end), None)
-            value = (
+            return (
                 _sanitize(_parse_float(table.loc[label, column]))
                 if column is not None and label in table.index
                 else None
             )
+
+        for key, (index, label) in fields.items():
+            value = cell(index, label)
             entry[key] = abs(value) if key == "capital_expenditure" and value is not None else value
-        pretax, tax = entry["pretax_income"], entry["income_tax"]
-        entry["effective_tax_rate"] = tax / pretax if tax is not None and pretax and pretax > 0 else None
+        # Yahoo "Total Debt" adds lease liabilities; SEC/Lixinger total_debt excludes them.
+        debt = [value for value in (cell(2, "Current Debt"), cell(2, "Long Term Debt")) if value is not None]
+        entry["total_debt"] = sum(debt) if debt else None
         rows.append(entry)
     if not rows:
         raise ValueError("Yahoo annual statements unavailable")
@@ -1949,22 +1954,81 @@ def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
     }
 
 
+DCF_FIELDS = (
+    "revenue",
+    "operating_income",
+    "pretax_income",
+    "income_tax",
+    "operating_cash_flow",
+    "capital_expenditure",
+    "depreciation_amortization",
+    "cash",
+    "total_debt",
+    "lease_liabilities",
+    "minority_interest",
+    "diluted_shares",
+    "shares_outstanding",
+)
+
+
+def _fill_dcf_rows(result: dict, fallback: dict | None) -> dict:
+    """Fill null primary fields from Yahoo for the same fiscal period and currency, recording each field's source."""
+    for row in result["periods"]:
+        match = None
+        if fallback:
+            end = datetime.fromisoformat(row["period_end"]).date()
+            match = next(
+                (
+                    other
+                    for other in fallback["periods"]
+                    if abs((datetime.fromisoformat(other["period_end"]).date() - end).days) <= 10
+                    and other.get("currency")
+                    and other.get("currency") == row.get("currency")
+                ),
+                None,
+            )
+        sources = {}
+        for key in DCF_FIELDS:
+            if row.get(key) is None and match and match.get(key) is not None:
+                row[key], sources[key] = match[key], fallback["source"]
+            elif row.get(key) is not None:
+                sources[key] = result["source"]
+            else:
+                row[key] = None
+        pretax, tax = row["pretax_income"], row["income_tax"]
+        row["effective_tax_rate"] = tax / pretax if tax is not None and pretax and pretax > 0 else None
+        row["field_sources"] = sources
+        row["missing_fields"] = [key for key in DCF_FIELDS if row[key] is None]
+    result["units"] = {"amounts": "reported currency units", "shares": "shares", "effective_tax_rate": "ratio"}
+    return result
+
+
 def _dcf_inputs(symbol: str, periods: int) -> dict:
     market = detect_market(symbol)
     if market not in ("HK", "US"):
         return {"error": "DCF inputs support HK and US stocks only"}
-    warnings = []
-    if market == "US":
+    warnings, primary = [], None
+    if market == "US" or os.environ.get("LIXINGER_TOKEN"):
+        label = "SEC companyfacts" if market == "US" else "Lixinger HK"
         try:
-            import sec_edgar
+            if market == "US":
+                import sec_edgar
 
-            return sec_edgar.dcf_inputs(symbol, periods)
+                primary = sec_edgar.dcf_inputs(symbol, periods)
+            else:
+                from lixinger import dcf_inputs_hk
+
+                primary = dcf_inputs_hk(symbol, periods)
         except Exception as e:
-            warnings.append(f"SEC companyfacts unavailable: {error_message(e)}; Yahoo fallback used")
+            warnings.append(f"{label} unavailable: {error_message(e)}; Yahoo fallback used")
     try:
-        result = _yf_dcf_inputs(symbol, periods)
+        yahoo = _yf_dcf_inputs(symbol, periods)
     except Exception as e:
-        return {"error": f"DCF inputs unavailable: {error_message(e)}", "warnings": warnings}
+        if primary is None:
+            return {"error": f"DCF inputs unavailable: {error_message(e)}", "warnings": warnings}
+        yahoo = None
+        warnings.append(f"Yahoo fill unavailable: {error_message(e)}")
+    result = _fill_dcf_rows(primary or yahoo, yahoo if primary else None)
     result["warnings"] = warnings + result["warnings"]
     return result
 
@@ -2514,24 +2578,72 @@ def _sector_rankings_sina(indicator: str) -> list:
     return [_clean_row(r) for r in df[keep].to_dict("records")]
 
 
+US_SECTOR_ETFS = {
+    "XLK": "Technology",
+    "XLF": "Financials",
+    "XLV": "Health Care",
+    "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLB": "Materials",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLC": "Communication Services",
+}
+
+
+def _sector_rankings_us() -> list:
+    """S&P 500 sector proxies from the SPDR Select Sector ETFs' last two daily closes."""
+    import yfinance as yf
+
+    closes = yf.download(list(US_SECTOR_ETFS), period="10d", auto_adjust=False, progress=False)["Close"]
+    rows = []
+    for symbol, name in US_SECTOR_ETFS.items():
+        series = closes[symbol].dropna() if symbol in closes else []
+        if len(series) < 2:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "etf": symbol,
+                "close": round(float(series.iloc[-1]), 4),
+                "change_pct": round(float(series.iloc[-1] / series.iloc[-2] - 1) * 100, 4),
+                "as_of": str(series.index[-1])[:10],
+            }
+        )
+    if not rows:
+        raise ValueError("US sector ETF quotes unavailable")
+    return rows
+
+
 def cmd_sector_rankings(args):
     board_type = getattr(args, "board_type", "industry")
     direction = getattr(args, "direction", "top")
+    market = getattr(args, "market", "A")
+    if market == "US" and board_type != "industry":
+        return {"error": "US sector rankings support board_type=industry only"}
     sources = [_sourced("eastmoney", lambda: _sector_rankings_em(board_type))]
-    if board_type == "industry":
+    if market == "US":
+        sources = [_sourced("yfinance", _sector_rankings_us)]
+    elif board_type == "industry":
         # efinance has no concept boards — it stays an industry-only leg
         sources.append(_sourced("ths", _sector_rankings_ths))
         sources.append(_sourced("efinance", _sector_rankings_efinance))
     else:
         sources.append(_sourced("sina", lambda: _sector_rankings_sina("概念")))
     try:
-        rows = _failover(sources, label=f"sector_rankings:{board_type}")
+        rows = _failover(
+            sources, label="sector_rankings_us:industry" if market == "US" else f"sector_rankings:{board_type}"
+        )
         if not rows:
             raise ValueError(f"no {board_type} board rankings data")
     except Exception as e:
         return {"error": error_message(e)}
     for r in rows:
         r["board_type"] = board_type
+        if market == "US":
+            r.update(market="US", proxy="SPDR Select Sector ETF")
 
     def _pct(row, default):
         v = row.get("change_pct")
@@ -3152,15 +3264,23 @@ def compute_market_stats(data: list) -> dict:
 
 
 def cmd_market_stats(args):
+    market = getattr(args, "market", "A")
     try:
-        data = snapshot_a()
+        data = {"A": snapshot_a, "HK": snapshot_hk, "US": snapshot_us}[market]()
         if isinstance(data, dict) and "error" in data:
             return data
         if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) and "error" in data[0]:
             return data[0]
         if not data:
             return {"error": "No market data"}
-        return compute_market_stats(data)
+        stats = compute_market_stats(data)
+        if market != "A":
+            # HK/US have no daily price limits; breadth covers the provider's listed-security universe.
+            stats.update(
+                dict.fromkeys(("limit_up_count", "limit_down_count", "limit_up_samples", "limit_down_samples"))
+            )
+            stats.update(market=market, source="eastmoney_spot", turnover_currency="HKD" if market == "HK" else "USD")
+        return stats
     except Exception as e:
         return {"error": error_message(e)}
 
@@ -3755,6 +3875,7 @@ def main():
     p_sec.add_argument("--top", type=int, default=10)
     p_sec.add_argument("--direction", default="top", choices=["top", "bottom", "both"])
     p_sec.add_argument("--board-type", default="industry", choices=["industry", "concept"])
+    p_sec.add_argument("--market", default="A", choices=["A", "US"])
 
     p_cons = sub.add_parser("sector_constituents")
     p_cons.add_argument("sector")
@@ -3769,7 +3890,8 @@ def main():
     p_chip = sub.add_parser("chip_distribution")
     p_chip.add_argument("symbol")
 
-    sub.add_parser("market_stats")
+    p_stats = sub.add_parser("market_stats")
+    p_stats.add_argument("--market", default="A", choices=["A", "HK", "US"])
 
     p_fund = sub.add_parser("fundamental_context")
     p_fund.add_argument("symbol")

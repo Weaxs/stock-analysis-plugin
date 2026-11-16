@@ -480,6 +480,7 @@ def test_dcf_inputs_use_latest_annual_companyfacts(monkeypatch):
                 "CashAndCashEquivalentsAtCarryingValue": {"units": {"USD": [instant(20)]}},
                 "LongTermDebt": {"units": {"USD": [instant(50)]}},
                 "CommercialPaper": {"units": {"USD": [instant(5)]}},
+                "OperatingLeaseLiability": {"units": {"USD": [instant(9)]}},
                 "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [fact(101)]}},
             },
         },
@@ -491,9 +492,48 @@ def test_dcf_inputs_use_latest_annual_companyfacts(monkeypatch):
     assert result["source"] == "sec_companyfacts"
     assert row["revenue"] == 100
     assert row["operating_income"] == 30
-    assert row["effective_tax_rate"] == 0.2
     assert row["capital_expenditure"] == 12
     assert row["total_debt"] == 55
+    assert row["lease_liabilities"] == 9
     assert row["diluted_shares"] == 101
     assert row["shares_outstanding"] == 98
     assert result["warnings"]
+
+
+def test_valuation_facts_derive_q4_and_point_in_time_ttm(monkeypatch):
+    def flow(start, end, value, filed, form="10-Q"):
+        return {"start": start, "end": end, "val": value, "form": form, "filed": filed}
+
+    income = [
+        flow("2025-01-01", "2025-03-31", 10, "2025-04-30"),
+        flow("2025-01-01", "2025-03-31", 99, "2026-04-30"),
+        flow("2025-04-01", "2025-06-30", 20, "2025-07-30"),
+        flow("2025-01-01", "2025-06-30", 30, "2025-07-30"),
+        flow("2025-07-01", "2025-09-30", 30, "2025-10-30"),
+        flow("2025-01-01", "2025-12-31", 100, "2026-02-01", "10-K"),
+    ]
+    data = {
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {"units": {"USD": income}},
+                "StockholdersEquity": {
+                    "units": {"USD": [{"end": "2025-12-31", "val": 400, "form": "10-K", "filed": "2026-02-01"}]}
+                },
+            },
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {"end": "2026-01-20", "val": 6, "form": "10-K", "filed": "2026-02-01", "accn": "a"},
+                            {"end": "2026-01-20", "val": 4, "form": "10-K", "filed": "2026-02-01", "accn": "a"},
+                        ]
+                    }
+                }
+            },
+        }
+    }
+    monkeypatch.setattr(sec_edgar, "company_facts", lambda symbol: data)
+    facts = sec_edgar.valuation_facts("EXM")
+    assert facts["ttm_net_income"] == [{"filed": "2026-02-01", "end": "2025-12-31", "val": 100}]
+    assert facts["shares"] == [{"filed": "2026-02-01", "end": "2026-01-20", "val": 10}]
+    assert facts["share_basis"] == "cover_shares_outstanding"

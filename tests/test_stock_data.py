@@ -419,8 +419,16 @@ def test_hk_financials_add_dcf_inputs_from_yahoo_statements(monkeypatch):
         {period: [40, -12, 7]}, index=["Operating Cash Flow", "Capital Expenditure", "Depreciation And Amortization"]
     )
     ticker.balance_sheet = pd.DataFrame(
-        {period: [20, 50, 3, 8]},
-        index=["Cash And Cash Equivalents", "Total Debt", "Minority Interest", "Ordinary Shares Number"],
+        {period: [20, 58, 10, 40, 8, 3, 8]},
+        index=[
+            "Cash And Cash Equivalents",
+            "Total Debt",
+            "Current Debt",
+            "Long Term Debt",
+            "Capital Lease Obligations",
+            "Minority Interest",
+            "Ordinary Shares Number",
+        ],
     )
     monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: ticker)
     monkeypatch.setattr(stock_data, "_akshare_retry", MagicMock(side_effect=ValueError("down")))
@@ -432,6 +440,9 @@ def test_hk_financials_add_dcf_inputs_from_yahoo_statements(monkeypatch):
     assert row["capital_expenditure"] == 12
     assert row["effective_tax_rate"] == 0.2
     assert row["minority_interest"] == 3
+    assert row["total_debt"] == 50
+    assert row["lease_liabilities"] == 8
+    assert row["missing_fields"] == []
 
 
 def test_us_dcf_inputs_fall_back_to_yahoo_when_sec_unavailable(monkeypatch):
@@ -455,3 +466,131 @@ def test_us_dcf_inputs_fall_back_to_yahoo_when_sec_unavailable(monkeypatch):
     assert result["dcf_inputs"]["source"] == "yfinance"
     assert result["dcf_inputs"]["periods"][0]["revenue"] == 100
     assert any("SEC" in warning for warning in result["dcf_inputs"]["warnings"])
+
+
+def _yahoo_dcf_ticker(currency="CNY"):
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
+    ticker = MagicMock()
+    ticker.info = {"shortName": "Example", "financialCurrency": currency}
+    ticker.income_stmt = pd.DataFrame({"2025-12-31": [999, 30]}, index=["Total Revenue", "Operating Income"])
+    ticker.cashflow = pd.DataFrame({"2025-12-31": [-12]}, index=["Capital Expenditure"])
+    ticker.balance_sheet = pd.DataFrame()
+    return ticker
+
+
+def test_hk_dcf_inputs_prefer_lixinger_and_fill_nulls_from_yahoo(monkeypatch):
+    import lixinger
+
+    from tools import stock_data
+
+    primary = {
+        "source": "lixinger",
+        "periods": [
+            {"period_end": "2025-12-31", "currency": "CNY", "revenue": 100, "pretax_income": 25, "income_tax": 5}
+        ],
+        "warnings": [],
+    }
+    monkeypatch.setenv("LIXINGER_TOKEN", "test")
+    monkeypatch.setattr(lixinger, "dcf_inputs_hk", lambda symbol, periods: primary)
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: _yahoo_dcf_ticker())
+    result = stock_data._dcf_inputs("0700.HK", 1)
+    row = result["periods"][0]
+    assert result["source"] == "lixinger"
+    assert row["revenue"] == 100
+    assert row["operating_income"] == 30
+    assert row["capital_expenditure"] == 12
+    assert row["effective_tax_rate"] == 0.2
+    assert row["field_sources"]["revenue"] == "lixinger"
+    assert row["field_sources"]["operating_income"] == "yfinance"
+    assert "cash" in row["missing_fields"]
+
+
+def test_dcf_inputs_do_not_fill_from_other_currency(monkeypatch):
+    import sec_edgar
+
+    from tools import stock_data
+
+    primary = {
+        "source": "sec_companyfacts",
+        "periods": [{"period_end": "2025-12-28", "currency": "USD"}],
+        "warnings": [],
+    }
+    monkeypatch.setattr(sec_edgar, "dcf_inputs", lambda symbol, periods: primary)
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: _yahoo_dcf_ticker("EUR"))
+    row = stock_data._dcf_inputs("AAPL", 1)["periods"][0]
+    assert row["operating_income"] is None
+    assert row["field_sources"] == {}
+
+
+def test_lixinger_hk_dcf_inputs_sum_debt_and_keep_leases_separate(monkeypatch):
+    import lixinger
+
+    def metric(value):
+        return {"t": value}
+
+    rows = [
+        {"date": "2025-06-30T00:00:00+08:00", "reportType": "interim_report", "stockCode": "00700"},
+        {
+            "date": "2025-12-31T00:00:00+08:00",
+            "reportType": "annual_report",
+            "stockCode": "00700",
+            "currency": "CNY",
+            "q": {
+                "ps": {"toi": metric(100), "tp": metric(25), "ite": metric(5)},
+                "bs": {"stl": metric(10), "ltl": metric(40), "bp": metric(5), "stll": metric(2), "ltll": metric(6)},
+            },
+        },
+    ]
+    monkeypatch.setattr(lixinger, "hk_data", lambda symbol, dataset, metrics: rows)
+    result = lixinger.dcf_inputs_hk("0700.HK", 2)
+    assert result["periods"] == [
+        {
+            "period_end": "2025-12-31",
+            "currency": "CNY",
+            "revenue": 100,
+            "pretax_income": 25,
+            "income_tax": 5,
+            "operating_cash_flow": None,
+            "cash": None,
+            "total_debt": 55,
+            "lease_liabilities": 8,
+            "minority_interest": None,
+            "shares_outstanding": None,
+        }
+    ]
+
+
+def test_hk_market_stats_null_limit_fields(monkeypatch):
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    rows = [
+        {"symbol": "00700.HK", "name": "A", "change_pct": 1.0, "turnover": 10},
+        {"symbol": "00005.HK", "name": "B", "change_pct": -2.0, "turnover": 5},
+    ]
+    monkeypatch.setattr(stock_data, "snapshot_hk", lambda: rows)
+    result = stock_data.cmd_market_stats(Namespace(market="HK"))
+    assert (result["up_count"], result["down_count"], result["total_turnover"]) == (1, 1, 15)
+    assert result["limit_up_count"] is None
+    assert result["turnover_currency"] == "HKD"
+
+
+def test_us_sector_rankings_use_etf_proxies(monkeypatch):
+    from argparse import Namespace
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    index = pd.to_datetime(["2026-11-12", "2026-11-13"])
+    closes = pd.DataFrame({"XLK": [100, 98], "XLE": [50, 51]}, index=index)
+    monkeypatch.setattr("yfinance.download", lambda *a, **k: {"Close": closes})
+    result = stock_data.cmd_sector_rankings(Namespace(top=5, direction="top", board_type="industry", market="US"))
+    assert [(row["etf"], row["change_pct"]) for row in result] == [("XLE", 2.0), ("XLK", -2.0)]
+    assert result[0]["proxy"] == "SPDR Select Sector ETF"
+    concept = stock_data.cmd_sector_rankings(Namespace(top=5, direction="top", board_type="concept", market="US"))
+    assert "error" in concept

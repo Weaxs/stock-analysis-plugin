@@ -284,7 +284,7 @@ def dcf(p):
             "upside_pct": (per_share / price - 1) * 100 if price is not None else None,
             "pv_fcff": pv_fcff,
             "pv_terminal_value": terminal_value / discount,
-            "terminal_value_pct": terminal_value / discount / enterprise * 100 if enterprise else None,
+            "terminal_value_pct": terminal_value / discount / enterprise * 100 if enterprise > 0 else None,
         },
         "projections": projections,
         "terminal": {

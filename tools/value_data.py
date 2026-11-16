@@ -102,9 +102,72 @@ def valuation_summary(history, field):
     }
 
 
+def as_of(events, day):
+    """Latest event filed on or before day (events sorted by filed)."""
+    found = None
+    for event in events:
+        if event["filed"] > day:
+            break
+        found = event
+    return found
+
+
+def us_valuation_history(args):
+    import sec_edgar
+    import yfinance as yf
+
+    symbol = yf_symbol(args.symbol)
+    facts = sec_edgar.valuation_facts(symbol)
+    ticker = yf.Ticker(symbol)
+    start = (market_now("US").date() - pd.DateOffset(years=args.years)).date()
+    # Close is split-adjusted to today's share basis; scale filed share counts by splits after their as-of date.
+    closes = ticker.history(start=start.isoformat(), auto_adjust=False)["Close"].dropna()
+    if closes.empty:
+        raise ValueError("US price history unavailable")
+    closes = closes.resample("W-FRI").last().dropna()  # weekly samples keep 10-year output bounded
+    splits = {market_date(stamp, "US"): float(ratio) for stamp, ratio in ticker.splits.items() if ratio > 0}
+    events = {key: sorted(facts[key], key=lambda e: e["filed"]) for key in ("ttm_net_income", "equity", "shares")}
+    history = []
+    for stamp, close in closes.items():
+        day = market_date(stamp, "US")
+        shares, income, equity = (as_of(events[key], day) for key in ("shares", "ttm_net_income", "equity"))
+        if not shares:
+            continue
+        factor = float(np.prod([ratio for split_day, ratio in splits.items() if split_day > shares["end"]]))
+        cap = float(close) * shares["val"] * factor
+        history.append(
+            {
+                "date": day,
+                "pe_ttm": round(cap / income["val"], 4) if income and income["val"] else None,
+                "pb": round(cap / equity["val"], 4) if equity and equity["val"] else None,
+            }
+        )
+    if not history:
+        raise ValueError("no US valuation history available")
+    return {
+        "symbol": args.symbol,
+        "market": "US",
+        "source": "sec_companyfacts+yfinance",
+        "requested_years": args.years,
+        "sampling": "weekly",
+        "share_basis": facts["share_basis"],
+        "history": history,
+        "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
+        "warnings": [
+            "Derived: market cap = weekly close x latest SEC-filed share count; PE uses TTM NetIncomeLoss attributable to parent, "
+            "PB uses StockholdersEquity, each effective from its filing date. "
+            "Multi-class issuers sum all classes at one class price."
+        ],
+    }
+
+
 def valuation_history(args):
     import akshare as ak
 
+    if detect_market(args.symbol) == "US":
+        if not 1 <= args.years <= 10:
+            raise ValueError("years must be in 1..10")
+        return us_valuation_history(args)
     market, symbol = stock_identity(args.symbol)
     if not 1 <= args.years <= 10:
         raise ValueError("valuation history requires an A/HK symbol and years in 1..10")
@@ -1529,6 +1592,7 @@ def hk_announcements(args, symbol):
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "total": total if args.category == "all" else len(rows),
+        "total_basis": "provider_record_count" if args.category == "all" else "matched_in_loaded_rows",
         "announcements": rows[: args.top],
         "truncated": total > len(items) or len(rows) > args.top,
         "body_extracted": False,
