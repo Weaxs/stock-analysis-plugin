@@ -71,7 +71,7 @@ class TestNewMarkets:
             assert "get_earnings_calendar" in capabilities.get_capabilities(m)["supported"]
         assert "get_earnings_calendar" not in capabilities.get_capabilities("KR")["supported"]
         assert "get_announcements" in capabilities.get_capabilities("US")["supported"]
-        assert "get_announcements" not in capabilities.get_capabilities("HK")["supported"]
+        assert "get_announcements" in capabilities.get_capabilities("HK")["supported"]
 
 
 def test_name_resolution_capability_matches_hk_us_support():

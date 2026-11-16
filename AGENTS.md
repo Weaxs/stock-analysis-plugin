@@ -7,7 +7,7 @@ A multi-host agent plugin for stock analysis, screening, and strategy backtestin
 The architecture is **one Python core, four thin plugin adapters plus an MCP stdio host**:
 
 - `tools/*.py` — the shared CLI tools. **This is the single source of truth** for all behavior. Every tool prints JSON to stdout.
-- `tools/tool_schemas.json` — the 73 tools' names, descriptions and JSON Schema parameters, read by every host. `scripts/tool-calls.mjs` maps each tool to its CLI argv for the three JS hosts; Hermes keeps the Python twin in `hermes/tools.py`.
+- `tools/tool_schemas.json` — the 74 tools' names, descriptions and JSON Schema parameters, read by every host. `scripts/tool-calls.mjs` maps each tool to its CLI argv for the three JS hosts; Hermes keeps the Python twin in `hermes/tools.py`.
 - `pi/index.ts` — Pi extension. Registers every schema via `pi.registerTool`, each call spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
 - `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` per schema, converted to typebox). Bundled with esbuild.
@@ -15,7 +15,7 @@ The architecture is **one Python core, four thin plugin adapters plus an MCP std
 - `mcp_host/server.py` — MCP stdio JSON-RPC host for WorkBuddy / Claude Desktop / Cursor. It reuses `hermes/schemas.py` (loads `tools/tool_schemas.json`) and `hermes/tools.py`, kills CLI children on cancellation, and adds no fifth schema copy.
 - `skills/*/SKILL.md` — 21 workflow / strategy-methodology skills shared by the four plugin hosts; MCP clients import skills separately.
 
-> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 73 tools over the *same* Python CLIs. A change to a tool's name or parameters goes into `tools/tool_schemas.json`, its argv into both `scripts/tool-calls.mjs` and `hermes/tools.py`, together with the relevant SKILL.md — never just one. MCP inherits the Hermes contract automatically; `tests/test_adapter_parity.ts` fails on any drift.
+> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 74 tools over the *same* Python CLIs. A change to a tool's name or parameters goes into `tools/tool_schemas.json`, its argv into both `scripts/tool-calls.mjs` and `hermes/tools.py`, together with the relevant SKILL.md — never just one. MCP inherits the Hermes contract automatically; `tests/test_adapter_parity.ts` fails on any drift.
 
 ---
 
@@ -162,7 +162,7 @@ npx tsx tests/test_dsh_integration.ts                      # dsh registration (t
 npx tsx tests/test_dsh_dashboard.ts                        # dsh dashboard warmer + snapshot API + watchlist + client manifest
 npx tsx tests/test_dsh_web_poll.ts                         # browser repoll after an in-flight watchlist edit
 npx tsx tests/test_process_tree.ts                         # Pi/dsh/OpenClaw abort + timeout kill nested process trees
-npx tsx tests/test_adapter_parity.ts                       # same 73 tools + argv/JSON mapping on all four hosts
+npx tsx tests/test_adapter_parity.ts                       # same 74 tools + argv/JSON mapping on all four hosts
 .venv/bin/python -m pytest tests/test_mcp_integration.py -v      # MCP schema parity, JSON-RPC and cancellation
 .venv/bin/python -m pytest tests/e2e/test_host_to_python.py -v     # host↔python round-trip
 npx tsx tests/e2e/test_pi_e2e.ts                           # Pi real-subprocess e2e
@@ -204,6 +204,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 - **One tool = one schema + two argv mappings + docs.** Adding/renaming/re-paraming a tool touches `tools/tool_schemas.json`, `scripts/tool-calls.mjs`, `hermes/tools.py`, the relevant `skills/*/SKILL.md`, and the README tool table — together, in one change.
 - **Keep the JSON contract stable.** Host adapters and tests parse `tools/` stdout. Changing a key is a breaking change across all four hosts — update all consumers and tests in the same change, or add the new key alongside the old.
 - Minimal, scoped diffs. Don't "improve" unrelated code or do cross-cutting refactors unless asked.
+- Commit only user-facing docs (README, `docs/`, shipped `skills/`). Keep specs, plans, review notes, research drafts and other agent/process artifacts local or in the PR body — never commit them. Code-design rationale goes in a short code comment next to the code, not a separate doc.
 - New config keys / tool params need corresponding test coverage (pytest for the core, tsx for the adapter registration).
 - Don't swallow exceptions: expected failures (missing symbol, bad input, provider down) become clean JSON `error` results; unexpected exceptions should not leak raw stack traces or response bodies to the user.
 

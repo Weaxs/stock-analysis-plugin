@@ -196,6 +196,120 @@ def text(value, name):
     return value.strip()
 
 
+def dcf(p):
+    growth = p["revenue_growth"]
+    years = len(growth) if isinstance(growth, list) else 0
+    if not 1 <= years <= 10:
+        raise ValueError("revenue_growth must contain 1..10 years")
+
+    def series(name, minimum=None, maximum=None):
+        values = p[name]
+        if not isinstance(values, list) or len(values) != years:
+            raise ValueError(f"{name} must match revenue_growth length")
+        return [number(value, name, minimum, maximum) for value in values]
+
+    growth = series("revenue_growth", -0.99, 10)
+    margins = series("operating_margin", -10, 1)
+    taxes = series("tax_rate", 0, 1)
+    waccs = series("wacc", 0, 1)
+    revenue = positive(p["base_revenue"], "base_revenue")
+    sales_to_capital = positive(p["sales_to_capital"], "sales_to_capital")
+    terminal_growth = number(p["terminal_growth"], "terminal_growth", -0.99, 1)
+    terminal_wacc = number(p["terminal_wacc"], "terminal_wacc", 0, 1)
+    terminal_roic = positive(p["terminal_roic"], "terminal_roic")
+    shares = positive(p["diluted_shares"], "diluted_shares")
+    if terminal_wacc <= terminal_growth or terminal_growth > terminal_roic:
+        raise ValueError("terminal_wacc must exceed terminal_growth and terminal_growth must not exceed terminal_roic")
+    claims = {key: number(p.get(key, 0), key, 0) for key in ("cash", "debt", "minority_interests", "other_claims")}
+    nonoperating = number(p.get("nonoperating_assets", 0), "nonoperating_assets", 0)
+    projections, discount, pv_fcff = [], 1, 0
+    for year, (rate, margin, tax, wacc) in enumerate(zip(growth, margins, taxes, waccs), 1):
+        previous, revenue = revenue, revenue * (1 + rate)
+        ebit = revenue * margin
+        nopat = ebit * (1 - tax)
+        reinvestment = (revenue - previous) / sales_to_capital
+        fcff = nopat - reinvestment
+        discount *= 1 + wacc
+        present_value = fcff / discount
+        pv_fcff += present_value
+        projections.append(
+            {
+                "year": year,
+                "revenue": revenue,
+                "ebit": ebit,
+                "nopat": nopat,
+                "reinvestment": reinvestment,
+                "fcff": fcff,
+                "discount_factor": 1 / discount,
+                "present_value": present_value,
+            }
+        )
+
+    def value(terminal_wacc_value, terminal_growth_value):
+        terminal_nopat = revenue * (1 + terminal_growth_value) * margins[-1] * (1 - taxes[-1])
+        reinvestment_rate = terminal_growth_value / terminal_roic
+        terminal_fcff = terminal_nopat * (1 - reinvestment_rate)
+        terminal_value = terminal_fcff / (terminal_wacc_value - terminal_growth_value)
+        enterprise = pv_fcff + terminal_value / discount
+        equity = enterprise + claims["cash"] + nonoperating - claims["debt"] - claims["minority_interests"]
+        equity -= claims["other_claims"]
+        return terminal_nopat, reinvestment_rate, terminal_fcff, terminal_value, enterprise, equity
+
+    terminal_nopat, reinvestment_rate, terminal_fcff, terminal_value, enterprise, equity = value(
+        terminal_wacc, terminal_growth
+    )
+    per_share = equity / shares
+    price = p.get("current_price")
+    if price is not None:
+        price = positive(price, "current_price")
+    sensitivity = []
+    for wacc_shift in (-0.01, 0, 0.01):
+        for growth_shift in (-0.005, 0, 0.005):
+            wacc_value, growth_value = terminal_wacc + wacc_shift, terminal_growth + growth_shift
+            valid = 0 <= wacc_value <= 1 and wacc_value > growth_value and growth_value <= terminal_roic
+            sensitivity.append(
+                {
+                    "terminal_wacc": wacc_value,
+                    "terminal_growth": growth_value,
+                    "value_per_share": value(wacc_value, growth_value)[5] / shares if valid else None,
+                }
+            )
+    return {
+        "currency": text(p["currency"], "currency"),
+        "units": text(p["units"], "units"),
+        "valuation": {
+            "enterprise_value": enterprise,
+            "equity_value": equity,
+            "value_per_share": per_share,
+            "upside_pct": (per_share / price - 1) * 100 if price is not None else None,
+            "pv_fcff": pv_fcff,
+            "pv_terminal_value": terminal_value / discount,
+            "terminal_value_pct": terminal_value / discount / enterprise * 100 if enterprise > 0 else None,
+        },
+        "projections": projections,
+        "terminal": {
+            "nopat": terminal_nopat,
+            "reinvestment_rate": reinvestment_rate,
+            "fcff": terminal_fcff,
+            "value": terminal_value,
+        },
+        "sensitivity": sensitivity,
+        "assumptions": {
+            "model": "FCFF",
+            "sales_to_capital": sales_to_capital,
+            "terminal_growth": terminal_growth,
+            "terminal_wacc": terminal_wacc,
+            "terminal_roic": terminal_roic,
+            "diluted_shares": shares,
+            **claims,
+            "nonoperating_assets": nonoperating,
+        },
+        "warnings": [
+            "Input-driven valuation, not a forecast or trade signal. Amounts and shares must use one consistent currency and unit."
+        ],
+    }
+
+
 def rows(value, name, minimum=1, maximum=100):
     if not isinstance(value, list) or not minimum <= len(value) <= maximum:
         raise ValueError(f"{name} has invalid row count")
@@ -1136,6 +1250,7 @@ def robustness(p):
 
 COMMANDS = {
     "position_size": position_size,
+    "dcf": dcf,
     "portfolio": portfolio,
     "rebalance": rebalance,
     "peers": peers,

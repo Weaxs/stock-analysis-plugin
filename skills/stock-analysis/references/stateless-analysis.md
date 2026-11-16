@@ -49,6 +49,14 @@
 
 lot_size 来自用户或可核实交易规则，尤其港股不能统一猜100股。工具不覆盖券商最低收费、未提供税费、跳空和流动性风险。quantity=0 表示当前约束下不足一个交易单位，MUST NOT 向上凑整。
 
+## DCF 估值：calculate_dcf_valuation
+
+A/港/美股可先调用 `get_financials(symbol, annual=true, periods=5, include_dcf_inputs=true)` 取年度收入、营业利润、税、现金流、资本开支、现金、债务、少数股东权益和股本。美股优先 SEC companyfacts，A 股和港股配置 `LIXINGER_TOKEN` 时优先理杏仁；主源缺失字段按同财年同币种用 Yahoo 补齐（租赁口径不同，不跨源补），并在 `field_sources` 标注。A 股 `operating_income` 是营业利润（含投资收益和公允价值变动），不等于 EBIT，用作经营利润率前需剔除。仍缺的字段列在 `missing_fields` 且为 null，MUST 向用户索取或另行核实，不能补默认值。`total_debt` 不含租赁；租赁负债在 `lease_liabilities`，是否计入 `debt` 由调用方明确。传给 `calculate_dcf_valuation` 时 `minority_interest` 对应 `minority_interests`，`total_debt`（加上选定的租赁）对应 `debt`。
+
+必需 `currency,units,base_revenue,revenue_growth,operating_margin,tax_rate,sales_to_capital,wacc,terminal_growth,terminal_wacc,terminal_roic,diluted_shares`。逐年数组长度相同且为1..10年；比例均为小数。可选 `cash,debt,minority_interests,nonoperating_assets,other_claims,current_price`。所有金额和股数口径一致。
+
+工具按达摩达兰 FCFF 口径计算：税后营业利润减去收入增量/销售资本比得到FCFF，终值再投资率为 `terminal_growth/terminal_roic`。输出企业价值、股权价值、每股价值、终值占比和 3x3 终值 WACC/增长敏感性。它不估计 WACC、ERP、国家风险、β或行业销售资本比，也不处理期权、租赁、金融企业和失败概率。结果是假设驱动估值，MUST NOT 当作买卖信号。
+
 ## 事件研究：analyze_event_study
 
 通常直接传 `symbol,benchmark,start_date,end_date,event_dates`，由共享 Python 核心取数，避免模型复述整段K线。股票与基准应属于同一市场；代码模式输出实际覆盖区间和提供方复权标记，没有标记时明确未指定，不用调用方猜测覆盖。开始日期须覆盖事件前一交易日、结束日期须覆盖最长事件窗口。也可使用下面的显式价格模式，两种模式互斥。

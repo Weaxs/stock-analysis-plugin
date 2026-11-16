@@ -6,7 +6,7 @@ import json
 import os
 import re
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import unescape
 from io import StringIO
 from pathlib import Path
@@ -18,7 +18,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, cached
-from _subproc import scrub_secrets, socket_timeout, utf8_stdio
+from _subproc import error_message, scrub_secrets, socket_timeout, utf8_stdio
 from stock_data import _A_INDEX_RE, _cn_code, _cn_now, _yf_hk_symbol, detect_market, normalize_stock_code
 from trading_calendar import _MARKET_TZ, market_now
 
@@ -102,42 +102,91 @@ def valuation_summary(history, field):
     }
 
 
+def as_of(events, day):
+    """Latest event filed on or before day (events sorted by filed)."""
+    found = None
+    for event in events:
+        if event["filed"] > day:
+            break
+        found = event
+    return found
+
+
+def us_valuation_history(args):
+    import sec_edgar
+    import yfinance as yf
+
+    symbol = yf_symbol(args.symbol)
+    facts = sec_edgar.valuation_facts(symbol)
+    ticker = yf.Ticker(symbol)
+    start = (market_now("US").date() - pd.DateOffset(years=args.years)).date()
+    # Close is split-adjusted to today's share basis; scale filed share counts by splits after their as-of date.
+    closes = ticker.history(start=start.isoformat(), auto_adjust=False)["Close"].dropna()
+    if closes.empty:
+        raise ValueError("US price history unavailable")
+    closes = closes.resample("W-FRI").last().dropna()  # weekly samples keep 10-year output bounded
+    splits = {market_date(stamp, "US"): float(ratio) for stamp, ratio in ticker.splits.items() if ratio > 0}
+    events = {key: sorted(facts[key], key=lambda e: e["filed"]) for key in ("ttm_net_income", "equity", "shares")}
+    history = []
+    for stamp, close in closes.items():
+        day = market_date(stamp, "US")
+        shares, income, equity = (as_of(events[key], day) for key in ("shares", "ttm_net_income", "equity"))
+        if not shares:
+            continue
+        factor = float(np.prod([ratio for split_day, ratio in splits.items() if split_day > shares["end"]]))
+        cap = float(close) * shares["val"] * factor
+        history.append(
+            {
+                "date": day,
+                "pe_ttm": round(cap / income["val"], 4) if income and income["val"] else None,
+                "pb": round(cap / equity["val"], 4) if equity and equity["val"] else None,
+            }
+        )
+    if not history:
+        raise ValueError("no US valuation history available")
+    return {
+        "symbol": args.symbol,
+        "market": "US",
+        "source": "sec_companyfacts+yfinance",
+        "requested_years": args.years,
+        "sampling": "weekly",
+        "share_basis": facts["share_basis"],
+        "history": history,
+        "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
+        "warnings": [
+            "Derived: market cap = weekly close x latest SEC-filed share count; PE uses TTM NetIncomeLoss attributable to parent, "
+            "PB uses StockholdersEquity, each effective from its filing date. "
+            "Multi-class issuers sum all classes at one class price."
+        ],
+    }
+
+
 def valuation_history(args):
     import akshare as ak
 
-    market, symbol = stock_identity(args.symbol)
     if not 1 <= args.years <= 10:
-        raise ValueError("valuation history requires an A/HK symbol and years in 1..10")
+        raise ValueError("years must be in 1..10")
+    if detect_market(args.symbol) == "US":
+        return us_valuation_history(args)
+    market, symbol = stock_identity(args.symbol)
     warning = None
-    if market == "HK":
-        if os.environ.get("LIXINGER_TOKEN"):
-            try:
-                from lixinger import hk_data
+    if os.environ.get("LIXINGER_TOKEN"):
+        try:
+            import lixinger
 
-                rows = hk_data(args.symbol, "fundamental", ["pe_ttm", "pb"])
-                cutoff = (_cn_now().date() - pd.DateOffset(years=args.years)).date().isoformat()
-                history = sorted(
-                    [
-                        {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm")), "pb": number(r.get("pb"))}
-                        for r in rows
-                        if iso(r.get("date")) and iso(r.get("date")) >= cutoff
-                    ],
-                    key=lambda r: r["date"],
-                )
-                if not history or not all(any(r[field] is not None for r in history) for field in ("pe_ttm", "pb")):
-                    raise ValueError("Lixinger HK valuation history incomplete")
-                return {
-                    "symbol": args.symbol,
-                    "market": market,
-                    "source": "lixinger",
-                    "requested_years": args.years,
-                    "history": history,
-                    "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
-                }
-            except Exception:
-                warning = "Lixinger HK unavailable; Baidu history retained without mixing sources"
-        else:
-            warning = "LIXINGER_TOKEN not configured; HK history limited to available Baidu data"
+            history = lixinger.valuation_history("cn" if market == "A" else "hk", symbol, args.years)
+            return {
+                "symbol": args.symbol,
+                "market": market,
+                "source": "lixinger",
+                "requested_years": args.years,
+                "history": history,
+                "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
+            }
+        except Exception as e:
+            warning = f"Lixinger {market} unavailable: {error_message(e)}; Baidu history used without mixing sources"
+    elif market == "HK":
+        warning = "LIXINGER_TOKEN not configured; HK history limited to available Baidu data"
     fetch = ak.stock_zh_valuation_baidu if market == "A" else ak.stock_hk_valuation_baidu
     period = "近一年" if args.years == 1 else "近三年" if args.years <= 3 else "近五年" if args.years <= 5 else "近十年"
     if market == "HK" and args.years > 3:
@@ -187,27 +236,16 @@ def _csi_hist(ak):
 
 
 def lixinger_index_history(code, start, end):
-    import requests
+    import lixinger
 
     def fetch():
-        response = requests.post(
-            "https://open.lixinger.com/api/cn/index/fundamental",
-            json={
-                "token": os.environ["LIXINGER_TOKEN"],
-                "stockCodes": [code],
-                "startDate": start,
-                "endDate": end,
-                "metricsList": ["pe_ttm.mcw", "pb.mcw"],
-            },
-            timeout=20,
+        data = lixinger.post(
+            "cn/index/fundamental",
+            {"stockCodes": [code], "startDate": start, "endDate": end, "metricsList": ["pe_ttm.mcw", "pb.mcw"]},
         )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") != 1:
-            raise ValueError("Lixinger index data unavailable; check token permissions")
         rows = [
             {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm.mcw")), "pb": number(r.get("pb.mcw"))}
-            for r in payload.get("data", [])
+            for r in data
             if r.get("stockCode") == code
         ]
         if not rows or not any(r["date"] and (r["pe_ttm"] is not None or r["pb"] is not None) for r in rows):
@@ -1447,6 +1485,95 @@ ANNOUNCEMENT_CATEGORIES = {
     "inquiry": ("", "问询"),
     "dividend": ("category_qyfpxzcs_szsh", ""),
 }
+HK_ANNOUNCEMENT_CATEGORIES = {
+    "forecast": r"Profit Warning|Positive Profit Alert|Inside Information.*Profit",
+    "annual": r"Final Results|Annual Report",
+    "interim": r"Interim Results|Interim/Half-Year Report",
+    "quarterly": r"Quarterly Results",
+    "issuance": r"Issue of Securities|Placing|Rights Issue|Open Offer|Subscription",
+    "dividend": r"Dividend",
+}
+
+
+def hk_announcements(args, symbol):
+    import requests
+
+    if args.category != "all" and args.category not in HK_ANNOUNCEMENT_CATEGORIES:
+        raise ValueError("HK announcements support all/forecast/annual/interim/quarterly/issuance/dividend")
+    end = date.fromisoformat(args.end_date) if args.end_date else market_now("HK").date()
+    start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
+    if start > end or not 1 <= args.top <= 500:
+        raise ValueError("start_date must not exceed end_date and top must be in 1..500")
+    response = requests.get(
+        "https://www1.hkexnews.hk/search/prefix.do",
+        params={"callback": "callback", "lang": "EN", "type": "A", "name": symbol, "market": "SEHK"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    stocks = json.loads(re.sub(r"^\s*callback\(|\);?\s*$", "", response.text)).get("stockInfo", [])
+    stock = next((row for row in stocks if row.get("code") == symbol), None)
+    if not stock:
+        raise ValueError("stock not found in HKEXnews directory")
+    response = requests.get(
+        "https://www1.hkexnews.hk/search/titleSearchServlet.do",
+        params={
+            "sortDir": 0,
+            "sortByOptions": "DateTime",
+            "category": 0,
+            "market": "SEHK",
+            "stockId": stock["stockId"],
+            "documentType": -1,
+            "fromDate": start.strftime("%Y%m%d"),
+            "toDate": end.strftime("%Y%m%d"),
+            "title": "",
+            "searchType": 0,
+            "t1code": -2,
+            "t2Gcode": -2,
+            "t2code": -2,
+            # shortcut: one 500-row page; narrow the date range when truncated.
+            "rowRange": 500,
+            "lang": "E",
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    data = response.json()
+    items = json.loads(data.get("result") or "[]")
+    rows = []
+    for row in items:
+        kind = unescape(re.sub(r"<[^>]+>", " ", row.get("LONG_TEXT") or row.get("SHORT_TEXT") or "")).strip()
+        title = unescape(re.sub(r"<[^>]+>", " ", row.get("TITLE") or "")).strip()
+        # One announcement can carry several headlines (e.g. Final Results + Dividend); match any of them.
+        matches = [
+            key for key, pattern in HK_ANNOUNCEMENT_CATEGORIES.items() if re.search(pattern, f"{kind} {title}", re.I)
+        ]
+        inferred = args.category if args.category in matches else next(iter(matches), "other")
+        path = row.get("FILE_LINK") or ""
+        if args.category != "all" and inferred != args.category or not path.startswith("/listedco/"):
+            continue
+        rows.append(
+            {
+                "title": title,
+                "date": datetime.strptime(row["DATE_TIME"], "%d/%m/%Y %H:%M").date().isoformat(),
+                "category": inferred,
+                "pdf_url": f"https://www1.hkexnews.hk{path}",
+                "type": kind,
+            }
+        )
+    total = int(data.get("recordCnt") or len(items))
+    return {
+        "symbol": args.symbol,
+        "market": "HK",
+        "source": "hkexnews",
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "total": total if args.category == "all" else len(rows),
+        "total_basis": "provider_record_count" if args.category == "all" else "matched_in_loaded_rows",
+        "announcements": rows[: args.top],
+        "truncated": total > len(items) or len(rows) > args.top,
+        "body_extracted": False,
+        "requested_category": args.category,
+    }
 
 
 def announcements(args):
@@ -1457,7 +1584,7 @@ def announcements(args):
 
         if args.symbol.isdigit():
             # Bare digits are an unsuffixed HK code as often as a CIK; only CIK-prefixed numbers reach SEC.
-            raise ValueError("numeric symbols need a CIK prefix (CIK320193); HK announcements are not supported")
+            raise ValueError("numeric symbols need a CIK prefix (CIK320193) or HK .HK suffix (00700.HK)")
         end = date.fromisoformat(args.end_date) if args.end_date else market_now("US").date()
         start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
         if start > end or not 1 <= args.top <= 500:
@@ -1469,6 +1596,8 @@ def announcements(args):
         )
         return sec_edgar.filings(symbol, args.category, start, end, args.top)
     market, symbol = stock_identity(args.symbol)
+    if market == "HK":
+        return hk_announcements(args, symbol)
     if market != "A" or not 1 <= args.top <= 500 or args.category not in ANNOUNCEMENT_CATEGORIES:
         raise ValueError("announcements require an A-share or US stock, valid category and top in 1..500")
     end = date.fromisoformat(args.end_date) if args.end_date else _cn_now().date()

@@ -294,6 +294,217 @@ FILING_FORMS = {
 FILING_FORMS["all"] = set().union(*FILING_FORMS.values()) | {"DEF 14A", "DEFA14A"}
 
 
+DCF_CONCEPTS = {
+    "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
+    "operating_income": ("OperatingIncomeLoss",),
+    "pretax_income": (
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ),
+    "income_tax": ("IncomeTaxExpenseBenefit",),
+    "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
+    "capital_expenditure": ("PaymentsToAcquirePropertyPlantAndEquipment",),
+    "depreciation_amortization": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization"),
+    "diluted_shares": ("WeightedAverageNumberOfDilutedSharesOutstanding",),
+}
+DCF_INSTANTS = {
+    "cash": ("CashAndCashEquivalentsAtCarryingValue",),
+    "minority_interest": ("MinorityInterest",),
+}
+DEBT_CONCEPTS = (
+    "LongTermDebt",
+    "LongTermDebtCurrent",
+    "LongTermDebtNoncurrent",
+    "ShortTermBorrowings",
+    "CommercialPaper",
+)
+# Each lease kind: the total tag, else its current + noncurrent parts.
+LEASE_CONCEPTS = {
+    "OperatingLeaseLiability": ("OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent"),
+    "FinanceLeaseLiability": ("FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"),
+}
+
+
+def annual_fact(row):
+    if row.get("fp") != "FY" or row.get("form") not in {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}:
+        return False
+    if "start" not in row:
+        return True
+    days = (date.fromisoformat(row["end"]) - date.fromisoformat(row["start"])).days
+    return 300 <= days <= 400
+
+
+def latest_facts(facts, names, unit):
+    values = {}
+    for name in names:
+        concept = {}
+        for row in facts.get(name, {}).get("units", {}).get(unit, []):
+            if annual_fact(row) and (row["end"] not in concept or row.get("filed", "") > concept[row["end"]]["filed"]):
+                concept[row["end"]] = row
+        values.update({end: row for end, row in concept.items() if end not in values})
+    return values
+
+
+def company_facts(symbol):
+    cik = resolve_cik(symbol)
+    return cached(
+        f"sec-companyfacts:{cik}", DAY, lambda: sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
+    )
+
+
+def dcf_inputs(symbol, periods):
+    data = company_facts(symbol)
+    gaap = data.get("facts", {}).get("us-gaap", {})
+    rows = {
+        key: latest_facts(gaap, names, "shares" if key == "diluted_shares" else "USD")
+        for key, names in {**DCF_CONCEPTS, **DCF_INSTANTS}.items()
+    }
+    lease_names = [name for total, parts in LEASE_CONCEPTS.items() for name in (total, *parts)]
+    debt = {name: latest_facts(gaap, (name,), "USD") for name in (*DEBT_CONCEPTS, *lease_names)}
+    # Values keep the latest (restated) filing; labels and cover shares come from each period's original report.
+    originals = {}
+    for name in DCF_CONCEPTS["revenue"] + DCF_CONCEPTS["operating_income"]:
+        for row in gaap.get(name, {}).get("units", {}).get("USD", []):
+            if annual_fact(row) and (row["end"] not in originals or row["filed"] < originals[row["end"]]["filed"]):
+                originals[row["end"]] = row
+    ends = sorted(originals, reverse=True)[:periods]
+    outstanding = (
+        data.get("facts", {})
+        .get("dei", {})
+        .get("EntityCommonStockSharesOutstanding", {})
+        .get("units", {})
+        .get("shares", [])
+    )
+    result = []
+    for end in ends:
+        entry = {key: rows[key].get(end, {}).get("val") for key in rows}
+        source = originals[end]
+        if (date.fromisoformat(source["filed"]) - date.fromisoformat(end)).days > 365:
+            # Only a later year's comparative exists (e.g. pre-XBRL years); its labels would be wrong.
+            source = {}
+        parts = [debt["LongTermDebt"].get(end, {}).get("val")]
+        if parts[0] is None:
+            parts = [debt[name].get(end, {}).get("val") for name in ("LongTermDebtCurrent", "LongTermDebtNoncurrent")]
+        parts += [debt[name].get(end, {}).get("val") for name in ("ShortTermBorrowings", "CommercialPaper")]
+        leases = []
+        for total, split in LEASE_CONCEPTS.items():
+            names = (total,) if end in debt[total] else split
+            if all(end in debt[name] for name in names):
+                leases += [debt[name][end]["val"] for name in names]
+        # Multi-class issuers report one cover row per class in the same filing; sum them.
+        cover = [
+            row
+            for row in outstanding
+            if source and (row.get("accn"), row.get("filed")) == (source.get("accn"), source.get("filed"))
+        ]
+        entry.update(
+            {
+                "period_end": end,
+                "currency": "USD",
+                "total_debt": sum(value for value in parts if value is not None)
+                if any(value is not None for value in parts)
+                else None,
+                "lease_liabilities": sum(leases) if leases else None,
+                "shares_outstanding": sum(row["val"] for row in cover) if cover else None,
+                "shares_outstanding_date": max(row["end"] for row in cover) if cover else None,
+                "form": source.get("form"),
+                "filed": source.get("filed"),
+                "fiscal_year": source.get("fy"),
+            }
+        )
+        result.append(entry)
+    if not result:
+        raise ValueError("SEC annual DCF facts unavailable")
+    return {
+        "source": "sec_companyfacts",
+        "name": data.get("entityName"),
+        "periods": result,
+        "warnings": [
+            "SEC XBRL tags vary by issuer; null fields are filled from Yahoo for the same period when available. "
+            "total_debt sums reported debt/borrowing tags and excludes leases; lease_liabilities is operating + finance "
+            "leases. Amounts use the latest filed (possibly restated) value; form/filed/shares_outstanding come from "
+            "the period's original annual report."
+        ],
+    }
+
+
+def first_filed(rows, forms=("10-Q", "10-Q/A", "10-K", "10-K/A")):
+    """Earliest filing per (start, end): the value the market could see then, not a later restatement."""
+    kept = {}
+    for row in rows:
+        key = (row.get("start"), row["end"])
+        if row.get("form") in forms and row.get("filed") and (key not in kept or row["filed"] < kept[key]["filed"]):
+            kept[key] = row
+    return list(kept.values())
+
+
+def valuation_facts(symbol):
+    """Point-in-time TTM net income, equity and share count events, each dated by its SEC filing date."""
+    data = company_facts(symbol)
+    gaap = data.get("facts", {}).get("us-gaap", {})
+    income = first_filed(gaap.get("NetIncomeLoss", {}).get("units", {}).get("USD", []))
+
+    def days(row):
+        return (date.fromisoformat(row["end"]) - date.fromisoformat(row["start"])).days
+
+    quarters = {row["end"]: row for row in income if "start" in row and 80 <= days(row) <= 100}
+    for year in (row for row in income if "start" in row and 350 <= days(row) <= 380):
+        inside = [q for q in quarters.values() if year["start"] <= q["start"] and q["end"] <= year["end"]]
+        if year["end"] not in quarters and len(inside) == 3:
+            quarters[year["end"]] = {
+                "start": max(q["end"] for q in inside),
+                "end": year["end"],
+                "val": year["val"] - sum(q["val"] for q in inside),
+                "filed": year["filed"],
+            }
+    ordered = sorted(quarters.values(), key=lambda row: row["end"])
+    ttm = []
+    for index in range(3, len(ordered)):
+        window = ordered[index - 3 : index + 1]
+        span = (date.fromisoformat(window[-1]["end"]) - date.fromisoformat(window[0]["start"])).days
+        if 350 <= span <= 380:
+            ttm.append(
+                {
+                    "filed": max(q["filed"] for q in window),
+                    "end": window[-1]["end"],
+                    "val": sum(q["val"] for q in window),
+                }
+            )
+    equity = [
+        {"filed": row["filed"], "end": row["end"], "val": row["val"]}
+        for row in first_filed(gaap.get("StockholdersEquity", {}).get("units", {}).get("USD", []))
+    ]
+    shares = {}
+    for row in (
+        data.get("facts", {})
+        .get("dei", {})
+        .get("EntityCommonStockSharesOutstanding", {})
+        .get("units", {})
+        .get("shares", [])
+    ):
+        if row.get("form") in ("10-Q", "10-Q/A", "10-K", "10-K/A") and row.get("filed"):
+            # Multi-class issuers report one row per class under the same filing; sum them.
+            entry = shares.setdefault(
+                (row.get("accn"), row["end"]), {"filed": row["filed"], "end": row["end"], "val": 0}
+            )
+            entry["val"] += row["val"]
+    basis = "cover_shares_outstanding"
+    if not shares:
+        # Some multi-class filers (e.g. Alphabet) omit dei cover shares; weighted diluted shares are the fallback.
+        basis = "weighted_diluted_shares"
+        diluted = gaap.get("WeightedAverageNumberOfDilutedSharesOutstanding", {}).get("units", {}).get("shares", [])
+        shares = {row["end"]: row for row in first_filed(diluted) if "start" in row and 80 <= days(row) <= 100}
+    if not ttm or not equity or not shares:
+        raise ValueError("SEC net income, equity or share count facts unavailable")
+    return {
+        "name": data.get("entityName"),
+        "ttm_net_income": ttm,
+        "equity": equity,
+        "shares": list(shares.values()),
+        "share_basis": basis,
+    }
+
+
 def filings(symbol, category, start, end, top):
     forms = FILING_FORMS.get(category)
     if forms is None:

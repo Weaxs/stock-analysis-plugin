@@ -24,7 +24,7 @@
 - **策略视角**：缠论、波浪理论、龙头战法、情绪周期等 18 套方法论，以 Skill 形式按需调用。
 - **dsh 仪表盘**：在 dsh Web / Desktop 侧栏看自选股和六个市场的行情，后台预热，打开即显示。
 
-一共 73 个工具、21 个 Skills，11 个数据源自动容灾。大部分功能不需要任何 API Key。
+一共 74 个工具、21 个 Skills，11 个数据源自动容灾。大部分功能不需要任何 API Key。
 
 ## 快速开始
 
@@ -108,7 +108,7 @@
 | `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股 K 线 / 行情） |
 | `FINNHUB_API_KEY` | Finnhub（港股 / 美股） |
 | `XUEQIU_TOKEN` | 雪球（A 股个股所属板块反查，东财不可用时的兜底） |
-| `LIXINGER_TOKEN` | 理杏仁：指数 PB 与港股非金融公司财务、每日估值（需对应权限） |
+| `LIXINGER_TOKEN` | 理杏仁：指数 PB、A 股/港股非金融公司每日估值与 DCF 财报输入、港股财务（需对应权限） |
 | `SEC_USER_AGENT` | SEC EDGAR 身份声明：应用名称与真实联系邮箱，13F / Form 4 必需 |
 
 **搜索引擎（可选，配置任一即可）：**
@@ -165,7 +165,7 @@
 
 ## 工具列表
 
-73 个工具按用途分组：
+74 个工具按用途分组：
 
 | 类别 | 数量 | 主要内容 |
 |------|------|----------|
@@ -175,19 +175,19 @@
 | 搜索与舆情 | 5 | 新闻搜索、综合情报、社交情绪、正文提取 |
 | 辅助 | 7 | 名称/拼音解析、交易日历、交易时段、数据源诊断、股票列表解析 |
 | 上下文与报告 | 8 | 自选股上下文、持仓分析、告警规则、信号记录与评估、研报渲染 |
-| 无状态研究与风险计算 | 8 | 同行比较、公告变更、组合风险、调仓计划、仓位计算、事件研究、回测稳健性 |
+| 无状态研究与风险计算 | 9 | 同行比较、公告变更、组合风险、调仓计划、仓位计算、DCF 估值、事件研究、回测稳健性 |
 
 <details>
-<summary>完整工具列表（73 个）</summary>
+<summary>完整工具列表（74 个）</summary>
 
 #### 数据获取
 
 | 工具 | 说明 |
 |------|------|
-| `get_announcements` | A 股巨潮公告 / 美股 SEC 申报：类别/日期范围/标题与原文链接；美股需 SEC_USER_AGENT |
+| `get_announcements` | A 股巨潮公告 / 港股 HKEXnews / 美股 SEC 申报：类别/日期范围/标题与原文链接；美股需 SEC_USER_AGENT |
 | `get_us_holdings` | SEC 机构组合 / 发行人 CIK 反查机构：精确 CUSIP 映射、季度数据与修订处理（需 SEC_USER_AGENT） |
 | `get_insider_trades` | SEC 股票 ticker/发行人 CIK 的 Form 4 内部人交易、代码和脚注 |
-| `get_valuation_history` | A/HK PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口 |
+| `get_valuation_history` | A/HK/US PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口（美股由 SEC 申报与周收盘派生） |
 | `get_index_valuation` | 中国指数 PE/PB 历史水位；中证官方多年滚动 PE；可选理杏仁补充 PB |
 | `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 董事会排期；US/JP yfinance 预计日期（provider_only，非官方确认） |
 | `get_shareholder_structure` | A 股股东户数/十大流通股东变化/报告期北向名义持股；HK 南向持股 |
@@ -198,14 +198,14 @@
 | `get_fund_quote` | 6 位场外公募基金净值；`nav` 是 `nav_date` 对应的已披露日终净值而非实时价，`accumulated_nav` 为累计净值、`change_pct` 为日涨跌幅；`estimated_nav` 可能为 `null`，QDII 净值可能滞后 1-2 交易日 |
 | `get_capital_flow` | 资金流向（仅 A 股） |
 | `get_news` | 个股相关新闻 |
-| `get_financials` | 财务指标 |
+| `get_financials` | 财务指标；可选追加 A/港/美股年度 DCF 输入 |
 | `get_stock_info` | 股票基本信息 |
 | `get_chip_distribution` | 筹码分布 |
 | `get_market_indices` | 主要指数行情 |
-| `get_sector_rankings` | 板块涨跌排行（行业/概念） |
+| `get_sector_rankings` | 板块涨跌排行（A 股行业/概念；美股 SPDR 行业 ETF 代理） |
 | `get_sector_constituents` | 板块成分股查询（仅 A 股，板块名模糊匹配） |
 | `resolve_stock_sectors` | 个股所属板块查询（A 股行业+概念 / 港股 GICS） |
-| `get_market_stats` | 市场统计（涨跌家数、涨停等） |
+| `get_market_stats` | 市场统计（A/HK/US 涨跌家数、成交额；涨停仅 A 股） |
 | `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_hot_stocks` | 全市场人气热搜榜（东财→百度，仅 A 股） |
@@ -288,6 +288,7 @@
 | `analyze_portfolio_risk` | 一次性持仓的集中度、行业/币种敞口、价格盈亏、止损情景、可选相关性与市场/行业/个股/汇率压力测试 |
 | `plan_portfolio_rebalance` | 按目标权重、整手、费用和现金约束生成先卖后买的调仓计划，返回未满足数量与调后敞口 |
 | `calculate_position_size` | 按现金、风险预算、费用、滑点和交易单位计算本次可买数量 |
+| `calculate_dcf_valuation` | 按显式假设计算达摩达兰式 FCFF DCF、股权价值、每股价值与敏感性 |
 | `analyze_event_study` | 事件前一交易日收盘至各窗口的股票/基准收益差，标明缺失和重叠样本 |
 | `validate_backtest` | 复用现有引擎，滚动训练选候选、样本外验证，比较参数及多个标的 |
 | `compare_analysis_snapshots` | 比较调用方传入的快照，区分新增、删除、变化、数据失效和恢复 |
@@ -458,7 +459,7 @@ sort_order: "desc"
 npm install                                   # 同时构建仓库 .venv
 .venv/bin/python -m pytest -q                 # Python 单元测试（离线）
 npx tsc --noEmit                              # TypeScript 类型检查
-npx tsx tests/test_adapter_parity.ts          # 四个宿主的 73 个工具和参数映射一致
+npx tsx tests/test_adapter_parity.ts          # 四个宿主的 74 个工具和参数映射一致
 npm run build:openclaw && npm run build:dsh   # 构建 OpenClaw / dsh bundle
 ```
 
@@ -470,12 +471,12 @@ npm run build:openclaw && npm run build:dsh   # 构建 OpenClaw / dsh bundle
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 73 个工具 + 21 个 skill
+│   └── index.ts                     #   注册 74 个工具 + 21 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   读取 tools/tool_schemas.json
-│   └── tools.py                     #   73 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   74 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
@@ -490,7 +491,7 @@ stock-analysis/
 │
 ├── mcp_host/                        # MCP stdio 服务器（复用 Hermes schema/handler）
 ├── tools/                           # 共享 Python CLI 工具
-│   ├── tool_schemas.json            #   73 个工具的名称/描述/参数（各宿主共用）
+│   ├── tool_schemas.json            #   74 个工具的名称/描述/参数（各宿主共用）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
 │   ├── signal_tracker.py            #   AI 买卖建议回测闭环（本地 JSONL 存储）
 │   ├── technical.py                 #   技术指标分析

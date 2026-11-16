@@ -53,7 +53,7 @@ Agent 应调用 `get_quote` 并返回行情。
 
 ## 按需工具发现
 
-最新稳定版 Pi 1.5.2 支持原生按需工具发现。插件在 `session_start` 检查 `tool_search` 的 exposure 元数据及活动工具 API：具备这些能力时，将股票工具设为 `deferred` 并启用原生搜索，保留其他插件的活动工具；旧宿主保持原来的 73 工具全量暴露，无需升级才能继续使用。
+最新稳定版 Pi 1.5.2 支持原生按需工具发现。插件在 `session_start` 检查 `tool_search` 的 exposure 元数据及活动工具 API：具备这些能力时，将股票工具设为 `deferred` 并启用原生搜索，保留其他插件的活动工具；旧宿主保持原来的 74 工具全量暴露，无需升级才能继续使用。
 
 新版中搜索已注册但未激活时，插件会尝试启用并确认成功后再隐藏股票工具；未加载搜索扩展、被宿主限制或无法启用时保持全量暴露。会话中途关闭搜索时，下次模型请求前恢复全部股票工具，并停止发送搜索指引。
 
@@ -125,7 +125,7 @@ git pull && npm install
 
 ```
 stock-analysis-plugin/
-├── pi/index.ts           # Pi Extension 入口，注册 73 个工具和 21 个 Skill
+├── pi/index.ts           # Pi Extension 入口，注册 74 个工具和 21 个 Skill
 ├── tools/                # 共享 Python CLI
 ├── skills/               # SKILL.md
 ├── schemas/ templates/ strategies/

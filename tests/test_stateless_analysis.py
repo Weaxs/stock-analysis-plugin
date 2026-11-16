@@ -35,6 +35,67 @@ def exact_json_number(text):
     return Fraction(Decimal(text))
 
 
+def dcf_payload(**overrides):
+    payload = {
+        "currency": "USD",
+        "units": "million",
+        "base_revenue": 100,
+        "revenue_growth": [0.1],
+        "operating_margin": [0.2],
+        "tax_rate": [0.25],
+        "sales_to_capital": 2,
+        "wacc": [0.1],
+        "terminal_growth": 0.02,
+        "terminal_wacc": 0.08,
+        "terminal_roic": 0.1,
+        "cash": 10,
+        "debt": 20,
+        "diluted_shares": 10,
+        "current_price": 20,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_dcf_values_fcff_terminal_and_equity_bridge():
+    code, result = invoke("dcf", dcf_payload())
+    assert code == 0
+    year = result["projections"][0]
+    assert year["revenue"] == pytest.approx(110)
+    assert year["reinvestment"] == pytest.approx(5)
+    assert year["fcff"] == pytest.approx(11.5)
+    assert result["terminal"]["value"] == pytest.approx(224.4)
+    valuation = result["valuation"]
+    assert valuation["enterprise_value"] == pytest.approx(214.4545454545)
+    assert valuation["equity_value"] == pytest.approx(204.4545454545)
+    assert valuation["value_per_share"] == pytest.approx(20.4454545455)
+    assert valuation["upside_pct"] == pytest.approx(2.227272727273)
+    assert len(result["sensitivity"]) == 9
+
+
+def test_dcf_terminal_share_is_null_for_negative_enterprise_value():
+    code, result = invoke("dcf", dcf_payload(operating_margin=[-0.5]))
+    assert code == 0
+    assert result["valuation"]["enterprise_value"] < 0
+    assert result["valuation"]["terminal_value_pct"] is None
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"terminal_wacc": 0.02},
+        {"terminal_growth": 0.11},
+        {"wacc": [0.1, 0.1]},
+        {"tax_rate": [1.1]},
+        {"diluted_shares": 0},
+    ],
+)
+def test_dcf_rejects_invalid_terminal_and_inputs(override):
+    code, result = invoke("dcf", dcf_payload(**override))
+    assert code == 1
+    assert "error" in result
+
+
 def invoke_raw(raw, exact=True, command="rebalance", timeout=30, env=None):
     result = subprocess.run(
         [sys.executable, str(SCRIPT), command],

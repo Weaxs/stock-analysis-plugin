@@ -34,11 +34,17 @@ ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始�
 
 公告类别为 `all/forecast/express/annual/interim/quarterly/reduction/issuance/inquiry/dividend`。默认最近 90 天，最多 500 条；通过巨潮官方股票目录取得 orgId，沪深京统一使用官方 `szse` 查询栏目。业绩快报和问询使用标题关键词查询。A 股返回 PDF 原文链接，可用 `extract_article`（pypdf）继续提取正文；美股返回 SEC `document_url/filing_url`。`total/truncated` 表示供应商匹配数量及截断，查询无结果与请求失败分开。
 
-港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。Yahoo 顶层快照的 `snapshot_units` 明确：`pe=trailing`，`roe/profit_margin/dividend_yield=ratio`（小数），`debt_to_equity=percent`（百分数）；不得把 D/E 百分数当作小数倍数。
+理杏仁统一走 `tools/lixinger.py`：一个 POST 客户端加上按市场（`cn`/`hk`）参数化的公司数据接口，调用方只传市场和代码。A 股个股估值历史在配置 `LIXINGER_TOKEN` 时优先理杏仁每日 PE-TTM/PB，失败回退百度并提示，不混接来源。港股使用既有 `LIXINGER_TOKEN`，需具备港股接口权限。新增来源覆盖理杏仁非金融公司财务和每日估值，最多十年；金融公司或无权限时回退现有 Yahoo/东财财务和百度估值，返回实际期数和不足提示。财务按 `annual_report` 识别年报，保留财年末、披露日和币种，金额为报告币种，历史比率为百分数；顶层 `roe/profit_margin` 延续 Yahoo 小数比例。理杏仁财报用于增强历史，同时按整组保留可用的 Yahoo 顶层快照，`currency` 是 Yahoo 的财报币种，`market_cap_currency` 是市值币种，`snapshot_source` 标明来源，缺失值不混入其他报告期或币种的历史数字；历史币种和报告日期在 `periods` 每行保留，Yahoo 未提供明确报告日期时顶层 `report_date=null`。快照失败时 `snapshot_available=false`，财报与历史仍返回。会计口径不强行转换为 A 股，估值分位沿用正值样本算法，不拼接不同来源。Yahoo 顶层快照的 `snapshot_units` 明确：`pe=trailing`，`roe/profit_margin/dividend_yield=ratio`（小数），`debt_to_equity=percent`（百分数）；不得把 D/E 百分数当作小数倍数。
 
 SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通过环境变量提供。单进程最多每秒 2 次请求（多个并行进程需控制账户/IP 总量不超过 SEC 的每秒 10 次），并缓存 ticker/CIK、申报元数据和 XML 解析结果。13F 返回机构最近季度的原始申报，不是实时完整组合；通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准，2023-01-03 起金额单位为美元，更早申报为千美元。修订文件另列原文链接，避免错误合并补充与重述；发行人 CIK 反查现已通过 `mode=issuer` 支持：从结构化 Schedule 13D/G 校验发行人 CIK、提取 CUSIP，再扫描官方最新已发布 13F 批量窗口。`auto` 默认有当前或已检索历史 13F 时查机构，否则查发行人；Berkshire 等兼具两种身份时显式选择 `issuer`。修订按 `RESTATEMENT` 替换与 `NEW HOLDINGS` 补充重建；无法判断的修订或缺少基础版时总量为 null，并给出 `unresolved_manager_count`。
 
 Form 4 的 `days` 是申报日期窗口，`top=1..20` 限制文件数，返回全部已解析交易。保留多人联报、衍生品、交易代码、脚注、直接/间接持有和修订信息；仅 P/S 标为买/卖，其余行为不推断方向，价格未披露为 null。读取 `truncated/warnings`，原件与修订不要重复计数。风险组合工具 `screen_risk` 仍为 A 股专用。
+
+A/港/美股 DCF 输入（`get_financials include_dcf_inputs=true`）：美股以 SEC companyfacts 为主源，A 股和港股配置 `LIXINGER_TOKEN` 时以理杏仁年报为主源（理杏仁港股无营业利润、资本开支、折旧摊销字段；A 股 `total_debt` 含“一年内到期的非流动负债”，其中可能有一年内到期的租赁负债），未配置时用 Yahoo（A 股为 `.SS/.SZ`，北交所无 Yahoo 财报），主源缺失字段仅在同一财年末（±10 天）且币种一致时用 Yahoo 补齐，`field_sources` 标明每个字段来源，`missing_fields` 列出仍缺字段。`total_debt` 三个来源都不含租赁（Yahoo 用 Current Debt + Long Term Debt，不用含租赁的 Total Debt），租赁负债在 `lease_liabilities` 单列。
+
+美股估值历史（`get_valuation_history`）由 SEC companyfacts 派生：TTM `NetIncomeLoss`（10-Q 单季加由 10-K 推出的第四季）、`StockholdersEquity` 和封面股本，均按 SEC 申报日起生效，取每个期间最早申报值，避免用后来的重述回填；Yahoo 周收盘按拆股调整后的价格乘以同口径股本得到市值。多类股公司按所有类别股本合计、单一类别价格计算；无封面股本时退回加权稀释股本（`share_basis`）。
+
+港美股市场宽度（`get_market_stats market=HK|US`）沿用东方财富全市场快照计算涨跌家数和成交额，无涨跌停制度，涨跌停字段为 null；美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`，不是交易所官方行业数据。港股行业排行暂无可靠的公开行业指数源，未补。
 
 接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
 

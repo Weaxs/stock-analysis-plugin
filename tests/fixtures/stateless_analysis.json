@@ -144,6 +144,34 @@
       "lot_size": 100
     }
   },
+  "calculate_dcf_valuation": {
+    "command": "dcf",
+    "args": {
+      "currency": "USD",
+      "units": "million",
+      "base_revenue": 100,
+      "revenue_growth": [
+        0.1
+      ],
+      "operating_margin": [
+        0.2
+      ],
+      "tax_rate": [
+        0.25
+      ],
+      "sales_to_capital": 2,
+      "wacc": [
+        0.1
+      ],
+      "terminal_growth": 0.02,
+      "terminal_wacc": 0.08,
+      "terminal_roic": 0.1,
+      "cash": 10,
+      "debt": 20,
+      "diluted_shares": 10,
+      "current_price": 20
+    }
+  },
   "analyze_event_study": {
     "command": "event_study",
     "args": {

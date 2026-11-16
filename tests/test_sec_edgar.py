@@ -454,3 +454,111 @@ def test_sec_filings_reject_categories_without_sec_form(monkeypatch, category):
     monkeypatch.setattr("requests.get", lambda *a, **k: pytest.fail("HTTP before category validation"))
     with pytest.raises(ValueError, match="SEC"):
         sec_edgar.filings("AAPL", category, date(2026, 1, 1), date(2026, 10, 1), 10)
+
+
+def test_dcf_inputs_use_latest_annual_companyfacts(monkeypatch):
+    def fact(value, end="2026-09-26", start="2025-09-28", filed="2026-11-03", form="10-K"):
+        return {"start": start, "end": end, "val": value, "fy": 2026, "fp": "FY", "form": form, "filed": filed}
+
+    def instant(value, end="2026-09-26", filed="2026-11-03", accn="a2026"):
+        return {"end": end, "val": value, "fy": 2026, "fp": "FY", "form": "10-K", "filed": filed, "accn": accn}
+
+    data = {
+        "entityName": "Example",
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            instant(60, "2026-10-20"),
+                            instant(38, "2026-10-20"),
+                            instant(90, "2025-10-20", "2025-11-01", "a2025"),
+                        ]
+                    }
+                }
+            },
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact(100) | {"accn": "a2026"},
+                            {**fact(80, "2025-09-27", "2024-09-29", "2025-11-01"), "accn": "a2025", "fy": 2025},
+                            {**fact(85, "2025-09-27", "2024-09-29"), "accn": "a2026"},
+                            {**fact(70, "2024-09-28", "2023-09-30"), "accn": "a2026"},
+                        ]
+                    }
+                },
+                "OperatingIncomeLoss": {"units": {"USD": [fact(30), fact(8, start="2026-06-28")]}},
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": {
+                    "units": {"USD": [fact(25)]}
+                },
+                "IncomeTaxExpenseBenefit": {"units": {"USD": [fact(5)]}},
+                "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [fact(40)]}},
+                "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [fact(12)]}},
+                "DepreciationDepletionAndAmortization": {"units": {"USD": [fact(7)]}},
+                "CashAndCashEquivalentsAtCarryingValue": {"units": {"USD": [instant(20)]}},
+                "LongTermDebt": {"units": {"USD": [instant(50)]}},
+                "CommercialPaper": {"units": {"USD": [instant(5)]}},
+                "OperatingLeaseLiability": {"units": {"USD": [instant(9)]}},
+                "FinanceLeaseLiabilityCurrent": {"units": {"USD": [instant(1)]}},
+                "FinanceLeaseLiabilityNoncurrent": {"units": {"USD": [instant(2), instant(4, "2025-09-27")]}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [fact(101)]}},
+            },
+        },
+    }
+    monkeypatch.setattr(sec_edgar, "resolve_cik", lambda symbol: "0000000001")
+    monkeypatch.setattr(sec_edgar, "cached", lambda key, ttl, fn: data)
+    result = sec_edgar.dcf_inputs("EXM", 3)
+    row, older, oldest = result["periods"]
+    assert older["lease_liabilities"] is None
+    assert (oldest["revenue"], oldest["filed"], oldest["shares_outstanding"]) == (70, None, None)
+    assert (older["revenue"], older["filed"], older["fiscal_year"]) == (85, "2025-11-01", 2025)
+    assert older["shares_outstanding"] == 90
+    assert result["source"] == "sec_companyfacts"
+    assert row["revenue"] == 100
+    assert row["operating_income"] == 30
+    assert row["capital_expenditure"] == 12
+    assert row["total_debt"] == 55
+    assert row["lease_liabilities"] == 12
+    assert row["diluted_shares"] == 101
+    assert row["shares_outstanding"] == 98
+    assert result["warnings"]
+
+
+def test_valuation_facts_derive_q4_and_point_in_time_ttm(monkeypatch):
+    def flow(start, end, value, filed, form="10-Q"):
+        return {"start": start, "end": end, "val": value, "form": form, "filed": filed}
+
+    income = [
+        flow("2025-01-01", "2025-03-31", 10, "2025-04-30"),
+        flow("2025-01-01", "2025-03-31", 99, "2026-04-30"),
+        flow("2025-04-01", "2025-06-30", 20, "2025-07-30"),
+        flow("2025-01-01", "2025-06-30", 30, "2025-07-30"),
+        flow("2025-07-01", "2025-09-30", 30, "2025-10-30"),
+        flow("2025-01-01", "2025-12-31", 100, "2026-02-01", "10-K"),
+    ]
+    data = {
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {"units": {"USD": income}},
+                "StockholdersEquity": {
+                    "units": {"USD": [{"end": "2025-12-31", "val": 400, "form": "10-K", "filed": "2026-02-01"}]}
+                },
+            },
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {"end": "2026-01-20", "val": 6, "form": "10-K", "filed": "2026-02-01", "accn": "a"},
+                            {"end": "2026-01-20", "val": 4, "form": "10-K", "filed": "2026-02-01", "accn": "a"},
+                        ]
+                    }
+                }
+            },
+        }
+    }
+    monkeypatch.setattr(sec_edgar, "company_facts", lambda symbol: data)
+    facts = sec_edgar.valuation_facts("EXM")
+    assert facts["ttm_net_income"] == [{"filed": "2026-02-01", "end": "2025-12-31", "val": 100}]
+    assert facts["shares"] == [{"filed": "2026-02-01", "end": "2026-01-20", "val": 10}]
+    assert facts["share_basis"] == "cover_shares_outstanding"

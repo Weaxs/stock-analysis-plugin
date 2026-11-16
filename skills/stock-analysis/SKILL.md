@@ -17,7 +17,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 ## 无状态分析扩展
 
-当用户要求同行比较、组合风险/压力测试、目标权重调仓、仓位预算或新旧分析比较时，MUST 读取[无状态研究工具](references/stateless-analysis.md)，分别使用 compare_stocks、analyze_portfolio_risk、plan_portfolio_rebalance、calculate_position_size、compare_analysis_snapshots。所有用户状态均由本次输入提供；调仓计划数量不等于成交，现金不足或整手差额必须读取 unfilled 说明。
+当用户要求同行比较、组合风险/压力测试、目标权重调仓、仓位预算、DCF 估值或新旧分析比较时，MUST 读取[无状态研究工具](references/stateless-analysis.md)，分别使用 compare_stocks、analyze_portfolio_risk、plan_portfolio_rebalance、calculate_position_size、calculate_dcf_valuation、compare_analysis_snapshots。所有用户状态均由本次输入提供；调仓计划数量不等于成交，现金不足或整手差额必须读取 unfilled 说明。
 
 ## 意图路由表
 
@@ -31,7 +31,7 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 | 个股状态速览 | `get_quote` + `get_technical_analysis` |
 | 场外公募基金净值 | `get_fund_quote`（6 位基金代码，如 018147） |
 | 异动归因 | `detect_anomaly` + `get_news` |
-| 大盘择时 | `detect_market_regime`；A 股可补充 `get_market_stats` |
+| 大盘择时 | `detect_market_regime`；可补充 `get_market_stats(market)` 看涨跌家数，美股行业强弱用 `get_sector_rankings(market=US)`（ETF 代理） |
 
 ## 执行流程
 
@@ -120,7 +120,7 @@ python3 scripts/gather.py <symbol>
 
 按用户问题选择数据，完整说明口径、采样覆盖和缺失项：
 
-- 判断估值贵贱：`get_valuation_history(symbol, years=5)` 的 PE-TTM/PB 历史正值分位与 Band；亏损 PE 不计算分位，实际采样不足五年必须说明。
+- 判断估值贵贱：`get_valuation_history(symbol, years=5)` 的 PE-TTM/PB 历史正值分位与 Band；亏损 PE 不计算分位，实际采样不足五年必须说明；美股为 SEC 申报派生的周采样，读取 `share_basis/warnings`。
 - 读多年财报：`get_financials(symbol, periods=10, annual=true)`；A 股按年报筛选，港股按源实际可得年度数返回。财报期不等于公告日，年报历史不能用于假定当时已知信息的回测。
 - 财报季排期：`get_earnings_calendar(report_date="YYYY-MM-DD", symbol=...)`，区分最新预约日期、实际披露日期和已公告业绩预告，不把预告当业绩实绩。
 - 股东变化：`get_shareholder_structure`。A 股北向值是财报十大流通股东中的 HKSCC 名义持股，缺席不等于零，不能当成日度北向买卖；港股南向值按港交所披露日期使用。

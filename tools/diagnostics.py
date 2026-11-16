@@ -30,8 +30,8 @@ PROVIDERS = {
     "lixinger": (
         "requests",
         ["LIXINGER_TOKEN"],
-        ["A"],
-        "optional index PE/PB history; subscription permissions not probed",
+        ["A", "HK"],
+        "optional index PB, CN/HK company valuation and statements; subscription permissions not probed",
     ),
     "efinance": ("efinance", [], ["A"], None),
     "tencent": ("requests", [], ["A", "HK", "US"], "qt.gtimg.cn quote/kline, no auth (issue #25)"),
