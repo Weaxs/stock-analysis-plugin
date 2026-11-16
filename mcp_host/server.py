@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """MCP stdio server for the stock-analysis tools: newline-delimited JSON-RPC 2.0, stdlib only.
 
-Reuses the Hermes adapter (hermes/schemas.py JSON Schemas + hermes/tools.py argv mapping), so the
+Reuses the Hermes adapter (tools/tool_schemas.json via hermes/schemas.py + hermes/tools.py argv mapping), so the
 tools stay identical to the other hosts. stdout carries only JSON-RPC messages; anything else
 goes to stderr.
 """
 
 import contextlib
 import json
-import os
-import signal
 import subprocess
 import sys
 import threading
@@ -28,6 +26,8 @@ TOOL_LIST = [
     {"name": s["name"], "description": s["description"], "inputSchema": s["parameters"]} for s in schemas.TOOL_SCHEMAS
 ]
 _current = threading.local()
+# Each call is a Python process that loads pandas; parallel model calls must not fan out unbounded.
+_SLOTS = threading.BoundedSemaphore(4)
 
 
 def _version() -> str:
@@ -38,24 +38,6 @@ def _version() -> str:
         return json.loads((tools.PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
     except Exception:
         return "unknown"
-
-
-def _terminate(proc):
-    if sys.platform == "win32":
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            proc.kill()
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
 
 
 class _Call:
@@ -70,12 +52,17 @@ class _Call:
         with self.lock:
             self.cancelled = True
             if self.proc is not None:
-                _terminate(self.proc)
+                tools.terminate_tree(self.proc)
 
 
 def _run(script: str, argv: list) -> str:
     # hermes.tools._run, but the child must not inherit the JSON-RPC stdin, and cancellation kills it.
     call = getattr(_current, "call", None) or _Call()
+    with _SLOTS:
+        return _run_slot(call, script, argv)
+
+
+def _run_slot(call, script: str, argv: list) -> str:
     try:
         with call.lock:
             if call.cancelled:
@@ -87,15 +74,14 @@ def _run(script: str, argv: list) -> str:
                 stderr=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
-                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if sys.platform == "win32" else 0,
-                start_new_session=sys.platform != "win32",
+                **tools.TREE_POPEN,
             )
     except Exception:
         return json.dumps({"error": "Python command failed; check interpreter/dependencies"})
     try:
         stdout, _ = proc.communicate(timeout=tools.command_timeout(script, argv) + 30)
     except subprocess.TimeoutExpired:
-        _terminate(proc)
+        tools.terminate_tree(proc)
         proc.communicate()
         return json.dumps({"error": "Python command timed out"})
     failure = None

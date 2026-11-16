@@ -3,20 +3,18 @@
 
 import argparse
 import contextlib
-import hashlib
 import json
 import math
 import os
 import re
 import sys
-import tempfile
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _cache import DAY, WEEK, atomic_write, cached  # noqa: E402
+from _cache import CACHE_DIR, DAY, WEEK, atomic_write, cached, cached_values  # noqa: E402
 from _subproc import error_message, run_tool, scrub_secrets, socket_timeout, utf8_stdio  # noqa: E402
 from trading_calendar import market_now  # noqa: E402
 
@@ -2464,10 +2462,9 @@ def cmd_sector_rankings(args):
 
 # --------------- sector constituents / stock sectors (issue #18) ---------------
 
-# Disk cache lives in tempdir — cross-platform (Windows has no ~/.cache). Stores
-# sector constituents (24h TTL; membership changes slowly) and sticky failover
-# winners (keys prefixed `sticky-`, see _failover).
-_DATA_CACHE_DIR = Path(tempfile.gettempdir()) / "pi-stock-analysis"
+# Small routing state (24h TTL) beside the user-private slow-data cache: sticky failover
+# winners (`sticky-`, see _failover) and per-leg outage markers (`resolve-down-`).
+_DATA_CACHE_DIR = CACHE_DIR / "state"
 _DATA_CACHE_TTL = 24 * 3600
 
 
@@ -2610,16 +2607,10 @@ def _sector_constituents(args):
     sector = args.sector.strip()
     if not sector:
         return {"error": "sector name required"}
-    board_type = args.board_type
-    # Sector names are user input — hash them instead of sanitizing, so names that
-    # differ only in whitespace/punctuation (创新药 vs 创新 药) can't collide.
-    cache_key = hashlib.sha256(f"{sector}|{board_type}".encode()).hexdigest()[:16]
     try:
-        result = sector_constituents_a(sector, board_type)
+        return sector_constituents_a(sector, args.board_type)
     except Exception as e:
         return {"error": error_message(e)}
-    _disk_cache_set(cache_key, result)
-    return result
 
 
 def _board_entry(name, source: str, board_type: str) -> dict:
@@ -2717,17 +2708,11 @@ def _stock_boards_cninfo(symbol: str) -> list:
 def _stock_boards_from_cache(symbol: str) -> list:
     """Reverse lookup against the get_sector_constituents disk cache — the honest
     fallback when eastmoney blocks the caller's IP and xueqiu has no token (the two
-    live A-share sources are both eastmoney-flavored). Reads week-lived user-directory entries plus legacy temporary payloads,
-    and returns one entry per cached sector
-    containing the symbol. Cold cache → []; malformed cache files are skipped
-    (_disk_cache_get returns None on expiry, bad JSON, or read errors)."""
-    from itertools import chain
-
-    from _cache import cached_values
-
+    live A-share sources are both eastmoney-flavored). Reads the week-lived get_sector_constituents
+    entries and returns one entry per cached sector containing the symbol. Cold cache → [];
+    expired or malformed entries are skipped."""
     boards = []
-    legacy = (_disk_cache_get(path.stem) for path in _DATA_CACHE_DIR.glob("*.json"))
-    for data in chain(legacy, cached_values("sector-constituents", WEEK)):
+    for data in cached_values("sector-constituents", WEEK):
         if not isinstance(data, dict):
             continue
         sector = data.get("sector")
@@ -2776,7 +2761,7 @@ _RESOLVE_DOWN_TTL = 3600
 def _resolve_leg_down(name: str) -> bool:
     """True while leg `name`'s failure marker is fresh. The marker stores a plain
     timestamp — the effective TTL above is shorter than the 24h file lifetime that
-    _disk_cache_get enforces on the shared cache dir."""
+    _disk_cache_get enforces on the private state cache dir."""
     ts = _disk_cache_get(f"resolve-down-{name}")
     return isinstance(ts, (int, float)) and time.time() - ts < _RESOLVE_DOWN_TTL
 

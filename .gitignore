@@ -27,6 +27,7 @@ node_modules/
 !tsconfig.json
 !schemas/**/*.json
 !tools/cli_budgets.json
+!tools/tool_schemas.json
 !tests/fixtures/analysis_quality.json
 !tests/fixtures/stateless_analysis.json
 !tests/fixtures/trend_temperature.json

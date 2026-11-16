@@ -474,22 +474,23 @@ stock-analysis/
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
-│   ├── schemas.py                   #   工具 JSON Schema 定义
+│   ├── schemas.py                   #   读取 tools/tool_schemas.json
 │   └── tools.py                     #   73 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
-│   └── index.ts                     #   definePluginEntry + registerTool ×73
+│   └── index.ts                     #   definePluginEntry + 按共享 schema 注册
 ├── dsh/                             # DeepSeek Harness (dsh) Plugin
 │   ├── cordis.patch.yml             #   bundle patch（insert 插件入口）
 │   ├── package.json                 #   dsh.bundle + dsh.client manifest
-│   ├── index.ts                     #   cordis apply(ctx) + defineTool ×73
+│   ├── index.ts                     #   cordis apply(ctx) + 按共享 schema 注册
 │   ├── dashboard.ts                 #   后台预热缓存 + 快照/自选股 HTTP API 与持久化
 │   ├── client.ts                    #   侧栏入口 + 主面板 + 主题同步（编译为 dist/client.js）
 │   └── web/                         #   仪表盘页面（app.ts 编译为 dist/web/app.js）
 │
 ├── mcp_host/                        # MCP stdio 服务器（复用 Hermes schema/handler）
 ├── tools/                           # 共享 Python CLI 工具
+│   ├── tool_schemas.json            #   73 个工具的名称/描述/参数（各宿主共用）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
 │   ├── signal_tracker.py            #   AI 买卖建议回测闭环（本地 JSONL 存储）
 │   ├── technical.py                 #   技术指标分析

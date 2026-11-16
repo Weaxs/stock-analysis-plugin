@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -64,6 +65,45 @@ def find_python() -> str:
     return venv if os.path.exists(venv) else sys.executable
 
 
+# A CLI that calls sibling CLIs must die with them: each child leads its own process group.
+TREE_POPEN = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
+)
+
+
+def terminate_tree(proc) -> None:
+    """Kill a TREE_POPEN child and every process it started."""
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            proc.kill()
+    else:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+
+
+def run_tree(cmd: list, *, timeout: float) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output, text) whose timeout also kills grandchildren."""
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", **TREE_POPEN
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except BaseException:  # timeout or Ctrl+C: the new session no longer receives terminal signals
+            terminate_tree(proc)
+            proc.communicate()
+            raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def run_tool(
     script: str, args: list, timeout: int | None = None, parse_json: bool = True, preserve_errors: bool = False
 ):
@@ -79,6 +119,7 @@ def run_tool(
         return payload if parse_json else json.dumps(payload, ensure_ascii=False)
 
     try:
+        # Not run_tree: a nested CLI must stay in the caller's process group so the host's tree kill reaches it.
         r = subprocess.run(
             [find_python(), os.path.join(TOOLS_DIR, script), *args],
             capture_output=True,

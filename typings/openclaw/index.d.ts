@@ -36,16 +36,17 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
 }
 
 declare module "typebox" {
+  type Options = Record<string, unknown>;
   export const Type: {
-    Object(props: Record<string, unknown>, opts?: unknown): unknown;
-    String(opts?: { description?: string }): unknown;
-    Number(opts?: { description?: string }): unknown;
-    Null(): unknown;
-    Unknown(): unknown;
-    Boolean(opts?: { description?: string }): unknown;
+    Object(props: Record<string, unknown>, opts?: Options): unknown;
+    String(opts?: Options): unknown;
+    Number(opts?: Options): unknown;
+    Null(opts?: Options): unknown;
+    Unknown(opts?: Options): unknown;
+    Boolean(opts?: Options): unknown;
     Optional(schema: unknown): unknown;
-    Union(schemas: unknown[], opts?: { description?: string }): unknown;
+    Union(schemas: unknown[], opts?: Options): unknown;
     Literal<T extends string | number | boolean>(value: T): unknown;
-    Array(item: unknown, opts?: { description?: string }): unknown;
+    Array(item: unknown, opts?: Options): unknown;
   };
 }

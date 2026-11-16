@@ -2177,38 +2177,50 @@ class TestStockBoardsFromCache:
             "count": len(codes),
         }
 
-    def test_cold_cache_returns_empty(self, sector_cache_dir):
+    def _seed(self, key, payload):
+        from _cache import WEEK, cached
+
+        cached(f"sector-constituents:{key}", WEEK, lambda: payload)
+
+    def test_cold_cache_returns_empty(self):
         assert _stock_boards_from_cache("600276") == []
 
-    def test_hit_returns_board_entry(self, sector_cache_dir):
-        _disk_cache_set("k1", self._payload())
+    def test_hit_returns_board_entry(self):
+        self._seed("k1", self._payload())
         assert _stock_boards_from_cache("600276") == [{"name": "创新药", "source": "cache", "board_type": "concept"}]
 
-    def test_symbol_in_multiple_cached_sectors(self, sector_cache_dir):
-        _disk_cache_set("k1", self._payload())
-        _disk_cache_set("k2", self._payload(sector="医药生物", board_type="industry"))
+    def test_symbol_in_multiple_cached_sectors(self):
+        self._seed("k1", self._payload())
+        self._seed("k2", self._payload(sector="医药生物", board_type="industry"))
         names = {b["name"] for b in _stock_boards_from_cache("600276")}
         assert names == {"创新药", "医药生物"}
 
-    def test_symbol_not_in_constituents_returns_empty(self, sector_cache_dir):
-        _disk_cache_set("k1", self._payload())
+    def test_symbol_not_in_constituents_returns_empty(self):
+        self._seed("k1", self._payload())
         assert _stock_boards_from_cache("000858") == []
 
-    def test_expired_cache_ignored(self, sector_cache_dir):
-        import os
+    def test_expired_cache_ignored(self, monkeypatch):
         import time
 
-        _disk_cache_set("k1", self._payload())
-        for f in sector_cache_dir.glob("*.json"):
-            old = time.time() - 25 * 3600
-            os.utime(f, (old, old))
+        import _cache
+
+        self._seed("k1", self._payload())
+        now = time.time()
+        monkeypatch.setattr(_cache.time, "time", lambda: now + _cache.WEEK + 1)
         assert _stock_boards_from_cache("600276") == []
 
-    def test_bad_json_tolerated(self, sector_cache_dir):
-        (sector_cache_dir / "corrupt.json").write_text("not json", encoding="utf-8")
-        (sector_cache_dir / "non-dict.json").write_text("[1, 2]", encoding="utf-8")
-        _disk_cache_set("k1", self._payload())
+    def test_bad_json_tolerated(self):
+        import _cache
+
+        self._seed("k1", self._payload())
+        prefix = _cache._namespace_prefix("sector-constituents")
+        (_cache.CACHE_DIR / f"{prefix}-corrupt.json").write_text("not json", encoding="utf-8")
+        (_cache.CACHE_DIR / f"{prefix}-list.json").write_text("[1, 2]", encoding="utf-8")
         assert _stock_boards_from_cache("600276")[0]["name"] == "创新药"
+
+    def test_temp_dir_payloads_are_not_trusted(self, sector_cache_dir):
+        (sector_cache_dir / "planted.json").write_text(json.dumps(self._payload()), encoding="utf-8")
+        assert _stock_boards_from_cache("600276") == []
 
 
 class TestResolveStockSectors:
