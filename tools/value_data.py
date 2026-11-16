@@ -18,7 +18,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, cached
-from _subproc import scrub_secrets, socket_timeout, utf8_stdio
+from _subproc import error_message, scrub_secrets, socket_timeout, utf8_stdio
 from stock_data import _A_INDEX_RE, _cn_code, _cn_now, _yf_hk_symbol, detect_market, normalize_stock_code
 from trading_calendar import _MARKET_TZ, market_now
 
@@ -164,13 +164,11 @@ def us_valuation_history(args):
 def valuation_history(args):
     import akshare as ak
 
+    if not 1 <= args.years <= 10:
+        raise ValueError("years must be in 1..10")
     if detect_market(args.symbol) == "US":
-        if not 1 <= args.years <= 10:
-            raise ValueError("years must be in 1..10")
         return us_valuation_history(args)
     market, symbol = stock_identity(args.symbol)
-    if not 1 <= args.years <= 10:
-        raise ValueError("valuation history requires an A/HK symbol and years in 1..10")
     warning = None
     if os.environ.get("LIXINGER_TOKEN"):
         try:
@@ -185,8 +183,8 @@ def valuation_history(args):
                 "history": history,
                 "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
             }
-        except Exception:
-            warning = f"Lixinger {market} unavailable; Baidu history retained without mixing sources"
+        except Exception as e:
+            warning = f"Lixinger {market} unavailable: {error_message(e)}; Baidu history used without mixing sources"
     elif market == "HK":
         warning = "LIXINGER_TOKEN not configured; HK history limited to available Baidu data"
     fetch = ak.stock_zh_valuation_baidu if market == "A" else ak.stock_hk_valuation_baidu
@@ -1545,10 +1543,11 @@ def hk_announcements(args, symbol):
     for row in items:
         kind = unescape(re.sub(r"<[^>]+>", " ", row.get("LONG_TEXT") or row.get("SHORT_TEXT") or "")).strip()
         title = unescape(re.sub(r"<[^>]+>", " ", row.get("TITLE") or "")).strip()
-        inferred = next(
-            (key for key, pattern in HK_ANNOUNCEMENT_CATEGORIES.items() if re.search(pattern, f"{kind} {title}", re.I)),
-            "other",
-        )
+        # One announcement can carry several headlines (e.g. Final Results + Dividend); match any of them.
+        matches = [
+            key for key, pattern in HK_ANNOUNCEMENT_CATEGORIES.items() if re.search(pattern, f"{kind} {title}", re.I)
+        ]
+        inferred = args.category if args.category in matches else next(iter(matches), "other")
         path = row.get("FILE_LINK") or ""
         if args.category != "all" and inferred != args.category or not path.startswith("/listedco/"):
             continue

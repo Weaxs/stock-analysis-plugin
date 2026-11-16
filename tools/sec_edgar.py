@@ -318,7 +318,11 @@ DEBT_CONCEPTS = (
     "ShortTermBorrowings",
     "CommercialPaper",
 )
-LEASE_CONCEPTS = ("OperatingLeaseLiability", "FinanceLeaseLiability")
+# Each lease kind: the total tag, else its current + noncurrent parts.
+LEASE_CONCEPTS = {
+    "OperatingLeaseLiability": ("OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent"),
+    "FinanceLeaseLiability": ("FinanceLeaseLiabilityCurrent", "FinanceLeaseLiabilityNoncurrent"),
+}
 
 
 def annual_fact(row):
@@ -355,23 +359,44 @@ def dcf_inputs(symbol, periods):
         key: latest_facts(gaap, names, "shares" if key == "diluted_shares" else "USD")
         for key, names in {**DCF_CONCEPTS, **DCF_INSTANTS}.items()
     }
-    debt = {name: latest_facts(gaap, (name,), "USD") for name in DEBT_CONCEPTS + LEASE_CONCEPTS}
-    ends = sorted(set(rows["revenue"]) | set(rows["operating_income"]), reverse=True)[:periods]
-    outstanding = latest_facts(data.get("facts", {}).get("dei", {}), ("EntityCommonStockSharesOutstanding",), "shares")
+    lease_names = [name for total, parts in LEASE_CONCEPTS.items() for name in (total, *parts)]
+    debt = {name: latest_facts(gaap, (name,), "USD") for name in (*DEBT_CONCEPTS, *lease_names)}
+    # Values keep the latest (restated) filing; labels and cover shares come from each period's original report.
+    originals = {}
+    for name in DCF_CONCEPTS["revenue"] + DCF_CONCEPTS["operating_income"]:
+        for row in gaap.get(name, {}).get("units", {}).get("USD", []):
+            if annual_fact(row) and (row["end"] not in originals or row["filed"] < originals[row["end"]]["filed"]):
+                originals[row["end"]] = row
+    ends = sorted(originals, reverse=True)[:periods]
+    outstanding = (
+        data.get("facts", {})
+        .get("dei", {})
+        .get("EntityCommonStockSharesOutstanding", {})
+        .get("units", {})
+        .get("shares", [])
+    )
     result = []
     for end in ends:
         entry = {key: rows[key].get(end, {}).get("val") for key in rows}
-        source = rows["revenue"].get(end) or rows["operating_income"].get(end)
+        source = originals[end]
+        if (date.fromisoformat(source["filed"]) - date.fromisoformat(end)).days > 365:
+            # Only a later year's comparative exists (e.g. pre-XBRL years); its labels would be wrong.
+            source = {}
         parts = [debt["LongTermDebt"].get(end, {}).get("val")]
         if parts[0] is None:
             parts = [debt[name].get(end, {}).get("val") for name in ("LongTermDebtCurrent", "LongTermDebtNoncurrent")]
         parts += [debt[name].get(end, {}).get("val") for name in ("ShortTermBorrowings", "CommercialPaper")]
-        leases = [debt[name][end]["val"] for name in LEASE_CONCEPTS if end in debt[name]]
-        cover = max(
-            (row for row in outstanding.values() if row.get("filed") == source.get("filed")),
-            key=lambda row: row["end"],
-            default={},
-        )
+        leases = []
+        for total, split in LEASE_CONCEPTS.items():
+            names = (total,) if end in debt[total] else split
+            if all(end in debt[name] for name in names):
+                leases += [debt[name][end]["val"] for name in names]
+        # Multi-class issuers report one cover row per class in the same filing; sum them.
+        cover = [
+            row
+            for row in outstanding
+            if source and (row.get("accn"), row.get("filed")) == (source.get("accn"), source.get("filed"))
+        ]
         entry.update(
             {
                 "period_end": end,
@@ -380,8 +405,8 @@ def dcf_inputs(symbol, periods):
                 if any(value is not None for value in parts)
                 else None,
                 "lease_liabilities": sum(leases) if leases else None,
-                "shares_outstanding": cover.get("val"),
-                "shares_outstanding_date": cover.get("end"),
+                "shares_outstanding": sum(row["val"] for row in cover) if cover else None,
+                "shares_outstanding_date": max(row["end"] for row in cover) if cover else None,
                 "form": source.get("form"),
                 "filed": source.get("filed"),
                 "fiscal_year": source.get("fy"),
@@ -396,7 +421,9 @@ def dcf_inputs(symbol, periods):
         "periods": result,
         "warnings": [
             "SEC XBRL tags vary by issuer; null fields are filled from Yahoo for the same period when available. "
-            "total_debt sums reported debt/borrowing tags and excludes leases; lease_liabilities is separate."
+            "total_debt sums reported debt/borrowing tags and excludes leases; lease_liabilities is operating + finance "
+            "leases. Amounts use the latest filed (possibly restated) value; form/filed/shares_outstanding come from "
+            "the period's original annual report."
         ],
     }
 

@@ -1909,10 +1909,13 @@ def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
     else:
         ticker = yf.Ticker(_yf_hk_symbol(symbol))
     tables = [ticker.income_stmt, ticker.cashflow, ticker.balance_sheet]
+    warnings = ["Yahoo standardized annual statements; verify against filings before valuation."]
     try:
-        currency = _yf_info(symbol, ticker).get("financialCurrency")
-    except Exception:
-        currency = None
+        currency, reason = _yf_info(symbol, ticker).get("financialCurrency"), "not reported"
+    except Exception as e:
+        currency, reason = None, error_message(e)
+    if not currency:
+        warnings.append(f"Yahoo financial currency unavailable ({reason}); rows cannot fill other sources")
     fields = {
         "revenue": (0, "Total Revenue"),
         "operating_income": (0, "Operating Income"),
@@ -1956,7 +1959,7 @@ def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
     return {
         "source": "yfinance",
         "periods": rows,
-        "warnings": ["Yahoo standardized annual statements; verify against filings before valuation."],
+        "warnings": warnings + ["lease_liabilities is Yahoo Capital Lease Obligations (may omit operating leases)."],
     }
 
 
@@ -1995,7 +1998,8 @@ def _fill_dcf_rows(result: dict, fallback: dict | None) -> dict:
             )
         sources = {}
         for key in DCF_FIELDS:
-            if row.get(key) is None and match and match.get(key) is not None:
+            # Yahoo leases are finance-lease-only "Capital Lease Obligations"; never mix them into another source.
+            if row.get(key) is None and match and match.get(key) is not None and key != "lease_liabilities":
                 row[key], sources[key] = match[key], fallback["source"]
             elif row.get(key) is not None:
                 sources[key] = result["source"]
@@ -2046,12 +2050,10 @@ def cmd_financials(args):
         return {"error": f"periods must be between 1 and 40, got {periods}"}
     annual = getattr(args, "annual", False)
     market = detect_market(args.symbol)
-    if getattr(args, "include_dcf_inputs", False):
-        result = _financials_without_dcf(args, periods, annual, market)
-        if "error" not in result:
-            result["dcf_inputs"] = _dcf_inputs(args.symbol, periods)
-        return result
-    return _financials_without_dcf(args, periods, annual, market)
+    result = _financials_without_dcf(args, periods, annual, market)
+    if getattr(args, "include_dcf_inputs", False) and "error" not in result:
+        result["dcf_inputs"] = _dcf_inputs(args.symbol, periods)
+    return result
 
 
 def _financials_without_dcf(args, periods, annual, market):
@@ -2061,7 +2063,10 @@ def _financials_without_dcf(args, periods, annual, market):
                 try:
                     from lixinger import financials_hk
 
-                    result = financials_hk(args.symbol, periods, annual)
+                    result = {
+                        "symbol": args.symbol,
+                        **financials_hk(args.symbol.split(".")[0].zfill(5), periods, annual),
+                    }
                     snapshot = financials_yf(args.symbol, 1, False)
                     result.update(
                         {
@@ -2630,15 +2635,15 @@ def cmd_sector_rankings(args):
     market = getattr(args, "market", "A")
     if market == "US" and board_type != "industry":
         return {"error": "US sector rankings support board_type=industry only"}
-    sources = [_sourced("eastmoney", lambda: _sector_rankings_em(board_type))]
     if market == "US":
         sources = [_sourced("yfinance", _sector_rankings_us)]
-    elif board_type == "industry":
-        # efinance has no concept boards — it stays an industry-only leg
-        sources.append(_sourced("ths", _sector_rankings_ths))
-        sources.append(_sourced("efinance", _sector_rankings_efinance))
     else:
-        sources.append(_sourced("sina", lambda: _sector_rankings_sina("概念")))
+        sources = [_sourced("eastmoney", lambda: _sector_rankings_em(board_type))]
+        if board_type == "industry":
+            # efinance has no concept boards — it stays an industry-only leg
+            sources += [_sourced("ths", _sector_rankings_ths), _sourced("efinance", _sector_rankings_efinance)]
+        else:
+            sources.append(_sourced("sina", lambda: _sector_rankings_sina("概念")))
     try:
         rows = _failover(
             sources, label="sector_rankings_us:industry" if market == "US" else f"sector_rankings:{board_type}"
@@ -3870,7 +3875,7 @@ def main():
     p_fin.add_argument("symbol")
     p_fin.add_argument("--periods", type=int, default=1)
     p_fin.add_argument("--annual", action="store_true", help="Select annual reports; periods=10 requests ten years")
-    p_fin.add_argument("--include-dcf-inputs", action="store_true", help="Add annual HK/US DCF input fields")
+    p_fin.add_argument("--include-dcf-inputs", action="store_true", help="Add annual A/HK/US DCF input fields")
 
     p_snap = sub.add_parser("market_snapshot")
     p_snap.add_argument("--market", default="A", choices=["A", "HK", "US"])

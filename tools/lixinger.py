@@ -43,7 +43,7 @@ def company_data(market, code, dataset, metrics):
 
 def valuation_history(market, code, years):
     """Daily PE-TTM/PB within the last `years`; raises when either metric is entirely missing."""
-    cutoff = (market_now("CN").date() - pd.DateOffset(years=years)).date().isoformat()
+    cutoff = (market_now("HK" if market == "hk" else "CN").date() - pd.DateOffset(years=years)).date().isoformat()
     history = []
     for row in company_data(market, code, "fundamental", ["pe_ttm", "pb"]):
         stamp = str(row.get("date") or "")[:10]
@@ -65,7 +65,7 @@ def metric(row, field):
     return row.get("q", {}).get(table, {}).get(name, {}).get("t")
 
 
-def financials_hk(symbol, periods, annual):
+def financials_hk(code, periods, annual):
     fields = {
         "roe": "m.roe",
         "gross_margin": "ps.gp_m",
@@ -74,7 +74,6 @@ def financials_hk(symbol, periods, annual):
         "net_income": "ps.np",
         "operating_cash_flow": "cfs.ncffoa",
     }
-    code = symbol.split(".")[0].zfill(5)
     data = company_data("hk", code, "fs", [f"q.{field}.t" for field in fields.values()])
     history = []
     for row in sorted(data, key=lambda r: r.get("date", ""), reverse=True):
@@ -103,7 +102,6 @@ def financials_hk(symbol, periods, annual):
     result = {
         **dict.fromkeys(("name", "market_cap", "pe", "forward_pe", "pb", "debt_to_equity", "dividend_yield")),
         "snapshot_available": False,
-        "symbol": symbol,
         "source": "lixinger",
         "report_date": latest["report_date"],
         "currency": latest["currency"],
@@ -170,7 +168,8 @@ DCF_FIELDS = {
     },
 }
 DCF_WARNINGS = {
-    "cn": "Lixinger CN statements; total_debt sums borrowings, bonds and current non-current liabilities "
+    "cn": "Lixinger CN statements; operating_income is 营业利润 (includes investment and fair-value gains, not EBIT); "
+    "total_debt sums borrowings, bonds and current non-current liabilities "
     "(the latter may include current lease liabilities); long-term leases are in lease_liabilities.",
     "hk": "Lixinger HK statements; total_debt sums borrowings, bonds, notes and convertibles and excludes leases.",
 }

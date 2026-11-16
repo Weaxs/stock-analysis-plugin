@@ -107,7 +107,7 @@ def test_hk_announcements_use_hkex_title_search_and_category_filter(monkeypatch)
             {
                 "TITLE": "ANNUAL RESULTS ANNOUNCEMENT",
                 "DATE_TIME": "18/03/2026 16:30",
-                "LONG_TEXT": "Announcements and Notices - [Final Results]",
+                "LONG_TEXT": "Announcements and Notices - [Final Results / Dividend or Distribution]",
                 "FILE_LINK": "/listedco/listconews/sehk/2026/0318/1.pdf",
                 "STOCK_CODE": "00700<br/>80700",
             },
@@ -132,9 +132,13 @@ def test_hk_announcements_use_hkex_title_search_and_category_filter(monkeypatch)
             "date": "2026-03-18",
             "category": "annual",
             "pdf_url": "https://www1.hkexnews.hk/listedco/listconews/sehk/2026/0318/1.pdf",
-            "type": "Announcements and Notices - [Final Results]",
+            "type": "Announcements and Notices - [Final Results / Dividend or Distribution]",
         }
     ]
     assert (result["total"], result["total_basis"]) == (1, "matched_in_loaded_rows")
+    dividend = value_data.announcements(
+        Namespace(symbol="0700.HK", category="dividend", start_date="2026-03-01", end_date="2026-03-31", top=10)
+    )
+    assert [row["category"] for row in dividend["announcements"]] == ["dividend"]
     assert calls[0][1]["name"] == "00700"
     assert calls[1][1]["stockId"] == 7609

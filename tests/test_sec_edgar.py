@@ -460,15 +460,34 @@ def test_dcf_inputs_use_latest_annual_companyfacts(monkeypatch):
     def fact(value, end="2026-09-26", start="2025-09-28", filed="2026-11-03", form="10-K"):
         return {"start": start, "end": end, "val": value, "fy": 2026, "fp": "FY", "form": form, "filed": filed}
 
-    def instant(value, end="2026-09-26"):
-        return {"end": end, "val": value, "fy": 2026, "fp": "FY", "form": "10-K", "filed": "2026-11-03"}
+    def instant(value, end="2026-09-26", filed="2026-11-03", accn="a2026"):
+        return {"end": end, "val": value, "fy": 2026, "fp": "FY", "form": "10-K", "filed": filed, "accn": accn}
 
     data = {
         "entityName": "Example",
         "facts": {
-            "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [instant(98, "2026-10-20")]}}},
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            instant(60, "2026-10-20"),
+                            instant(38, "2026-10-20"),
+                            instant(90, "2025-10-20", "2025-11-01", "a2025"),
+                        ]
+                    }
+                }
+            },
             "us-gaap": {
-                "Revenues": {"units": {"USD": [fact(90, filed="2026-10-01"), fact(100)]}},
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact(100) | {"accn": "a2026"},
+                            {**fact(80, "2025-09-27", "2024-09-29", "2025-11-01"), "accn": "a2025", "fy": 2025},
+                            {**fact(85, "2025-09-27", "2024-09-29"), "accn": "a2026"},
+                            {**fact(70, "2024-09-28", "2023-09-30"), "accn": "a2026"},
+                        ]
+                    }
+                },
                 "OperatingIncomeLoss": {"units": {"USD": [fact(30), fact(8, start="2026-06-28")]}},
                 "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": {
                     "units": {"USD": [fact(25)]}
@@ -481,20 +500,26 @@ def test_dcf_inputs_use_latest_annual_companyfacts(monkeypatch):
                 "LongTermDebt": {"units": {"USD": [instant(50)]}},
                 "CommercialPaper": {"units": {"USD": [instant(5)]}},
                 "OperatingLeaseLiability": {"units": {"USD": [instant(9)]}},
+                "FinanceLeaseLiabilityCurrent": {"units": {"USD": [instant(1)]}},
+                "FinanceLeaseLiabilityNoncurrent": {"units": {"USD": [instant(2), instant(4, "2025-09-27")]}},
                 "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [fact(101)]}},
             },
         },
     }
     monkeypatch.setattr(sec_edgar, "resolve_cik", lambda symbol: "0000000001")
     monkeypatch.setattr(sec_edgar, "cached", lambda key, ttl, fn: data)
-    result = sec_edgar.dcf_inputs("EXM", 1)
-    row = result["periods"][0]
+    result = sec_edgar.dcf_inputs("EXM", 3)
+    row, older, oldest = result["periods"]
+    assert older["lease_liabilities"] is None
+    assert (oldest["revenue"], oldest["filed"], oldest["shares_outstanding"]) == (70, None, None)
+    assert (older["revenue"], older["filed"], older["fiscal_year"]) == (85, "2025-11-01", 2025)
+    assert older["shares_outstanding"] == 90
     assert result["source"] == "sec_companyfacts"
     assert row["revenue"] == 100
     assert row["operating_income"] == 30
     assert row["capital_expenditure"] == 12
     assert row["total_debt"] == 55
-    assert row["lease_liabilities"] == 9
+    assert row["lease_liabilities"] == 12
     assert row["diluted_shares"] == 101
     assert row["shares_outstanding"] == 98
     assert result["warnings"]

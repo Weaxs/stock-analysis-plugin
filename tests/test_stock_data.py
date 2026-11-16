@@ -506,6 +506,7 @@ def test_hk_dcf_inputs_prefer_lixinger_and_fill_nulls_from_yahoo(monkeypatch):
     assert row["field_sources"]["revenue"] == "lixinger"
     assert row["field_sources"]["operating_income"] == "yfinance"
     assert "cash" in row["missing_fields"]
+    assert row["lease_liabilities"] is None and "lease_liabilities" in row["missing_fields"]
 
 
 def test_dcf_inputs_do_not_fill_from_other_currency(monkeypatch):
