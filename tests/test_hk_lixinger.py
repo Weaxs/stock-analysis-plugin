@@ -135,7 +135,7 @@ def test_lixinger_request_does_not_exceed_ten_year_window(monkeypatch):
         )
 
     monkeypatch.setattr("requests.post", post)
-    lixinger.hk_data("0700.HK", "fundamental", ["pb"])
+    lixinger.company_data("hk", "00700", "fundamental", ["pb"])
     assert calls[0]["startDate"] == "2016-10-31"
     assert calls[0]["endDate"] == "2026-10-31"
 

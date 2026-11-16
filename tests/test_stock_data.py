@@ -494,7 +494,7 @@ def test_hk_dcf_inputs_prefer_lixinger_and_fill_nulls_from_yahoo(monkeypatch):
         "warnings": [],
     }
     monkeypatch.setenv("LIXINGER_TOKEN", "test")
-    monkeypatch.setattr(lixinger, "dcf_inputs_hk", lambda symbol, periods: primary)
+    monkeypatch.setattr(lixinger, "dcf_inputs", lambda market, code, periods: primary)
     monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: _yahoo_dcf_ticker())
     result = stock_data._dcf_inputs("0700.HK", 1)
     row = result["periods"][0]
@@ -544,8 +544,8 @@ def test_lixinger_hk_dcf_inputs_sum_debt_and_keep_leases_separate(monkeypatch):
             },
         },
     ]
-    monkeypatch.setattr(lixinger, "hk_data", lambda symbol, dataset, metrics: rows)
-    result = lixinger.dcf_inputs_hk("0700.HK", 2)
+    monkeypatch.setattr(lixinger, "company_data", lambda market, code, dataset, metrics: rows)
+    result = lixinger.dcf_inputs("hk", "00700", 2)
     assert result["periods"] == [
         {
             "period_end": "2025-12-31",

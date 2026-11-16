@@ -172,35 +172,23 @@ def valuation_history(args):
     if not 1 <= args.years <= 10:
         raise ValueError("valuation history requires an A/HK symbol and years in 1..10")
     warning = None
-    if market == "HK":
-        if os.environ.get("LIXINGER_TOKEN"):
-            try:
-                from lixinger import hk_data
+    if os.environ.get("LIXINGER_TOKEN"):
+        try:
+            import lixinger
 
-                rows = hk_data(args.symbol, "fundamental", ["pe_ttm", "pb"])
-                cutoff = (_cn_now().date() - pd.DateOffset(years=args.years)).date().isoformat()
-                history = sorted(
-                    [
-                        {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm")), "pb": number(r.get("pb"))}
-                        for r in rows
-                        if iso(r.get("date")) and iso(r.get("date")) >= cutoff
-                    ],
-                    key=lambda r: r["date"],
-                )
-                if not history or not all(any(r[field] is not None for r in history) for field in ("pe_ttm", "pb")):
-                    raise ValueError("Lixinger HK valuation history incomplete")
-                return {
-                    "symbol": args.symbol,
-                    "market": market,
-                    "source": "lixinger",
-                    "requested_years": args.years,
-                    "history": history,
-                    "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
-                }
-            except Exception:
-                warning = "Lixinger HK unavailable; Baidu history retained without mixing sources"
-        else:
-            warning = "LIXINGER_TOKEN not configured; HK history limited to available Baidu data"
+            history = lixinger.valuation_history("cn" if market == "A" else "hk", symbol, args.years)
+            return {
+                "symbol": args.symbol,
+                "market": market,
+                "source": "lixinger",
+                "requested_years": args.years,
+                "history": history,
+                "metrics": {field: valuation_summary(history, field) for field in ("pe_ttm", "pb")},
+            }
+        except Exception:
+            warning = f"Lixinger {market} unavailable; Baidu history retained without mixing sources"
+    elif market == "HK":
+        warning = "LIXINGER_TOKEN not configured; HK history limited to available Baidu data"
     fetch = ak.stock_zh_valuation_baidu if market == "A" else ak.stock_hk_valuation_baidu
     period = "近一年" if args.years == 1 else "近三年" if args.years <= 3 else "近五年" if args.years <= 5 else "近十年"
     if market == "HK" and args.years > 3:
@@ -250,27 +238,16 @@ def _csi_hist(ak):
 
 
 def lixinger_index_history(code, start, end):
-    import requests
+    import lixinger
 
     def fetch():
-        response = requests.post(
-            "https://open.lixinger.com/api/cn/index/fundamental",
-            json={
-                "token": os.environ["LIXINGER_TOKEN"],
-                "stockCodes": [code],
-                "startDate": start,
-                "endDate": end,
-                "metricsList": ["pe_ttm.mcw", "pb.mcw"],
-            },
-            timeout=20,
+        data = lixinger.post(
+            "cn/index/fundamental",
+            {"stockCodes": [code], "startDate": start, "endDate": end, "metricsList": ["pe_ttm.mcw", "pb.mcw"]},
         )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") != 1:
-            raise ValueError("Lixinger index data unavailable; check token permissions")
         rows = [
             {"date": iso(r.get("date")), "pe_ttm": number(r.get("pe_ttm.mcw")), "pb": number(r.get("pb.mcw"))}
-            for r in payload.get("data", [])
+            for r in data
             if r.get("stockCode") == code
         ]
         if not rows or not any(r["date"] and (r["pe_ttm"] is not None or r["pb"] is not None) for r in rows):

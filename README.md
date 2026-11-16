@@ -108,7 +108,7 @@
 | `ALPHAVANTAGE_API_KEY` | Alpha Vantage（美股 K 线 / 行情） |
 | `FINNHUB_API_KEY` | Finnhub（港股 / 美股） |
 | `XUEQIU_TOKEN` | 雪球（A 股个股所属板块反查，东财不可用时的兜底） |
-| `LIXINGER_TOKEN` | 理杏仁：指数 PB 与港股非金融公司财务、每日估值（需对应权限） |
+| `LIXINGER_TOKEN` | 理杏仁：指数 PB、A 股/港股非金融公司每日估值与 DCF 财报输入、港股财务（需对应权限） |
 | `SEC_USER_AGENT` | SEC EDGAR 身份声明：应用名称与真实联系邮箱，13F / Form 4 必需 |
 
 **搜索引擎（可选，配置任一即可）：**
@@ -198,7 +198,7 @@
 | `get_fund_quote` | 6 位场外公募基金净值；`nav` 是 `nav_date` 对应的已披露日终净值而非实时价，`accumulated_nav` 为累计净值、`change_pct` 为日涨跌幅；`estimated_nav` 可能为 `null`，QDII 净值可能滞后 1-2 交易日 |
 | `get_capital_flow` | 资金流向（仅 A 股） |
 | `get_news` | 个股相关新闻 |
-| `get_financials` | 财务指标；可选追加港美股年度 DCF 输入 |
+| `get_financials` | 财务指标；可选追加 A/港/美股年度 DCF 输入 |
 | `get_stock_info` | 股票基本信息 |
 | `get_chip_distribution` | 筹码分布 |
 | `get_market_indices` | 主要指数行情 |

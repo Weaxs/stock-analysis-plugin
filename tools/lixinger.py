@@ -1,40 +1,68 @@
-"""Optional Lixinger HK non-financial datasets (same env token as index data)."""
+"""Optional Lixinger open-API provider: CN/HK non-financial companies and CN indexes.
+
+Callers pass a provider market ("cn"/"hk") and the provider's stock code; symbol parsing stays with them."""
 
 import os
 from datetime import timedelta
 
+import pandas as pd
 import requests
 from _cache import DAY, cached
 from trading_calendar import market_now
 
+API = "https://open.lixinger.com/api"
 
-def hk_data(symbol, dataset, metrics):
-    code = symbol.split(".")[0].zfill(5)
-    end = market_now("HK").date()
+
+def post(path, payload):
+    response = requests.post(f"{API}/{path}", json={"token": os.environ["LIXINGER_TOKEN"], **payload}, timeout=20)
+    response.raise_for_status()
+    body = response.json()
+    if body.get("code") != 1 or not isinstance(body.get("data"), list):
+        raise ValueError(f"Lixinger {path} unavailable; check token permissions/company type")
+    return body["data"]
+
+
+def company_data(market, code, dataset, metrics):
+    end = market_now("HK" if market == "hk" else "CN").date()
     try:
         start = end.replace(year=end.year - 10)
     except ValueError:
         start = end.replace(year=end.year - 10, day=28) + timedelta(days=1)
 
     def fetch():
-        response = requests.post(
-            f"https://open.lixinger.com/api/hk/company/{dataset}/non_financial",
-            json={
-                "token": os.environ["LIXINGER_TOKEN"],
-                "stockCodes": [code],
-                "startDate": start.isoformat(),
-                "endDate": end.isoformat(),
-                "metricsList": metrics,
-            },
-            timeout=20,
+        data = post(
+            f"{market}/company/{dataset}/non_financial",
+            {"stockCodes": [code], "startDate": start.isoformat(), "endDate": end.isoformat(), "metricsList": metrics},
         )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") != 1 or not isinstance(payload.get("data"), list) or not payload["data"]:
-            raise ValueError("Lixinger HK non-financial data unavailable; check token permissions/company type")
-        return payload["data"]
+        if not data:
+            raise ValueError(f"Lixinger {market} non-financial data unavailable; check token permissions/company type")
+        return data
 
-    return cached(f"lixinger-hk:{dataset}:{code}:{end}:{','.join(metrics)}", DAY, fetch)
+    return cached(f"lixinger-{market}:{dataset}:{code}:{end}:{','.join(metrics)}", DAY, fetch)
+
+
+def valuation_history(market, code, years):
+    """Daily PE-TTM/PB within the last `years`; raises when either metric is entirely missing."""
+    cutoff = (market_now("CN").date() - pd.DateOffset(years=years)).date().isoformat()
+    history = []
+    for row in company_data(market, code, "fundamental", ["pe_ttm", "pb"]):
+        stamp = str(row.get("date") or "")[:10]
+        if stamp >= cutoff:
+            history.append({"date": stamp, **{field: number(row.get(field)) for field in ("pe_ttm", "pb")}})
+    history.sort(key=lambda r: r["date"])
+    if not history or not all(any(r[field] is not None for r in history) for field in ("pe_ttm", "pb")):
+        raise ValueError("Lixinger valuation history incomplete")
+    return history
+
+
+def number(value):
+    value = pd.to_numeric(value, errors="coerce")
+    return float(value) if pd.notna(value) and abs(value) != float("inf") else None
+
+
+def metric(row, field):
+    table, name = field.split(".")
+    return row.get("q", {}).get(table, {}).get(name, {}).get("t")
 
 
 def financials_hk(symbol, periods, annual):
@@ -46,12 +74,13 @@ def financials_hk(symbol, periods, annual):
         "net_income": "ps.np",
         "operating_cash_flow": "cfs.ncffoa",
     }
-    data = hk_data(symbol, "fs", [f"q.{field}.t" for field in fields.values()])
+    code = symbol.split(".")[0].zfill(5)
+    data = company_data("hk", code, "fs", [f"q.{field}.t" for field in fields.values()])
     history = []
     for row in sorted(data, key=lambda r: r.get("date", ""), reverse=True):
         if annual and row.get("reportType") != "annual_report":
             continue
-        if not row.get("date") or row.get("stockCode", symbol.split(".")[0].zfill(5)) != symbol.split(".")[0].zfill(5):
+        if not row.get("date") or row.get("stockCode", code) != code:
             continue
         entry = {
             "report_date": row["date"][:10],
@@ -61,8 +90,7 @@ def financials_hk(symbol, periods, annual):
             "source": "lixinger",
         }
         for key, field in fields.items():
-            table, metric = field.split(".")
-            value = row.get("q", {}).get(table, {}).get(metric, {}).get("t")
+            value = metric(row, field)
             entry[key] = (
                 value * 100 if value is not None and key in ("roe", "gross_margin", "net_profit_margin") else value
             )
@@ -101,55 +129,65 @@ def financials_hk(symbol, periods, annual):
     return result
 
 
-# Field codes from https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial
-# (no operating income, capex or D&A there; those come from the Yahoo fill).
+# Field codes from https://www.lixinger.com/api/open-api/html-doc/{cn,hk}/company/fs/non_financial.
+# HK has no operating income, capex or D&A; the caller fills those from Yahoo.
 DCF_FIELDS = {
-    "revenue": ("ps.toi",),
-    "pretax_income": ("ps.tp",),
-    "income_tax": ("ps.ite",),
-    "operating_cash_flow": ("cfs.ncffoa",),
-    "cash": ("cfs.bocaceatpe",),
-    "total_debt": (
-        "bs.stl",
-        "bs.stpl",
-        "bs.stbp",
-        "bs.stlcofcb",
-        "bs.stsn",
-        "bs.ltl",
-        "bs.ltpl",
-        "bs.sn",
-        "bs.bp",
-        "bs.ltlcofcb",
-    ),
-    "lease_liabilities": ("bs.stll", "bs.ltll"),
-    "minority_interest": ("bs.etmsh",),
-    "shares_outstanding": ("bs.tsc",),
+    "cn": {
+        "revenue": ("ps.toi",),
+        "operating_income": ("ps.op",),
+        "pretax_income": ("ps.tp",),
+        "income_tax": ("ps.ite",),
+        "operating_cash_flow": ("cfs.ncffoa",),
+        "capital_expenditure": ("cfs.cpfpfiaolta",),
+        "depreciation_amortization": ("cfs.daa",),
+        "cash": ("cfs.bocaceatpe",),
+        "total_debt": ("bs.stl", "bs.stbp", "bs.ncldwioy", "bs.ltl", "bs.bp"),
+        "lease_liabilities": ("bs.ll",),
+        "minority_interest": ("bs.etmsh",),
+        "shares_outstanding": ("bs.tsc",),
+    },
+    "hk": {
+        "revenue": ("ps.toi",),
+        "pretax_income": ("ps.tp",),
+        "income_tax": ("ps.ite",),
+        "operating_cash_flow": ("cfs.ncffoa",),
+        "cash": ("cfs.bocaceatpe",),
+        "total_debt": (
+            "bs.stl",
+            "bs.stpl",
+            "bs.stbp",
+            "bs.stlcofcb",
+            "bs.stsn",
+            "bs.ltl",
+            "bs.ltpl",
+            "bs.sn",
+            "bs.bp",
+            "bs.ltlcofcb",
+        ),
+        "lease_liabilities": ("bs.stll", "bs.ltll"),
+        "minority_interest": ("bs.etmsh",),
+        "shares_outstanding": ("bs.tsc",),
+    },
+}
+DCF_WARNINGS = {
+    "cn": "Lixinger CN statements; total_debt sums borrowings, bonds and current non-current liabilities "
+    "(the latter may include current lease liabilities); long-term leases are in lease_liabilities.",
+    "hk": "Lixinger HK statements; total_debt sums borrowings, bonds, notes and convertibles and excludes leases.",
 }
 
 
-def dcf_inputs_hk(symbol, periods):
-    metrics = [f"q.{field}.t" for fields in DCF_FIELDS.values() for field in fields]
-    code = symbol.split(".")[0].zfill(5)
+def dcf_inputs(market, code, periods):
+    fields = DCF_FIELDS[market]
+    metrics = [f"q.{field}.t" for names in fields.values() for field in names]
     rows = []
-    for row in sorted(hk_data(symbol, "fs", metrics), key=lambda r: r.get("date", ""), reverse=True):
+    for row in sorted(company_data(market, code, "fs", metrics), key=lambda r: r.get("date", ""), reverse=True):
         if row.get("reportType") != "annual_report" or not row.get("date") or row.get("stockCode", code) != code:
             continue
         entry = {"period_end": row["date"][:10], "currency": row.get("currency")}
-        for key, fields in DCF_FIELDS.items():
-            values = [
-                value
-                for field in fields
-                if (value := row.get("q", {}).get(field.split(".")[0], {}).get(field.split(".")[1], {}).get("t"))
-                is not None
-            ]
+        for key, names in fields.items():
+            values = [value for name in names if (value := metric(row, name)) is not None]
             entry[key] = sum(values) if values else None
         rows.append(entry)
     if not rows:
-        raise ValueError("Lixinger returned no annual HK statements")
-    return {
-        "source": "lixinger",
-        "periods": rows[:periods],
-        "warnings": [
-            "Lixinger HK statements; total_debt sums borrowings, bonds, notes and convertibles and excludes leases."
-        ],
-    }
+        raise ValueError(f"Lixinger returned no annual {market} statements")
+    return {"source": "lixinger", "periods": rows[:periods], "warnings": [DCF_WARNINGS[market]]}

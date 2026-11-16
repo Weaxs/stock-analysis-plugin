@@ -1901,7 +1901,13 @@ def financials_yf(symbol: str, periods: int = 1, annual: bool = False) -> dict:
 def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
     import yfinance as yf
 
-    ticker = yf.Ticker(_yf_hk_symbol(symbol))
+    if detect_market(symbol) == "A":
+        code = _cn_code(symbol)
+        if code.startswith("bj"):
+            raise ValueError("Yahoo has no Beijing Stock Exchange statements")
+        ticker = yf.Ticker(f"{code[2:]}.{'SS' if code.startswith('sh') else 'SZ'}")
+    else:
+        ticker = yf.Ticker(_yf_hk_symbol(symbol))
     tables = [ticker.income_stmt, ticker.cashflow, ticker.balance_sheet]
     try:
         currency = _yf_info(symbol, ticker).get("financialCurrency")
@@ -2005,20 +2011,21 @@ def _fill_dcf_rows(result: dict, fallback: dict | None) -> dict:
 
 def _dcf_inputs(symbol: str, periods: int) -> dict:
     market = detect_market(symbol)
-    if market not in ("HK", "US"):
-        return {"error": "DCF inputs support HK and US stocks only"}
+    if market not in ("A", "HK", "US"):
+        return {"error": "DCF inputs support A, HK and US stocks only"}
     warnings, primary = [], None
     if market == "US" or os.environ.get("LIXINGER_TOKEN"):
-        label = "SEC companyfacts" if market == "US" else "Lixinger HK"
+        label = "SEC companyfacts" if market == "US" else f"Lixinger {market}"
         try:
             if market == "US":
                 import sec_edgar
 
                 primary = sec_edgar.dcf_inputs(symbol, periods)
             else:
-                from lixinger import dcf_inputs_hk
+                import lixinger
 
-                primary = dcf_inputs_hk(symbol, periods)
+                code = _cn_code(symbol)[2:] if market == "A" else symbol.split(".")[0].zfill(5)
+                primary = lixinger.dcf_inputs("cn" if market == "A" else "hk", code, periods)
         except Exception as e:
             warnings.append(f"{label} unavailable: {error_message(e)}; Yahoo fallback used")
     try:
