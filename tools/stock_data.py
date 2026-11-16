@@ -616,8 +616,13 @@ def _kline_akshare(symbol: str, period: str, count: int) -> list:
     end = _cn_now()
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
 
-    # ETFs (51/52/56/58/15/16/18xxxx) are not covered by stock_zh_a_hist
-    hist_fn = ak.fund_etf_hist_em if normalize_stock_code(symbol)["is_etf"] else ak.stock_zh_a_hist
+    # ETFs (51/52/56/58/15/16/18xxxx) are not covered by stock_zh_a_hist.
+    # akshare 1.20.44-1.20.46 renamed several APIs; py3.10 stays below 1.20.40 with the old names.
+    hist_fn = (
+        ak.fund_etf_hist_em
+        if normalize_stock_code(symbol)["is_etf"]
+        else getattr(ak, "stock_zh_a_hist_em", None) or ak.stock_zh_a_hist
+    )
     df = _akshare_retry(
         hist_fn,
         symbol=symbol,
@@ -1582,7 +1587,7 @@ def cmd_capital_flow(args):
         try:
             import akshare as ak
 
-            df = _akshare_retry(ak.stock_sector_fund_flow_rank)
+            df = _akshare_retry(getattr(ak, "stock_fund_flow_sector_rank_em", None) or ak.stock_sector_fund_flow_rank)
             if df is None or df.empty:
                 return {"error": "Sector fund flow data unavailable"}
             col_map = {
@@ -1609,7 +1614,9 @@ def cmd_capital_flow(args):
         # akshare wants the bare 6-digit stock plus market ∈ {sh, sz, bj}.
         code = _cn_code(args.symbol)
         market, stock = code[:2], code[2:]
-        df = _akshare_retry(ak.stock_individual_fund_flow, stock=stock, market=market)
+        # Positional: the 1.20.45 rename also renamed `stock=` to `symbol=`.
+        flow = getattr(ak, "stock_fund_flow_individual_hist_em", None) or ak.stock_individual_fund_flow
+        df = _akshare_retry(flow, stock, market)
         col_map = {
             "日期": "date",
             "主力净流入-净额": "main_net_inflow",
@@ -1988,7 +1995,7 @@ def _snapshot_sina() -> list:
     import akshare as ak
     import pandas as pd
 
-    df = _akshare_retry(ak.stock_zh_a_spot)
+    df = _akshare_retry(getattr(ak, "stock_zh_a_spot_sina", None) or ak.stock_zh_a_spot)
     if df is None or df.empty:
         raise ValueError("sina snapshot empty")
     df["代码"] = df["代码"].astype(str).str.replace(r"^(?:sh|sz|bj)", "", regex=True)
@@ -2227,10 +2234,10 @@ def cmd_market_indices(args):
             ]
             results = []
             try:
-                df = _akshare_retry(ak.stock_zh_index_spot_em)
+                df = _akshare_retry(getattr(ak, "index_zh_spot_em", None) or ak.stock_zh_index_spot_em)
             except Exception:
                 # eastmoney refuses datacenter/proxy IPs (RemoteDisconnected) — sina is the fallback
-                df = _akshare_retry(ak.stock_zh_index_spot_sina)
+                df = _akshare_retry(getattr(ak, "index_zh_spot_sina", None) or ak.stock_zh_index_spot_sina)
             for code, name in indices:
                 clean_code = code[2:] if code[:2] in ("sh", "sz") else code
                 row = df[df["代码"] == clean_code]

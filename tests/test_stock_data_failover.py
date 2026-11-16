@@ -1251,7 +1251,7 @@ class TestSnapshotAFailover:
         mock_ef = MagicMock()
         mock_ef.stock.get_realtime_quotes.side_effect = OSError("eastmoney down")
         mock_ak = MagicMock()
-        mock_ak.stock_zh_a_spot.return_value = pd.DataFrame(
+        mock_ak.stock_zh_a_spot_sina.return_value = pd.DataFrame(
             {
                 "代码": ["sh600519"],
                 "名称": ["贵州茅台"],
@@ -1475,7 +1475,7 @@ class TestAkshareETF:
     def test_etf_kline_uses_fund_api(self):
         mock_ak = MagicMock()
         mock_ak.fund_etf_hist_em.return_value = self._etf_hist_df()
-        mock_ak.stock_zh_a_hist.side_effect = AssertionError("stock api must not be called for ETF")
+        mock_ak.stock_zh_a_hist_em.side_effect = AssertionError("stock api must not be called for ETF")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             result = _kline_akshare("510300", "daily", 2)
         assert len(result) == 2
@@ -1484,12 +1484,12 @@ class TestAkshareETF:
 
     def test_stock_kline_still_uses_stock_api(self):
         mock_ak = MagicMock()
-        mock_ak.stock_zh_a_hist.return_value = self._etf_hist_df()
+        mock_ak.stock_zh_a_hist_em.return_value = self._etf_hist_df()
         mock_ak.fund_etf_hist_em.side_effect = AssertionError("fund api must not be called for stock")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             result = _kline_akshare("600519", "daily", 2)
         assert len(result) == 2
-        mock_ak.stock_zh_a_hist.assert_called_once()
+        mock_ak.stock_zh_a_hist_em.assert_called_once()
 
     def test_etf_quote_uses_fund_spot(self):
         import pandas as pd
@@ -3446,8 +3446,8 @@ class TestCapitalFlowMarketDetection:
 
         captured = {}
 
-        def fake_retry(fn, **kw):
-            captured.update(kw)
+        def fake_retry(fn, *args, **kw):
+            captured.update(zip(("stock", "market"), args), **kw)
             return pd.DataFrame({"日期": ["2026-09-18"], "主力净流入-净额": [1.0e6]})
 
         monkeypatch.setattr("tools.stock_data._akshare_retry", fake_retry)

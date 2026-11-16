@@ -148,17 +148,17 @@ class TestCnTradeDatesMemo:
     def test_memoized_and_failures_retry(self, monkeypatch):
         monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
         mock_ak = MagicMock()
-        mock_ak.tool_trade_date_hist_sina.return_value = pd.DataFrame(
+        mock_ak.calendar_trade_date_hist_sina.return_value = pd.DataFrame(
             {"trade_date": ["2026-09-18", "2026-09-17", "2025-12-31"]}
         )
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             assert tc.cn_trade_dates(2026) == {"2026-09-18", "2026-09-17"}
             assert tc.cn_trade_dates(2026) == {"2026-09-18", "2026-09-17"}
-            mock_ak.tool_trade_date_hist_sina.assert_called_once()
-            mock_ak.tool_trade_date_hist_sina.side_effect = ConnectionError("boom")
+            mock_ak.calendar_trade_date_hist_sina.assert_called_once()
+            mock_ak.calendar_trade_date_hist_sina.side_effect = ConnectionError("boom")
             assert tc.cn_trade_dates(2027) == set()
             assert tc.cn_trade_dates(2027) == set()
-            assert mock_ak.tool_trade_date_hist_sina.call_count == 1
+            assert mock_ak.calendar_trade_date_hist_sina.call_count == 1
 
 
 class TestCnTradeDatesTimeout:
@@ -170,7 +170,7 @@ class TestCnTradeDatesTimeout:
         seen = record_socket_timeout()
         monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
         mock_ak = MagicMock()
-        mock_ak.tool_trade_date_hist_sina.return_value = pd.DataFrame({"trade_date": ["2026-09-18"]})
+        mock_ak.calendar_trade_date_hist_sina.return_value = pd.DataFrame({"trade_date": ["2026-09-18"]})
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             assert tc.cn_trade_dates(2026) == {"2026-09-18"}
         assert seen == [25, None]
@@ -179,7 +179,7 @@ class TestCnTradeDatesTimeout:
         seen = record_socket_timeout()
         monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
         mock_ak = MagicMock()
-        mock_ak.tool_trade_date_hist_sina.side_effect = ConnectionError("boom")
+        mock_ak.calendar_trade_date_hist_sina.side_effect = ConnectionError("boom")
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             assert tc.cn_trade_dates(2026) == set()
         assert seen == [25, None]
@@ -303,19 +303,19 @@ class TestUsTradingDayFallback:
 def test_calendar_shares_full_snapshot_across_years(monkeypatch):
     monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
     mock_ak = MagicMock()
-    mock_ak.tool_trade_date_hist_sina.return_value = pd.DataFrame({"trade_date": ["2025-12-31", "2026-09-18"]})
+    mock_ak.calendar_trade_date_hist_sina.return_value = pd.DataFrame({"trade_date": ["2025-12-31", "2026-09-18"]})
     with patch.dict(sys.modules, {"akshare": mock_ak}):
         assert tc.cn_trade_dates(2025) == {"2025-12-31"}
         assert tc.cn_trade_dates(2026) == {"2026-09-18"}
         monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
         assert tc.cn_trade_dates(2026) == {"2026-09-18"}
-    assert mock_ak.tool_trade_date_hist_sina.call_count == 1
+    assert mock_ak.calendar_trade_date_hist_sina.call_count == 1
 
 
 def test_calendar_failure_is_not_persisted(monkeypatch):
     monkeypatch.setattr(tc, "_CN_TRADE_DATES", {})
     source = MagicMock(side_effect=[ConnectionError("offline"), pd.DataFrame({"date": ["2026-09-18"]})])
-    with patch.dict(sys.modules, {"akshare": MagicMock(tool_trade_date_hist_sina=source)}):
+    with patch.dict(sys.modules, {"akshare": MagicMock(calendar_trade_date_hist_sina=source)}):
         assert tc.cn_trade_dates(2026) == set()
         assert tc.cn_trade_dates(2026) == {"2026-09-18"}
     assert source.call_count == 2
@@ -336,7 +336,7 @@ def test_calendar_refreshes_when_china_date_changes(monkeypatch):
     source = MagicMock(
         side_effect=[pd.DataFrame({"date": ["2026-10-29"]}), pd.DataFrame({"date": ["2026-10-29", "2026-10-30"]})]
     )
-    with patch.dict(sys.modules, {"akshare": MagicMock(tool_trade_date_hist_sina=source)}):
+    with patch.dict(sys.modules, {"akshare": MagicMock(calendar_trade_date_hist_sina=source)}):
         assert tc.cn_trade_dates(2026) == {"2026-10-29"}
         Clock.current = datetime(2026, 10, 30)
         assert tc.cn_trade_dates(2026) == {"2026-10-29", "2026-10-30"}

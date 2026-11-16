@@ -181,6 +181,11 @@ INDEX_NAMES = {
 }
 
 
+def _csi_hist(ak):
+    # akshare 1.20.44 renamed it; py3.10 stays below 1.20.40 with the old name.
+    return getattr(ak, "index_hist_csindex", None) or ak.stock_zh_index_hist_csindex
+
+
 def lixinger_index_history(code, start, end):
     import requests
 
@@ -244,7 +249,7 @@ def index_valuation(args):
             "history",
             lambda: dataset(
                 f"csi-history:{code}:{args.years}",
-                lambda: ak.stock_zh_index_hist_csindex(
+                lambda: _csi_hist(ak)(
                     symbol=code, start_date=cutoff.replace("-", ""), end_date=_cn_now().date().strftime("%Y%m%d")
                 ),
             ),
@@ -257,7 +262,10 @@ def index_valuation(args):
         capture(
             section,
             "recent",
-            lambda: dataset(f"csi-valuation:{code}", lambda: ak.stock_zh_index_value_csindex(symbol=code)),
+            lambda: dataset(
+                f"csi-valuation:{code}",
+                lambda: (getattr(ak, "index_value_csindex", None) or ak.stock_zh_index_value_csindex)(symbol=code),
+            ),
         )
         for row in section.get("recent", []):
             stamp = iso(row.get("日期"))
@@ -1380,7 +1388,7 @@ def etf_details(args):
                 "benchmark_history",
                 lambda: dataset(
                     f"csi-close:{code}:{args.days}:{end.isoformat()}",
-                    lambda: ak.stock_zh_index_hist_csindex(
+                    lambda: _csi_hist(ak)(
                         symbol=code, start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d")
                     ),
                 ),
