@@ -204,6 +204,7 @@ Versions live in **five** manifests that must stay in lockstep: `pyproject.toml`
 - **One tool = one schema + two argv mappings + docs.** Adding/renaming/re-paraming a tool touches `tools/tool_schemas.json`, `scripts/tool-calls.mjs`, `hermes/tools.py`, the relevant `skills/*/SKILL.md`, and the README tool table — together, in one change.
 - **Keep the JSON contract stable.** Host adapters and tests parse `tools/` stdout. Changing a key is a breaking change across all four hosts — update all consumers and tests in the same change, or add the new key alongside the old.
 - Minimal, scoped diffs. Don't "improve" unrelated code or do cross-cutting refactors unless asked.
+- Commit only user-facing docs (README, `docs/`, shipped `skills/`). Keep specs, plans, review notes, research drafts and other agent/process artifacts local or in the PR body — never commit them.
 - New config keys / tool params need corresponding test coverage (pytest for the core, tsx for the adapter registration).
 - Don't swallow exceptions: expected failures (missing symbol, bad input, provider down) become clean JSON `error` results; unexpected exceptions should not leak raw stack traces or response bodies to the user.
 
