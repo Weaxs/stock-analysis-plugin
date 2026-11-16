@@ -53,7 +53,8 @@ def cn_trade_dates(year: int) -> set[str]:
             import akshare as ak
 
             with socket_timeout(25):
-                df = ak.tool_trade_date_hist_sina()
+                # akshare 1.20.45 renamed it; py3.10 stays below 1.20.40 with the old name.
+                df = (getattr(ak, "calendar_trade_date_hist_sina", None) or ak.tool_trade_date_hist_sina)()
             if df is None or df.empty:
                 return []
             return sorted({date.fromisoformat(str(value)[:10]).isoformat() for value in df.iloc[:, 0]})
