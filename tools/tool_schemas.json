@@ -241,13 +241,13 @@
   },
   {
     "name": "get_announcements",
-    "description": "查询A股巨潮公告与美股SEC EDGAR申报标题、日期、类型和原文链接；按日期范围/类别筛选，默认近90天，top=1..500。A股返回PDF链接，美股返回document_url/filing_url并需SEC_USER_AGENT；正文用extract_article提取，truncated提示截断。美股category=all含8-K/6-K/DEF14A，不支持forecast/express/interim/dividend。",
+    "description": "查询A股巨潮公告、港股HKEXnews公告与美股SEC EDGAR申报标题、日期、类型和原文链接；按日期范围/类别筛选，默认近90天，top=1..500。A/HK返回PDF链接，美股返回document_url/filing_url并需SEC_USER_AGENT；正文用extract_article提取，truncated提示截断。美股category=all含8-K/6-K/DEF14A，不支持forecast/express/interim/dividend。港股支持all/forecast/annual/interim/quarterly/issuance/dividend，类别按HKEX标题与类型识别。",
     "parameters": {
       "type": "object",
       "properties": {
         "symbol": {
           "type": "string",
-          "description": "A股代码、美股ticker或CIK（6位数字CIK须加CIK前缀，如CIK320193）"
+          "description": "A股代码、港股代码（如00700.HK）、美股ticker或CIK（6位数字CIK须加CIK前缀，如CIK320193）"
         },
         "category": {
           "type": "string",
@@ -263,7 +263,7 @@
             "inquiry",
             "dividend"
           ],
-          "description": "公告类别，默认all；美股仅支持all/annual/quarterly/reduction/issuance/inquiry，8-K/6-K/DEF14A经all查询"
+          "description": "公告类别，默认all；美股仅支持all/annual/quarterly/reduction/issuance/inquiry，8-K/6-K/DEF14A经all查询；港股不支持express/reduction/inquiry"
         },
         "start_date": {
           "type": "string",
@@ -590,7 +590,7 @@
   },
   {
     "name": "get_financials",
-    "description": "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。有效Yahoo顶层快照按整组保留，currency为财报币种、market_cap_currency为市值币种、snapshot_source标明来源；缺失值及report_date不混入历史数值/日期。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar",
+    "description": "获取股票财务摘要及历史趋势，按天缓存。A股annual=true与periods=10取十年年报；港股可配置LIXINGER_TOKEN取非金融公司财务序列，保留币种/披露日/实际财年，历史比率单位percent。有效Yahoo顶层快照按整组保留，currency为财报币种、market_cap_currency为市值币种、snapshot_source标明来源；缺失值及report_date不混入历史数值/日期。缺token或无权限降级原有来源并标注不足，不补造缺失。估值历史用get_valuation_history，披露排期用get_earnings_calendar。include_dcf_inputs=true时港美股追加年度DCF输入：美股优先SEC companyfacts、失败降级Yahoo，港股用Yahoo标准化年报；缺失为null，不估算。",
     "parameters": {
       "type": "object",
       "properties": {
@@ -605,6 +605,10 @@
         "periods": {
           "type": "number",
           "description": "返回最近N个报告期1..40，默认1；annual=true时periods=10请求10年年报"
+        },
+        "include_dcf_inputs": {
+          "type": "boolean",
+          "description": "追加港美股年度DCF输入（收入/EBIT/税/现金流/资本开支/现金/债务/少数股东/股本），默认false"
         }
       },
       "required": [
@@ -2322,6 +2326,114 @@
         "stop_price",
         "risk_fraction",
         "lot_size"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "calculate_dcf_valuation",
+    "description": "无状态达摩达兰式FCFF DCF：输入收入、增长、营业利润率、税率、销售资本比、逐年WACC、永续增长与ROIC及股权桥，输出企业价值、股权价值、每股价值、终值占比和3x3敏感性；不取数、不估WACC、不生成买卖信号。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "description": "所有金额统一币种，如USD/HKD/CNY"
+        },
+        "units": {
+          "type": "string",
+          "description": "金额单位，如million；股数须与每股价值口径一致"
+        },
+        "base_revenue": {
+          "type": "number",
+          "description": "基期收入，正数"
+        },
+        "revenue_growth": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "逐年收入增长率小数，1..10年，如0.1"
+        },
+        "operating_margin": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "逐年营业利润率小数，长度同revenue_growth"
+        },
+        "tax_rate": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "逐年税率0..1，长度同revenue_growth"
+        },
+        "sales_to_capital": {
+          "type": "number",
+          "description": "销售资本比，正数；再投资=收入增量/该值"
+        },
+        "wacc": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "逐年WACC 0..1，长度同revenue_growth"
+        },
+        "terminal_growth": {
+          "type": "number",
+          "description": "永续增长率小数，须小于terminal_wacc且不大于terminal_roic"
+        },
+        "terminal_wacc": {
+          "type": "number",
+          "description": "永续期WACC 0..1"
+        },
+        "terminal_roic": {
+          "type": "number",
+          "description": "永续期ROIC，正数；终值再投资率=terminal_growth/terminal_roic"
+        },
+        "cash": {
+          "type": "number",
+          "description": "现金，默认0"
+        },
+        "debt": {
+          "type": "number",
+          "description": "有息债务，默认0"
+        },
+        "minority_interests": {
+          "type": "number",
+          "description": "少数股东权益，默认0"
+        },
+        "nonoperating_assets": {
+          "type": "number",
+          "description": "非经营资产，默认0"
+        },
+        "other_claims": {
+          "type": "number",
+          "description": "其他股权前索取权，默认0"
+        },
+        "diluted_shares": {
+          "type": "number",
+          "description": "稀释后股本，正数"
+        },
+        "current_price": {
+          "type": "number",
+          "description": "可选当前股价，用于计算upside_pct"
+        }
+      },
+      "required": [
+        "currency",
+        "units",
+        "base_revenue",
+        "revenue_growth",
+        "operating_margin",
+        "tax_rate",
+        "sales_to_capital",
+        "wacc",
+        "terminal_growth",
+        "terminal_wacc",
+        "terminal_roic",
+        "diluted_shares"
       ],
       "additionalProperties": false
     }

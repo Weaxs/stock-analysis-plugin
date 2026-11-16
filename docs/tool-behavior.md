@@ -47,7 +47,7 @@
 python tools/stateless_analysis.py position_size --input input.json
 ```
 
-对应宿主工具是 `calculate_position_size`。其余 CLI 子命令依次为 `peers/disclosure/portfolio/rebalance/event_study/robustness/snapshot`。事件研究可直接传 `symbol/benchmark/start_date/end_date/event_dates`；回测验证可传 `symbols/start_date/end_date/strategies`，由 Python 复用行情接口，避免模型重新抄写历史 K 线。显式价格/datasets 模式仍支持离线计算，两种模式互斥。
+对应宿主工具是 `calculate_position_size`。其余 CLI 子命令依次为 `peers/disclosure/portfolio/rebalance/dcf/event_study/robustness/snapshot`；`dcf` 对应 `calculate_dcf_valuation`，只计算显式假设，不取数或估计 WACC。事件研究可直接传 `symbol/benchmark/start_date/end_date/event_dates`；回测验证可传 `symbols/start_date/end_date/strategies`，由 Python 复用行情接口，避免模型重新抄写历史 K 线。显式价格/datasets 模式仍支持离线计算，两种模式互斥。
 
 跨币种组合必须提供显式汇率；价格盈亏不含历史汇兑损益。组合压力测试是用户指定市场/行业/个股/汇率冲击的确定性 what-if，个股冲击覆盖行业、行业覆盖市场，汇率独立乘算，不是预测或最大亏损保证。调仓工具按目标权重和整手生成计划，先卖后买；现金不足时同比例缩减买单并以 `cash_limited/unfilled` 标记，计划数量不代表成交。稳健性工具仅支持 next_open、每窗口重新从现金开始，样本内敏感性不等于样本外表现。
 

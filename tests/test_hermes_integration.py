@@ -112,6 +112,7 @@ EXPECTED_TOOLS = sorted(
         "analyze_portfolio_risk",
         "plan_portfolio_rebalance",
         "calculate_position_size",
+        "calculate_dcf_valuation",
         "analyze_event_study",
         "validate_backtest",
         "compare_analysis_snapshots",

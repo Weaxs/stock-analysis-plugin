@@ -6,7 +6,7 @@ import json
 import os
 import re
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import unescape
 from io import StringIO
 from pathlib import Path
@@ -1447,6 +1447,93 @@ ANNOUNCEMENT_CATEGORIES = {
     "inquiry": ("", "问询"),
     "dividend": ("category_qyfpxzcs_szsh", ""),
 }
+HK_ANNOUNCEMENT_CATEGORIES = {
+    "forecast": r"Profit Warning|Positive Profit Alert|Inside Information.*Profit",
+    "annual": r"Final Results|Annual Report",
+    "interim": r"Interim Results|Interim/Half-Year Report",
+    "quarterly": r"Quarterly Results",
+    "issuance": r"Issue of Securities|Placing|Rights Issue|Open Offer|Subscription",
+    "dividend": r"Dividend",
+}
+
+
+def hk_announcements(args, symbol):
+    import requests
+
+    if args.category != "all" and args.category not in HK_ANNOUNCEMENT_CATEGORIES:
+        raise ValueError("HK announcements support all/forecast/annual/interim/quarterly/issuance/dividend")
+    end = date.fromisoformat(args.end_date) if args.end_date else market_now("HK").date()
+    start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
+    if start > end or not 1 <= args.top <= 500:
+        raise ValueError("start_date must not exceed end_date and top must be in 1..500")
+    response = requests.get(
+        "https://www1.hkexnews.hk/search/prefix.do",
+        params={"callback": "callback", "lang": "EN", "type": "A", "name": symbol, "market": "SEHK"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    stocks = json.loads(re.sub(r"^\s*callback\(|\);?\s*$", "", response.text)).get("stockInfo", [])
+    stock = next((row for row in stocks if row.get("code") == symbol), None)
+    if not stock:
+        raise ValueError("stock not found in HKEXnews directory")
+    response = requests.get(
+        "https://www1.hkexnews.hk/search/titleSearchServlet.do",
+        params={
+            "sortDir": 0,
+            "sortByOptions": "DateTime",
+            "category": 0,
+            "market": "SEHK",
+            "stockId": stock["stockId"],
+            "documentType": -1,
+            "fromDate": start.strftime("%Y%m%d"),
+            "toDate": end.strftime("%Y%m%d"),
+            "title": "",
+            "searchType": 0,
+            "t1code": -2,
+            "t2Gcode": -2,
+            "t2code": -2,
+            # shortcut: one 500-row page; narrow the date range when truncated.
+            "rowRange": 500,
+            "lang": "E",
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    data = response.json()
+    items = json.loads(data.get("result") or "[]")
+    rows = []
+    for row in items:
+        kind = unescape(re.sub(r"<[^>]+>", " ", row.get("LONG_TEXT") or row.get("SHORT_TEXT") or "")).strip()
+        title = unescape(re.sub(r"<[^>]+>", " ", row.get("TITLE") or "")).strip()
+        inferred = next(
+            (key for key, pattern in HK_ANNOUNCEMENT_CATEGORIES.items() if re.search(pattern, f"{kind} {title}", re.I)),
+            "other",
+        )
+        path = row.get("FILE_LINK") or ""
+        if args.category != "all" and inferred != args.category or not path.startswith("/listedco/"):
+            continue
+        rows.append(
+            {
+                "title": title,
+                "date": datetime.strptime(row["DATE_TIME"], "%d/%m/%Y %H:%M").date().isoformat(),
+                "category": inferred,
+                "pdf_url": f"https://www1.hkexnews.hk{path}",
+                "type": kind,
+            }
+        )
+    total = int(data.get("recordCnt") or len(items))
+    return {
+        "symbol": args.symbol,
+        "market": "HK",
+        "source": "hkexnews",
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "total": total if args.category == "all" else len(rows),
+        "announcements": rows[: args.top],
+        "truncated": total > len(items) or len(rows) > args.top,
+        "body_extracted": False,
+        "requested_category": args.category,
+    }
 
 
 def announcements(args):
@@ -1457,7 +1544,7 @@ def announcements(args):
 
         if args.symbol.isdigit():
             # Bare digits are an unsuffixed HK code as often as a CIK; only CIK-prefixed numbers reach SEC.
-            raise ValueError("numeric symbols need a CIK prefix (CIK320193); HK announcements are not supported")
+            raise ValueError("numeric symbols need a CIK prefix (CIK320193) or HK .HK suffix (00700.HK)")
         end = date.fromisoformat(args.end_date) if args.end_date else market_now("US").date()
         start = date.fromisoformat(args.start_date) if args.start_date else end - timedelta(days=90)
         if start > end or not 1 <= args.top <= 500:
@@ -1469,6 +1556,8 @@ def announcements(args):
         )
         return sec_edgar.filings(symbol, args.category, start, end, args.top)
     market, symbol = stock_identity(args.symbol)
+    if market == "HK":
+        return hk_announcements(args, symbol)
     if market != "A" or not 1 <= args.top <= 500 or args.category not in ANNOUNCEMENT_CATEGORIES:
         raise ValueError("announcements require an A-share or US stock, valid category and top in 1..500")
     end = date.fromisoformat(args.end_date) if args.end_date else _cn_now().date()

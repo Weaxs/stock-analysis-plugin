@@ -128,8 +128,8 @@ stock-analysis-plugin (wheel)
 ├── hermes/
 │   ├── __init__.py       # register(ctx) entry point
 │   ├── plugin.yaml       # plugin manifest
-│   ├── schemas.py        # loads tools/tool_schemas.json (JSON Schemas for 73 tools)
-│   ├── tools.py          # 73 handlers that run the CLIs as subprocesses
+│   ├── schemas.py        # loads tools/tool_schemas.json (JSON Schemas for 74 tools)
+│   ├── tools.py          # 74 handlers that run the CLIs as subprocesses
 │   └── _payload/         # tools/, skills/, schemas/, templates/
 └── mcp_host/             # MCP stdio server (stock-analysis-mcp)
 ```

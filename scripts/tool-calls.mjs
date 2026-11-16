@@ -82,6 +82,7 @@ export const TOOL_CALLS = {
       const args = ["financials", p.symbol];
       if (p.periods !== undefined && p.periods !== 1) args.push("--periods", String(p.periods));
       if (p.annual) args.push("--annual");
+      if (p.include_dcf_inputs) args.push("--include-dcf-inputs");
       return args;
     },
   },
@@ -456,6 +457,11 @@ export const TOOL_CALLS = {
     script: "stateless_analysis.py",
     input: (p) => p,
     argv: (p, path) => ["position_size", "--input", path],
+  },
+  calculate_dcf_valuation: {
+    script: "stateless_analysis.py",
+    input: (p) => p,
+    argv: (p, path) => ["dcf", "--input", path],
   },
   analyze_event_study: {
     script: "stateless_analysis.py",

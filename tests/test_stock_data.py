@@ -397,3 +397,61 @@ def test_yahoo_quote_preserves_time_from_same_info_response(monkeypatch):
     assert quote["data_as_of"] == "2024-01-02T14:30:00+00:00"
     assert quote["as_of_basis"] == "provider"
     assert calls == ["AAPL"]
+
+
+def test_hk_financials_add_dcf_inputs_from_yahoo_statements(monkeypatch):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    period = "2025-12-31"
+    ticker = MagicMock()
+    ticker.info = {"shortName": "Tencent", "financialCurrency": "CNY"}
+    ticker.financials = pd.DataFrame()
+    ticker.income_stmt = pd.DataFrame(
+        {period: [100, 30, 25, 5, 9]},
+        index=["Total Revenue", "Operating Income", "Pretax Income", "Tax Provision", "Diluted Average Shares"],
+    )
+    ticker.cashflow = pd.DataFrame(
+        {period: [40, -12, 7]}, index=["Operating Cash Flow", "Capital Expenditure", "Depreciation And Amortization"]
+    )
+    ticker.balance_sheet = pd.DataFrame(
+        {period: [20, 50, 3, 8]},
+        index=["Cash And Cash Equivalents", "Total Debt", "Minority Interest", "Ordinary Shares Number"],
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: ticker)
+    monkeypatch.setattr(stock_data, "_akshare_retry", MagicMock(side_effect=ValueError("down")))
+    monkeypatch.delenv("LIXINGER_TOKEN", raising=False)
+    result = stock_data.cmd_financials(Namespace(symbol="0700.HK", periods=1, annual=True, include_dcf_inputs=True))
+    row = result["dcf_inputs"]["periods"][0]
+    assert result["dcf_inputs"]["source"] == "yfinance"
+    assert row["currency"] == "CNY"
+    assert row["capital_expenditure"] == 12
+    assert row["effective_tax_rate"] == 0.2
+    assert row["minority_interest"] == 3
+
+
+def test_us_dcf_inputs_fall_back_to_yahoo_when_sec_unavailable(monkeypatch):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    import pandas as pd
+    import sec_edgar
+
+    from tools import stock_data
+
+    ticker = MagicMock()
+    ticker.info = {"shortName": "Example", "financialCurrency": "USD"}
+    ticker.financials = pd.DataFrame()
+    ticker.income_stmt = pd.DataFrame({"2025-12-31": [100]}, index=["Total Revenue"])
+    ticker.cashflow = pd.DataFrame()
+    ticker.balance_sheet = pd.DataFrame()
+    monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: ticker)
+    monkeypatch.setattr(sec_edgar, "dcf_inputs", MagicMock(side_effect=ValueError("SEC down")))
+    result = stock_data.cmd_financials(Namespace(symbol="AAPL", periods=1, annual=False, include_dcf_inputs=True))
+    assert result["dcf_inputs"]["source"] == "yfinance"
+    assert result["dcf_inputs"]["periods"][0]["revenue"] == 100
+    assert any("SEC" in warning for warning in result["dcf_inputs"]["warnings"])

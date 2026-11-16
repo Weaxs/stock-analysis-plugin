@@ -225,7 +225,7 @@ for (const host of ["openclaw", "dsh", "hermes"]) {
   }
 }
 const names = Object.keys(hosts.pi).sort();
-if (names.length !== 73) issues.push(`pi registered ${names.length} tools, expected 73`);
+if (names.length !== 74) issues.push(`pi registered ${names.length} tools, expected 74`);
 for (const host of ["openclaw", "dsh", "hermes"]) {
   for (const extra of Object.keys(hosts[host]).filter(n => !hosts.pi[n])) issues.push(`${host}: extra tool ${extra}`);
   for (const name of names) {

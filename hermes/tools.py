@@ -111,6 +111,8 @@ def get_financials(args: dict, **kwargs) -> str:
         argv += ["--periods", periods]
     if args.get("annual"):
         argv += ["--annual"]
+    if args.get("include_dcf_inputs"):
+        argv += ["--include-dcf-inputs"]
     return _run("stock_data.py", argv)
 
 
@@ -592,6 +594,10 @@ def plan_portfolio_rebalance(args: dict, **kwargs) -> str:
 
 def calculate_position_size(args: dict, **kwargs) -> str:
     return _run_analysis("position_size", args)
+
+
+def calculate_dcf_valuation(args: dict, **kwargs) -> str:
+    return _run_analysis("dcf", args)
 
 
 def analyze_event_study(args: dict, **kwargs) -> str:

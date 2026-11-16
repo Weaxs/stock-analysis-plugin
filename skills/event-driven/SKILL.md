@@ -28,7 +28,7 @@ gather 工具返回：
 - `stock_info` — 公司基本信息
 - `sector_rankings` — 板块排名
 
-事件原文先调用 `get_announcements`：A 股业绩预告用 `forecast`、快报用 `express`、减持用 `reduction`、增发用 `issuance`、问询及回复用 `inquiry`、分红用 `dividend`；美股用 SEC 申报（`all` 含 8-K/6-K/DEF 14A，需 SEC_USER_AGENT），不支持的类别会报错。指定 `start_date/end_date`；PDF/HTML 原文用 `extract_article` 提取并检查 `truncated`，读取后再量化，列表截断时缩小日期范围。
+事件原文先调用 `get_announcements`：A 股业绩预告用 `forecast`、快报用 `express`、减持用 `reduction`、增发用 `issuance`、问询及回复用 `inquiry`、分红用 `dividend`；港股用 HKEXnews，支持 `all/forecast/annual/interim/quarterly/issuance/dividend`；美股用 SEC 申报（`all` 含 8-K/6-K/DEF 14A，需 SEC_USER_AGENT），不支持的类别会报错。指定 `start_date/end_date`；PDF/HTML 原文用 `extract_article` 提取并检查 `truncated`，读取后再量化，列表截断时缩小日期范围。
 
 新闻摘要只用于发现事件。金额、期限、合同对手、业绩变化或政策原文必须由公告/原文确认；只有摘要时不做精确量化。
 

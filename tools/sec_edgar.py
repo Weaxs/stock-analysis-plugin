@@ -294,6 +294,107 @@ FILING_FORMS = {
 FILING_FORMS["all"] = set().union(*FILING_FORMS.values()) | {"DEF 14A", "DEFA14A"}
 
 
+DCF_CONCEPTS = {
+    "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
+    "operating_income": ("OperatingIncomeLoss",),
+    "pretax_income": (
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ),
+    "income_tax": ("IncomeTaxExpenseBenefit",),
+    "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
+    "capital_expenditure": ("PaymentsToAcquirePropertyPlantAndEquipment",),
+    "depreciation_amortization": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization"),
+    "diluted_shares": ("WeightedAverageNumberOfDilutedSharesOutstanding",),
+}
+DCF_INSTANTS = {
+    "cash": ("CashAndCashEquivalentsAtCarryingValue",),
+    "minority_interest": ("MinorityInterest",),
+}
+DEBT_CONCEPTS = (
+    "LongTermDebt",
+    "LongTermDebtCurrent",
+    "LongTermDebtNoncurrent",
+    "ShortTermBorrowings",
+    "CommercialPaper",
+)
+
+
+def annual_fact(row):
+    if row.get("fp") != "FY" or row.get("form") not in {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}:
+        return False
+    if "start" not in row:
+        return True
+    days = (date.fromisoformat(row["end"]) - date.fromisoformat(row["start"])).days
+    return 300 <= days <= 400
+
+
+def latest_facts(facts, names, unit):
+    values = {}
+    for name in names:
+        concept = {}
+        for row in facts.get(name, {}).get("units", {}).get(unit, []):
+            if annual_fact(row) and (row["end"] not in concept or row.get("filed", "") > concept[row["end"]]["filed"]):
+                concept[row["end"]] = row
+        values.update({end: row for end, row in concept.items() if end not in values})
+    return values
+
+
+def dcf_inputs(symbol, periods):
+    cik = resolve_cik(symbol)
+    data = cached(
+        f"sec-companyfacts:{cik}", DAY, lambda: sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
+    )
+    gaap = data.get("facts", {}).get("us-gaap", {})
+    rows = {
+        key: latest_facts(gaap, names, "shares" if key == "diluted_shares" else "USD")
+        for key, names in {**DCF_CONCEPTS, **DCF_INSTANTS}.items()
+    }
+    debt = {name: latest_facts(gaap, (name,), "USD") for name in DEBT_CONCEPTS}
+    ends = sorted(set(rows["revenue"]) | set(rows["operating_income"]), reverse=True)[:periods]
+    outstanding = latest_facts(data.get("facts", {}).get("dei", {}), ("EntityCommonStockSharesOutstanding",), "shares")
+    result = []
+    for end in ends:
+        entry = {key: rows[key].get(end, {}).get("val") for key in rows}
+        source = rows["revenue"].get(end) or rows["operating_income"].get(end)
+        parts = [debt["LongTermDebt"].get(end, {}).get("val")]
+        if parts[0] is None:
+            parts = [debt[name].get(end, {}).get("val") for name in ("LongTermDebtCurrent", "LongTermDebtNoncurrent")]
+        parts += [debt[name].get(end, {}).get("val") for name in ("ShortTermBorrowings", "CommercialPaper")]
+        cover = max(
+            (row for row in outstanding.values() if row.get("filed") == source.get("filed")),
+            key=lambda row: row["end"],
+            default={},
+        )
+        entry.update(
+            {
+                "period_end": end,
+                "currency": "USD",
+                "total_debt": sum(value for value in parts if value is not None)
+                if any(value is not None for value in parts)
+                else None,
+                "shares_outstanding": cover.get("val"),
+                "shares_outstanding_date": cover.get("end"),
+                "form": source.get("form"),
+                "filed": source.get("filed"),
+                "fiscal_year": source.get("fy"),
+            }
+        )
+        pretax, tax = entry["pretax_income"], entry["income_tax"]
+        entry["effective_tax_rate"] = tax / pretax if tax is not None and pretax and pretax > 0 else None
+        result.append(entry)
+    if not result:
+        raise ValueError("SEC annual DCF facts unavailable")
+    return {
+        "source": "sec_companyfacts",
+        "name": data.get("entityName"),
+        "periods": result,
+        "warnings": [
+            "SEC XBRL tags vary by issuer; missing values stay null. total_debt sums reported debt/borrowing tags and excludes leases."
+        ],
+    }
+
+
 def filings(symbol, category, start, end, top):
     forms = FILING_FORMS.get(category)
     if forms is None:

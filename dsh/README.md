@@ -1,6 +1,6 @@
 # Stock Analysis — DeepSeek Harness (dsh) Plugin
 
-A 股 / 港股 / 美股 / 日股 / 韩股 / 台股的行情、技术分析、选股与回测。作为 dsh bundle 安装到 profile 后，对话中可调用 73 个工具，并自动注册 21 个工作流和策略方法论 Skill；dsh Web / Desktop 侧栏还会多出一个「股票仪表盘」。
+A 股 / 港股 / 美股 / 日股 / 韩股 / 台股的行情、技术分析、选股与回测。作为 dsh bundle 安装到 profile 后，对话中可调用 74 个工具，并自动注册 21 个工作流和策略方法论 Skill；dsh Web / Desktop 侧栏还会多出一个「股票仪表盘」。
 
 ![dsh 股票仪表盘：六市场自选股行情、指数带、A 股涨跌分布与行业涨跌榜（深色主题）](https://raw.githubusercontent.com/Weaxs/stock-analysis-plugin/main/docs/images/dsh-dashboard-dark.png)
 
@@ -45,11 +45,11 @@ allowBuilds:
 
 数据由插件后台常驻预热：Web 路由注册后即开始按固定任务表调用现有 CLI（`stock_data.py quote/market_indices/kline/sector_rankings/market_stats` 与 `trading_calendar.py phase`），最多 4 个 Python 进程按优先级排队（报价 > 指数 > 走势 > 行业/统计），结果留在内存缓存。刷新节奏随各市场交易阶段变化：交易时段有页面打开时报价与指数约 30 秒、行业 1 分钟、全 A 统计 2 分钟；无人查看时放宽到 5–10 分钟；收盘后 30–60 分钟一次。失败保留上次成功值并标注，重试间隔按 1、2、4… 分钟退避。页面只轮询内存快照 `/api/snapshot`（有后台任务时 1.5 秒，否则 15 秒，页面不可见时停止），并在浏览器本地缓存 24 小时，打开即显示上次数据；「刷新」会让所有数据立即重新获取。不调用包含财务、新闻、风险等完整采集的 `run_watchlist_analysis`。前端接口只接受固定的快照、刷新和自选股操作，不开放任意 Python 脚本或参数。
 
-前端由 `dsh/client.ts`、`dsh/dashboard.ts` 和 `dsh/web/`（`app.ts` + HTML/CSS）组成，均为 TypeScript，`npm run build:dsh` 将浏览器端编译为 IIFE 输出到 `dist/`；它不增加或改变四宿主共享的 73 个模型工具。源码或 manifest 改动后重新运行 `npm run build:dsh` 并重装/重启对应 profile。
+前端由 `dsh/client.ts`、`dsh/dashboard.ts` 和 `dsh/web/`（`app.ts` + HTML/CSS）组成，均为 TypeScript，`npm run build:dsh` 将浏览器端编译为 IIFE 输出到 `dist/`；它不增加或改变四宿主共享的 74 个模型工具。源码或 manifest 改动后重新运行 `npm run build:dsh` 并重装/重启对应 profile。
 
 ## 按需工具发现
 
-dsh 0.2.2 及以上（工具注册支持按步骤的 `when` 条件）默认增加一个宿主控制入口 `stock_tool_search`；更早的 0.2.1 不提供该接口，插件会自动关闭按需发现并全量暴露工具，功能不受影响。按需发现只控制工具加载，不改变 73 个分析工具的名称、参数和输出。原生函数调用模式下，首次请求只暴露这个发现入口；其他插件的工具照常保留。搜索支持中文描述、英文关键词或确切工具名，例如 `财务`、`get_quote`、`run_backtest`；命中工具在下一次模型请求提供完整 schema，再按原名调用。默认最多加载 5 项，`limit` 可设 1 到 20；无匹配返回空列表。
+dsh 0.2.2 及以上（工具注册支持按步骤的 `when` 条件）默认增加一个宿主控制入口 `stock_tool_search`；更早的 0.2.1 不提供该接口，插件会自动关闭按需发现并全量暴露工具，功能不受影响。按需发现只控制工具加载，不改变 74 个分析工具的名称、参数和输出。原生函数调用模式下，首次请求只暴露这个发现入口；其他插件的工具照常保留。搜索支持中文描述、英文关键词或确切工具名，例如 `财务`、`get_quote`、`run_backtest`；命中工具在下一次模型请求提供完整 schema，再按原名调用。默认最多加载 5 项，`limit` 可设 1 到 20；无匹配返回空列表。
 
 加载集合按 Agent 隔离，搜索和回退均保留宿主已有的工具权限限制。搜索入口被禁止或移除时，下一次请求保留原先已授权的完整股票工具目录。旧版缺少相关接口时保持全量暴露；PTC / both 模式沿用宿主生成的 SDK，不做发现过滤。加载集合在本次运行中保留，恢复会话或重载插件后需重新搜索。
 
@@ -65,7 +65,7 @@ dsh 0.2.2 及以上（工具注册支持按步骤的 `when` 条件）默认增�
 
 ## 工具与 Skills
 
-73 个工具覆盖行情与基金净值、技术分析与 K 线形态、资金流与板块、估值/股东/ETF/股息、公告与 SEC、多因子选股、策略回测、市场复盘、新闻舆情、持仓风险与调仓计算。完整列表见[主仓库 README · 工具列表](https://github.com/Weaxs/stock-analysis-plugin#工具列表)，Skills 见 [Skills 一览](https://github.com/Weaxs/stock-analysis-plugin#skills-一览)。
+74 个工具覆盖行情与基金净值、技术分析与 K 线形态、资金流与板块、估值/股东/ETF/股息、公告与 SEC、多因子选股、策略回测、市场复盘、新闻舆情、持仓风险与调仓计算。完整列表见[主仓库 README · 工具列表](https://github.com/Weaxs/stock-analysis-plugin#工具列表)，Skills 见 [Skills 一览](https://github.com/Weaxs/stock-analysis-plugin#skills-一览)。
 
 ## 其他宿主
 

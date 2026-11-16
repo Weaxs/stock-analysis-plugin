@@ -1898,12 +1898,92 @@ def financials_yf(symbol: str, periods: int = 1, annual: bool = False) -> dict:
     return result
 
 
+def _yf_dcf_inputs(symbol: str, periods: int) -> dict:
+    import yfinance as yf
+
+    ticker = yf.Ticker(_yf_hk_symbol(symbol))
+    tables = [ticker.income_stmt, ticker.cashflow, ticker.balance_sheet]
+    try:
+        currency = _yf_info(symbol, ticker).get("financialCurrency")
+    except Exception:
+        currency = None
+    fields = {
+        "revenue": (0, "Total Revenue"),
+        "operating_income": (0, "Operating Income"),
+        "pretax_income": (0, "Pretax Income"),
+        "income_tax": (0, "Tax Provision"),
+        "diluted_shares": (0, "Diluted Average Shares"),
+        "operating_cash_flow": (1, "Operating Cash Flow"),
+        "capital_expenditure": (1, "Capital Expenditure"),
+        "depreciation_amortization": (1, "Depreciation And Amortization"),
+        "cash": (2, "Cash And Cash Equivalents"),
+        "total_debt": (2, "Total Debt"),
+        "minority_interest": (2, "Minority Interest"),
+        "shares_outstanding": (2, "Ordinary Shares Number"),
+    }
+    ends = sorted(
+        {str(col)[:10] for table in tables if table is not None and not table.empty for col in table.columns},
+        reverse=True,
+    )[:periods]
+    rows = []
+    for end in ends:
+        entry = {"period_end": end, "currency": currency}
+        for key, (index, label) in fields.items():
+            table = tables[index]
+            column = next((col for col in getattr(table, "columns", []) if str(col)[:10] == end), None)
+            value = (
+                _sanitize(_parse_float(table.loc[label, column]))
+                if column is not None and label in table.index
+                else None
+            )
+            entry[key] = abs(value) if key == "capital_expenditure" and value is not None else value
+        pretax, tax = entry["pretax_income"], entry["income_tax"]
+        entry["effective_tax_rate"] = tax / pretax if tax is not None and pretax and pretax > 0 else None
+        rows.append(entry)
+    if not rows:
+        raise ValueError("Yahoo annual statements unavailable")
+    return {
+        "source": "yfinance",
+        "periods": rows,
+        "warnings": ["Yahoo standardized annual statements; verify against filings before valuation."],
+    }
+
+
+def _dcf_inputs(symbol: str, periods: int) -> dict:
+    market = detect_market(symbol)
+    if market not in ("HK", "US"):
+        return {"error": "DCF inputs support HK and US stocks only"}
+    warnings = []
+    if market == "US":
+        try:
+            import sec_edgar
+
+            return sec_edgar.dcf_inputs(symbol, periods)
+        except Exception as e:
+            warnings.append(f"SEC companyfacts unavailable: {error_message(e)}; Yahoo fallback used")
+    try:
+        result = _yf_dcf_inputs(symbol, periods)
+    except Exception as e:
+        return {"error": f"DCF inputs unavailable: {error_message(e)}", "warnings": warnings}
+    result["warnings"] = warnings + result["warnings"]
+    return result
+
+
 def cmd_financials(args):
     periods = getattr(args, "periods", 1)
     if not 1 <= periods <= 40:
         return {"error": f"periods must be between 1 and 40, got {periods}"}
     annual = getattr(args, "annual", False)
     market = detect_market(args.symbol)
+    if getattr(args, "include_dcf_inputs", False):
+        result = _financials_without_dcf(args, periods, annual, market)
+        if "error" not in result:
+            result["dcf_inputs"] = _dcf_inputs(args.symbol, periods)
+        return result
+    return _financials_without_dcf(args, periods, annual, market)
+
+
+def _financials_without_dcf(args, periods, annual, market):
     try:
         if market == "HK":
             if os.environ.get("LIXINGER_TOKEN"):
@@ -3663,6 +3743,7 @@ def main():
     p_fin.add_argument("symbol")
     p_fin.add_argument("--periods", type=int, default=1)
     p_fin.add_argument("--annual", action="store_true", help="Select annual reports; periods=10 requests ten years")
+    p_fin.add_argument("--include-dcf-inputs", action="store_true", help="Add annual HK/US DCF input fields")
 
     p_snap = sub.add_parser("market_snapshot")
     p_snap.add_argument("--market", default="A", choices=["A", "HK", "US"])

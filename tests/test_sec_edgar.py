@@ -454,3 +454,46 @@ def test_sec_filings_reject_categories_without_sec_form(monkeypatch, category):
     monkeypatch.setattr("requests.get", lambda *a, **k: pytest.fail("HTTP before category validation"))
     with pytest.raises(ValueError, match="SEC"):
         sec_edgar.filings("AAPL", category, date(2026, 1, 1), date(2026, 10, 1), 10)
+
+
+def test_dcf_inputs_use_latest_annual_companyfacts(monkeypatch):
+    def fact(value, end="2026-09-26", start="2025-09-28", filed="2026-11-03", form="10-K"):
+        return {"start": start, "end": end, "val": value, "fy": 2026, "fp": "FY", "form": form, "filed": filed}
+
+    def instant(value, end="2026-09-26"):
+        return {"end": end, "val": value, "fy": 2026, "fp": "FY", "form": "10-K", "filed": "2026-11-03"}
+
+    data = {
+        "entityName": "Example",
+        "facts": {
+            "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [instant(98, "2026-10-20")]}}},
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [fact(90, filed="2026-10-01"), fact(100)]}},
+                "OperatingIncomeLoss": {"units": {"USD": [fact(30), fact(8, start="2026-06-28")]}},
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": {
+                    "units": {"USD": [fact(25)]}
+                },
+                "IncomeTaxExpenseBenefit": {"units": {"USD": [fact(5)]}},
+                "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [fact(40)]}},
+                "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [fact(12)]}},
+                "DepreciationDepletionAndAmortization": {"units": {"USD": [fact(7)]}},
+                "CashAndCashEquivalentsAtCarryingValue": {"units": {"USD": [instant(20)]}},
+                "LongTermDebt": {"units": {"USD": [instant(50)]}},
+                "CommercialPaper": {"units": {"USD": [instant(5)]}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [fact(101)]}},
+            },
+        },
+    }
+    monkeypatch.setattr(sec_edgar, "resolve_cik", lambda symbol: "0000000001")
+    monkeypatch.setattr(sec_edgar, "cached", lambda key, ttl, fn: data)
+    result = sec_edgar.dcf_inputs("EXM", 1)
+    row = result["periods"][0]
+    assert result["source"] == "sec_companyfacts"
+    assert row["revenue"] == 100
+    assert row["operating_income"] == 30
+    assert row["effective_tax_rate"] == 0.2
+    assert row["capital_expenditure"] == 12
+    assert row["total_debt"] == 55
+    assert row["diluted_shares"] == 101
+    assert row["shares_outstanding"] == 98
+    assert result["warnings"]

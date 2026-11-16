@@ -26,7 +26,7 @@ gather 工具返回：
 - `stock_info` — 公司基本信息（行业、板块）
 - `sector_rankings` — 板块排名
 
-需要财务趋势时调用 `get_financials(symbol, annual=true, periods=10)`。港股配置 `LIXINGER_TOKEN` 后优先理杏仁非金融公司财报，按真实 `report_type` 判断年报，保留实际财年末、披露日期、币种；历史 ROE/毛利率/净利率为百分数，顶层 `roe/profit_margin` 延续小数比例。读取 `available_periods/warnings`，缺期不补造。有效 Yahoo 顶层快照与历史行分开读：`currency` 为快照财报币种、`market_cap_currency` 为市值币种，历史币种在 `periods` 每行，`snapshot_source` 标记快照来源；null 不用历史值补成跨期或跨币种数字；顶层 `report_date` 未知时读取 `periods` 的历史日期，不当作当前快照报告期。
+需要财务趋势时调用 `get_financials(symbol, annual=true, periods=10)`。港股配置 `LIXINGER_TOKEN` 后优先理杏仁非金融公司财报，按真实 `report_type` 判断年报，保留实际财年末、披露日期、币种；历史 ROE/毛利率/净利率为百分数，顶层 `roe/profit_margin` 延续小数比例。读取 `available_periods/warnings`，缺期不补造。港美股需要 DCF 输入时追加 `include_dcf_inputs=true`，读取 `dcf_inputs.source/periods/warnings`。有效 Yahoo 顶层快照与历史行分开读：`currency` 为快照财报币种、`market_cap_currency` 为市值币种，历史币种在 `periods` 每行，`snapshot_source` 标记快照来源；null 不用历史值补成跨期或跨币种数字；顶层 `report_date` 未知时读取 `periods` 的历史日期，不当作当前快照报告期。
 
 Yahoo 顶层快照单位以 `snapshot_units` 为准：`roe/profit_margin/dividend_yield=ratio`，`debt_to_equity=percent`，例如 150 表示 150%，不是 150 倍；`pe=trailing`，不与 dynamic PE 直接比较。
 
