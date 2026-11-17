@@ -62,7 +62,7 @@ function payload() {
   return {
     watchlist: [], ribbon: [], phases: {},
     market: { region: "cn", indices: [] },
-    stats: { value: null, error: null, updatedAt: null, loading: false },
+    stats: {},
     sectors: { value: { top: [], bottom: [] }, error: null, updatedAt: null, loading: false },
     pending: 0, fetchedAt: new Date().toISOString(),
   };

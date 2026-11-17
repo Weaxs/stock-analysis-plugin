@@ -11,6 +11,8 @@ export type RunPy = (script: string, args: string[], timeoutMs?: number, signal?
 
 export const REGIONS = ["cn", "hk", "us", "jp", "kr", "tw"] as const;
 export type Region = (typeof REGIONS)[number];
+const STATS_MARKETS = { cn: "A", hk: "HK", us: "US" } as const;
+type StatsRegion = keyof typeof STATS_MARKETS;
 const STATIC_FILES = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
@@ -39,6 +41,22 @@ const RIBBON: Array<[Region, string]> = [
   ["jp", "^N225"], ["kr", "^KS11"], ["tw", "^TWII"],
 ];
 const TRADING_PHASES = new Set(["morning", "afternoon", "intraday"]);
+const UPDATE_CHECK_MS = 6 * 60 * MINUTE;
+
+export interface PluginVersion {
+  name: string;
+  version: string;
+  latest?: () => Promise<string | null>;
+}
+
+export function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (value: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
+  const next = parse(candidate);
+  const now = parse(current);
+  if (!next || !now) return false;
+  const index = next.findIndex((part, i) => part !== now[i]);
+  return index >= 0 && next[index] > now[index];
+}
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -250,6 +268,7 @@ export interface DashboardOptions {
   webDir: string;
   /** Start the resident background warmer (production). Tests drive `tick()` directly. */
   warm?: boolean;
+  plugin?: PluginVersion;
 }
 
 type DashboardHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<void>) & {
@@ -259,7 +278,7 @@ type DashboardHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<
 };
 
 export function createDashboardHandler(options: DashboardOptions): DashboardHandler {
-  const { runPy, watchlistFile, webDir } = options;
+  const { runPy, watchlistFile, webDir, plugin } = options;
   const limiter = createPriorityLimiter(MAX_PYTHON);
   const slots = new Map<string, Slot>();
   const inflight = new Set<Promise<void>>();
@@ -357,15 +376,17 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         return { top: value.top, bottom: Array.isArray(value.bottom) ? value.bottom : [] };
       },
     });
-    list.push({
-      // Slow (~15 s alone) but first-viewport content: start it in the first wave on its own worker.
-      key: "stats", kind: "stats", region: "cn", priority: 2,
-      run: async () => {
-        const value = await py("stock_data.py", ["market_stats"], 130_000) as Record<string, unknown>;
-        if (!value || typeof value !== "object" || value.error) throw new Error(safeError(value?.error, "市场宽度暂不可用"));
-        return value;
-      },
-    });
+    for (const [region, market] of Object.entries(STATS_MARKETS) as Array<[StatsRegion, string]>) {
+      list.push({
+        // First-viewport content (the breadth strip shows all three markets), so it rides the first wave.
+        key: `stats:${region}`, kind: "stats", region, priority: 2,
+        run: async () => {
+          const value = await py("stock_data.py", ["market_stats", "--market", market], 60_000) as Record<string, unknown>;
+          if (!value || typeof value !== "object" || value.error) throw new Error(safeError(value?.error, "市场宽度暂不可用"));
+          return value;
+        },
+      });
+    }
     const unique = new Map<string, Job>();
     for (const job of list) {
       const previous = unique.get(job.key);
@@ -430,6 +451,14 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   const kick = () => { void tick(); };
 
+  let latestVersion: string | null = null;
+  let latestCheckedAt = 0;
+  function checkLatest() {
+    if (!plugin?.latest || Date.now() - latestCheckedAt < UPDATE_CHECK_MS) return;
+    latestCheckedAt = Date.now();
+    plugin.latest().then(value => { latestVersion = value; }, () => { /* offline or registry error: keep the last known result */ });
+  }
+
   function slotView(key: string) {
     const entry = slots.get(key);
     return {
@@ -456,6 +485,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     viewedRegion = region;
     const symbols = readWatchlist(watchlistFile);
     kick();
+    checkLatest();
     return {
       watchlist: symbols.map(symbol => {
         const quote = slotView(`quote:${symbol}`);
@@ -473,10 +503,15 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
       ribbon: RIBBON.map(([item, code]) => indexRow(item, code)),
       phases: Object.fromEntries(REGIONS.map(item => [item, slotView(`phase:${item}`).value])),
       market: { region, indices: INDEX_SYMBOLS[region].map(code => indexRow(region, code)) },
-      // A-share breadth and sectors are the only whole-market statistics; other regions stay honest blanks.
-      stats: slotView("stats"),
+      // Breadth exists for A/HK/US and sectors for A only; other regions stay honest blanks.
+      stats: Object.fromEntries(Object.keys(STATS_MARKETS).map(item => [item, slotView(`stats:${item}`)])),
       sectors: slotView("sectors"),
       pending: limiter.queued,
+      plugin: plugin ? {
+        name: plugin.name,
+        version: plugin.version,
+        latest: latestVersion && isNewerVersion(latestVersion, plugin.version) ? latestVersion : null,
+      } : null,
       fetchedAt: new Date().toISOString(),
     };
   }
@@ -569,6 +604,28 @@ interface WebServerContext extends Context {
   };
 }
 
+export function installedPlugin(here: string): PluginVersion | undefined {
+  // Version comes from dsh/package.json: next to this file in source, one level up from published dist/index.js.
+  for (const file of [join(here, "package.json"), join(here, "..", "package.json")]) {
+    try {
+      const { name, version } = JSON.parse(readFileSync(file, "utf8")) as { name?: unknown; version?: unknown };
+      if (typeof name === "string" && name.endsWith("dsh-stock-analysis") && typeof version === "string") {
+        // A checkout or `add ./dsh` resolves to its real path; only registry installs live under node_modules.
+        return { name, version, latest: /[/\\]node_modules[/\\]/.test(here) ? () => npmLatest(name) : undefined };
+      }
+    } catch { /* try the next layout */ }
+  }
+  return undefined;
+}
+
+async function npmLatest(name: string): Promise<string | null> {
+  const registry = (process.env.npm_config_registry || "https://registry.npmjs.org").replace(/\/+$/, "");
+  const res = await fetch(`${registry}/${name.replace("/", "%2f")}/latest`, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`registry ${res.status}`);
+  const { version } = await res.json() as { version?: unknown };
+  return typeof version === "string" ? version : null;
+}
+
 export function registerDashboard(ctx: Context, runPy: RunPy) {
   // Unit fixtures and headless profiles do not necessarily expose the Web carrier.
   if (typeof ctx.inject !== "function") return;
@@ -577,11 +634,12 @@ export function registerDashboard(ctx: Context, runPy: RunPy) {
   const webDir = [join(here, "web"), join(here, "dist", "web")].find(dir => existsSync(join(dir, "app.js"))) ?? join(here, "web");
   const dataRoot = process.env.DSH_HOME || join(homedir(), ".dsh");
   const watchlistFile = process.env.STOCK_WATCHLIST_FILE || join(dataRoot, "stock-analysis", "watchlist.json");
+  const plugin = installedPlugin(here);
   ctx.inject(["webServer"], nested => {
     const c = nested as WebServerContext;
     c.effect(() => {
       // The warmer lives exactly as long as the route: no Web carrier, no background requests.
-      const handler = createDashboardHandler({ runPy, watchlistFile, webDir, warm: true });
+      const handler = createDashboardHandler({ runPy, watchlistFile, webDir, warm: true, plugin });
       const disposeRoute = c.webServer.register({ kind: "prefix", path: DASHBOARD_BASE, handler });
       return () => {
         handler.dispose();

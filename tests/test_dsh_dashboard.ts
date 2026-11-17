@@ -10,6 +10,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createDashboardHandler,
   dashboardQuoteSymbol,
+  installedPlugin,
+  isNewerVersion,
   normalizeWatchlist,
   readWatchlist,
   symbolRegion,
@@ -164,6 +166,43 @@ try {
     assert.equal(after.pending, 0, "dispose settles queued and running jobs");
   }
 
+  // ---------- plugin version + update hint ----------
+  {
+    assert(isNewerVersion("0.2.12", "0.2.11"));
+    assert(isNewerVersion("1.0.0", "0.9.99"));
+    assert(!isNewerVersion("0.2.11", "0.2.11"));
+    assert(!isNewerVersion("0.2.10", "0.2.11"));
+    assert(!isNewerVersion("0.3.0-rc.1", "0.2.11"), "prereleases are not offered as updates");
+    const versionFile = join(temp, "version", "watchlist.json");
+    writeWatchlist(versionFile, []);
+    let checks = 0;
+    const plugin = { name: "dsh-stock-analysis", version: "0.2.11", latest: async () => { checks++; return "0.2.12"; } };
+    const versioned = createDashboardHandler({ runPy: async () => "{}", watchlistFile: versionFile, webDir, plugin });
+    assert.deepEqual((await call(versioned, get("/stock-analysis/api/snapshot"))).json().plugin, { name: "dsh-stock-analysis", version: "0.2.11", latest: null });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await call(versioned, get("/stock-analysis/api/snapshot"))).json().plugin.latest, "0.2.12");
+    assert.equal(checks, 1, "the registry is checked at most once per interval");
+    versioned.dispose();
+    const unversioned = createDashboardHandler({ runPy: async () => "{}", watchlistFile: versionFile, webDir });
+    assert.equal((await call(unversioned, get("/stock-analysis/api/snapshot"))).json().plugin, null);
+    unversioned.dispose();
+    const dshPkg = JSON.parse(readFileSync(join(repoRoot, "dsh", "package.json"), "utf8"));
+    for (const dir of [join(repoRoot, "dsh"), join(repoRoot, "dsh", "dist")]) {
+      const found = installedPlugin(dir);
+      assert.deepEqual([found?.name, found?.version], [dshPkg.name, dshPkg.version], `${dir} resolves the dsh package.json`);
+      assert.equal(found?.latest, undefined, "a checkout never offers a registry update");
+    }
+    for (const name of ["dsh-stock-analysis", "@weaxs/dsh-stock-analysis"]) {
+      const installed = join(temp, "node_modules", name);
+      mkdirSync(join(installed, "dist"), { recursive: true });
+      writeFileSync(join(installed, "package.json"), JSON.stringify({ name, version: "0.2.11" }));
+      const found = installedPlugin(join(installed, "dist"));
+      assert.equal(found?.name, name);
+      assert.equal(typeof found?.latest, "function", `${name} registry installs check for updates`);
+    }
+    assert.equal(installedPlugin(join(temp, "nothing")), undefined);
+  }
+
   // ---------- warm-up fetches the fixed job set within the worker budget ----------
   const file = join(temp, "api", "watchlist.json");
   writeWatchlist(file, ["600519", "AAPL", "00700.HK"]);
@@ -181,11 +220,13 @@ try {
       "stock_data.py:kline 600519 --period daily --count 30",
       "stock_data.py:kline ^HSI --period daily --count 30",
       "stock_data.py:sector_rankings --top 5 --direction both --board-type industry",
-      "stock_data.py:market_stats",
+      "stock_data.py:market_stats --market A",
+      "stock_data.py:market_stats --market HK",
+      "stock_data.py:market_stats --market US",
       "trading_calendar.py:phase JP",
     ]) assert(py.calls.includes(expected), `missing ${expected}`);
     assert(!py.calls.includes("stock_data.py:market_indices --region cn"), "A-share indices use direct quotes");
-    assert.equal(py.timeouts.get("stock_data.py:market_stats"), 130_000);
+    assert.equal(py.timeouts.get("stock_data.py:market_stats --market US"), 60_000);
     assert.equal(py.timeouts.get("stock_data.py:kline 600519 --period daily --count 30"), 20_000);
     assert.equal(py.timeouts.get("stock_data.py:kline AAPL --period daily --count 30"), 40_000, "Yahoo-backed klines get a longer budget");
 
@@ -202,7 +243,8 @@ try {
     assert.equal(snap.market.indices[1].quote, null, "missing provider rows stay empty rather than invented");
     assert.equal(snap.ribbon[0].code, "sh000001");
     assert.equal(snap.ribbon[0].quote.price, 100);
-    assert.equal(snap.stats.value.up_count, 2);
+    assert.equal(snap.stats.cn.value.up_count, 2);
+    assert.deepEqual(Object.keys(snap.stats), ["cn", "hk", "us"], "breadth covers A/HK/US only");
     assert.equal(snap.sectors.value.bottom[0].name, "白酒");
     assert.equal(snap.phases.cn.phase, "post_market");
     assert(!py.calls.some(call => /evil|bad/.test(call)), "query parameters cannot select commands");
@@ -438,6 +480,7 @@ try {
   const unscopedClient = clientSource.replaceAll(pkg.name, "dsh-stock-analysis");
   assert(unscopedClient.includes('id: "dsh-stock-analysis"'), "the unscoped bundle must register the unscoped client id");
   assert(!unscopedClient.includes(`id: "${pkg.name}"`), "the scoped id must not remain after the twin rewrite");
+  assert(clientSource.includes(`openBundle?.("${pkg.name}")`), "the update pill opens this bundle's plugin page, rewritten for the twin");
 
   console.log("dsh dashboard: snapshot, warmer freshness, failures, watchlist, security, assets, and package manifest passed");
 } finally {
