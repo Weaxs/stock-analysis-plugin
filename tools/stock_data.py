@@ -263,40 +263,6 @@ def _kline_baostock(symbol: str, period: str, count: int) -> list:
     return [_clean_row(r) for r in df.to_dict("records")]
 
 
-def _quote_efinance(symbol: str) -> dict:
-    import efinance as ef
-
-    df = ef.stock.get_realtime_quotes([symbol])
-    if df is None or df.empty:
-        raise ValueError("efinance quote returned empty")
-    r = df.iloc[0]
-    col_map = {
-        "股票代码": "symbol",
-        "股票名称": "name",
-        "最新价": "price",
-        "涨跌额": "change",
-        "涨跌幅": "change_pct",
-        "成交量": "volume",
-        "成交额": "turnover",
-        "最高": "high",
-        "最低": "low",
-        "今开": "open",
-        "昨收": "prev_close",
-        "总市值": "market_cap",
-        "市盈率": "pe",
-        "换手率": "turnover_rate",
-    }
-    result = {}
-    for cn_key, en_key in col_map.items():
-        val = r.get(cn_key)
-        if val is not None and val != "":
-            with contextlib.suppress(ValueError, TypeError):
-                val = float(val) if en_key not in ("symbol", "name") else val
-        result[en_key] = val
-    result["pe_basis"] = "dynamic"
-    return _clean_row(result)
-
-
 # --------------- tencent / sina (non-eastmoney A-share fallbacks, issue #25) ---------------
 #
 # akshare/efinance both resolve to eastmoney hosts, so an eastmoney-blocked network
@@ -343,7 +309,7 @@ def _quote_time(value: str, fmt: str, tz=timezone(timedelta(hours=8))) -> str | 
 
 def _tencent_payload_row(f: list, symbol: str) -> dict:
     """Build the quote row from one Tencent `~`-separated payload (already split).
-    Shared by _quote_tencent (single) and _tencent_batch_quotes (snapshot leg)."""
+    Used by _quote_tencent and the cn-indices batch fallback."""
     f += [""] * (50 - len(f))  # pad optional tail fields (pe/pb/market_cap/volume_ratio…) on short payloads
     market = detect_market(symbol)
     foreign = market in ("HK", "US")  # HK and US share currency-unit turnover and lack the A-share ratio fields
@@ -419,7 +385,7 @@ def _quote_tencent(symbol: str) -> dict:
         raise ValueError(f"tencent returned no quote for {symbol}")
     if normalize_stock_code(symbol)["is_etf"]:
         # f[73] is total fund shares and f[78] the intraday IOPV (blank for money/bond ETFs);
-        # premium matches _quote_akshare_etf.
+        # premium matches _quote_eastmoney.
         iopv = _parse_float(f[78]) if len(f) > 78 else None
         price = row.get("price")
         row.update(
@@ -1087,106 +1053,129 @@ def cmd_kline(args):
 # --------------- quote ---------------
 
 
-def quote_a(symbol: str, evidence: bool = False) -> dict:
-    """A-share quote with failover: tencent → akshare → tushare → efinance → sina; ETFs add fund spot after tencent.
+# Eastmoney answers per-code (ulist), ranked-page (clist) and server-filtered (datacenter)
+# queries, so no caller needs a whole-market spot table to read a few rows.
+_EM_HEADERS = {"User-Agent": "Mozilla/5.0"}
+_EM_PUSH2 = "https://push2.eastmoney.com/api/qt"
+_EM_DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+_EM_FS = {
+    "A": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",
+    "HK": "m:128+t:3,m:128+t:4,m:128+t:1,m:128+t:2",
+    "US": "m:105,m:106,m:107",
+}
+_EM_PAGE = 100  # clist caps pz at 100 rows
 
-    Tencent answers one symbol per request; the eastmoney spot sources page the whole
-    market (~55 requests) to return one row, so they only serve as fallbacks.
+
+def _get_json(url: str, params: dict) -> dict:
+    """GET an eastmoney JSON API; relative paths are push2 qt endpoints."""
+    import requests
+
+    url = url if "://" in url else f"{_EM_PUSH2}/{url}"
+    resp = requests.get(url, params=params, headers=_EM_HEADERS, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _em_secid(symbol: str) -> str:
+    code = _cn_code(symbol)
+    return f"{1 if code[:2] == 'sh' else 0}.{code[2:]}"
+
+
+def _em_ulist(secids: list, fields: str) -> list:
+    data = _get_json("ulist.np/get", {"fltt": 2, "invt": 2, "secids": ",".join(secids), "fields": fields}).get("data")
+    return (data or {}).get("diff") or []
+
+
+def _em_clist(market: str, fid: str, fields: str, page: int = 1, size: int = _EM_PAGE, desc: bool = True):
+    """One ranked page of a market list → (universe total, rows); pn is a page index of size pz."""
+    params = {"np": 1, "fltt": 2, "invt": 2, "fs": _EM_FS[market], "fid": fid, "po": int(desc), "pn": page, "pz": size}
+    data = _get_json("clist/get", {**params, "fields": fields}).get("data") or {}
+    return int(data.get("total") or 0), data.get("diff") or []
+
+
+def _em_datacenter(report: str, filter_: str, sort: str, size: int, order: str = "-1", url: str = _EM_DATACENTER):
+    """One server-filtered datacenter page → (match count, rows); no match is an empty page."""
+    body = _get_json(
+        url,
+        {
+            "reportName": report,
+            "columns": "ALL",
+            "filter": filter_,
+            "sortColumns": sort,
+            "sortTypes": order,
+            "pageSize": size,
+            "pageNumber": 1,
+            "source": "WEB",
+            "client": "WEB",
+        },
+    )
+    if body.get("result") is None:
+        if body.get("code") == 9201:  # 返回数据为空
+            return 0, []
+        raise ValueError(f"eastmoney {report} unavailable: {str(body.get('message'))[:100]}")
+    return int(body["result"].get("count") or 0), body["result"].get("data") or []
+
+
+_EM_QUOTE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f14,f15,f16,f17,f18,f20,f23,f24,f38,f441"
+
+
+def _quote_eastmoney(symbol: str) -> dict:
+    """One-code eastmoney quote. ETFs add iopv (盘中实时估值), fund_shares (最新份额) and
+    premium_discount_rate = (price - iopv) / iopv * 100 (positive = 溢价); None without an IOPV."""
+    row = next((r for r in _em_ulist([_em_secid(symbol)], _EM_QUOTE_FIELDS) if str(r.get("f12")) == symbol), {})
+
+    def value(key):
+        return _parse_float(row.get(key))
+
+    if value("f2") is None:
+        raise ValueError(f"eastmoney returned no quote for {symbol}")
+    result = {
+        "symbol": symbol,
+        "name": row.get("f14"),
+        "price": value("f2"),
+        "change": value("f4"),
+        "change_pct": value("f3"),
+        "volume": value("f5"),
+        "turnover": value("f6"),
+        "high": value("f15"),
+        "low": value("f16"),
+        "open": value("f17"),
+        "prev_close": value("f18"),
+        "market_cap": value("f20"),
+        "turnover_rate": value("f8"),
+        "volume_ratio": value("f10"),
+    }
+    if normalize_stock_code(symbol)["is_etf"]:
+        price, iopv = result["price"], value("f441")
+        premium = round((price - iopv) / iopv * 100, 4) if iopv else None
+        result.update(is_etf=True, iopv=iopv, fund_shares=value("f38"), premium_discount_rate=premium)
+    else:
+        result.update(
+            pe=value("f9"), pe_basis="dynamic", pb=value("f23"), amplitude=value("f7"), change_pct_60d=value("f24")
+        )
+    return _clean_row(result)
+
+
+def quote_a(symbol: str, evidence: bool = False) -> dict:
+    """A-share quote with failover: tencent → eastmoney → tushare → sina, one code per request.
 
     Explicitly-prefixed symbols (sh000001, typically indices) go straight to
-    tencent/sina — the eastmoney sources take bare 6-digit codes only. ETF quotes use their own sticky chain key
-    (quote_a_etf) so a stock-side winner never demotes the fund-spot source."""
+    tencent/sina — a bare secid would be ambiguous (sh000001 vs sz000001). ETF quotes use their own
+    chain key (quote_a_etf) so a stock-side winner never reorders the ETF chain."""
     if _A_PREFIXED_RE.fullmatch(symbol):
         sources = [("tencent", lambda: _quote_tencent(symbol)), ("sina", lambda: _quote_sina(symbol))]
         with socket_timeout(25):
             return _failover(sources, label=f"quote_a:{symbol}", evidence=evidence)
     is_etf = normalize_stock_code(symbol)["is_etf"]
-    sources = [("tencent", lambda: _quote_tencent(symbol))]
-    if is_etf:
-        sources.append(("akshare_etf", lambda: _quote_akshare_etf(symbol)))
-    sources += [
-        ("akshare", lambda: _quote_akshare(symbol)),
+    sources = [
+        ("tencent", lambda: _quote_tencent(symbol)),
+        ("eastmoney", lambda: _quote_eastmoney(symbol)),
         ("tushare", lambda: _quote_tushare(symbol)),
-        ("efinance", lambda: _quote_efinance(symbol)),
         ("sina", lambda: _quote_sina(symbol)),
     ]
     chain = "quote_a_etf" if is_etf else "quote_a"
     with socket_timeout(25):
         return _failover(sources, label=f"{chain}:{symbol}", evidence=evidence)
-
-
-def _quote_akshare_etf(symbol: str) -> dict:
-    """A-share ETF realtime quote via akshare fund_etf_spot_em.
-
-    On top of the stock-shaped fields, the same spot row carries fund-native
-    columns: iopv (盘中实时估值) and fund_shares (最新份额). premium_discount_rate
-    is derived here as (price - iopv) / iopv * 100 — positive = 溢价 (price above
-    IOPV), negative = 折价; None when the fund publishes no intraday IOPV (money/
-    bond ETFs)."""
-    import akshare as ak
-
-    df = _akshare_retry(ak.fund_etf_spot_em)
-    row = df[df["代码"] == symbol]
-    if row.empty:
-        raise ValueError(f"ETF {symbol} not found in akshare fund spot")
-    r = row.iloc[0]
-    result = _clean_row(
-        {
-            "symbol": symbol,
-            "name": r.get("名称"),
-            "price": r.get("最新价"),
-            "change": r.get("涨跌额"),
-            "change_pct": r.get("涨跌幅"),
-            "volume": r.get("成交量"),
-            "turnover": r.get("成交额"),
-            "high": r.get("最高价"),
-            "low": r.get("最低价"),
-            "open": r.get("开盘价"),
-            "prev_close": r.get("昨收"),
-            "market_cap": r.get("总市值"),
-            "turnover_rate": r.get("换手率"),
-            "volume_ratio": r.get("量比"),
-            "is_etf": True,
-            "iopv": r.get("IOPV实时估值"),
-            "fund_shares": r.get("最新份额"),
-        }
-    )
-    price, iopv = result.get("price"), result.get("iopv")
-    result["premium_discount_rate"] = round((price - iopv) / iopv * 100, 4) if price is not None and iopv else None
-    return result
-
-
-def _quote_akshare(symbol: str) -> dict:
-    import akshare as ak
-
-    df = _akshare_retry(ak.stock_zh_a_spot_em)
-    row = df[df["代码"] == symbol]
-    if row.empty:
-        raise ValueError(f"Symbol {symbol} not found in akshare")
-    r = row.iloc[0]
-    return _clean_row(
-        {
-            "symbol": symbol,
-            "name": r.get("名称"),
-            "price": r.get("最新价"),
-            "change": r.get("涨跌额"),
-            "change_pct": r.get("涨跌幅"),
-            "volume": r.get("成交量"),
-            "turnover": r.get("成交额"),
-            "high": r.get("最高"),
-            "low": r.get("最低"),
-            "open": r.get("今开"),
-            "prev_close": r.get("昨收"),
-            "market_cap": r.get("总市值"),
-            "pe": r.get("市盈率-动态"),
-            "pe_basis": "dynamic",
-            "pb": r.get("市净率"),
-            "turnover_rate": r.get("换手率"),
-            "volume_ratio": r.get("量比"),
-            "amplitude": r.get("振幅"),
-            "change_pct_60d": r.get("60日涨跌幅"),
-        }
-    )
 
 
 def _quote_yfinance(symbol: str) -> dict:
@@ -1466,30 +1455,6 @@ def _fund_nav_date(stamp) -> str:
     return datetime.fromtimestamp(stamp / 1000, timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
-def _fund_estimate(symbol: str) -> dict:
-    import akshare as ak
-
-    with socket_timeout(25):
-        df = ak.fund_value_estimation_em()
-    if df is None or df.empty or "基金代码" not in df.columns:
-        return {}
-    rows = df[df["基金代码"] == symbol]
-    value_col = next((c for c in df.columns if c.endswith("-估算数据-估算值")), None)
-    change_col = next((c for c in df.columns if c.endswith("-估算数据-估算增长率")), None)
-    if rows.empty or not value_col:
-        return {}
-    row = rows.iloc[0]
-    estimated_nav = _parse_float(row.get(value_col))
-    if estimated_nav is None:
-        return {}
-    return {
-        "estimated_nav": estimated_nav,
-        "estimated_change_pct": _parse_float(str(row.get(change_col)).rstrip("%")) if change_col else None,
-        "estimated_at": value_col.split("-估算数据-", 1)[0],
-        "estimate_status": "available",
-    }
-
-
 def cmd_fund_quote(args):
     symbol = args.symbol
     if not re.fullmatch(r"\d{6}", symbol):
@@ -1511,17 +1476,6 @@ def cmd_fund_quote(args):
         nav_date = _fund_nav_date(latest["x"])
         accumulated_by_date = {_fund_nav_date(row[0]): row[1] for row in accumulated_rows}
         today = _cn_now().date().isoformat()
-        estimate = {
-            "estimated_nav": None,
-            "estimated_change_pct": None,
-            "estimated_at": None,
-            "estimate_status": "unavailable",
-        }
-        warnings = []
-        try:
-            estimate.update(_fund_estimate(symbol))
-        except Exception:
-            warnings.append("estimated NAV provider request failed; published NAV remains available")
         result = _clean_row(
             {
                 "symbol": symbol,
@@ -1540,13 +1494,16 @@ def cmd_fund_quote(args):
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
                 "note": (
                     "nav is published end-of-day NAV, not a real-time price; QDII disclosure may lag "
-                    "1-2 trading days; estimated_nav is separate and may be unavailable"
+                    "1-2 trading days; no intraday estimated NAV is provided"
                 ),
-                **estimate,
+                # Eastmoney retired its per-fund intraday estimate (fundgz); its remaining estimate
+                # page lists every fund at once, so the estimate keys stay but are always unavailable.
+                "estimated_nav": None,
+                "estimated_change_pct": None,
+                "estimated_at": None,
+                "estimate_status": "unavailable",
             }
         )
-        if warnings:
-            result["warnings"] = warnings
         return result
     except Exception as e:
         return {"error": error_message(e)}
@@ -2101,193 +2058,129 @@ def _financials_without_dcf(args, periods, annual, market):
 
 # --------------- market_snapshot ---------------
 
+# The screener only scores stocks that can pass its filters, so every leg walks the market
+# largest-cap first and stops at market_cap_min; the row cap bounds a loose (or zero) floor.
+_SNAPSHOT_MAX_ROWS = 3000
 
-def snapshot_a() -> list:
-    # akshare/efinance leave requests timeout-less — the chain-wide socket bound
-    # (socket_timeout) is what lets the tencent leg get its turn on a dead network.
-    try:
-        with socket_timeout(25):
-            return _failover(
-                [
-                    ("akshare", _snapshot_akshare),
-                    ("efinance", _snapshot_efinance),
-                    ("sina", _snapshot_sina),
-                    ("tencent", _snapshot_tencent),
-                ],
-                label="snapshot_a",
-            )
-    except Exception as e:
-        return [{"error": f"A-share snapshot unavailable from all sources: {error_message(e)}"}]
-
-
-def _snapshot_efinance() -> list:
-    import efinance as ef
-
-    df = ef.stock.get_realtime_quotes()
-    if df is None or df.empty:
-        raise ValueError("efinance snapshot empty")
-    col_map = {
-        "股票代码": "symbol",
-        "股票名称": "name",
-        "最新价": "price",
-        "涨跌幅": "change_pct",
-        "涨跌额": "change",
-        "成交量": "volume",
-        "成交额": "turnover",
-        "市盈率": "pe",
-        "换手率": "turnover_rate",
-        "最高": "high",
-        "最低": "low",
-        "今开": "open",
-        "昨收": "prev_close",
-    }
-    df = df.rename(columns=col_map)
-    df["pe_basis"] = "dynamic"
-    keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
-    return [_clean_row(r) for r in df[keep].to_dict("records")]
+# screener filter field → eastmoney xuangu (server-side A-share condition screener) column
+_XUANGU_FILTER_COLUMNS = {
+    "market_cap": "TOTAL_MARKET_CAP",
+    "pe": "PE9",
+    "pb": "PBNEWMRQ",
+    "turnover_rate": "TURNOVERRATE",
+    "change_pct": "CHANGE_RATE",
+    "volume_ratio": "VOLUME_RATIO",
+}
+_XUANGU_COLUMNS = {
+    "SECURITY_CODE": "symbol",
+    "SECURITY_NAME_ABBR": "name",
+    "NEW_PRICE": "price",
+    "CHANGE_RATE": "change_pct",
+    "VOLUME": "volume",
+    "DEAL_AMOUNT": "turnover",
+    "PE9": "pe",
+    "PBNEWMRQ": "pb",
+    "TOTAL_MARKET_CAP": "market_cap",
+    "TURNOVERRATE": "turnover_rate",
+    "VOLUME_RATIO": "volume_ratio",
+}
+_XUANGU_URL = "https://data.eastmoney.com/dataapi/xuangu/list"
 
 
-def _snapshot_sina() -> list:
-    import akshare as ak
-    import pandas as pd
-
-    df = _akshare_retry(getattr(ak, "stock_zh_a_spot_sina", None) or ak.stock_zh_a_spot)
-    if df is None or df.empty:
-        raise ValueError("sina snapshot empty")
-    df["代码"] = df["代码"].astype(str).str.replace(r"^(?:sh|sz|bj)", "", regex=True)
-    df["成交量"] = pd.to_numeric(df["成交量"], errors="coerce") / 100
-    col_map = {
-        "代码": "symbol",
-        "名称": "name",
-        "最新价": "price",
-        "涨跌额": "change",
-        "涨跌幅": "change_pct",
-        "成交量": "volume",
-        "成交额": "turnover",
-        "昨收": "prev_close",
-        "今开": "open",
-        "最高": "high",
-        "最低": "low",
-    }
-    df = df.rename(columns=col_map)
-    keep = [c for c in col_map.values() if c in df.columns]
-    return [_clean_row(r) for r in df[keep].to_dict("records")]
+def _xuangu_page(conditions: str, page: int, size: int) -> dict:
+    params = {"st": "TOTAL_MARKET_CAP", "sr": -1, "ps": size, "p": page, "sty": ",".join(_XUANGU_COLUMNS)}
+    body = _get_json(_XUANGU_URL, {**params, "filter": conditions, "source": "SELECT_SECURITIES", "client": "WEB"})
+    if not isinstance(body.get("result"), dict):
+        raise ValueError(f"eastmoney screener unavailable: {str(body.get('message'))[:100]}")
+    return body["result"]
 
 
-# qt.gtimg.cn accepts comma-joined multi-code batches; 60 keeps URLs well short
-_TENCENT_BATCH = 60
+def _snapshot_xuangu(filters: dict):
+    """A-share candidates filtered server-side (PE9 is a TTM PE), largest market cap first."""
+    conditions = ""
+    for key, value in sorted(filters.items()):
+        field, _, bound = key.rpartition("_")
+        if field in _XUANGU_FILTER_COLUMNS and bound in ("min", "max"):
+            conditions += f"({_XUANGU_FILTER_COLUMNS[field]}{'>=' if bound == 'min' else '<='}{value})"
+    rows, page = [], 1
+    while len(rows) < _SNAPSHOT_MAX_ROWS:
+        result = _xuangu_page(conditions, page, 1000)
+        for item in result.get("data") or []:
+            rows.append(_clean_row({key: item.get(col) for col, key in _XUANGU_COLUMNS.items()} | {"pe_basis": "ttm"}))
+        if not result.get("nextpage"):
+            break
+        page += 1
+    total = None
+    with contextlib.suppress(Exception):
+        total = _xuangu_page("", 1, 1).get("count")
+    return total, rows
 
 
-def _tencent_batch_quotes(codes: list) -> list:
-    """Batch quotes from qt.gtimg.cn for exchange-prefixed codes, a few requests in
-    flight (this leg fires only when the eastmoney/sina legs are all dead, and ~15k
-    enumerated codes serialized would take minutes). Unknown codes are simply absent
-    from the response; delisted/suspended ones come back frozen with volume=0 and
-    are dropped here."""
-    import concurrent.futures
-
-    import requests
-
-    def fetch(batch):
-        try:
-            resp = requests.get(f"https://qt.gtimg.cn/q={','.join(batch)}", timeout=10)
-        except Exception:
-            return []  # a lost batch loses 60 codes — a partial snapshot still beats none
-        rows = []
-        for part in resp.content.decode("gbk", errors="replace").split(";"):
-            vname, _, payload = part.strip().partition('="')
-            f = payload.rstrip('"').split("~")
-            if len(f) < 35 or not f[1]:
-                continue
-            if not _parse_float(f[6]):  # volume 0/empty → frozen payload (delisted/suspended)
-                continue
-            prefixed = vname[2:]  # strip the leading "v_"
-            bare = prefixed[2:] if prefixed[:2] in ("sh", "sz", "bj") else prefixed
-            rows.append(_clean_row(_tencent_payload_row(f, bare)))
-        return rows
-
-    batches = [codes[i : i + _TENCENT_BATCH] for i in range(0, len(codes), _TENCENT_BATCH)]
-    rows = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        for batch_rows in pool.map(fetch, batches):
-            rows.extend(batch_rows)
-    return rows
-
-
-def _snapshot_tencent() -> list:
-    """Tencent full-market snapshot — the plain-HTTPS last-resort leg for when the
-    eastmoney/sina legs are all blocked (datacenter IPs, issue #25).
-
-    Codes are enumerated over the known SH (600-605, 688-689) and SZ (000-003,
-    300-302) ranges and validated by the batch quotes themselves — no list API is
-    reliable from blocked networks (www.szse.cn resets datacenter connections,
-    query.sse.com.cn flaps, akshare's wrapper has no timeout). BSE and suspended
-    stocks stay uncovered by this leg."""
-    codes = [f"sh{i:06d}" for lo, hi in ((600000, 605999), (688000, 689999)) for i in range(lo, hi + 1)]
-    codes += [f"sz{i:06d}" for lo, hi in ((1, 3999), (300000, 302999)) for i in range(lo, hi + 1)]
-    rows = _tencent_batch_quotes(codes)
-    if not rows:
-        raise ValueError("tencent snapshot returned empty data")
-    return rows
+def _snapshot_tencent(filters: dict):
+    """Non-eastmoney A-share leg (issue #25): Tencent's board rank sorted by market cap."""
+    floor = filters.get("market_cap_min") or 0
+    rows, total = [], None
+    while len(rows) < _SNAPSHOT_MAX_ROWS:
+        params = {"_appver": "11.17.0", "board_code": "aStock", "sort_type": "marketValue", "direct": "down"}
+        body = _get_json(
+            "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList",
+            {**params, "offset": len(rows), "count": 200},
+        )
+        data = body.get("data") or {}
+        total, ranked = data.get("total"), data.get("rank_list") or []
+        for item in ranked:
+            cap = _parse_float(item.get("zsz"))  # 亿元
+            if cap is None or cap * 1e8 < floor:
+                return total, rows
+            turnover = _parse_float(item.get("turnover"))  # 万元
+            row = {
+                "symbol": str(item.get("code", ""))[2:],
+                "name": item.get("name"),
+                "price": _parse_float(item.get("zxj")),
+                "change_pct": _parse_float(item.get("zdf")),
+                "volume": _parse_float(item.get("volume")),
+                "turnover": turnover * 1e4 if turnover is not None else None,
+                "pe": _parse_float(item.get("pe_ttm")),
+                "pe_basis": "ttm",
+                "pb": _parse_float(item.get("pn")),
+                "market_cap": cap * 1e8,
+                "turnover_rate": _parse_float(item.get("hsl")),
+                "volume_ratio": _parse_float(item.get("lb")),
+            }
+            rows.append(_clean_row(row))
+        if len(ranked) < 200:
+            break
+    if not rows and not total:
+        raise ValueError("tencent rank returned empty data")
+    return total, rows
 
 
-def _snapshot_akshare() -> list:
-    import akshare as ak
-
-    df = _akshare_retry(ak.stock_zh_a_spot_em)
-    col_map = {
-        "代码": "symbol",
-        "名称": "name",
-        "最新价": "price",
-        "涨跌幅": "change_pct",
-        "涨跌额": "change",
-        "成交量": "volume",
-        "成交额": "turnover",
-        "市盈率-动态": "pe",
-        "市净率": "pb",
-        "总市值": "market_cap",
-        "换手率": "turnover_rate",
-        "量比": "volume_ratio",
-        "最高": "high",
-        "最低": "low",
-        "今开": "open",
-        "昨收": "prev_close",
-        "60日涨跌幅": "change_pct_60d",
-    }
-    df = df.rename(columns=col_map)
-    df["pe_basis"] = "dynamic"
-    keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
-    df = df[keep]
-    return [_clean_row(r) for r in df.to_dict("records")]
+# HK/US keep their historical column set: adding turnover_rate/volume_ratio (or US pb) would
+# silently start applying A-share-tuned default filters to these markets.
+_CLIST_SNAPSHOT_COLUMNS = {
+    "HK": {"f12": "symbol", "f14": "name", "f2": "price", "f3": "change_pct", "f5": "volume", "f6": "turnover"}
+    | {"f9": "pe", "f23": "pb", "f20": "market_cap"},
+    "US": {"f12": "symbol", "f14": "name", "f2": "price", "f3": "change_pct", "f5": "volume", "f6": "turnover"}
+    | {"f9": "pe", "f20": "market_cap"},
+}
 
 
-def snapshot_hk() -> list:
-    try:
-        import akshare as ak
-
-        with socket_timeout(25):
-            df = _akshare_retry(ak.stock_hk_spot_em)
-        col_map = {
-            "代码": "symbol",
-            "名称": "name",
-            "最新价": "price",
-            "涨跌幅": "change_pct",
-            "成交量": "volume",
-            "成交额": "turnover",
-            "市盈率": "pe",
-            "市净率": "pb",
-            "总市值": "market_cap",
-        }
-        df = df.rename(columns=col_map)
-        if "symbol" in df.columns:
-            symbols = df["symbol"].astype(str).str.upper()
-            df["symbol"] = symbols.map(lambda s: s if s.endswith(".HK") else f"{s}.HK")
-        df["pe_basis"] = "unknown"
-        keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
-        return [_clean_row(r) for r in df[keep].to_dict("records")]
-    except Exception as e:
-        # summary only (type + short message) — never a stack trace or response body
-        return [{"error": f"HK snapshot unavailable: {type(e).__name__}: {scrub_secrets(str(e))}"[:200]}]
+def _snapshot_clist(market: str, floor: float):
+    columns = _CLIST_SNAPSHOT_COLUMNS[market]
+    rows, total, page = [], 0, 1
+    while len(rows) < _SNAPSHOT_MAX_ROWS:
+        total, ranked = _em_clist(market, "f20", ",".join(columns), page=page)
+        for item in ranked:
+            cap = _parse_float(item.get("f20"))
+            if cap is None or cap < floor:
+                return total, rows
+            row = {key: _parse_float(item.get(col)) for col, key in columns.items()}
+            row.update(symbol=_clist_symbol(market, item.get("f12")), name=item.get("f14"))
+            rows.append(_clean_row(row | {"pe_basis": "unknown"}))
+        if len(ranked) < _EM_PAGE:
+            break
+        page += 1
+    return total, rows
 
 
 def normalize_us_symbol(value) -> str:
@@ -2297,44 +2190,28 @@ def normalize_us_symbol(value) -> str:
     return re.sub(r"[._]", "-", symbol)  # Eastmoney writes class shares as BRK_B; yfinance wants BRK-B
 
 
-def snapshot_us() -> list:
-    try:
-        import akshare as ak
-
-        with socket_timeout(25):
-            df = _akshare_retry(ak.stock_us_spot_em)
-        col_map = {
-            "代码": "symbol",
-            "名称": "name",
-            "最新价": "price",
-            "涨跌幅": "change_pct",
-            "成交量": "volume",
-            "成交额": "turnover",
-            "市盈率": "pe",
-            "总市值": "market_cap",
-        }
-        df = df.rename(columns=col_map)
-        if "symbol" in df.columns:
-            df["symbol"] = df["symbol"].map(normalize_us_symbol)
-        df["pe_basis"] = "unknown"
-        keep = [c for c in col_map.values() if c in df.columns] + ["pe_basis"]
-        return [_clean_row(r) for r in df[keep].to_dict("records")]
-    except Exception as e:
-        return [{"error": f"US snapshot unavailable: {type(e).__name__}: {scrub_secrets(str(e))}"[:200]}]
-
-
 def cmd_market_snapshot(args):
+    """Screener input: the stocks at or above market_cap_min (largest first), never the whole market."""
+    market = args.market.upper()
     try:
-        m = args.market.upper()
-        if m == "A":
-            return snapshot_a()
-        elif m == "HK":
-            return snapshot_hk()
-        elif m == "US":
-            return snapshot_us()
-        return {"error": f"Unknown market: {m}"}
+        filters = json.loads(getattr(args, "filters", None) or "{}")
+        if not isinstance(filters, dict):
+            return {"error": "filters must be a JSON object"}
+        floor = filters.get("market_cap_min") or 0
+        if market == "A":
+            legs = [("eastmoney", lambda: _snapshot_xuangu(filters)), ("tencent", lambda: _snapshot_tencent(filters))]
+        elif market in _CLIST_SNAPSHOT_COLUMNS:
+            legs = [("eastmoney", lambda: _snapshot_clist(market, floor))]
+        else:
+            return {"error": f"Unknown market: {market}"}
+        with socket_timeout(25):
+            total, rows = _failover(legs, label=f"snapshot_{market.lower()}")
+        result = {"market": market, "total_stocks": total, "rows": rows[:_SNAPSHOT_MAX_ROWS]}
+        if len(rows) >= _SNAPSHOT_MAX_ROWS:
+            result["truncated"] = True
+        return result
     except Exception as e:
-        return {"error": error_message(e)}
+        return {"error": f"{market} snapshot unavailable: {error_message(e)}"}
 
 
 # --------------- market_indices ---------------
@@ -2374,53 +2251,70 @@ def _quote_tencent_hk_index(symbol: str) -> dict:
     }
 
 
+_CN_INDICES = [
+    ("sh000001", "上证指数"),
+    ("sz399001", "深证成指"),
+    ("sz399006", "创业板指"),
+    ("sh000688", "科创50"),
+    ("sh000300", "沪深300"),
+    ("sh000016", "上证50"),
+]
+
+
+_EM_INDEX_FIELDS = (
+    ("price", "f2"),
+    ("change", "f4"),
+    ("change_pct", "f3"),
+    ("volume", "f5"),
+    ("turnover", "f6"),
+    ("high", "f15"),
+    ("low", "f16"),
+    ("open", "f17"),
+    ("prev_close", "f18"),
+)
+
+
+def _cn_indices_eastmoney() -> dict:
+    secids = {f"{1 if code[:2] == 'sh' else 0}.{code[2:]}": code for code, _ in _CN_INDICES}
+    quotes = {}
+    for row in _em_ulist(list(secids), "f2,f3,f4,f5,f6,f12,f13,f14,f15,f16,f17,f18"):
+        code = secids.get(f"{row.get('f13')}.{row.get('f12')}")
+        if code and _parse_float(row.get("f2")) is not None:
+            quotes[code] = {"name": row.get("f14")} | {key: _parse_float(row.get(col)) for key, col in _EM_INDEX_FIELDS}
+    return quotes
+
+
+def _cn_indices_tencent() -> dict:
+    """One qt.gtimg.cn batch request for every CN index (eastmoney refuses some datacenter IPs)."""
+    import requests
+
+    resp = requests.get(f"https://qt.gtimg.cn/q={','.join(code for code, _ in _CN_INDICES)}", timeout=10)
+    resp.raise_for_status()
+    quotes = {}
+    for part in resp.content.decode("gbk", errors="replace").split(";"):
+        name, _, payload = part.strip().partition('="')
+        fields = payload.rstrip('"').split("~")
+        if len(fields) > 37 and _parse_float(fields[3]):
+            row = _tencent_payload_row(fields, name.removeprefix("v_"))
+            keys = ("name", "price", "change", "change_pct", "volume", "turnover", "high", "low", "open", "prev_close")
+            quotes[name.removeprefix("v_")] = {key: row[key] for key in keys}
+    return quotes
+
+
 def cmd_market_indices(args):
     region = args.region.lower()
     try:
         if region == "cn":
-            import akshare as ak
-
-            indices = [
-                ("sh000001", "上证指数"),
-                ("sz399001", "深证成指"),
-                ("sz399006", "创业板指"),
-                ("sh000688", "科创50"),
-                ("sh000300", "沪深300"),
-                ("sh000016", "上证50"),
-            ]
-            results = []
-            try:
-                df = _akshare_retry(getattr(ak, "index_zh_spot_em", None) or ak.stock_zh_index_spot_em)
-            except Exception:
-                # eastmoney refuses datacenter/proxy IPs (RemoteDisconnected) — sina is the fallback
-                df = _akshare_retry(getattr(ak, "index_zh_spot_sina", None) or ak.stock_zh_index_spot_sina)
-            for code, name in indices:
-                clean_code = code[2:] if code[:2] in ("sh", "sz") else code
-                row = df[df["代码"] == clean_code]
-                if row.empty:
-                    row = df[df["代码"] == code]
-                if row.empty:
-                    results.append({"code": code, "name": name, "note": "data unavailable"})
-                    continue
-                r = row.iloc[0]
-                results.append(
-                    _clean_row(
-                        {
-                            "code": code,
-                            "name": r.get("名称", name),
-                            "price": r.get("最新价"),
-                            "change": r.get("涨跌额"),
-                            "change_pct": r.get("涨跌幅"),
-                            "volume": r.get("成交量"),
-                            "turnover": r.get("成交额"),
-                            "high": r.get("最高"),
-                            "low": r.get("最低"),
-                            "open": r.get("今开"),
-                            "prev_close": r.get("昨收"),
-                        }
-                    )
+            with socket_timeout(25):
+                quotes = _failover(
+                    [("eastmoney", _cn_indices_eastmoney), ("tencent", _cn_indices_tencent)], label="market_indices_cn"
                 )
-            return results
+            return [
+                _clean_row({"code": code, **quotes[code]})
+                if code in quotes
+                else {"code": code, "name": name, "note": "data unavailable"}
+                for code, name in _CN_INDICES
+            ]
         elif region in _REGION_INDEX_SYMBOLS:
             from concurrent.futures import ThreadPoolExecutor
 
@@ -3206,93 +3100,127 @@ def cmd_chip_distribution(args):
 # --------------- market_stats ---------------
 
 
-def compute_market_stats(data: list) -> dict:
-    """Compute breadth/limit/turnover statistics from a market snapshot list."""
-    import numpy as np
+def _clist_symbol(market: str, code) -> str:
+    code = str(code)
+    return f"{code.zfill(5)}.HK" if market == "HK" else normalize_us_symbol(code) if market == "US" else code
 
-    changes = []
-    turnovers = []
-    limit_ups = []
-    limit_downs = []
-    up_count = down_count = flat_count = 0
 
-    for s in data:
-        chg = s.get("change_pct")
-        if chg is not None:
-            changes.append(float(chg))
-            if chg > 0:
-                up_count += 1
-            elif chg < 0:
-                down_count += 1
-            else:
-                flat_count += 1
-        t = s.get("turnover")
-        if t is not None:
-            turnovers.append(float(t))
+def _clist_change_at(market: str, rank: int, desc: bool = True):
+    _, rows = _em_clist(market, "f3", "f3", page=rank, size=1, desc=desc)
+    return _parse_float(rows[0].get("f3")) if rows else None
 
-        price = s.get("price")
-        prev = s.get("prev_close")
-        sym = s.get("symbol", "")
-        if price and prev and prev > 0:
-            code_info = normalize_stock_code(sym)
-            lp = code_info.get("limit_pct")
-            if lp:
-                name = s.get("name", "")
-                if name and "ST" in name.upper() and code_info["board"] == "main":
-                    lp = 0.05
-                limit_up = calc_limit_price(float(prev), lp, "up")
-                limit_down = calc_limit_price(float(prev), lp, "down")
-                if abs(float(price) - limit_up) < 0.01:
-                    limit_ups.append({"symbol": sym, "name": s.get("name"), "change_pct": chg})
-                elif abs(float(price) - limit_down) < 0.01:
-                    limit_downs.append({"symbol": sym, "name": s.get("name"), "change_pct": chg})
 
-    changes_arr = np.array(changes) if changes else np.array([0])
-    sorted_data = sorted(data, key=lambda x: x.get("change_pct") or 0, reverse=True)
+def _leading_count(market: str, total: int, desc: bool) -> int:
+    """Ranks with a strictly positive (desc) / negative (asc) change, by binary search over single-row pages."""
+    lo, hi = 0, total
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        change = _clist_change_at(market, mid, desc) or 0
+        if change > 0 if desc else change < 0:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
-    return _clean_row(
+
+def _movers(market: str, desc: bool) -> tuple:
+    total, rows = _em_clist(market, "f3", "f12,f14,f3", size=5, desc=desc)
+    movers = [
+        {"symbol": _clist_symbol(market, r.get("f12")), "name": r.get("f14"), "change_pct": _parse_float(r.get("f3"))}
+        for r in rows
+    ]
+    return total, movers if desc else movers[::-1]  # losers keep the old order: least negative first
+
+
+def _median_change(market: str, total: int, up: int, flat: int, counted: int):
+    """Median of the counted stocks; unchanged and unquoted rows rank between gainers and losers."""
+    if counted <= 0:
+        return None
+    k = (counted + 1) // 2
+    if up < k <= up + flat:
+        return 0.0
+    return _clist_change_at(market, k if k <= up else k + total - counted)
+
+
+_EM_LIMIT_POOL = {"ut": "7eea3edcaed734bea9cbfc24409ed989", "dpt": "wz.ztzt"}
+
+
+def _limit_samples(endpoint: str, sort: str, trade_date: str) -> list:
+    params = {**_EM_LIMIT_POOL, "Pageindex": 0, "pagesize": 5, "sort": sort, "date": trade_date}
+    pool = (_get_json(f"https://push2ex.eastmoney.com/{endpoint}", params).get("data") or {}).get("pool") or []
+    return [
         {
-            "total_stocks": len(data),
-            "up_count": up_count,
-            "down_count": down_count,
-            "flat_count": flat_count,
-            "limit_up_count": len(limit_ups),
-            "limit_down_count": len(limit_downs),
-            "avg_change_pct": round(float(changes_arr.mean()), 2),
-            "median_change_pct": round(float(np.median(changes_arr)), 2),
-            "total_turnover": round(sum(turnovers), 0) if turnovers else None,
-            "top5_gainers": [
-                {"symbol": s.get("symbol"), "name": s.get("name"), "change_pct": s.get("change_pct")}
-                for s in sorted_data[:5]
-            ],
-            "top5_losers": [
-                {"symbol": s.get("symbol"), "name": s.get("name"), "change_pct": s.get("change_pct")}
-                for s in sorted_data[-5:]
-            ],
-            "limit_up_samples": limit_ups[:5],
-            "limit_down_samples": limit_downs[:5],
+            "symbol": p.get("c"),
+            "name": p.get("n"),
+            "change_pct": _sanitize(round(p["zdp"], 2) if isinstance(p.get("zdp"), (int, float)) else None),
         }
-    )
+        for p in pool
+    ]
+
+
+def _market_stats_a() -> dict:
+    """A-share breadth from eastmoney's 涨跌分布 (buckets ±11 are limit moves) — no per-stock rows."""
+    body = _get_json("https://push2ex.eastmoney.com/getTopicZDFenBu", _EM_LIMIT_POOL).get("data") or {}
+    buckets = {int(k): int(v) for item in body.get("fenbu") or [] for k, v in item.items()}
+    if not buckets:
+        raise ValueError("eastmoney breadth distribution unavailable")
+    up = sum(v for k, v in buckets.items() if k > 0)
+    down = sum(v for k, v in buckets.items() if k < 0)
+    flat = buckets.get(0, 0)
+    trade_date = str(body.get("qdate") or "")
+    index_rows = _em_ulist(["1.000001", "0.399001", "0.899050"], "f6")  # 沪 + 深 + 北 market turnover
+    turnovers = [_parse_float(r.get("f6")) for r in index_rows]
+    total, gainers = _movers("A", True)
+    _, losers = _movers("A", False)
+    return {
+        "total_stocks": up + down + flat,
+        "up_count": up,
+        "down_count": down,
+        "flat_count": flat,
+        "limit_up_count": buckets.get(11, 0),
+        "limit_down_count": buckets.get(-11, 0),
+        "median_change_pct": _median_change("A", total, up, flat, up + down + flat),
+        "total_turnover": round(sum(turnovers), 0) if turnovers and None not in turnovers else None,
+        "top5_gainers": gainers,
+        "top5_losers": losers,
+        "limit_up_samples": _limit_samples("getTopicZTPool", "fbt:asc", trade_date),
+        "limit_down_samples": _limit_samples("getTopicDTPool", "fund:asc", trade_date),
+    }
+
+
+def _market_stats_clist(market: str) -> dict:
+    """HK/US breadth: the up/down boundaries of the change-ranked list, found by binary search."""
+    total, gainers = _movers(market, True)
+    _, losers = _movers(market, False)
+    if not total:
+        raise ValueError(f"eastmoney {market} list unavailable")
+    up = _leading_count(market, total, True)
+    down = _leading_count(market, total, False)
+    flat = total - up - down
+    return {
+        "total_stocks": total,
+        "up_count": up,
+        "down_count": down,
+        "flat_count": flat,
+        "median_change_pct": _median_change(market, total, up, flat, total),
+        "top5_gainers": gainers,
+        "top5_losers": losers,
+        # No daily price limits; a turnover total would need every row.
+        **dict.fromkeys(("limit_up_count", "limit_down_count", "limit_up_samples", "limit_down_samples")),
+        "total_turnover": None,
+        "market": market,
+        "source": "eastmoney_rank",
+        "turnover_currency": "HKD" if market == "HK" else "USD",
+    }
 
 
 def cmd_market_stats(args):
     market = getattr(args, "market", "A")
     try:
-        data = {"A": snapshot_a, "HK": snapshot_hk, "US": snapshot_us}[market]()
-        if isinstance(data, dict) and "error" in data:
-            return data
-        if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) and "error" in data[0]:
-            return data[0]
-        if not data:
-            return {"error": "No market data"}
-        stats = compute_market_stats(data)
-        if market != "A":
-            # HK/US have no daily price limits; breadth covers the provider's listed-security universe.
-            stats.update(
-                dict.fromkeys(("limit_up_count", "limit_down_count", "limit_up_samples", "limit_down_samples"))
-            )
-            stats.update(market=market, source="eastmoney_spot", turnover_currency="HKD" if market == "HK" else "USD")
-        return stats
+        with socket_timeout(25):
+            stats = _market_stats_a() if market == "A" else _market_stats_clist(market)
+        # The mean needs every stock's change; the key stays for the JSON contract.
+        return _clean_row({"avg_change_pct": None, **stats})
     except Exception as e:
         return {"error": error_message(e)}
 
@@ -3636,122 +3564,43 @@ def cmd_hot_stocks(args):
 
 # --------------- margin_trading / northbound_flow (A-share only) ---------------
 
-# Exchange margin-detail column layouts differ: SSE carries 融资偿还额/融券偿还量,
-# SZSE carries 融券余额/融资融券余额 — the output keys below follow the source.
-_MARGIN_DETAIL_SSE_COLS = {
-    "标的证券代码": "symbol",
-    "标的证券简称": "name",
-    "融资余额": "margin_balance",
-    "融资买入额": "margin_buy",
-    "融资偿还额": "margin_repay",
-    "融券余量": "short_balance_shares",
-    "融券卖出量": "short_sell_shares",
-    "融券偿还量": "short_repay_shares",
-}
-
-_MARGIN_DETAIL_SZSE_COLS = {
-    "证券代码": "symbol",
-    "证券简称": "name",
-    "融资买入额": "margin_buy",
-    "融资余额": "margin_balance",
-    "融券卖出量": "short_sell_shares",
-    "融券余量": "short_balance_shares",
-    "融券余额": "short_balance",
-    "融资融券余额": "total_balance",
+# Eastmoney per-stock margin detail (RPTA_WEB_RZRQ_GGMX) → output keys
+_MARGIN_COLUMNS = {
+    "SCODE": "symbol",
+    "SECNAME": "name",
+    "RZYE": "margin_balance",
+    "RZMRE": "margin_buy",
+    "RZCHE": "margin_repay",
+    "RQYL": "short_balance_shares",
+    "RQMCL": "short_sell_shares",
+    "RQCHL": "short_repay_shares",
+    "RQYE": "short_balance",
+    "RZRQYE": "total_balance",
 }
 
 
 def cmd_margin_trading(args):
-    """Per-stock margin trading detail (融资融券) for the last N trading days.
+    """Per-stock margin trading detail (融资融券) for the last N trading days, newest first.
 
-    akshare has no per-stock margin history endpoint — the exchange detail lists
-    (stock_margin_detail_sse / stock_margin_detail_szse) are per-day, all-stock
-    tables, so each trading day is fetched and filtered to the symbol. Daily fetches
-    are independent and run concurrently (5 workers; a serial 60-day run would
-    overrun the host's 120s subprocess budget), then re-sorted newest-first — the
-    output never depends on completion order. A day that fails or has no data is
-    skipped (两融明细 T 日晚间才发布 — a morning run always misses the latest day);
-    only when every day failed is an error returned. Days where the symbol is
-    absent (non-margin underlying that day) are skipped; if no day yields a row the
-    symbol is reported as not covered."""
+    One server-filtered eastmoney query returns exactly this stock's rows (两融明细 T 日晚间才发布 —
+    a morning run ends at the previous day)."""
     if detect_market(args.symbol) != "A":
         return {"error": "margin_trading only available for A-shares"}
     days = getattr(args, "days", 10)
     if days < 1:
         return {"error": f"days must be a positive integer, got {days}"}
-    # One akshare call per day — cap the fan-out so a slow source can't overrun
-    # the host's subprocess budget (rows carry their dates; truncation is evident).
     days = min(days, 60)
-    code = _cn_code(args.symbol)
-    exchange, bare = code[:2], code[2:]
+    bare = _cn_code(args.symbol)[2:]
     try:
-        import concurrent.futures
-
-        from trading_calendar import prev_trading_days
-
-        if exchange == "sh":
-            col_map = _MARGIN_DETAIL_SSE_COLS
-        elif exchange == "sz":
-            col_map = _MARGIN_DETAIL_SZSE_COLS
-        else:
-            return {"error": f"margin_trading: {args.symbol} is a BSE code; only SSE/SZSE margin detail is available"}
-        trade_days = prev_trading_days("CN", days)
-        if not trade_days:
-            return {"error": "margin_trading: trading calendar unavailable"}
-
-        def fetch_day(date_iso):
-            """Cache the published exchange-day table, then select this stock."""
-
-            def fetch_table():
-                import akshare as ak
-
-                detail_fn = ak.stock_margin_detail_sse if exchange == "sh" else ak.stock_margin_detail_szse
-                df = _akshare_retry(detail_fn, date=date_iso.replace("-", ""))
-                if df is None or df.empty:
-                    return []
-                df = df.rename(columns=col_map)
-                required = {"symbol", "margin_buy", "margin_balance"}
-                if not required.issubset(df.columns):
-                    raise ValueError("margin detail table missing financial columns")
-                df = df[df["symbol"].astype(str).str.fullmatch(r"\d{6}")]
-                if "信用交易日期" in df.columns:
-                    source_days = df["信用交易日期"].map(lambda v: re.sub(r"\D", "", str(v))[:8])
-                    if not (source_days == date_iso.replace("-", "")).all():
-                        raise ValueError("margin detail table date does not match requested day")
-                keep = [c for c in col_map.values() if c in df.columns]
-                table = [{"date": date_iso, **_clean_row(r)} for r in df[keep].to_dict("records")]
-                for row in table:
-                    values = [_parse_float(row.get(field)) for field in ("margin_buy", "margin_balance")]
-                    if any(value is None or not math.isfinite(value) for value in values):
-                        # Keep usable stocks without persisting an incomplete exchange snapshot.
-                        return {"rows": table, "warnings": ["incomplete financial values"]}
-                return table
-
-            try:
-                today = _cn_now().date().isoformat()
-                table = (
-                    cached(f"margin-table:{exchange}:{date_iso}", DAY, fetch_table)
-                    if date_iso < today
-                    else fetch_table()
-                )
-                if isinstance(table, dict):
-                    table = table["rows"]
-                return date_iso, [r for r in table if str(r.get("symbol")) == bare], None
-            except Exception as e:
-                return date_iso, [], f"{date_iso}: {type(e).__name__}: {scrub_secrets(str(e))}"
-
-        rows = []
-        failures = []
-        with socket_timeout(25), concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-            for _date_iso, day_rows, failure in pool.map(fetch_day, trade_days):
-                if failure:
-                    failures.append(failure)
-                rows.extend(day_rows)
-        rows.sort(key=lambda r: r["date"], reverse=True)
+        with socket_timeout(25):
+            _, records = _em_datacenter("RPTA_WEB_RZRQ_GGMX", f'(SCODE="{bare}")', "DATE", days)
+        rows = [
+            _clean_row(
+                {"date": str(r.get("DATE", ""))[:10]} | {key: r.get(col) for col, key in _MARGIN_COLUMNS.items()}
+            )
+            for r in records
+        ]
         if not rows:
-            if failures:
-                msg = f"margin detail fetch failed for all {len(trade_days)} day(s): {'; '.join(failures)}"
-                return {"symbol": args.symbol, "error": msg}
             return {"symbol": args.symbol, "error": f"no margin trading data for {args.symbol} (可能不是两融标的)"}
         if getattr(args, "include_ratio", False):
             try:
@@ -3879,6 +3728,7 @@ def main():
 
     p_snap = sub.add_parser("market_snapshot")
     p_snap.add_argument("--market", default="A", choices=["A", "HK", "US"])
+    p_snap.add_argument("--filters", default="{}", help="JSON screener filters; market_cap_min bounds the scan")
 
     p_idx = sub.add_parser("market_indices")
     p_idx.add_argument("--region", default="cn", choices=["cn", "hk", "us", "jp", "kr", "tw"])

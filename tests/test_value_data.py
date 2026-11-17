@@ -44,36 +44,39 @@ def test_stock_valuation_percentiles_ignore_losses_and_sort_dates(monkeypatch):
 
 
 def test_earnings_calendar_prefers_latest_revision_and_keeps_actual(monkeypatch):
-    import akshare as ak
-
     from tools import value_data
 
-    monkeypatch.setattr(
-        ak,
-        "stock_report_disclosure",
-        lambda **k: pd.DataFrame(
+    calls = []
+    tables = {
+        "RPT_PUBLIC_BS_APPOIN": [
             {
-                "股票代码": ["600519"],
-                "股票简称": ["茅台"],
-                "首次预约": ["2026-10-15"],
-                "初次变更": ["2026-10-20"],
-                "二次变更": [None],
-                "三次变更": [None],
-                "实际披露": [None],
+                "SECURITY_CODE": "600519",
+                "SECURITY_NAME_ABBR": "茅台",
+                "FIRST_APPOINT_DATE": "2026-10-15 00:00:00",
+                "FIRST_CHANGE_DATE": "2026-10-20 00:00:00",
+                "SECOND_CHANGE_DATE": None,
+                "THIRD_CHANGE_DATE": None,
+                "ACTUAL_PUBLISH_DATE": None,
             }
-        ),
-    )
-    monkeypatch.setattr(
-        ak,
-        "stock_yjyg_em",
-        lambda **k: pd.DataFrame({"股票代码": ["600519"], "公告日期": ["2026-10-01"], "预告类型": ["预增"]}),
-    )
+        ],
+        "RPT_PUBLIC_OP_NEWPREDICT": [
+            {"SECURITY_CODE": "600519", "NOTICE_DATE": "2026-10-01 00:00:00", "PREDICT_TYPE": "预增"}
+        ],
+    }
+
+    def fake(report, filter_, sort, size, order="-1", url=None):
+        calls.append((report, filter_, size))
+        return 7, tables[report]
+
+    monkeypatch.setattr(value_data, "_em_datacenter", fake)
     result = value_data.earnings_calendar(Namespace(symbol="600519", report_date="2026-09-30", top=50))
+    assert all(f == "(REPORT_DATE='2026-09-30')(SECURITY_CODE=\"600519\")" and size == 50 for _, f, size in calls)
     assert result["disclosures"][0]["scheduled_date"] == "2026-10-20"
     assert result["disclosures"][0]["original_scheduled_date"] == "2026-10-15"
     assert result["disclosures"][0]["scheduled_date_revisions"] == [{"revision": 1, "scheduled_date": "2026-10-20"}]
     assert result["disclosures"][0]["actual_date"] is None
     assert result["forecasts"][0]["announcement_date"] == "2026-10-01"
+    assert result["disclosures_total"] == 7
 
 
 def test_hk_southbound_is_dated_and_normalized(monkeypatch):
@@ -144,27 +147,44 @@ def test_dividends_ignore_proposals_and_compute_realized_yield(monkeypatch):
 
 
 def test_dividend_ranking_is_report_period_yield(monkeypatch):
-    import akshare as ak
-
     from tools import value_data
 
-    monkeypatch.setattr(
-        ak,
-        "stock_fhps_em",
-        lambda **k: pd.DataFrame(
-            {
-                "代码": ["600519", "000001"],
-                "名称": ["A", "B"],
-                # Eastmoney returns a fraction: 0.05 means 5%.
-                "现金分红-股息率": [0.02, 0.05],
-                "方案进度": ["实施分配", "实施分配"],
-            }
-        ),
-    )
+    calls = []
+    rows = [
+        # Eastmoney returns a fraction: 0.05 means 5%.
+        {"SECURITY_CODE": "000001", "SECURITY_NAME_ABBR": "B", "DIVIDENT_RATIO": 0.05, "ASSIGN_PROGRESS": "实施分配"},
+        {"SECURITY_CODE": "600519", "SECURITY_NAME_ABBR": "A", "DIVIDENT_RATIO": 0.02, "ASSIGN_PROGRESS": "实施分配"},
+    ]
+
+    def fake(report, filter_, sort, size, order="-1", url=None):
+        calls.append((report, filter_, sort, size))
+        return len(rows), rows[:size]
+
+    monkeypatch.setattr(value_data, "_em_datacenter", fake)
     result = value_data.dividends(Namespace(symbol="", mode="ranking", report_date="2025-12-31", top=1, years=10))
+    assert calls == [
+        ("RPT_SHAREBONUS_DET", "(REPORT_DATE='2025-12-31')(ASSIGN_PROGRESS=\"实施分配\")", "DIVIDENT_RATIO", 1)
+    ]
     assert result["items"][0]["symbol"] == "000001"
     assert result["items"][0]["dividend_yield"] == 5
     assert result["yield_basis"] == "provider report-period cash dividend yield, percent"
+
+
+def test_dividend_ranking_restricts_to_candidate_codes_in_chunks(monkeypatch):
+    from tools import value_data
+
+    filters = []
+    monkeypatch.setattr(
+        value_data,
+        "_em_datacenter",
+        lambda report, filter_, sort, size, order="-1", url=None: filters.append(filter_) or (0, []),
+    )
+    codes = [f"{i:06d}" for i in range(250)] + ["bad"]
+    value_data.dividend_ranking("2025-12-31", codes=codes)
+    assert len(filters) == 2
+    assert '"000199"))' in filters[0] and '(SECURITY_CODE in ("000200"' in filters[1]
+    assert "bad" not in "".join(filters)
+    assert value_data.dividend_ranking("2025-12-31", codes=[])["items"] == []
 
 
 def _fail(*args, **kwargs):

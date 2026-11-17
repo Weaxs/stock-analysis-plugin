@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _subproc import command_timeout, run_tool, utf8_stdio
 from market_review import calc_temperature
-from stock_data import compute_market_stats
 
 DEFAULT_FILTERS = {
     "pe_min": 0,
@@ -56,12 +55,10 @@ def _fetch_json(args: list[str], timeout: int | None = None) -> dict | list | No
     return run_tool("stock_data.py", args, timeout=timeout, preserve_errors=True)
 
 
-def fetch_snapshot(market: str) -> list:
-    # a cold full-market snapshot can exceed 30s (CI runners) — allow longer; with
-    # all eastmoney/sina legs timing out, the tencent fallback leg needs ~2min more
-    return _fetch_json(
-        ["market_snapshot", "--market", market], timeout=command_timeout("stock_data.py", ["market_snapshot"])
-    )
+def fetch_snapshot(market: str, filters: dict) -> dict:
+    """Stocks at or above filters["market_cap_min"], largest first (A also filters server-side)."""
+    args = ["market_snapshot", "--market", market, "--filters", json.dumps(filters)]
+    return _fetch_json(args, timeout=command_timeout("stock_data.py", ["market_snapshot"]))
 
 
 def load_config(path: str) -> dict:
@@ -167,19 +164,18 @@ def sentiment_multiplier(score: float) -> float:
     return round(0.8 + score / 100 * 0.4, 3)  # linear map to [0.8, 1.2]
 
 
-def compute_sentiment(market: str, snapshot: list | None = None) -> dict:
+def compute_sentiment(market: str) -> dict:
     """Market sentiment gate; degrades to a neutral multiplier of 1.0 on any failure."""
     fallback = {"score": None, "level": "unknown", "signal": None, "multiplier": 1.0}
     region = _INDEX_REGION.get(market)
     if region is None:
         return fallback
     try:
-        stats = None
-        if isinstance(snapshot, list) and snapshot:
-            try:
-                stats = compute_market_stats(snapshot)
-            except Exception:
-                stats = None
+        stats = _fetch_json(
+            ["market_stats", "--market", market], timeout=command_timeout("stock_data.py", ["market_stats"])
+        )
+        if not isinstance(stats, dict) or "error" in stats:
+            stats = None
         indices = _fetch_json(["market_indices", "--region", region])
         if not isinstance(indices, list) or not indices:
             return fallback
@@ -372,22 +368,25 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     )
     if dividend_requested and market not in ("A", "HK"):
         return {"error": "dividend screening currently covers A/HK only", "market": market}
-    raw = fetch_snapshot(market)
-    if isinstance(raw, dict) and "error" in raw:
-        return raw
-    # snapshot legs wrap a total failure as a one-row [{"error": ...}] list — surface it
-    # instead of letting the error row walk the scoring pipeline as a ghost candidate
-    if isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict) and "error" in raw[0]:
-        return {**raw[0], "market": market}
-    if raw is None:
+    snapshot = fetch_snapshot(market, filters)
+    if isinstance(snapshot, dict) and "error" in snapshot:
+        return snapshot
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("rows"), list):
         return {"error": "failed to fetch market snapshot", "market": market}
 
     l2_enabled = bool(l2 or (config or {}).get("l2"))
-    sentiment = compute_sentiment(market, raw if isinstance(raw, list) else None)
+    sentiment = compute_sentiment(market)
     multiplier = sentiment["multiplier"]
 
-    df = pd.DataFrame(raw)
-    total = len(df)
+    # An empty server-filtered page still reports every requested filter as applied.
+    columns = ["symbol", *{key.rsplit("_", 1)[0] for key in filters}]
+    df = pd.DataFrame(snapshot["rows"]) if snapshot["rows"] else pd.DataFrame(columns=columns)
+    total = snapshot.get("total_stocks")
+    scan_meta = {}
+    if snapshot.get("truncated"):
+        scan_meta["warnings"] = [
+            f"scanned only the {len(df)} largest stocks by market cap; raise market_cap_min to cover the rest"
+        ]
 
     for c in ["price", "change_pct", "volume", "turnover", "pe", "pb", "market_cap", "turnover_rate", "volume_ratio"]:
         if c in df.columns:
@@ -403,7 +402,11 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         try:
             from value_data import dividend_ranking
 
-            ranked = dividend_ranking(report_date=(config or {}).get("dividend_report_date", ""), market=market)
+            ranked = dividend_ranking(
+                report_date=(config or {}).get("dividend_report_date", ""),
+                market=market,
+                codes=list(df["symbol"]) if market == "A" else None,
+            )
 
             def dividend_key(symbol):
                 return symbol.split(".")[0].lstrip("0") if market == "HK" else symbol
@@ -441,6 +444,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             "market_sentiment": sentiment,
             "l2_enabled": l2_enabled,
             **dividend_meta,
+            **scan_meta,
         }
 
     df = compute_scores(df)
@@ -531,6 +535,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         "market_sentiment": sentiment,
         "l2_enabled": l2_enabled,
         **dividend_meta,
+        **scan_meta,
     }
 
 

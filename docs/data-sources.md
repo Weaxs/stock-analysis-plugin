@@ -44,7 +44,7 @@ A/港/美股 DCF 输入（`get_financials include_dcf_inputs=true`）：美股�
 
 美股估值历史（`get_valuation_history`）由 SEC companyfacts 派生：TTM `NetIncomeLoss`（10-Q 单季加由 10-K 推出的第四季）、`StockholdersEquity` 和封面股本，均按 SEC 申报日起生效，取每个期间最早申报值，避免用后来的重述回填；Yahoo 周收盘按拆股调整后的价格乘以同口径股本得到市值。多类股公司按所有类别股本合计、单一类别价格计算；无封面股本时退回加权稀释股本（`share_basis`）。
 
-港美股市场宽度（`get_market_stats market=HK|US`）沿用东方财富全市场快照计算涨跌家数和成交额，无涨跌停制度，涨跌停字段为 null；美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`，不是交易所官方行业数据。港股行业排行暂无可靠的公开行业指数源，未补。
+港美股市场宽度（`get_market_stats market=HK|US`）用东方财富涨跌排行二分计数涨跌家数（不拉全市场），总成交额与涨跌停字段为 null；美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`，不是交易所官方行业数据。港股行业排行暂无可靠的公开行业指数源，未补。
 
 接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
 

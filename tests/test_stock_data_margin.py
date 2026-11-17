@@ -5,234 +5,108 @@ from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
+from tools import stock_data
 from tools.stock_data import cmd_margin_trading, cmd_northbound_flow
-from tools.trading_calendar import prev_trading_days
 
 
-def _real_trade_days(n: int) -> list:
-    """Use the same mocked calendar as cmd_margin_trading in these tests."""
-    with patch.dict(sys.modules, {"akshare": MagicMock()}):
-        return prev_trading_days("CN", n)
-
-
-def _sse_detail(date: str):
-    """One exchange-day payload (all stocks) as akshare stock_margin_detail_sse returns it."""
-    return pd.DataFrame(
+def _rpta(symbol="600519", dates=("2026-10-30", "2026-10-29")):
+    """RPTA_WEB_RZRQ_GGMX rows as eastmoney datacenter returns them, newest first."""
+    return [
         {
-            "信用交易日期": [date, date],
-            "标的证券代码": ["600519", "601318"],
-            "标的证券简称": ["贵州茅台", "中国平安"],
-            "融资余额": [2.0e10, 1.5e10],
-            "融资买入额": [3.0e8, 2.0e8],
-            "融资偿还额": [2.5e8, 1.8e8],
-            "融券余量": [1.0e5, 2.0e5],
-            "融券卖出量": [1.0e4, 2.0e4],
-            "融券偿还量": [9.0e3, 1.5e4],
+            "DATE": f"{d} 00:00:00",
+            "SCODE": symbol,
+            "SECNAME": "贵州茅台",
+            "RZYE": 1.5e10,
+            "RZMRE": 3e8,
+            "RZCHE": 2.5e8,
+            "RQYL": 1000,
+            "RQMCL": 100,
+            "RQCHL": 50,
+            "RQYE": 1.6e6,
+            "RZRQYE": 1.5016e10,
         }
-    )
+        for d in dates
+    ]
 
 
-def _szse_detail():
-    return pd.DataFrame(
-        {
-            "证券代码": ["000001", "000002"],
-            "证券简称": ["平安银行", "万科A"],
-            "融资买入额": [1.0e8, 2.0e8],
-            "融资余额": [5.0e9, 8.0e9],
-            "融券卖出量": [1.0e4, 2.0e4],
-            "融券余量": [5.0e5, 6.0e5],
-            "融券余额": [6.0e6, 7.0e6],
-            "融资融券余额": [5.006e9, 8.007e9],
-        }
-    )
+@pytest.fixture
+def datacenter(monkeypatch):
+    calls = []
+
+    def install(rows=None, error=None):
+        def fake(report, filter_, sort, size, order="-1", url=None):
+            calls.append({"report": report, "filter": filter_, "sort": sort, "size": size})
+            if error:
+                raise error
+            return len(rows or []), (rows or [])[:size]
+
+        monkeypatch.setattr(stock_data, "_em_datacenter", fake)
+        return calls
+
+    return install
 
 
 class TestMarginTrading:
-    def test_sse_routing_and_fields(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            expected_day = _real_trade_days(1)[0]
-            result = cmd_margin_trading(Namespace(symbol="600519", days=1))
-        assert isinstance(result, list)
-        assert len(result) == 1
+    def test_one_server_filtered_query_and_fields(self, datacenter):
+        calls = datacenter(_rpta())
+        result = cmd_margin_trading(Namespace(symbol="600519", days=2))
+        assert calls == [{"report": "RPTA_WEB_RZRQ_GGMX", "filter": '(SCODE="600519")', "sort": "DATE", "size": 2}]
+        assert [r["date"] for r in result] == ["2026-10-30", "2026-10-29"]
         row = result[0]
-        assert row["date"] == expected_day
         assert row["symbol"] == "600519"
         assert row["name"] == "贵州茅台"
-        assert row["margin_balance"] == 2.0e10
-        assert row["margin_buy"] == 3.0e8
+        assert row["margin_balance"] == 1.5e10
+        assert row["margin_buy"] == 3e8
         assert row["margin_repay"] == 2.5e8
-        assert row["short_balance_shares"] == 1.0e5
-        assert row["short_sell_shares"] == 1.0e4
-        assert row["short_repay_shares"] == 9.0e3
-        mock_ak.stock_margin_detail_sse.assert_called_with(date=expected_day.replace("-", ""))
-        mock_ak.stock_margin_detail_szse.assert_not_called()
+        assert row["short_balance_shares"] == 1000
+        assert row["short_sell_shares"] == 100
+        assert row["short_repay_shares"] == 50
+        assert row["short_balance"] == 1.6e6
+        assert row["total_balance"] == 1.5016e10
 
-    def test_szse_routing_and_fields(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_szse.side_effect = lambda date: _szse_detail()
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            expected_day = _real_trade_days(1)[0]
-            result = cmd_margin_trading(Namespace(symbol="000001", days=1))
-        assert len(result) == 1
-        row = result[0]
-        assert row["date"] == expected_day
-        assert row["symbol"] == "000001"
-        assert row["margin_balance"] == 5.0e9
-        assert row["short_balance"] == 6.0e6
-        assert row["total_balance"] == 5.006e9
-        assert "margin_repay" not in row
-        mock_ak.stock_margin_detail_szse.assert_called_with(date=expected_day.replace("-", ""))
-        mock_ak.stock_margin_detail_sse.assert_not_called()
+    def test_prefixed_symbol_accepted(self, datacenter):
+        calls = datacenter(_rpta("000001"))
+        result = cmd_margin_trading(Namespace(symbol="sz000001", days=1))
+        assert calls[0]["filter"] == '(SCODE="000001")'
+        assert result[0]["symbol"] == "000001"
 
-    def test_prefixed_symbol_accepted(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = cmd_margin_trading(Namespace(symbol="sh600519", days=1))
-        assert isinstance(result, list)
-        assert result[0]["symbol"] == "600519"
+    def test_days_clamped_to_60(self, datacenter):
+        calls = datacenter(_rpta())
+        cmd_margin_trading(Namespace(symbol="600519", days=500))
+        assert calls[0]["size"] == 60
 
-    def test_calendar_wiring_market_and_days(self):
-        """cmd → trading_calendar wiring: CN calendar, days passed through (unclamped)."""
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        with (
-            patch.dict(sys.modules, {"akshare": mock_ak}),
-            patch("trading_calendar.prev_trading_days", wraps=prev_trading_days) as cal_spy,
-        ):
-            result = cmd_margin_trading(Namespace(symbol="600519", days=3))
-        cal_spy.assert_called_once_with("CN", 3)
-        assert isinstance(result, list)
-        assert len(result) == 3
+    def test_non_a_share_rejected(self, datacenter):
+        calls = datacenter(_rpta())
+        assert "error" in cmd_margin_trading(Namespace(symbol="AAPL", days=10))
+        assert calls == []
 
-    def test_newest_first_across_days(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            expected_days = _real_trade_days(4)
-            result = cmd_margin_trading(Namespace(symbol="600519", days=4))
-        assert [r["date"] for r in result] == expected_days
-        assert mock_ak.stock_margin_detail_sse.call_count == 4
+    def test_invalid_days_rejected(self, datacenter):
+        calls = datacenter(_rpta())
+        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=0))
+        assert calls == []
 
-    def test_latest_day_not_published_is_skipped(self):
-        """两融明细 T 日晚间才发布：上午跑时最近一天必抛（SSE Length mismatch /
-        SZSE read_excel 解析异常）— 跳过该天继续，返回其余天序列而非整单 error。"""
-        mock_ak = MagicMock()
-        with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
-            days = _real_trade_days(4)
-            latest_raw = days[0].replace("-", "")
-
-            def detail(date: str):
-                if date == latest_raw:
-                    raise ValueError("Length mismatch")
-                return _sse_detail(date)
-
-            mock_ak.stock_margin_detail_sse.side_effect = detail
-            result = cmd_margin_trading(Namespace(symbol="600519", days=4))
-        assert isinstance(result, list)
-        assert [r["date"] for r in result] == days[1:]
-
-    def test_provider_failure_all_days_is_clean_error(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = ConnectionError("boom")
-        with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
-            result = cmd_margin_trading(Namespace(symbol="600519", days=3))
-        assert isinstance(result, dict)
-        assert "error" in result
-
-    def test_days_clamped_to_60(self):
-        """--days 每天一次 akshare 调用；超过 60 钳制到 60，避免慢源下击穿宿主 120s 子进程预算。"""
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        with (
-            patch.dict(sys.modules, {"akshare": mock_ak}),
-            patch("trading_calendar.prev_trading_days", wraps=prev_trading_days) as cal_spy,
-        ):
-            result = cmd_margin_trading(Namespace(symbol="600519", days=250))
-        cal_spy.assert_called_once_with("CN", 60)
-        assert isinstance(result, list)
-        assert len(result) == 60
-
-    def test_non_a_share_rejected(self):
-        mock_ak = MagicMock()
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = cmd_margin_trading(Namespace(symbol="AAPL", days=10))
-        assert "error" in result
-        mock_ak.stock_margin_detail_sse.assert_not_called()
-
-    def test_bse_symbol_rejected(self):
-        mock_ak = MagicMock()
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = cmd_margin_trading(Namespace(symbol="920001", days=10))
-        assert "error" in result
-        mock_ak.stock_margin_detail_sse.assert_not_called()
-        mock_ak.stock_margin_detail_szse.assert_not_called()
-
-    def test_not_a_margin_underlying_is_clean_error(self):
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = cmd_margin_trading(Namespace(symbol="600999", days=4))
-        assert isinstance(result, dict)
-        assert "error" in result
+    def test_not_a_margin_underlying_is_clean_error(self, datacenter):
+        datacenter([])
+        result = cmd_margin_trading(Namespace(symbol="600999", days=4))
         assert result["symbol"] == "600999"
+        assert "两融标的" in result["error"]
 
-    def test_invalid_days_rejected(self):
-        result = cmd_margin_trading(Namespace(symbol="600519", days=0))
-        assert "error" in result
+    def test_provider_failure_is_clean_error(self, datacenter):
+        datacenter(error=ConnectionError("eastmoney down"))
+        result = cmd_margin_trading(Namespace(symbol="600519", days=4))
+        assert "eastmoney down" in result["error"]
 
-    def test_concurrent_fetch_out_of_order_still_newest_first(self):
-        """各日抓取经 ThreadPoolExecutor 并发（max_workers=5）；乱序完成/乱序返回时
-        输出仍按日期降序，保持"最新在前"契约，不依赖执行器返回顺序。"""
-        mock_ak = MagicMock()
-        mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-        days = _real_trade_days(4)
-        used = {}
 
-        class ReverseExecutor:
-            """逆序跑、逆序返回的同步执行器 — 模拟并发下乱序完成/乱序返回。"""
-
-            def __init__(self, max_workers=None, **kwargs):
-                used["max_workers"] = max_workers
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def map(self, fn, items):
-                items = list(items)
-                results = {d: fn(d) for d in reversed(items)}  # 乱序完成
-                return [results[d] for d in reversed(items)]  # 乱序返回
-
-        with (
-            patch.dict(sys.modules, {"akshare": mock_ak}),
-            patch("concurrent.futures.ThreadPoolExecutor", ReverseExecutor),
-        ):
-            result = cmd_margin_trading(Namespace(symbol="600519", days=4))
-        assert used.get("max_workers") == 5  # 并发执行且限流 5
-        assert [r["date"] for r in result] == days  # 最新在前，不受完成顺序影响
-
-    def test_concurrent_fetch_keeps_per_day_isolation(self):
-        """并发下保留 per-day 故障隔离：单日抛错跳过，其余天正常返回。"""
-        mock_ak = MagicMock()
-        days = _real_trade_days(4)
-        latest_raw = days[0].replace("-", "")
-
-        def detail(date: str):
-            if date == latest_raw:
-                raise ValueError("Length mismatch")
-            return _sse_detail(date)
-
-        mock_ak.stock_margin_detail_sse.side_effect = detail
-        with patch.dict(sys.modules, {"akshare": mock_ak}), patch("tools.stock_data.time.sleep"):
-            result = cmd_margin_trading(Namespace(symbol="600519", days=4))
-        assert isinstance(result, list)
-        assert [r["date"] for r in result] == days[1:]
+def test_margin_buy_ratio_uses_matching_day_turnover(monkeypatch, datacenter):
+    datacenter(_rpta(dates=("2026-10-30", "2026-10-29")))
+    monkeypatch.setattr(stock_data, "_kline_akshare", lambda *a, **k: [{"date": "2026-10-30", "turnover": 1.2e9}])
+    rows = cmd_margin_trading(Namespace(symbol="600519", days=2, include_ratio=True))
+    assert rows[0]["margin_buy_ratio_pct"] == 25
+    assert rows[0]["turnover"] == 1.2e9
+    assert rows[1]["margin_buy_ratio_pct"] is None
+    assert rows[1]["margin_buy_ratio_note"] == "matching-date CNY turnover unavailable"
 
 
 class TestNorthboundFlow:
@@ -359,93 +233,3 @@ class TestNorthboundFlow:
         assert isinstance(result, dict)
         assert "error" in result
         assert "2024-08-16" in result["error"]
-
-
-def test_margin_buy_ratio_uses_matching_day_turnover(monkeypatch):
-    from tools import stock_data
-
-    mock_ak = MagicMock()
-    mock_ak.stock_margin_detail_sse.side_effect = lambda date: _sse_detail(date)
-    monkeypatch.setattr(
-        stock_data, "_kline_akshare", lambda *a, **k: [{"date": _real_trade_days(1)[0], "turnover": 1.2e9}]
-    )
-    with patch.dict(sys.modules, {"akshare": mock_ak}):
-        rows = cmd_margin_trading(Namespace(symbol="600519", days=1, include_ratio=True))
-    assert rows[0]["margin_buy_ratio_pct"] == 25
-    assert rows[0]["turnover"] == 1.2e9
-
-
-def test_two_stocks_share_exchange_day_tables(monkeypatch):
-    days = ["2026-10-30", "2026-10-29", "2026-10-28"]
-    source = MagicMock(side_effect=lambda date: _sse_detail(date))
-    ak = MagicMock(stock_margin_detail_sse=source)
-    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: days)
-    with patch.dict(sys.modules, {"akshare": ak}):
-        first = cmd_margin_trading(Namespace(symbol="600519", days=3))
-        second = cmd_margin_trading(Namespace(symbol="601318", days=3))
-    assert len(first) == len(second) == 3
-    assert source.call_count == 3
-    assert all(r["symbol"] == "600519" for r in first)
-    assert all(r["symbol"] == "601318" for r in second)
-
-
-def test_empty_margin_table_is_not_cached(monkeypatch):
-    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
-    source = MagicMock(side_effect=[pd.DataFrame(), _sse_detail("20261029")])
-    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
-        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=1))
-        assert len(cmd_margin_trading(Namespace(symbol="600519", days=1))) == 1
-    assert source.call_count == 2
-
-
-def test_malformed_margin_table_is_not_cached(monkeypatch):
-    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
-    source = MagicMock(side_effect=[pd.DataFrame({"标的证券代码": ["600519"]}), _sse_detail("20261029")])
-    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
-        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=1))
-        result = cmd_margin_trading(Namespace(symbol="600519", days=1))
-        assert result[0]["margin_balance"] == 2.0e10
-    assert source.call_count == 2
-
-
-def test_wrong_day_margin_table_is_not_relabelled_or_cached(monkeypatch):
-    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
-    source = MagicMock(side_effect=[_sse_detail("20261028"), _sse_detail("20261029")])
-    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
-        assert "error" in cmd_margin_trading(Namespace(symbol="600519", days=1))
-        result = cmd_margin_trading(Namespace(symbol="600519", days=1))
-        assert result[0]["date"] == "2026-10-29"
-    assert source.call_count == 2
-
-
-def test_current_day_margin_table_is_not_persisted(monkeypatch):
-    from datetime import datetime
-
-    from tools import stock_data
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return cls(2026, 10, 30)
-
-    monkeypatch.setattr(stock_data, "datetime", Clock)
-    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-30"])
-    monkeypatch.setattr("trading_calendar.datetime", Clock)
-    source = MagicMock(side_effect=lambda date: _sse_detail(date))
-    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
-        assert len(cmd_margin_trading(Namespace(symbol="600519", days=1))) == 1
-        assert len(cmd_margin_trading(Namespace(symbol="601318", days=1))) == 1
-    assert source.call_count == 2
-
-
-def test_unrelated_incomplete_stock_does_not_hide_healthy_stock(monkeypatch):
-    monkeypatch.setattr("trading_calendar.prev_trading_days", lambda *a: ["2026-10-29"])
-    incomplete = _sse_detail("20261029")
-    incomplete.loc[1, "融资买入额"] = float("nan")
-    source = MagicMock(side_effect=[incomplete, _sse_detail("20261029")])
-    with patch.dict(sys.modules, {"akshare": MagicMock(stock_margin_detail_sse=source)}):
-        first = cmd_margin_trading(Namespace(symbol="600519", days=1))
-        assert first[0]["margin_balance"] == 2.0e10
-        second = cmd_margin_trading(Namespace(symbol="601318", days=1))
-        assert second[0]["margin_buy"] == 2.0e8
-    assert source.call_count == 2

@@ -812,7 +812,7 @@
   },
   {
     "name": "get_market_stats",
-    "description": "获取市场整体统计（涨跌家数、平均/中位涨幅、涨跌Top5、总成交额）。market=A（默认）含涨停跌停数；HK/US基于东方财富全市场快照，无涨跌停制度，涨跌停字段为null。用于衡量市场整体情绪与温度",
+    "description": "获取市场整体统计（涨跌家数、中位涨幅、涨跌Top5、总成交额）。market=A（默认）含涨停跌停数；HK/US基于东方财富涨跌排行计数，无涨跌停制度，涨跌停字段与总成交额为null。avg_change_pct恒为null。用于衡量市场整体情绪与温度",
     "parameters": {
       "type": "object",
       "properties": {

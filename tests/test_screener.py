@@ -30,12 +30,14 @@ class TestMergeFilters:
 
     @pytest.mark.parametrize("filters", [{"price_max": 10}, {"pe_max": "bad"}, {"pe_max": float("nan")}])
     def test_invalid_filters_are_clean_errors(self, monkeypatch, filters):
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: [{"symbol": "AAPL", "price": 100, "pe": 50}])
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap([{"symbol": "AAPL", "price": 100, "pe": 50}]))
         monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
         assert "error" in screen("US", top=20, config={"filters": filters})
 
     def test_explicit_unavailable_filter_is_not_claimed_as_applied(self, monkeypatch):
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: [{"symbol": "AAPL", "price": 100, "change_pct": 1}])
+        monkeypatch.setattr(
+            screener, "fetch_snapshot", lambda *a: _snap([{"symbol": "AAPL", "price": 100, "change_pct": 1}])
+        )
         monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
         result = screen("US", top=20, config={"filters": {"pe_max": 10}})
         assert "error" in result
@@ -171,13 +173,18 @@ def _snapshot():
     ]
 
 
+def _snap(rows):
+    """market_snapshot CLI shape around plain rows; non-list values (None / error dicts) pass through."""
+    return {"market": "A", "total_stocks": len(rows), "rows": rows} if isinstance(rows, list) else rows
+
+
 def _neutral_sentiment(multiplier=1.0):
     return {"score": 50.0, "level": "neutral", "signal": "yellow", "multiplier": multiplier}
 
 
 def _patch_screen(monkeypatch, multiplier=1.0):
-    monkeypatch.setattr(screener, "fetch_snapshot", lambda market: _snapshot())
-    monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment(multiplier))
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(_snapshot()))
+    monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment(multiplier))
 
 
 class TestSentimentMultiplier:
@@ -192,7 +199,7 @@ class TestSentimentMultiplier:
 class TestComputeSentiment:
     def test_degrades_on_fetch_failure(self, monkeypatch):
         monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: None)
-        result = compute_sentiment("A", snapshot=_snapshot())
+        result = compute_sentiment("A")
         assert result == {"score": None, "level": "unknown", "signal": None, "multiplier": 1.0}
 
     def test_degrades_on_error_dict(self, monkeypatch):
@@ -205,61 +212,43 @@ class TestComputeSentiment:
         result = compute_sentiment("JP")
         assert result["multiplier"] == 1.0
 
-    def test_a_share_uses_snapshot_and_indices(self, monkeypatch):
-        snapshot = _snapshot()
+    @staticmethod
+    def _fetch(stats, index_change):
+        calls = []
+
+        def fetch(args, timeout=30):
+            calls.append(args)
+            return stats if args[0] == "market_stats" else [{"code": "sh000001", "change_pct": index_change}]
+
+        return calls, fetch
+
+    def test_a_share_uses_market_stats_and_indices(self, monkeypatch):
         stats = {"up_count": 80, "down_count": 20, "limit_up_count": 30, "limit_down_count": 10}
-        calls = {}
-
-        def _stats(data):
-            calls["data"] = data
-            return stats
-
-        monkeypatch.setattr(screener, "compute_market_stats", _stats)
-        monkeypatch.setattr(
-            screener,
-            "_fetch_json",
-            lambda args, timeout=30: [{"code": "sh000001", "change_pct": 2.0}],
-        )
-        result = compute_sentiment("A", snapshot=snapshot)
-        assert calls["data"] is snapshot
+        calls, fetch = self._fetch(stats, 2.0)
+        monkeypatch.setattr(screener, "_fetch_json", fetch)
+        result = compute_sentiment("A")
+        assert ["market_stats", "--market", "A"] in calls
         # breadth 80 (w .45) + index 74 (w .35) + limit 75 (w .20) = 76.9
         assert result["score"] == 76.9
         assert result["level"] == "constructive"
         assert result["signal"] == "green"
         assert result["multiplier"] == round(0.8 + 76.9 / 100 * 0.4, 3)
 
-    def test_us_indices_only(self, monkeypatch):
-        def _no_stats(data):
-            raise AssertionError("compute_market_stats must not be called without a snapshot")
-
-        monkeypatch.setattr(screener, "compute_market_stats", _no_stats)
-        monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: [{"code": "^GSPC", "change_pct": 1.0}])
+    def test_us_indices_only_when_stats_fail(self, monkeypatch):
+        _, fetch = self._fetch({"error": "provider down"}, 1.0)
+        monkeypatch.setattr(screener, "_fetch_json", fetch)
         result = compute_sentiment("US")
         # index-only: 50 + 1.0 * 12 = 62 → ≥ 60 is constructive
         assert result["score"] == 62.0
         assert result["level"] == "constructive"
-        assert result["signal"] == "green"
         assert result["multiplier"] == round(0.8 + 62.0 / 100 * 0.4, 3)
 
-    def test_us_snapshot_adds_breadth(self, monkeypatch):
-        snapshot = _snapshot()
-        calls = {}
-
-        def _stats(data):
-            calls["data"] = data
-            # non-A snapshot: normalize_stock_code gives limit_pct=None → no limit counts
-            return {"up_count": 3, "down_count": 0, "limit_up_count": 0, "limit_down_count": 0}
-
-        monkeypatch.setattr(screener, "compute_market_stats", _stats)
-        monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=30: [{"code": "^GSPC", "change_pct": 1.0}])
-        result = compute_sentiment("US", snapshot=snapshot)
-        assert calls["data"] is snapshot
-        # breadth 100 (w .45) + index 62 (w .35); limit_total=0 drops the limit component,
-        # weights renormalize: (45 + 21.7) / 0.8 = 83.375 → 83.4
-        assert result["score"] == 83.4
-        assert result["level"] == "constructive"
-        assert result["signal"] == "green"
-        assert result["multiplier"] == round(0.8 + 83.4 / 100 * 0.4, 3)
+    def test_us_breadth_without_limits(self, monkeypatch):
+        stats = {"up_count": 3, "down_count": 0, "limit_up_count": None, "limit_down_count": None}
+        _, fetch = self._fetch(stats, 1.0)
+        monkeypatch.setattr(screener, "_fetch_json", fetch)
+        # breadth 100 (w .45) + index 62 (w .35); no limit component, weights renormalize → 83.4
+        assert compute_sentiment("US")["score"] == 83.4
 
 
 class TestPeBasis:
@@ -269,7 +258,7 @@ class TestPeBasis:
         for row in snapshot:
             row["pe_basis"] = "dynamic"
         _patch_screen(monkeypatch)
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(snapshot))
         monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
         result = screen("A", 20, {"l2": l2_enabled})
         assert [candidate["pe_basis"] for candidate in result["candidates"]] == ["dynamic"] * 3
@@ -310,12 +299,12 @@ class TestScreenNoL2Regression:
 
 class TestScreenSnapshotErrors:
     def test_fetch_failure_returns_error(self, monkeypatch):
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: None)
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(None))
         result = screen("A", 20, None)
         assert result == {"error": "failed to fetch market snapshot", "market": "A"}
 
     def test_error_dict_passthrough(self, monkeypatch):
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: {"error": "provider down"})
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap({"error": "provider down"}))
         assert screen("US", 20, None) == {"error": "provider down"}
 
 
@@ -433,25 +422,6 @@ class TestScreenL2:
         assert [c["symbol"] for c in result["candidates"]] == ["AAA", "BBB", "CCC"]
 
 
-class TestScreenErrorList:
-    """snapshot_a/hk/us wrap a total failure as a one-row [{"error": ...}] list —
-    screen() must surface it, not run the error row through the scoring pipeline
-    as a ghost candidate."""
-
-    def test_error_list_passthrough(self, monkeypatch):
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"error": "A-share snapshot unavailable"}])
-        result = screen("A", 20, None)
-        # same error shape as the raw-None branch: error message + market key
-        assert result == {"error": "A-share snapshot unavailable", "market": "A"}
-
-    def test_error_list_no_ghost_candidate(self, monkeypatch):
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"error": "all sources down"}])
-        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
-        result = screen("US", 20, None)
-        assert "candidates" not in result
-        assert result["error"] == "all sources down"
-
-
 class TestNonFiniteSanitization:
     """An all-empty factor column min-maxes to NaN; NaN/±inf must become None —
     json.dumps would otherwise emit bare NaN/Infinity tokens that strict JSON
@@ -462,8 +432,8 @@ class TestNonFiniteSanitization:
         snapshot = _snapshot()
         for row in snapshot:
             row["turnover"] = missing_turnover
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
-        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(snapshot))
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment())
         result = screen("A", 20, None)
         assert result["returned_count"] == 3
         for c in result["candidates"]:
@@ -485,8 +455,8 @@ class TestNonFiniteSanitization:
         snapshot = _snapshot()
         for row in snapshot:
             row["turnover"] = None
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
-        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(snapshot))
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment())
         monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
         result = screen("A", 20, None, l2=True)
         # L2 rewrites final from the (coerced) numeric components — no NaN, no crash
@@ -516,7 +486,7 @@ def test_dividend_filter_and_factor_are_opt_in(monkeypatch):
             "volume_ratio": 1,
         },
     ]
-    monkeypatch.setattr(screener, "fetch_snapshot", lambda m: raw)
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw))
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
     monkeypatch.setattr(
         "value_data.dividend_ranking",
@@ -532,7 +502,7 @@ def test_dividend_filter_and_factor_are_opt_in(monkeypatch):
 
 
 def test_requested_dividend_filter_does_not_silently_skip_missing_source(monkeypatch):
-    monkeypatch.setattr(screener, "fetch_snapshot", lambda m: [{"symbol": "600519", "pe": 10}])
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap([{"symbol": "600519", "pe": 10}]))
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
 
     def fail(**_):
@@ -546,7 +516,7 @@ def test_requested_dividend_filter_does_not_silently_skip_missing_source(monkeyp
 def test_invalid_dividend_threshold_fails_before_network(monkeypatch, threshold):
     from unittest.mock import MagicMock
 
-    snapshot = MagicMock(return_value=[{"symbol": "600519", "pe": 10, "pb": 2, "market_cap": 1e10}])
+    snapshot = MagicMock(return_value=_snap([{"symbol": "600519", "pe": 10, "pb": 2, "market_cap": 1e10}]))
     monkeypatch.setattr(screener, "fetch_snapshot", snapshot)
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
     monkeypatch.setattr(
@@ -570,7 +540,7 @@ def test_hk_dividend_factor_normalizes_hk_symbols_and_preserves_basis(monkeypatc
             "volume_ratio": 1,
         }
     ]
-    monkeypatch.setattr(screener, "fetch_snapshot", lambda m: raw)
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw))
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a, **k: {"multiplier": 1})
     calls = []
 
@@ -625,7 +595,7 @@ def test_l2_missing_financials_do_not_receive_constant_quality_score(monkeypatch
 
 def test_no_factor_data_is_unknown_instead_of_zero_score(monkeypatch):
     _patch_screen(monkeypatch)
-    monkeypatch.setattr(screener, "fetch_snapshot", lambda market: [{"symbol": "TEST", "price": 10}])
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap([{"symbol": "TEST", "price": 10}]))
     for l2 in (False, True):
         monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
         candidate = screen("A", 20, None, l2=l2)["candidates"][0]
@@ -682,10 +652,12 @@ def test_l1_missing_factors_do_not_count_as_zero_before_ranking(monkeypatch):
     monkeypatch.setattr(
         screener,
         "fetch_snapshot",
-        lambda market: [
-            {"symbol": "AAA", "price": 10, "change_pct": 1, "turnover": 1000},
-            {"symbol": "BBB", "price": 10, "change_pct": 5, "turnover": 5000},
-        ],
+        lambda *a: _snap(
+            [
+                {"symbol": "AAA", "price": 10, "change_pct": 1, "turnover": 1000},
+                {"symbol": "BBB", "price": 10, "change_pct": 5, "turnover": 5000},
+            ]
+        ),
     )
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
     result = screener.screen("US", 1, None)
@@ -844,11 +816,52 @@ class TestLiquidityUsesTurnover:
         # AAA: cheap with huge share count; CCC: few shares but the largest money traded.
         for row, volume, turnover in zip(snapshot, [9e7, 5e5, 1e5], [9e7, 1e8, 3e8], strict=True):
             row.update(volume=volume, turnover=turnover, turnover_rate=1.0)
-        monkeypatch.setattr(screener, "fetch_snapshot", lambda market: snapshot)
-        monkeypatch.setattr(screener, "compute_sentiment", lambda market, snapshot=None: _neutral_sentiment())
+        monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(snapshot))
+        monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment())
         result = screen("A", 20, None)
         liq = {c["symbol"]: c["scores"]["liquidity"] for c in result["candidates"]}
         assert liq["CCC"] > liq["BBB"] > liq["AAA"]
         ccc = next(c for c in result["candidates"] if c["symbol"] == "CCC")
         assert ccc["turnover"] == 3e8
         assert "liquidity" in ccc["factor_coverage"]["available"]
+
+
+def test_snapshot_request_carries_filters_and_dividends_query_only_candidates(monkeypatch):
+    seen = {}
+
+    def snapshot(market, filters):
+        seen["filters"] = filters
+        return _snap(_snapshot())
+
+    def ranking(**kwargs):
+        seen["codes"] = kwargs["codes"]
+        return {"report_date": "2025-12-31", "items": [{"symbol": "AAA", "dividend_yield": 4}]}
+
+    monkeypatch.setattr(screener, "fetch_snapshot", snapshot)
+    monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment())
+    monkeypatch.setattr("value_data.dividend_ranking", ranking)
+    result = screen("A", 20, {"filters": {"market_cap_min": 1e10, "dividend_yield_min": 3}})
+    assert seen["filters"]["market_cap_min"] == 1e10 and seen["filters"]["pe_max"] == 100
+    assert seen["codes"] == [row["symbol"] for row in _snapshot()]
+    assert result["total_stocks"] == 3
+
+
+def test_snapshot_fetch_uses_market_snapshot_cli(monkeypatch):
+    calls = []
+    monkeypatch.setattr(screener, "_fetch_json", lambda args, timeout=None: calls.append(args) or {"rows": []})
+    screener.fetch_snapshot("US", {"market_cap_min": 5e9})
+    assert calls == [["market_snapshot", "--market", "US", "--filters", '{"market_cap_min": 5000000000.0}']]
+
+
+def test_empty_server_filtered_snapshot_is_an_empty_result(monkeypatch):
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: {"total_stocks": 5000, "rows": []})
+    monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment())
+    result = screen("A", 20, {"filters": {"pe_max": 1}})
+    assert result["candidates"] == [] and result["total_stocks"] == 5000
+    assert result["filters_applied"]["pe_max"] == 1
+
+
+def test_truncated_snapshot_warns(monkeypatch):
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: {**_snap(_snapshot()), "truncated": True})
+    monkeypatch.setattr(screener, "compute_sentiment", lambda market: _neutral_sentiment())
+    assert "raise market_cap_min" in screen("A", 20, None)["warnings"][0]
