@@ -368,6 +368,10 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     )
     if dividend_requested and market not in ("A", "HK"):
         return {"error": "dividend screening currently covers A/HK only", "market": market}
+    # Sentiment is an independent market_stats call; overlap it with the snapshot fetch.
+    pool = ThreadPoolExecutor(max_workers=1)
+    sentiment_future = pool.submit(compute_sentiment, market)
+    pool.shutdown(wait=False)
     snapshot = fetch_snapshot(market, filters)
     if isinstance(snapshot, dict) and "error" in snapshot:
         return snapshot
@@ -375,7 +379,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         return {"error": "failed to fetch market snapshot", "market": market}
 
     l2_enabled = bool(l2 or (config or {}).get("l2"))
-    sentiment = compute_sentiment(market)
+    sentiment = sentiment_future.result()
     multiplier = sentiment["multiplier"]
 
     # An empty server-filtered page still reports every requested filter as applied.

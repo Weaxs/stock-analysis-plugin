@@ -11,24 +11,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _subproc import error_message, utf8_stdio  # noqa: E402
-from stock_data import _EM_HEADERS, normalize_us_symbol  # noqa: E402
+from stock_data import _em_codetable, normalize_us_symbol  # noqa: E402
 
-_SEARCH_URL = "https://search-codetable.eastmoney.com/codetable/search/web"
 _A_TYPES = {"沪A", "深A", "京A", "科创板", "创业板"}
 
 
 def _search(query: str, count: int) -> list[dict]:
     """Eastmoney code-table search (code / name / pinyin / initials), kept to A/HK/US listed stocks."""
-    import requests
-
-    params = {"keyword": query, "pageIndex": 1, "pageSize": count, "client": "web", "clientType": "webSuggest"}
-    resp = requests.get(_SEARCH_URL, params={**params, "clientVersion": "lastest"}, headers=_EM_HEADERS, timeout=10)
-    resp.raise_for_status()
-    body = resp.json()
-    if str(body.get("code")) != "0":
-        raise ValueError(f"stock search unavailable: {str(body.get('msg'))[:100]}")
     stocks = []
-    for row in body.get("result") or []:
+    for row in _em_codetable(query, count):
         code, name, market, kind = (
             str(row.get("code", "")),
             row.get("shortName"),

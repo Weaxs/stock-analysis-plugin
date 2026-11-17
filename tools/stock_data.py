@@ -1116,6 +1116,18 @@ def _em_datacenter(report: str, filter_: str, sort: str, size: int, order: str =
     return int(body["result"].get("count") or 0), body["result"].get("data") or []
 
 
+_EM_CODETABLE = "https://search-codetable.eastmoney.com/codetable/search/web"
+
+
+def _em_codetable(keyword: str, count: int) -> list:
+    """Eastmoney code-table search rows (stocks, funds, indices and BK boards) matching a keyword."""
+    params = {"keyword": keyword, "pageIndex": 1, "pageSize": count, "client": "web", "clientType": "webSuggest"}
+    body = _get_json(_EM_CODETABLE, {**params, "clientVersion": "lastest"})
+    if str(body.get("code")) != "0":
+        raise ValueError(f"eastmoney search unavailable: {str(body.get('msg'))[:100]}")
+    return body.get("result") or []
+
+
 _EM_QUOTE_FIELDS = "f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f14,f15,f16,f17,f18,f20,f23,f24,f38,f441"
 
 
@@ -1715,18 +1727,31 @@ def _yf_info(symbol, ticker):
     return cached(f"yf-basic-info:{_yf_hk_symbol(symbol)}", DAY, fetch)
 
 
-def _financials_a_frame(symbol):
+def _financials_a_frame(symbol, periods=1, annual=False):
+    """Sina serves one page per report year, and akshare's default start_year=1900 walks every year
+    since listing (~30 requests). Start at the current year and step back only until `periods` rows exist."""
     import akshare as ak
+    import pandas as pd
 
-    df = _cached_frame(
-        f"financial-source:{symbol}", lambda: _akshare_retry(ak.stock_financial_analysis_indicator, symbol=symbol)
-    )
+    year = _cn_now().year
+    # This year's annual report never exists within this year; one step back covers reports not yet out.
+    first = year - periods if annual else year - -(-periods // 4) + 1
+    for start in (first, first - 1):
+        df = _cached_frame(
+            f"financial-source:{symbol}:{start}",
+            lambda start=start: _akshare_retry(
+                ak.stock_financial_analysis_indicator, symbol=symbol, start_year=str(start)
+            ),
+        )
+        dates = df["日期"].astype(str) if "日期" in df.columns else pd.Series(dtype=str)
+        if (dates.str.endswith("12-31").sum() if annual else len(dates)) >= periods:
+            break
     return df.sort_values("日期", ascending=False) if "日期" in df.columns else df
 
 
 def financials_a(symbol: str, periods: int = 1, annual: bool = False) -> dict:
     try:
-        df = _financials_a_frame(symbol)
+        df = _financials_a_frame(symbol, periods, annual)
         if annual and not df.empty:
             df = df[df["日期"].astype(str).str.endswith("12-31")]
         if df is None or df.empty:
@@ -2623,17 +2648,20 @@ def _constituents_em(sector: str, board_kind: str) -> dict:
     """Eastmoney industry/concept board constituents via akshare, fuzzy-resolved."""
     import akshare as ak
 
-    if board_kind == "industry":
-        name_fn, cons_fn = ak.stock_board_industry_name_em, ak.stock_board_industry_cons_em
-    else:
-        name_fn, cons_fn = ak.stock_board_concept_name_em, ak.stock_board_concept_cons_em
-    names_df = _akshare_retry(name_fn)
-    if names_df is None or names_df.empty or "板块名称" not in names_df.columns:
-        raise ValueError(f"eastmoney {board_kind} board list unavailable")
-    exact = _fuzzy_match_sector(sector, [str(n) for n in names_df["板块名称"].tolist()])
+    cons_fn = ak.stock_board_industry_cons_em if board_kind == "industry" else ak.stock_board_concept_cons_em
+    kind = "行业" if board_kind == "industry" else "概念"
+    # Search the board by name (one request) instead of paging the whole board list (~5s per kind).
+    keyword = re.sub(r"(板块|行业|概念)$", "", re.sub(r"\s+", "", sector)) or sector
+    boards = {
+        str(r.get("shortName")): str(r.get("code"))
+        for r in _akshare_retry(_em_codetable, keyword, 50)
+        if r.get("market") == 90 and r.get("securityTypeName") == kind and str(r.get("code", "")).startswith("BK")
+    }
+    exact = _fuzzy_match_sector(sector, list(boards))
     if not exact:
         raise ValueError(f"no eastmoney {board_kind} board matching '{sector}'")
-    df = _akshare_retry(cons_fn, symbol=exact)
+    # A BK code also skips akshare's own name→code lookup, which pages the whole board list again.
+    df = _akshare_retry(cons_fn, symbol=boards[exact])
     if df is None or df.empty:
         raise ValueError(f"eastmoney {board_kind} board '{exact}' returned no constituents")
     constituents = _constituent_rows(df)
@@ -3190,12 +3218,17 @@ def _market_stats_a() -> dict:
 
 def _market_stats_clist(market: str) -> dict:
     """HK/US breadth: the up/down boundaries of the change-ranked list, found by binary search."""
+    from concurrent.futures import ThreadPoolExecutor
+
     total, gainers = _movers(market, True)
-    _, losers = _movers(market, False)
     if not total:
         raise ValueError(f"eastmoney {market} list unavailable")
-    up = _leading_count(market, total, True)
-    down = _leading_count(market, total, False)
+    # The two binary searches (~15 sequential requests each) and the loser list are independent.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        losers_f = pool.submit(_movers, market, False)
+        up_f, down_f = (pool.submit(_leading_count, market, total, rising) for rising in (True, False))
+        _, losers = losers_f.result()
+        up, down = up_f.result(), down_f.result()
     flat = total - up - down
     return {
         "total_stocks": total,

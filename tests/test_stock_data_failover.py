@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 from argparse import Namespace
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1467,14 +1467,24 @@ class TestFuzzyMatchSector:
 
 
 class TestConstituentsEm:
-    """Eastmoney board constituents via akshare, with fuzzy name resolution."""
+    """Eastmoney board constituents: board searched by name, fuzzy-resolved, fetched by BK code."""
+
+    @pytest.fixture(autouse=True)
+    def _search(self, monkeypatch):
+        self.keywords = []
+        self.rows = []
+        monkeypatch.setattr(
+            "tools.stock_data._em_codetable", lambda keyword, count: self.keywords.append(keyword) or self.rows
+        )
 
     def _mock_ak(self, industry_names, concept_names, cons_df):
-        import pandas as pd
-
+        self.rows = [
+            {"code": f"BK{i:04d}", "shortName": name, "market": 90, "securityTypeName": kind}
+            for i, (name, kind) in enumerate(
+                [(n, "行业") for n in industry_names] + [(n, "概念") for n in concept_names]
+            )
+        ] + [{"code": "600519", "shortName": "贵州茅台", "market": 1, "securityTypeName": "沪A"}]
         mock_ak = MagicMock()
-        mock_ak.stock_board_industry_name_em.return_value = pd.DataFrame({"板块名称": industry_names})
-        mock_ak.stock_board_concept_name_em.return_value = pd.DataFrame({"板块名称": concept_names})
         mock_ak.stock_board_industry_cons_em.return_value = cons_df
         mock_ak.stock_board_concept_cons_em.return_value = cons_df
         return mock_ak
@@ -1491,7 +1501,8 @@ class TestConstituentsEm:
         assert result["source"] == "eastmoney"
         assert result["count"] == 2
         assert result["constituents"][0] == {"code": "600276", "name": "恒瑞医药"}
-        mock_ak.stock_board_industry_cons_em.assert_called_once_with(symbol="医药生物")
+        mock_ak.stock_board_industry_cons_em.assert_called_once_with(symbol="BK0000")
+        mock_ak.stock_board_industry_name_em.assert_not_called()
 
     def test_fuzzy_resolves_concept_board(self):
         import pandas as pd
@@ -1502,7 +1513,7 @@ class TestConstituentsEm:
             result = _constituents_em("创新", "concept")
         assert result["sector"] == "创新药"
         assert result["board_type"] == "concept"
-        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="创新药")
+        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="BK0002")
 
     def test_intel_phrase_with_suffix_resolves_board(self):
         """Spec scenario: the intel keyword 「创新药板块」 resolves to the board 创新药."""
@@ -1511,9 +1522,10 @@ class TestConstituentsEm:
         cons_df = pd.DataFrame({"代码": ["600276"], "名称": ["恒瑞医药"]})
         mock_ak = self._mock_ak(["半导体"], ["创新药"], cons_df)
         with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = _constituents_em("创新药板块", "concept")
+            result = _constituents_em("创新药 板块", "concept")
         assert result["sector"] == "创新药"
-        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="创新药")
+        assert self.keywords == ["创新药"]
+        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="BK0001")
 
     def test_no_matching_board_raises(self):
         import pandas as pd
@@ -1525,6 +1537,16 @@ class TestConstituentsEm:
             pytest.raises(ValueError, match="no eastmoney industry board"),
         ):
             _constituents_em("创新药", "industry")
+
+    def test_board_of_other_kind_is_not_matched(self):
+        import pandas as pd
+
+        mock_ak = self._mock_ak([], ["白酒"], pd.DataFrame({"代码": ["600519"], "名称": ["贵州茅台"]}))
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no eastmoney industry board"),
+        ):
+            _constituents_em("白酒", "industry")
 
     def test_empty_constituents_raises(self):
         import pandas as pd
@@ -3301,6 +3323,55 @@ def _financials_a_df():
             "流动比率": [3.0, 2.9, 2.8],
         }
     )
+
+
+class TestFinancialsAStartYear:
+    """Sina pages are per report year: fetch from the current year back only as far as periods need."""
+
+    def _run(self, monkeypatch, published, **kwargs):
+        import pandas as pd
+
+        from tools import stock_data
+
+        starts = []
+
+        def fake(symbol, start_year):
+            starts.append(int(start_year))
+            return pd.DataFrame(
+                {"日期": [d for d in published if int(d[:4]) >= int(start_year)], "净资产收益率(%)": 1.0}
+            )
+
+        mock_ak = MagicMock()
+        mock_ak.stock_financial_analysis_indicator.side_effect = fake
+        monkeypatch.setattr(stock_data, "_cn_now", lambda: datetime(2026, 11, 17))
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = stock_data.financials_a("600519", **kwargs)
+        return starts, result
+
+    def test_falls_back_one_year_when_current_year_not_out(self, monkeypatch):
+        starts, result = self._run(monkeypatch, ["2025-09-30", "2025-06-30"])
+        assert starts == [2026, 2025]
+        assert result["report_date"] == "2025-09-30"
+
+    def test_default_fetches_current_year_only(self, monkeypatch):
+        starts, result = self._run(monkeypatch, ["2026-09-30", "2026-06-30", "2025-12-31"])
+        assert starts == [2026]
+        assert result["report_date"] == "2026-09-30"
+
+    def test_quarterly_periods_span_years(self, monkeypatch):
+        starts, result = self._run(
+            monkeypatch,
+            ["2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30"]
+            + ["2025-06-30", "2025-03-31", "2024-12-31"],
+            periods=8,
+        )
+        assert starts == [2025, 2024]
+        assert result["available_periods"] == 8
+
+    def test_annual_steps_back_until_report_published(self, monkeypatch):
+        starts, result = self._run(monkeypatch, ["2026-03-31", "2025-09-30", "2024-12-31"], annual=True)
+        assert starts == [2025, 2024]
+        assert result["report_date"] == "2024-12-31"
 
 
 class TestFinancialsPeriodsA:

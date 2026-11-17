@@ -64,7 +64,7 @@ class TestSearch:
 
     def test_provider_error_raises_runtime_error(self, monkeypatch):
         _search_response(monkeypatch, None, code="400")
-        with pytest.raises(RuntimeError, match="stock search unavailable"):
+        with pytest.raises(RuntimeError, match="eastmoney search unavailable"):
             name_resolver.resolve("贵州茅台")
 
     def test_one_request_per_query(self, monkeypatch):
