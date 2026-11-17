@@ -28,6 +28,8 @@ ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始�
 
 股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。A 股排行/选股使用指定报告期已实施方案股息率；HK 指定 `market=HK` 时使用 HKEX/LSEG 公布的年度股息率（百分数），不是当前价 TTM；HK `report_date` 仅支持数据源可得年度的年末。港股股息选股因子也使用同一年度口径。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
 
+CDS 指数（`get_cds_index`）只提供市场级信用风险偏好，不是个股 CDS。`source=cn` 读取[中国货币网 CDS 指数](https://www.chinamoney.com.cn/chinese/cdsindx/)的 CFETS-SHCH 高等级、民企、长三角、科创、碳中和指数（bp），源站仅提供约一年历史，按不超过一个月的窗口分页查询并缓存 4 小时；传 `index` 时只为匹配到的指数拉历史，`tenor` 只保留该期限。`source=global` 读取 [DTCC 公开披露](https://pddata.dtcc.com/ppd/cftcdashboard)的 CFTC 信用类日终文件，只取新成交、非组合、利差记号为小数的 CDX.NA.IG、CDX.NA.HY、iTraxx Europe、iTraxx Europe Crossover，窗口截止到 DTCC 最新已发布的工作日文件（通常是前一个 UTC 工作日，周末文件不含指数成交，直接跳过），按日取成交最多的到期日（当前 5 年系列）的中位数；CDX.NA.HY 按价格报价，价格下跌表示信用走弱。指数换系列后到期日和成分都会变化，窗口统计只比较最新系列；`index` 只筛选输出，每个日文件含全部指数，仍需全部下载。这是公开成交的中位数，不是官方收盘价；过往日文件缓存一周。
+
 数据源参考：[AKShare股票接口](https://akshare.akfamily.xyz/data/stock/stock.html)、[指数接口](https://github.com/akfamily/akshare/blob/main/docs/data/index/index.md)、[基金接口](https://github.com/akfamily/akshare/blob/main/docs/data/fund/fund_public.md)、[港交所南向持股](https://www.hkexnews.hk/sdw/search/mutualmarket.aspx?t=hk)、[HKEX 年度股息率](https://www.hkex.com.hk/Listing/Sustainability/Shareholder-Value-in-Focus/Dividend-Yield-Ratio?sc_lang=en)、[理杏仁指数基本面接口](https://www.lixinger.com/api/open-api/html-doc/cn/index/fundamental)。
 
 ## 公告与港美股研究数据

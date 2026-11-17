@@ -495,6 +495,23 @@ def get_index_valuation(args: dict, **kwargs) -> str:
     return _run("value_data.py", ["index_valuation", args["symbol"], "--years", args.get("years", 5)])
 
 
+def get_cds_index(args: dict, **kwargs) -> str:
+    return _run(
+        "credit_data.py",
+        [
+            "cds_index",
+            "--source",
+            args.get("source", "cn"),
+            "--days",
+            args.get("days", 30),
+            "--index",
+            args.get("index", ""),
+            "--tenor",
+            args.get("tenor", ""),
+        ],
+    )
+
+
 def get_earnings_calendar(args: dict, **kwargs) -> str:
     return _run(
         "value_data.py",

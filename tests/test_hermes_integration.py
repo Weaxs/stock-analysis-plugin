@@ -121,6 +121,7 @@ EXPECTED_TOOLS = sorted(
         "get_insider_trades",
         "get_valuation_history",
         "get_index_valuation",
+        "get_cds_index",
         "get_earnings_calendar",
         "get_shareholder_structure",
         "get_etf_details",
@@ -414,6 +415,15 @@ def test_value_cli_dispatch(monkeypatch, name, args, command):
     getattr(hermes_tools, name)(args)
     assert calls[0][0] == "value_data.py"
     assert calls[0][1][0] == command
+
+
+def test_cds_index_dispatch(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hermes_tools, "_run", lambda script, argv: calls.append((script, argv)) or "{}")
+    hermes_tools.get_cds_index({"source": "cn", "days": 60, "index": "民企", "tenor": "1Y"})
+    assert calls == [
+        ("credit_data.py", ["cds_index", "--source", "cn", "--days", 60, "--index", "民企", "--tenor", "1Y"])
+    ]
 
 
 def test_financial_and_margin_flags(monkeypatch):

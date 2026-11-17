@@ -373,6 +373,36 @@
     }
   },
   {
+    "name": "get_cds_index",
+    "description": "查询市场级CDS指数作为信用风险偏好背景（非个股CDS或交易信号）。source=cn返回中国货币网CFETS-SHCH高等级/民企/长三角/科创/碳中和在岸CDS指数最新期限曲线（bp）与窗口内各期限变化（percentile为窗口内≤最新值的百分比0..100）；source=global取DTCC公开成交，按日汇总当前5Y系列CDX.NA.IG、iTraxx Europe/Crossover利差（bp）与CDX.NA.HY价格（价格下跌=信用走弱），只比较同一到期系列，是成交中位数而非官方收盘。用index/tenor只取需要的指数和期限，cn历史只为匹配到的指数分页拉取。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "cn",
+            "global"
+          ],
+          "description": "cn=中国在岸CDS指数（默认），global=DTCC公开成交的CDX/iTraxx"
+        },
+        "days": {
+          "type": "number",
+          "description": "回看自然日1..90，默认30；global截止到DTCC最新已发布工作日文件"
+        },
+        "index": {
+          "type": "string",
+          "description": "指数名，精确匹配优先、否则包含匹配，如民企、科创、高等级、CDX.NA.HY、ITRAXX EUROPE；省略返回全部"
+        },
+        "tenor": {
+          "type": "string",
+          "description": "期限，如3M、1Y、5Y；cn按期限过滤，global仅5Y；省略返回全部期限"
+        }
+      },
+      "required": []
+    }
+  },
+  {
     "name": "get_earnings_calendar",
     "description": "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日）；US/JP需symbol并返回yfinance供应商预计日期（provider_only，非官方确认）。HK可按已知财政期末过滤，未知期次与US/JP请求report_date时另列unverified_schedules；KR/TW不可用。",
     "parameters": {

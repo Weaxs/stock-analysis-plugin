@@ -4,7 +4,7 @@
 // (defineTool is identity, so the options object is captured verbatim).
 // Verifies:
 //   - the plugin exports the cordis function-plugin form (name/inject/apply)
-//   - all 74 tools register, aligned with the canonical cross-host tool list
+//   - all 75 tools register, aligned with the canonical cross-host tool list
 //     (openclaw.plugin.json contracts.tools — the repo invariant says every
 //     host exposes the same set)
 //   - the dsh bundle manifest (package.json dsh.bundle.patch + cordis.patch.yml)
@@ -187,6 +187,7 @@ const sampleArgs: Record<string, Record<string, unknown>> = {
   get_insider_trades: { symbol: "AAPL", days: 30, top: 2 },
   get_valuation_history: { symbol: "600519" },
   get_index_valuation: { symbol: "000300" },
+  get_cds_index: { source: "cn", days: 60, index: "民企", tenor: "1Y" },
   get_earnings_calendar: { report_date: "2026-09-30", symbol: "600519" },
   get_shareholder_structure: { symbol: "600519", report_date: "2026-06-30" },
   get_etf_details: { symbol: "510300", benchmark: "sh000300" },

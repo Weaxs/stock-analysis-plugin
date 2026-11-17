@@ -24,7 +24,7 @@
 - **策略视角**：缠论、波浪理论、龙头战法、情绪周期等 18 套方法论，以 Skill 形式按需调用。
 - **dsh 仪表盘**：在 dsh Web / Desktop 侧栏看自选股和六个市场的行情，后台预热，打开即显示。
 
-一共 74 个工具、21 个 Skills，11 个数据源自动容灾。大部分功能不需要任何 API Key。
+一共 75 个工具、21 个 Skills，11 个数据源自动容灾。大部分功能不需要任何 API Key。
 
 ## 快速开始
 
@@ -165,11 +165,11 @@
 
 ## 工具列表
 
-74 个工具按用途分组：
+75 个工具按用途分组：
 
 | 类别 | 数量 | 主要内容 |
 |------|------|----------|
-| 数据获取 | 28 | K 线、报价、基金净值、资金流、财务、板块、涨停池、龙虎榜、两融、估值历史、股东、ETF、股息、公告、SEC |
+| 数据获取 | 29 | K 线、报价、基金净值、资金流、财务、板块、涨停池、龙虎榜、两融、估值历史、股东、ETF、股息、公告、SEC、CDS 指数 |
 | 分析计算 | 9 | 技术指标、K 线形态、量价、异动、信号胜率、趋势与行业轮动研究 |
 | 筛选与回测 | 8 | 多因子选股、风险筛查、策略回测、市场状态、日度复盘、自选股批量分析 |
 | 搜索与舆情 | 5 | 新闻搜索、综合情报、社交情绪、正文提取 |
@@ -178,7 +178,7 @@
 | 无状态研究与风险计算 | 9 | 同行比较、公告变更、组合风险、调仓计划、仓位计算、DCF 估值、事件研究、回测稳健性 |
 
 <details>
-<summary>完整工具列表（74 个）</summary>
+<summary>完整工具列表（75 个）</summary>
 
 #### 数据获取
 
@@ -189,6 +189,7 @@
 | `get_insider_trades` | SEC 股票 ticker/发行人 CIK 的 Form 4 内部人交易、代码和脚注 |
 | `get_valuation_history` | A/HK/US PE-TTM/PB 历史、正值分位与估值 Band，实际采样窗口（美股由 SEC 申报与周收盘派生） |
 | `get_index_valuation` | 中国指数 PE/PB 历史水位；中证官方多年滚动 PE；可选理杏仁补充 PB |
+| `get_cds_index` | 市场级 CDS 指数：中国在岸 CFETS-SHCH 指数期限曲线，或 DTCC 公开成交的 CDX/iTraxx 当前系列日中位数；窗口变化与分位，可按 index/tenor 只取单个指数和期限；非个股 CDS |
 | `get_earnings_calendar` | A 股报告期披露与业绩预告；HK 董事会排期；US/JP yfinance 预计日期（provider_only，非官方确认） |
 | `get_shareholder_structure` | A 股股东户数/十大流通股东变化/报告期北向名义持股；HK 南向持股 |
 | `get_etf_details` | A 股 ETF 净值折溢价、规模变动、披露持仓、可选基准成分与跟踪误差 |
@@ -401,6 +402,7 @@ python tools/value_data.py earnings_calendar --report-date 2026-09-30 --symbol 6
 python tools/value_data.py shareholder_structure 600519 --report-date 2026-06-30
 python tools/value_data.py shareholder_structure 0700.HK
 python tools/value_data.py index_valuation 000300 --years 5
+python tools/credit_data.py cds_index --source cn --days 30
 python tools/value_data.py etf_details 510300 --benchmark sh000300 --days 60
 python tools/value_data.py etf_details 510300 --include-full-holdings
 python tools/stock_data.py margin_trading 600519 --days 10 --include-ratio
@@ -459,7 +461,7 @@ sort_order: "desc"
 npm install                                   # 同时构建仓库 .venv
 .venv/bin/python -m pytest -q                 # Python 单元测试（离线）
 npx tsc --noEmit                              # TypeScript 类型检查
-npx tsx tests/test_adapter_parity.ts          # 四个宿主的 74 个工具和参数映射一致
+npx tsx tests/test_adapter_parity.ts          # 四个宿主的 75 个工具和参数映射一致
 npm run build:openclaw && npm run build:dsh   # 构建 OpenClaw / dsh bundle
 ```
 
@@ -471,12 +473,12 @@ npm run build:openclaw && npm run build:dsh   # 构建 OpenClaw / dsh bundle
 ```
 stock-analysis/
 ├── pi/                              # Pi Agent Extension
-│   └── index.ts                     #   注册 74 个工具 + 21 个 skill
+│   └── index.ts                     #   注册 75 个工具 + 21 个 skill
 ├── hermes/                          # Hermes Agent Plugin
 │   ├── plugin.yaml                  #   插件清单
 │   ├── __init__.py                  #   register(ctx) 入口
 │   ├── schemas.py                   #   读取 tools/tool_schemas.json
-│   └── tools.py                     #   74 个 handler → subprocess 调 CLI
+│   └── tools.py                     #   75 个 handler → subprocess 调 CLI
 ├── openclaw/                        # OpenClaw Plugin
 │   ├── openclaw.plugin.json         #   manifest（contracts.tools）
 │   ├── package.json                 #   含 openclaw 块（pluginApi/SDK 版本）
@@ -491,7 +493,7 @@ stock-analysis/
 │
 ├── mcp_host/                        # MCP stdio 服务器（复用 Hermes schema/handler）
 ├── tools/                           # 共享 Python CLI 工具
-│   ├── tool_schemas.json            #   74 个工具的名称/描述/参数（各宿主共用）
+│   ├── tool_schemas.json            #   75 个工具的名称/描述/参数（各宿主共用）
 │   ├── stock_data.py                #   行情 / 资金流 / 新闻 / 财务 / 短线情绪
 │   ├── signal_tracker.py            #   AI 买卖建议回测闭环（本地 JSONL 存储）
 │   ├── technical.py                 #   技术指标分析
