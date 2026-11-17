@@ -477,6 +477,7 @@ try {
   const unscopedClient = clientSource.replaceAll(pkg.name, "dsh-stock-analysis");
   assert(unscopedClient.includes('id: "dsh-stock-analysis"'), "the unscoped bundle must register the unscoped client id");
   assert(!unscopedClient.includes(`id: "${pkg.name}"`), "the scoped id must not remain after the twin rewrite");
+  assert(clientSource.includes(`openBundle?.("${pkg.name}")`), "the update pill opens this bundle's plugin page, rewritten for the twin");
 
   console.log("dsh dashboard: snapshot, warmer freshness, failures, watchlist, security, assets, and package manifest passed");
 } finally {

@@ -126,6 +126,8 @@ const state = {
   lastOk: 0,
   fromCache: false,
   signature: "",
+  // Set by the dsh shell when its plugin manager can open this bundle's page (with its Update button).
+  pluginPage: false,
 };
 
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -385,11 +387,10 @@ function renderVersion() {
   const update = $("update");
   update.hidden = !plugin?.latest;
   if (!plugin?.latest) return;
-  update.replaceChildren(
-    document.createTextNode(`有新版本 v${plugin.latest}（当前 v${plugin.version}）。运行 `),
-    el("code", "", `dsh plugin --profile <profile> add ${plugin.name}@latest`),
-    document.createTextNode(" 后重启 dsh。"),
-  );
+  $("update-version").textContent = `↑ v${plugin.latest}`;
+  const tip = `新版本 v${plugin.latest} 已发布（当前 v${plugin.version}），${state.pluginPage ? "点击前往插件页更新" : "点击查看发布说明"}`;
+  update.title = tip;
+  update.setAttribute("aria-label", tip);
 }
 
 function staleTitle(row: IndexRow): string {
@@ -1051,16 +1052,23 @@ $("market-tabs").addEventListener("keydown", event => {
 // Host theme: the parent dsh shell posts its scheme and palette tokens.
 const initialTheme = new URLSearchParams(location.search).get("theme");
 if (initialTheme === "light" || initialTheme === "dark") document.documentElement.dataset.theme = initialTheme;
-window.addEventListener("message", (event: MessageEvent<{ type?: string; scheme?: string; palette?: Record<string, unknown> }>) => {
+window.addEventListener("message", (event: MessageEvent<{ type?: string; scheme?: string; palette?: Record<string, unknown>; pluginPage?: unknown }>) => {
   if (event.origin !== location.origin || event.source !== window.parent) return;
   const message = event.data;
   if (!message || message.type !== "stock-analysis:theme" || (message.scheme !== "light" && message.scheme !== "dark")) return;
   document.documentElement.dataset.theme = message.scheme;
+  state.pluginPage = message.pluginPage === true;
+  renderVersion();
   for (const key of ["bg", "surface", "surfaceSubtle", "text", "muted", "border", "accent", "onAccent"]) {
     const value = message.palette?.[key];
     const property = key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
     if (typeof value === "string" && value.length < 300) document.documentElement.style.setProperty(`--${property}`, value);
   }
+});
+$("update").addEventListener("click", event => {
+  if (!state.pluginPage) return;
+  event.preventDefault();
+  window.parent.postMessage({ type: "stock-analysis:open-plugin" }, location.origin);
 });
 
 document.addEventListener("visibilitychange", () => {

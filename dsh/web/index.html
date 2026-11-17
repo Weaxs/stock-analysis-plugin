@@ -18,6 +18,10 @@
       </div>
       <p id="status" class="status" role="status" aria-live="polite">正在连接行情服务…</p>
       <div class="bar-actions">
+        <a id="update" class="update-pill" href="https://github.com/Weaxs/stock-analysis-plugin/releases/latest" target="_blank" rel="noreferrer" hidden>
+          <span class="update-label">新版本</span>
+          <span id="update-version" class="update-version"></span>
+        </a>
         <button id="refresh" class="btn ghost" type="button" title="立即刷新全部行情">
           <svg class="refresh-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M18.4 15a7 7 0 1 1-.8-7.8L20 9"/></svg>
           <span>刷新</span>
@@ -28,7 +32,6 @@
         </button>
       </div>
     </header>
-    <p id="update" class="update" role="status" hidden></p>
 
     <form id="add-form" class="add" hidden>
       <label class="sr-only" for="symbol-input">股票代码，多个用逗号分隔</label>

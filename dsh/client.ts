@@ -22,6 +22,7 @@ interface ThemeContext {
 }
 
 interface ClientContext {
+  get(name: "pluginNavigation"): { openBundle?(packageName: string): void } | undefined;
   inject(deps: ["theme"], callback: (ctx: ThemeContext) => void): void;
   slots: {
     inject(name: string, callback: () => unknown): void;
@@ -78,11 +79,25 @@ window.__ModuleLoader__.load({
             .filter(([, value]) => value),
         );
       };
-      const post = (frame: HTMLIFrameElement) => {
-        if (scheme && frame.contentWindow) {
-          frame.contentWindow.postMessage({ type: "stock-analysis:theme", scheme, palette: palette() }, location.origin);
+      // Optional plugin-manager service; its page has the registry Update button for this bundle.
+      const pluginPage = () => {
+        try {
+          const navigation = ctx.get("pluginNavigation");
+          return typeof navigation?.openBundle === "function" ? navigation : null;
+        } catch {
+          return null;
         }
       };
+      const post = (frame: HTMLIFrameElement) => {
+        if (scheme && frame.contentWindow) {
+          frame.contentWindow.postMessage({ type: "stock-analysis:theme", scheme, palette: palette(), pluginPage: Boolean(pluginPage()) }, location.origin);
+        }
+      };
+      window.addEventListener("message", (event: MessageEvent<{ type?: string }>) => {
+        if (event.origin !== location.origin || event.data?.type !== "stock-analysis:open-plugin") return;
+        if (![...frames].some(frame => frame.contentWindow === event.source)) return;
+        pluginPage()?.openBundle?.("@weaxs/dsh-stock-analysis");
+      });
       ctx.inject(["theme"], c => {
         const push = (snapshot: ThemeSnapshot) => {
           scheme = snapshot.active.colorScheme;
