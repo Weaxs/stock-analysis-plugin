@@ -39,6 +39,22 @@ const RIBBON: Array<[Region, string]> = [
   ["jp", "^N225"], ["kr", "^KS11"], ["tw", "^TWII"],
 ];
 const TRADING_PHASES = new Set(["morning", "afternoon", "intraday"]);
+const UPDATE_CHECK_MS = 6 * 60 * MINUTE;
+
+export interface PluginVersion {
+  name: string;
+  version: string;
+  latest?: () => Promise<string | null>;
+}
+
+export function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (value: string) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
+  const next = parse(candidate);
+  const now = parse(current);
+  if (!next || !now) return false;
+  const index = next.findIndex((part, i) => part !== now[i]);
+  return index >= 0 && next[index] > now[index];
+}
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -250,6 +266,7 @@ export interface DashboardOptions {
   webDir: string;
   /** Start the resident background warmer (production). Tests drive `tick()` directly. */
   warm?: boolean;
+  plugin?: PluginVersion;
 }
 
 type DashboardHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<void>) & {
@@ -430,6 +447,15 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   const kick = () => { void tick(); };
 
+  let latestVersion: string | null = null;
+  let latestCheckedAt = 0;
+  function checkLatest() {
+    const plugin = options.plugin;
+    if (!plugin?.latest || Date.now() - latestCheckedAt < UPDATE_CHECK_MS) return;
+    latestCheckedAt = Date.now();
+    plugin.latest().then(value => { latestVersion = value; }, () => { /* offline: keep the last known result */ });
+  }
+
   function slotView(key: string) {
     const entry = slots.get(key);
     return {
@@ -456,6 +482,8 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     viewedRegion = region;
     const symbols = readWatchlist(watchlistFile);
     kick();
+    checkLatest();
+    const plugin = options.plugin;
     return {
       watchlist: symbols.map(symbol => {
         const quote = slotView(`quote:${symbol}`);
@@ -477,6 +505,11 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
       stats: slotView("stats"),
       sectors: slotView("sectors"),
       pending: limiter.queued,
+      plugin: plugin ? {
+        name: plugin.name,
+        version: plugin.version,
+        latest: latestVersion && isNewerVersion(latestVersion, plugin.version) ? latestVersion : null,
+      } : null,
       fetchedAt: new Date().toISOString(),
     };
   }
@@ -569,6 +602,27 @@ interface WebServerContext extends Context {
   };
 }
 
+function installedPlugin(here: string): PluginVersion | undefined {
+  // Source: dsh/package.json next to this file; published: dist/index.js sits one level below it.
+  for (const file of [join(here, "package.json"), join(here, "..", "package.json")]) {
+    try {
+      const { name, version } = JSON.parse(readFileSync(file, "utf8")) as { name?: unknown; version?: unknown };
+      if (typeof name === "string" && name.endsWith("dsh-stock-analysis") && typeof version === "string") {
+        return { name, version, latest: () => npmLatest(name) };
+      }
+    } catch { /* try the next layout */ }
+  }
+  return undefined;
+}
+
+async function npmLatest(name: string): Promise<string | null> {
+  const registry = (process.env.npm_config_registry || "https://registry.npmjs.org").replace(/\/+$/, "");
+  const res = await fetch(`${registry}/${name.replace("/", "%2f")}/latest`, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) return null;
+  const { version } = await res.json() as { version?: unknown };
+  return typeof version === "string" ? version : null;
+}
+
 export function registerDashboard(ctx: Context, runPy: RunPy) {
   // Unit fixtures and headless profiles do not necessarily expose the Web carrier.
   if (typeof ctx.inject !== "function") return;
@@ -577,11 +631,12 @@ export function registerDashboard(ctx: Context, runPy: RunPy) {
   const webDir = [join(here, "web"), join(here, "dist", "web")].find(dir => existsSync(join(dir, "app.js"))) ?? join(here, "web");
   const dataRoot = process.env.DSH_HOME || join(homedir(), ".dsh");
   const watchlistFile = process.env.STOCK_WATCHLIST_FILE || join(dataRoot, "stock-analysis", "watchlist.json");
+  const plugin = installedPlugin(here);
   ctx.inject(["webServer"], nested => {
     const c = nested as WebServerContext;
     c.effect(() => {
       // The warmer lives exactly as long as the route: no Web carrier, no background requests.
-      const handler = createDashboardHandler({ runPy, watchlistFile, webDir, warm: true });
+      const handler = createDashboardHandler({ runPy, watchlistFile, webDir, warm: true, plugin });
       const disposeRoute = c.webServer.register({ kind: "prefix", path: DASHBOARD_BASE, handler });
       return () => {
         handler.dispose();

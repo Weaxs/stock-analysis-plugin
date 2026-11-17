@@ -28,6 +28,7 @@
         </button>
       </div>
     </header>
+    <p id="update" class="update" role="status" hidden></p>
 
     <form id="add-form" class="add" hidden>
       <label class="sr-only" for="symbol-input">股票代码，多个用逗号分隔</label>
@@ -80,7 +81,7 @@
       <div id="market-body" class="market-body" role="tabpanel" aria-labelledby="market-heading"></div>
     </section>
 
-    <footer class="foot">报价可能延迟，悬停名称可查看来源与报价时间。交易时段内有页面打开时约每 30 秒更新一次，后台每 5 分钟预热；30 日走势为最近 30 个有效交易日收盘价。</footer>
+    <footer class="foot">报价可能延迟，悬停名称可查看来源与报价时间。交易时段内有页面打开时约每 30 秒更新一次，后台每 5 分钟预热；30 日走势为最近 30 个有效交易日收盘价。<span id="version"></span></footer>
   </div>
   <div id="tip" class="tip" role="tooltip" hidden></div>
 </body>

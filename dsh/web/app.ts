@@ -87,6 +87,7 @@ interface Snapshot {
   stats: Slot<Stats>;
   sectors: Slot<{ top: Sector[]; bottom: Sector[] }>;
   pending: number;
+  plugin?: { name: string; version: string; latest: string | null } | null;
   fetchedAt: string;
 }
 
@@ -376,6 +377,19 @@ function renderStatus() {
 
 function isStale(row: IndexRow): boolean {
   return Boolean(row.error && row.quote);
+}
+
+function renderVersion() {
+  const plugin = state.snap?.plugin;
+  $("version").textContent = plugin ? `${plugin.name} v${plugin.version}` : "";
+  const update = $("update");
+  update.hidden = !plugin?.latest;
+  if (!plugin?.latest) return;
+  update.replaceChildren(
+    document.createTextNode(`有新版本 v${plugin.latest}（当前 v${plugin.version}）。运行 `),
+    el("code", "", `dsh plugin --profile <profile> add ${plugin.name}@latest`),
+    document.createTextNode(" 后重启 dsh。"),
+  );
 }
 
 function staleTitle(row: IndexRow): string {
@@ -839,6 +853,7 @@ function render(flash = new Map<string, Direction>()) {
   $("tip").hidden = true;
   $("watch-count").textContent = state.snap ? `${state.snap.watchlist.length} / 30` : "";
   renderStatus();
+  renderVersion();
   renderRibbon();
   renderPulse();
   renderFilters();

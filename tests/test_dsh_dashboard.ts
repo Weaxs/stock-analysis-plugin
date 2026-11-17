@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createDashboardHandler,
   dashboardQuoteSymbol,
+  isNewerVersion,
   normalizeWatchlist,
   readWatchlist,
   symbolRegion,
@@ -165,6 +166,27 @@ try {
   }
 
   // ---------- warm-up fetches the fixed job set within the worker budget ----------
+  {
+    assert(isNewerVersion("0.2.12", "0.2.11"));
+    assert(isNewerVersion("1.0.0", "0.9.99"));
+    assert(!isNewerVersion("0.2.11", "0.2.11"));
+    assert(!isNewerVersion("0.2.10", "0.2.11"));
+    assert(!isNewerVersion("0.3.0-rc.1", "0.2.11"), "prereleases are not offered as updates");
+    const versionFile = join(temp, "version", "watchlist.json");
+    writeWatchlist(versionFile, []);
+    let checks = 0;
+    const plugin = { name: "dsh-stock-analysis", version: "0.2.11", latest: async () => { checks++; return "0.2.12"; } };
+    const versioned = createDashboardHandler({ runPy: async () => "{}", watchlistFile: versionFile, webDir, plugin });
+    assert.deepEqual((await call(versioned, get("/stock-analysis/api/snapshot"))).json().plugin, { name: "dsh-stock-analysis", version: "0.2.11", latest: null });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await call(versioned, get("/stock-analysis/api/snapshot"))).json().plugin.latest, "0.2.12");
+    assert.equal(checks, 1, "the registry is checked at most once per interval");
+    versioned.dispose();
+    const unversioned = createDashboardHandler({ runPy: async () => "{}", watchlistFile: versionFile, webDir });
+    assert.equal((await call(unversioned, get("/stock-analysis/api/snapshot"))).json().plugin, null);
+    unversioned.dispose();
+  }
+
   const file = join(temp, "api", "watchlist.json");
   writeWatchlist(file, ["600519", "AAPL", "00700.HK"]);
   const py = fakePython();
