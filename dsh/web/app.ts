@@ -84,7 +84,7 @@ interface Snapshot {
   ribbon: IndexRow[];
   phases: Partial<Record<Region, Phase | null>>;
   market: { region: Region; indices: IndexRow[] };
-  stats: Slot<Stats>;
+  stats: Partial<Record<Region, Slot<Stats>>>;
   sectors: Slot<{ top: Sector[]; bottom: Sector[] }>;
   pending: number;
   plugin?: { name: string; version: string; latest: string | null } | null;
@@ -484,36 +484,28 @@ function statsCounts(stats: Stats): [number, number, number] {
   return [num(stats.up_count) ?? 0, num(stats.flat_count) ?? 0, num(stats.down_count) ?? 0];
 }
 
+const BREADTH_REGIONS = ["cn", "hk", "us"] as const;
+
 function renderPulse() {
   const node = $("pulse");
   node.replaceChildren();
-  const slot = state.snap?.stats;
-  const stats = slot?.value;
-  node.append(el("span", "label", "A股"));
-  if (!slot || !stats) {
-    node.append(el("span", "", slot?.error && !slot.loading ? "全市场涨跌统计暂时失败，稍后自动重试" : "正在统计全市场涨跌，首次约需 15–60 秒…"));
-    return;
+  for (const region of BREADTH_REGIONS) {
+    const slot = state.snap?.stats?.[region];
+    const stats = slot?.value;
+    const group = el("span", "breadth");
+    group.append(el("span", "label", REGION_NAMES[region]));
+    if (!stats) {
+      group.append(el("span", "", slot?.error && !slot.loading ? "暂不可用" : "统计中…"));
+    } else {
+      const [up, flat, down] = statsCounts(stats);
+      const upText = el("span", "up", "涨 ");
+      upText.append(el("strong", "up", up));
+      const downText = el("span", "down", "跌 ");
+      downText.append(el("strong", "down", down));
+      group.append(upText, breadthBar(up, flat, down), downText);
+    }
+    node.append(group);
   }
-  const [up, flat, down] = statsCounts(stats);
-  const breadth = el("span", "breadth");
-  const upText = el("span", "up", "涨 ");
-  upText.append(el("strong", "up", up));
-  const downText = el("span", "down", "跌 ");
-  downText.append(el("strong", "down", down));
-  breadth.append(upText, breadthBar(up, flat, down), downText);
-  const item = (label: string, value: string | number, cls = "") => {
-    const span = el("span", "", `${label} `);
-    span.append(el("strong", cls, value));
-    return span;
-  };
-  node.append(
-    breadth,
-    item("涨停", num(stats.limit_up_count) ?? "—", "up"),
-    item("跌停", num(stats.limit_down_count) ?? "—", "down"),
-    item("中位数", fmtPct(stats.median_change_pct), dir(stats.median_change_pct)),
-    item("成交额", fmtAmount(stats.total_turnover)),
-  );
-  if (slot.updatedAt) node.append(el("span", "", `统计于 ${clock(slot.updatedAt)}`));
 }
 
 function renderFilters() {
@@ -750,7 +742,7 @@ function indexPanel(market: Snapshot["market"], phase: Phase | null | undefined)
   return node;
 }
 
-function statsPanel(slot: Slot<Stats> | undefined): HTMLDivElement {
+function statsPanel(region: Region, slot: Slot<Stats> | undefined): HTMLDivElement {
   const stats = slot?.value;
   const node = panel("涨跌分布", slot?.updatedAt ? `统计于 ${clock(slot.updatedAt)}` : "");
   if (!stats) {
@@ -763,11 +755,12 @@ function statsPanel(slot: Slot<Stats> | undefined): HTMLDivElement {
   legend.append(el("span", "up", `上涨 ${up}`), el("span", "flat", `平盘 ${flat}`), el("span", "down", `下跌 ${down}`));
   wide.append(breadthBar(up, flat, down), legend);
   const list = el("dl", "stats");
+  // HK/US have no price limits and no turnover total; their rows are dropped rather than shown as blanks.
+  const aShare = region === "cn";
   const rows: Array<[string, string | number, string]> = [
-    ["涨停", num(stats.limit_up_count) ?? "—", "up"],
-    ["跌停", num(stats.limit_down_count) ?? "—", "down"],
+    ...(aShare ? [["涨停", num(stats.limit_up_count) ?? "—", "up"], ["跌停", num(stats.limit_down_count) ?? "—", "down"]] as Array<[string, string | number, string]> : []),
     ["涨幅中位数", fmtPct(stats.median_change_pct), dir(stats.median_change_pct)],
-    ["总成交额", fmtAmount(stats.total_turnover), ""],
+    ...(aShare ? [["总成交额", fmtAmount(stats.total_turnover), ""]] as Array<[string, string | number, string]> : []),
     ["统计股票", num(stats.total_stocks) ?? up + flat + down, ""],
   ];
   for (const [label, value, cls] of rows) {
@@ -824,7 +817,8 @@ function sessionPanel(region: Region, phase: Phase | null | undefined): HTMLDivE
     if (!value) continue;
     list.append(el("dt", "", label), el("dd", "", value));
   }
-  body.append(list, el("p", "", `全市场涨跌分布与行业排行目前只有 A 股数据，${REGION_NAMES[region]}暂不提供，不用指数涨跌代替。`));
+  const missing = (BREADTH_REGIONS as readonly Region[]).includes(region) ? "行业排行" : "全市场涨跌分布与行业排行";
+  body.append(list, el("p", "", `${missing}目前只有 A 股数据，${REGION_NAMES[region]}暂不提供，不用指数涨跌代替。`));
   node.append(body);
   return node;
 }
@@ -844,7 +838,8 @@ function renderMarket() {
   const phase = snap.phases?.[state.region];
   body.append(indexPanel(market, phase));
   const side = el("div", "side");
-  if (state.region === "cn") side.append(statsPanel(snap.stats), sectorsPanel(snap.sectors));
+  if (state.region === "cn") side.append(statsPanel("cn", snap.stats?.cn), sectorsPanel(snap.sectors));
+  else if ((BREADTH_REGIONS as readonly Region[]).includes(state.region)) side.append(statsPanel(state.region, snap.stats?.[state.region]), sessionPanel(state.region, phase));
   else side.append(sessionPanel(state.region, phase));
   body.append(side);
 }

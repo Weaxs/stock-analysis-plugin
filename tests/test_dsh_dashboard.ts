@@ -220,11 +220,13 @@ try {
       "stock_data.py:kline 600519 --period daily --count 30",
       "stock_data.py:kline ^HSI --period daily --count 30",
       "stock_data.py:sector_rankings --top 5 --direction both --board-type industry",
-      "stock_data.py:market_stats",
+      "stock_data.py:market_stats --market A",
+      "stock_data.py:market_stats --market HK",
+      "stock_data.py:market_stats --market US",
       "trading_calendar.py:phase JP",
     ]) assert(py.calls.includes(expected), `missing ${expected}`);
     assert(!py.calls.includes("stock_data.py:market_indices --region cn"), "A-share indices use direct quotes");
-    assert.equal(py.timeouts.get("stock_data.py:market_stats"), 130_000);
+    assert.equal(py.timeouts.get("stock_data.py:market_stats --market US"), 60_000);
     assert.equal(py.timeouts.get("stock_data.py:kline 600519 --period daily --count 30"), 20_000);
     assert.equal(py.timeouts.get("stock_data.py:kline AAPL --period daily --count 30"), 40_000, "Yahoo-backed klines get a longer budget");
 
@@ -241,7 +243,8 @@ try {
     assert.equal(snap.market.indices[1].quote, null, "missing provider rows stay empty rather than invented");
     assert.equal(snap.ribbon[0].code, "sh000001");
     assert.equal(snap.ribbon[0].quote.price, 100);
-    assert.equal(snap.stats.value.up_count, 2);
+    assert.equal(snap.stats.cn.value.up_count, 2);
+    assert.deepEqual(Object.keys(snap.stats), ["cn", "hk", "us"], "breadth covers A/HK/US only");
     assert.equal(snap.sectors.value.bottom[0].name, "白酒");
     assert.equal(snap.phases.cn.phase, "post_market");
     assert(!py.calls.some(call => /evil|bad/.test(call)), "query parameters cannot select commands");

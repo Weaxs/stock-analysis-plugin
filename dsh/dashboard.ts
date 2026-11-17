@@ -11,6 +11,8 @@ export type RunPy = (script: string, args: string[], timeoutMs?: number, signal?
 
 export const REGIONS = ["cn", "hk", "us", "jp", "kr", "tw"] as const;
 export type Region = (typeof REGIONS)[number];
+const STATS_MARKETS = { cn: "A", hk: "HK", us: "US" } as const;
+type StatsRegion = keyof typeof STATS_MARKETS;
 const STATIC_FILES = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
@@ -374,15 +376,17 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         return { top: value.top, bottom: Array.isArray(value.bottom) ? value.bottom : [] };
       },
     });
-    list.push({
-      // Slow (~15 s alone) but first-viewport content: start it in the first wave on its own worker.
-      key: "stats", kind: "stats", region: "cn", priority: 2,
-      run: async () => {
-        const value = await py("stock_data.py", ["market_stats"], 130_000) as Record<string, unknown>;
-        if (!value || typeof value !== "object" || value.error) throw new Error(safeError(value?.error, "市场宽度暂不可用"));
-        return value;
-      },
-    });
+    for (const [region, market] of Object.entries(STATS_MARKETS) as Array<[StatsRegion, string]>) {
+      list.push({
+        // First-viewport content (the breadth strip shows all three markets), so it rides the first wave.
+        key: `stats:${region}`, kind: "stats", region, priority: 2,
+        run: async () => {
+          const value = await py("stock_data.py", ["market_stats", "--market", market], 60_000) as Record<string, unknown>;
+          if (!value || typeof value !== "object" || value.error) throw new Error(safeError(value?.error, "市场宽度暂不可用"));
+          return value;
+        },
+      });
+    }
     const unique = new Map<string, Job>();
     for (const job of list) {
       const previous = unique.get(job.key);
@@ -499,8 +503,8 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
       ribbon: RIBBON.map(([item, code]) => indexRow(item, code)),
       phases: Object.fromEntries(REGIONS.map(item => [item, slotView(`phase:${item}`).value])),
       market: { region, indices: INDEX_SYMBOLS[region].map(code => indexRow(region, code)) },
-      // A-share breadth and sectors are the only whole-market statistics; other regions stay honest blanks.
-      stats: slotView("stats"),
+      // Breadth exists for A/HK/US and sectors for A only; other regions stay honest blanks.
+      stats: Object.fromEntries(Object.keys(STATS_MARKETS).map(item => [item, slotView(`stats:${item}`)])),
       sectors: slotView("sectors"),
       pending: limiter.queued,
       plugin: plugin ? {
