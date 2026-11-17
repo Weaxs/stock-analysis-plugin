@@ -48,7 +48,7 @@ export interface PluginVersion {
 }
 
 export function isNewerVersion(candidate: string, current: string): boolean {
-  const parse = (value: string) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
+  const parse = (value: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
   const next = parse(candidate);
   const now = parse(current);
   if (!next || !now) return false;
@@ -276,7 +276,7 @@ type DashboardHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<
 };
 
 export function createDashboardHandler(options: DashboardOptions): DashboardHandler {
-  const { runPy, watchlistFile, webDir } = options;
+  const { runPy, watchlistFile, webDir, plugin } = options;
   const limiter = createPriorityLimiter(MAX_PYTHON);
   const slots = new Map<string, Slot>();
   const inflight = new Set<Promise<void>>();
@@ -450,10 +450,9 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
   let latestVersion: string | null = null;
   let latestCheckedAt = 0;
   function checkLatest() {
-    const plugin = options.plugin;
     if (!plugin?.latest || Date.now() - latestCheckedAt < UPDATE_CHECK_MS) return;
     latestCheckedAt = Date.now();
-    plugin.latest().then(value => { latestVersion = value; }, () => { /* offline: keep the last known result */ });
+    plugin.latest().then(value => { latestVersion = value; }, () => { /* offline or registry error: keep the last known result */ });
   }
 
   function slotView(key: string) {
@@ -483,7 +482,6 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     const symbols = readWatchlist(watchlistFile);
     kick();
     checkLatest();
-    const plugin = options.plugin;
     return {
       watchlist: symbols.map(symbol => {
         const quote = slotView(`quote:${symbol}`);
@@ -602,13 +600,14 @@ interface WebServerContext extends Context {
   };
 }
 
-function installedPlugin(here: string): PluginVersion | undefined {
+export function installedPlugin(here: string): PluginVersion | undefined {
   // Source: dsh/package.json next to this file; published: dist/index.js sits one level below it.
   for (const file of [join(here, "package.json"), join(here, "..", "package.json")]) {
     try {
       const { name, version } = JSON.parse(readFileSync(file, "utf8")) as { name?: unknown; version?: unknown };
       if (typeof name === "string" && name.endsWith("dsh-stock-analysis") && typeof version === "string") {
-        return { name, version, latest: () => npmLatest(name) };
+        // A checkout or `add ./dsh` resolves to its real path; only registry installs live under node_modules.
+        return { name, version, latest: /[/\\]node_modules[/\\]/.test(here) ? () => npmLatest(name) : undefined };
       }
     } catch { /* try the next layout */ }
   }
@@ -618,7 +617,7 @@ function installedPlugin(here: string): PluginVersion | undefined {
 async function npmLatest(name: string): Promise<string | null> {
   const registry = (process.env.npm_config_registry || "https://registry.npmjs.org").replace(/\/+$/, "");
   const res = await fetch(`${registry}/${name.replace("/", "%2f")}/latest`, { signal: AbortSignal.timeout(5000) });
-  if (!res.ok) return null;
+  if (!res.ok) throw new Error(`registry ${res.status}`);
   const { version } = await res.json() as { version?: unknown };
   return typeof version === "string" ? version : null;
 }

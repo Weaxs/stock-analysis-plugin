@@ -47,7 +47,7 @@ allowBuilds:
 
 前端由 `dsh/client.ts`、`dsh/dashboard.ts` 和 `dsh/web/`（`app.ts` + HTML/CSS）组成，均为 TypeScript，`npm run build:dsh` 将浏览器端编译为 IIFE 输出到 `dist/`；它不增加或改变四宿主共享的 74 个模型工具。源码或 manifest 改动后重新运行 `npm run build:dsh` 并重装/重启对应 profile。
 
-页脚显示当前插件版本。有页面打开时，后台每 6 小时最多查询一次 npm（遵循 `npm_config_registry`）的 `latest` 版本；有新版时页面顶部提示更新命令，查询失败不影响行情。
+页脚显示当前插件版本。从 npm 安装时，有页面打开的情况下后台每 6 小时最多查询一次 npm 的 `latest` 版本（默认 registry.npmjs.org，可用环境变量 `npm_config_registry` 改为镜像）；有新版时页面顶部提示更新命令，查询失败不影响行情。源码或本地路径安装不检查更新。
 
 ## 按需工具发现
 

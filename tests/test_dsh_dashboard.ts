@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createDashboardHandler,
   dashboardQuoteSymbol,
+  installedPlugin,
   isNewerVersion,
   normalizeWatchlist,
   readWatchlist,
@@ -165,7 +166,7 @@ try {
     assert.equal(after.pending, 0, "dispose settles queued and running jobs");
   }
 
-  // ---------- warm-up fetches the fixed job set within the worker budget ----------
+  // ---------- plugin version + update hint ----------
   {
     assert(isNewerVersion("0.2.12", "0.2.11"));
     assert(isNewerVersion("1.0.0", "0.9.99"));
@@ -185,8 +186,20 @@ try {
     const unversioned = createDashboardHandler({ runPy: async () => "{}", watchlistFile: versionFile, webDir });
     assert.equal((await call(unversioned, get("/stock-analysis/api/snapshot"))).json().plugin, null);
     unversioned.dispose();
+    const dshPkg = JSON.parse(readFileSync(join(repoRoot, "dsh", "package.json"), "utf8"));
+    for (const dir of [join(repoRoot, "dsh"), join(repoRoot, "dsh", "dist")]) {
+      const found = installedPlugin(dir);
+      assert.deepEqual([found?.name, found?.version], [dshPkg.name, dshPkg.version], `${dir} resolves the dsh package.json`);
+      assert.equal(found?.latest, undefined, "a checkout never offers a registry update");
+    }
+    const installed = join(temp, "node_modules", "dsh-stock-analysis");
+    mkdirSync(join(installed, "dist"), { recursive: true });
+    writeFileSync(join(installed, "package.json"), JSON.stringify({ name: "dsh-stock-analysis", version: "0.2.11" }));
+    assert.equal(typeof installedPlugin(join(installed, "dist"))?.latest, "function", "registry installs check for updates");
+    assert.equal(installedPlugin(join(temp, "nothing")), undefined);
   }
 
+  // ---------- warm-up fetches the fixed job set within the worker budget ----------
   const file = join(temp, "api", "watchlist.json");
   writeWatchlist(file, ["600519", "AAPL", "00700.HK"]);
   const py = fakePython();
