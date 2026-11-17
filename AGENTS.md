@@ -7,7 +7,7 @@ A multi-host agent plugin for stock analysis, screening, and strategy backtestin
 The architecture is **one Python core, four thin plugin adapters plus an MCP stdio host**:
 
 - `tools/*.py` — the shared CLI tools. **This is the single source of truth** for all behavior. Every tool prints JSON to stdout.
-- `tools/tool_schemas.json` — the 74 tools' names, descriptions and JSON Schema parameters, read by every host. `scripts/tool-calls.mjs` maps each tool to its CLI argv for the three JS hosts; Hermes keeps the Python twin in `hermes/tools.py`.
+- `tools/tool_schemas.json` — the 75 tools' names, descriptions and JSON Schema parameters, read by every host. `scripts/tool-calls.mjs` maps each tool to its CLI argv for the three JS hosts; Hermes keeps the Python twin in `hermes/tools.py`.
 - `pi/index.ts` — Pi extension. Registers every schema via `pi.registerTool`, each call spawns a `tools/*.py` CLI.
 - `hermes/` — Hermes plugin (`plugin.yaml` + `register(ctx)` in `__init__.py`; `tools.py` handlers → subprocess to the same CLIs). Discovered via the `hermes_agent.plugins` entry point.
 - `openclaw/` — OpenClaw plugin (`openclaw.plugin.json` manifest + `index.ts` `definePluginEntry` + `registerTool` per schema, converted to typebox). Bundled with esbuild.
@@ -15,7 +15,7 @@ The architecture is **one Python core, four thin plugin adapters plus an MCP std
 - `mcp_host/server.py` — MCP stdio JSON-RPC host for WorkBuddy / Claude Desktop / Cursor. It reuses `hermes/schemas.py` (loads `tools/tool_schemas.json`) and `hermes/tools.py`, kills CLI children on cancellation, and adds no fifth schema copy.
 - `skills/*/SKILL.md` — 21 workflow / strategy-methodology skills shared by the four plugin hosts; MCP clients import skills separately.
 
-> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 74 tools over the *same* Python CLIs. A change to a tool's name or parameters goes into `tools/tool_schemas.json`, its argv into both `scripts/tool-calls.mjs` and `hermes/tools.py`, together with the relevant SKILL.md — never just one. MCP inherits the Hermes contract automatically; `tests/test_adapter_parity.ts` fails on any drift.
+> **The invariant that matters most:** the four plugin adapters and MCP expose the *same* 75 tools over the *same* Python CLIs. A change to a tool's name or parameters goes into `tools/tool_schemas.json`, its argv into both `scripts/tool-calls.mjs` and `hermes/tools.py`, together with the relevant SKILL.md — never just one. MCP inherits the Hermes contract automatically; `tests/test_adapter_parity.ts` fails on any drift.
 
 ---
 
@@ -162,7 +162,7 @@ npx tsx tests/test_dsh_integration.ts                      # dsh registration (t
 npx tsx tests/test_dsh_dashboard.ts                        # dsh dashboard warmer + snapshot API + watchlist + client manifest
 npx tsx tests/test_dsh_web_poll.ts                         # browser repoll after an in-flight watchlist edit
 npx tsx tests/test_process_tree.ts                         # Pi/dsh/OpenClaw abort + timeout kill nested process trees
-npx tsx tests/test_adapter_parity.ts                       # same 74 tools + argv/JSON mapping on all four hosts
+npx tsx tests/test_adapter_parity.ts                       # same 75 tools + argv/JSON mapping on all four hosts
 .venv/bin/python -m pytest tests/test_mcp_integration.py -v      # MCP schema parity, JSON-RPC and cancellation
 .venv/bin/python -m pytest tests/e2e/test_host_to_python.py -v     # host↔python round-trip
 npx tsx tests/e2e/test_pi_e2e.ts                           # Pi real-subprocess e2e

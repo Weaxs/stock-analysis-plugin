@@ -42,6 +42,7 @@ TOOL_MATRIX = {
     "get_insider_trades": {"markets": ["US"], "reason": "SEC issuer Form 4 only"},
     "get_valuation_history": {"markets": ["A", "HK", "US"], "reason": "A/HK providers; US derived from SEC filings"},
     "get_index_valuation": {"markets": ["A"], "reason": "Chinese index valuation only"},
+    "get_cds_index": {"markets": ["A", "US"], "reason": "Market-level CN onshore CDS indices / CDX-iTraxx only"},
     "get_earnings_calendar": {
         "markets": ["A", "HK", "US", "JP"],
         "reason": "A-share disclosed calendar / HK/US/JP single-symbol provider schedule",

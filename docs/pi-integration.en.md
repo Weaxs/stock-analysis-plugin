@@ -53,7 +53,7 @@ The agent should call `get_quote` and return market data.
 
 ## On-demand tool discovery
 
-Pi 1.5.2 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 74 tools directly exposed.
+Pi 1.5.2 supports native tool discovery. At session startup, the plugin checks for the native `tool_search` exposure metadata and active-tool APIs. When available, it defers its stock tools and activates search while preserving other active tools. Older hosts and SDK sessions without the native search extension keep all 75 tools directly exposed.
 
 If search is registered but inactive, the plugin enables it and confirms activation before deferring stock tools. Missing, restricted, or unavailable search keeps the tools directly exposed. Disabling search during a session restores the stock tools before the next model request and removes the discovery guidance.
 
@@ -125,7 +125,7 @@ git pull && npm install
 
 ```
 stock-analysis-plugin/
-├── pi/index.ts           # Pi extension entry: 74 tools and 21 Skills
+├── pi/index.ts           # Pi extension entry: 75 tools and 21 Skills
 ├── tools/                # shared Python CLIs
 ├── skills/               # SKILL.md files
 ├── schemas/ templates/ strategies/

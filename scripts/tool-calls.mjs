@@ -28,6 +28,10 @@ export const TOOL_CALLS = {
     script: "value_data.py",
     argv: (p) => ["index_valuation", p.symbol, "--years", String(p.years ?? 5)],
   },
+  get_cds_index: {
+    script: "credit_data.py",
+    argv: (p) => ["cds_index", "--source", p.source ?? "cn", "--days", String(p.days ?? 30), "--index", p.index ?? "", "--tenor", p.tenor ?? ""],
+  },
   get_earnings_calendar: {
     script: "value_data.py",
     argv: (p) => ["earnings_calendar", "--report-date", p.report_date ?? "", "--symbol", p.symbol ?? "", "--top", String(p.top ?? 50)],

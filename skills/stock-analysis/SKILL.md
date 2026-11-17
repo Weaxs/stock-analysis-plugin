@@ -25,6 +25,8 @@ description: 综合股票分析：联合技术、基本面、资金、消息和�
 
 用户要求短线、波段、交易计划或买卖时机时，读取[短线交易决策框架](references/short-term-trading.md)；普通基本面或长期价值分析不加载该参考。
 
+用户询问非对称风险、赔率、盈亏比、凸性或脆弱性时，读取[肥尾、非对称风险与趋势收益诊断](../bull-trend/references/fat-tails.md)的非对称风险公式模板。
+
 | 意图 | 调用序列 |
 |------|---------|
 | 个股买卖时机 | `get_technical_analysis` → `get_market_capabilities` → 当前市场支持的资金/风险工具 → `detect_market_regime`。A股可加 `get_capital_flow`(summary) 和 `screen_risk`；其他市场不得用缺失的资金或风险数据。veto_buy=true 则不入场；大盘下跌时个股看多信号降级为轻仓试错或等待；HOLD/WAIT 给出可观察触发条件 |
@@ -125,6 +127,7 @@ python3 scripts/gather.py <symbol>
 - 财报季排期：`get_earnings_calendar(report_date="YYYY-MM-DD", symbol=...)`，区分最新预约日期、实际披露日期和已公告业绩预告，不把预告当业绩实绩。
 - 股东变化：`get_shareholder_structure`。A 股北向值是财报十大流通股东中的 HKSCC 名义持股，缺席不等于零，不能当成日度北向买卖；港股南向值按港交所披露日期使用。
 - 大盘估值：`get_index_valuation(symbol="000300", years=5)`；中证近期 PE1 不冒充 PE-TTM、PB 或多年分位。
+- 信用风险偏好：`get_cds_index` 返回市场级 CDS 指数的窗口变化与分位，只作行业/大盘背景；不是个股 CDS，不能单独推出个股方向。按标的只取一个最贴近的指数和期限（如 `index="民企", tenor="1Y"`），不要无过滤拉全部：A 股民营企业用民企，央国企/高评级用高等级，科创板/硬科技用科创，长三角企业用长三角，新能源/环保用碳中和；美股投资级公司用 `source="global", index="CDX.NA.IG"`，高收益/高杠杆用 `CDX.NA.HY`（价格，下跌表示信用走弱），欧洲公司用 `ITRAXX EUROPE` 或 `CROSSOVER`。对应关系是代理，报告时说明。
 - ETF：`get_etf_details(symbol="510300", benchmark="sh000300")`。折溢价须看净值/行情日期；披露持仓不是完整实时申赎篮子，指数成分与基金持仓分别呈现。跟踪误差必须给出用户认可的基准。
 - 股息：`get_dividends` 区分历史、未来已公布除息日历和排行；history/calendar 支持 A/HK/US/JP/KR/TW，排行仍仅 A/HK。预案不计入已实现 TTM 股息。名义每股现金未重算送转股口径，遇送转股时不得据此精确比较持有收益。
 - 两融：`get_margin_trading(include_ratio=true)` 的 `margin_buy_ratio_pct` 只使用同日成交额；null 表示不可计算。
