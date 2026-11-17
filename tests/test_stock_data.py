@@ -1,5 +1,3 @@
-import pytest
-
 from tools.stock_data import calc_limit_price, detect_market, normalize_stock_code
 
 
@@ -99,43 +97,6 @@ class TestCalcLimitPrice:
     def test_exact_half_cent_uses_decimal_half_up(self):
         assert calc_limit_price(1.15, 0.10, "up") == 1.27
         assert calc_limit_price(1.45, 0.30, "down") == 1.02
-
-
-class TestComputeMarketStats:
-    def test_main_board_st_uses_five_percent_for_limit_up_and_down(self):
-        from tools.stock_data import compute_market_stats
-
-        result = compute_market_stats(
-            [
-                {"symbol": "600001", "name": "ST 示例", "price": 10.5, "prev_close": 10, "change_pct": 5},
-                {"symbol": "000002", "name": "*ST 示例", "price": 9.5, "prev_close": 10, "change_pct": -5},
-            ]
-        )
-        assert result["limit_up_count"] == 1
-        assert result["limit_down_count"] == 1
-        assert result["limit_up_samples"][0]["symbol"] == "600001"
-        assert result["limit_down_samples"][0]["symbol"] == "000002"
-
-    @pytest.mark.parametrize(
-        ("symbol", "name", "price", "change_pct", "expected_up", "expected_down"),
-        [
-            ("600519", "普通主板", 11, 10, 1, 0),
-            ("000001", "普通主板", 9, -10, 0, 1),
-            ("300001", "ST 创业板", 12, 20, 1, 0),
-            ("688001", "*ST 科创板", 8, -20, 0, 1),
-            ("430047", "ST 北交所", 13, 30, 1, 0),
-        ],
-    )
-    def test_regular_and_non_main_board_limit_rules_are_unchanged(
-        self, symbol, name, price, change_pct, expected_up, expected_down
-    ):
-        from tools.stock_data import compute_market_stats
-
-        result = compute_market_stats(
-            [{"symbol": symbol, "name": name, "price": price, "prev_close": 10, "change_pct": change_pct}]
-        )
-        assert result["limit_up_count"] == expected_up
-        assert result["limit_down_count"] == expected_down
 
 
 class TestDetectMarketEdgeCases:
@@ -562,22 +523,6 @@ def test_lixinger_hk_dcf_inputs_sum_debt_and_keep_leases_separate(monkeypatch):
             "shares_outstanding": None,
         }
     ]
-
-
-def test_hk_market_stats_null_limit_fields(monkeypatch):
-    from argparse import Namespace
-
-    from tools import stock_data
-
-    rows = [
-        {"symbol": "00700.HK", "name": "A", "change_pct": 1.0, "turnover": 10},
-        {"symbol": "00005.HK", "name": "B", "change_pct": -2.0, "turnover": 5},
-    ]
-    monkeypatch.setattr(stock_data, "snapshot_hk", lambda: rows)
-    result = stock_data.cmd_market_stats(Namespace(market="HK"))
-    assert (result["up_count"], result["down_count"], result["total_turnover"]) == (1, 1, 15)
-    assert result["limit_up_count"] is None
-    assert result["turnover_currency"] == "HKD"
 
 
 def test_us_sector_rankings_use_etf_proxies(monkeypatch):

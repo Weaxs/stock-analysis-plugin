@@ -13,154 +13,66 @@ DEFAULT_STOCKS = [
 ]
 
 
-@pytest.fixture(autouse=True)
-def _fresh_international_map():
-    name_resolver._load_international_stock_map.cache_clear()
-
-
 @pytest.fixture
 def set_stocks(monkeypatch):
     def _set(stocks):
-        monkeypatch.setattr(name_resolver, "_load_stock_map", lambda: stocks)
-        monkeypatch.setattr(name_resolver, "_load_international_stock_map", lambda: [], raising=False)
+        monkeypatch.setattr(name_resolver, "_search", lambda query, count: stocks)
 
     return _set
 
 
-class TestInternationalNames:
-    def test_hk_chinese_name(self, set_stocks, monkeypatch):
-        set_stocks(DEFAULT_STOCKS)
-        monkeypatch.setattr(
-            name_resolver, "_load_international_stock_map", lambda: [{"code": "00700.HK", "name": "腾讯控股"}]
-        )
-        assert name_resolver.resolve("腾讯") == [{"code": "00700.HK", "name": "腾讯控股"}]
+def _search_response(monkeypatch, rows, code="0"):
+    calls = []
 
-    def test_us_provider_code_and_failed_hk_provider(self, monkeypatch, tmp_path):
-        import sys
-        from types import SimpleNamespace
+    class Response:
+        def raise_for_status(self):
+            pass
 
-        import pandas as pd
+        def json(self):
+            return {"code": code, "msg": "Success", "result": rows}
 
-        def hk_unavailable():
-            raise RuntimeError("HK provider down")
+    def fake_get(url, params, headers, timeout):
+        calls.append(params)
+        return Response()
 
-        akshare = SimpleNamespace(
-            stock_zh_a_spot_em=lambda: pd.DataFrame([]),
-            stock_hk_spot_em=hk_unavailable,
-            stock_us_spot_em=lambda: pd.DataFrame([{"代码": "AAPL.OQ", "名称": "苹果"}]),
-        )
-        monkeypatch.setitem(sys.modules, "akshare", akshare)
-        monkeypatch.setattr(name_resolver, "cached", lambda key, ttl, fetch: fetch())
-        assert name_resolver.resolve("苹果") == [{"code": "AAPL", "name": "苹果"}]
+    monkeypatch.setattr("requests.get", fake_get)
+    return calls
 
-    @pytest.mark.parametrize("query,expected", [("aapl", "AAPL"), ("00700.hk", "00700.HK")])
-    def test_lowercase_international_code(self, set_stocks, monkeypatch, query, expected):
-        set_stocks([])
-        monkeypatch.setattr(
-            name_resolver,
-            "_load_international_stock_map",
-            lambda: [{"code": "AAPL", "name": "苹果"}, {"code": "00700.HK", "name": "腾讯控股"}],
-        )
-        assert name_resolver.resolve(query) == [
-            {"code": expected, "name": "苹果" if expected == "AAPL" else "腾讯控股"}
+
+class TestSearch:
+    def test_keeps_only_listed_a_hk_us_stocks(self, monkeypatch):
+        rows = [
+            {"code": "600519", "shortName": "贵州茅台", "market": 1, "securityTypeName": "沪A"},
+            {"code": "688981", "shortName": "中芯国际", "market": 1, "securityTypeName": "科创板"},
+            {"code": "00981", "shortName": "中芯国际", "market": 116, "securityTypeName": "港股"},
+            {"code": "BRK_B", "shortName": "伯克希尔-B", "market": 106, "securityTypeName": "美股"},
+            {"code": "000847", "shortName": "腾讯济安", "market": 1, "securityTypeName": "指数"},
+            {"code": "BK1189", "shortName": "腾讯概念", "market": 90, "securityTypeName": "概念"},
+            {"code": "APC", "shortName": "苹果", "market": 185, "securityTypeName": "德国"},
+            {"code": "832687", "shortName": "京东农业", "market": 0, "securityTypeName": "三板"},
+            {"code": "ODD$", "shortName": "异常", "market": 105, "securityTypeName": "美股"},
+            {"code": "600000", "shortName": "", "market": 1, "securityTypeName": "沪A"},
         ]
-
-    def test_ascii_ticker_is_not_masked_by_local_pinyin_score(self, set_stocks, monkeypatch):
-        set_stocks([{"code": "000001", "name": "平安银行"}])
-        monkeypatch.setattr(name_resolver, "_load_international_stock_map", lambda: [{"code": "A", "name": "安捷伦"}])
-        assert name_resolver.resolve("A") == [{"code": "A", "name": "安捷伦"}]
-
-    @pytest.mark.parametrize(
-        "raw_code,name,expected",
-        [
-            ("105.AAPL", "苹果", "AAPL"),
-            ("105.AMZN", "亚马逊", "AMZN"),
-            ("106.BA", "波音", "BA"),
-            ("BRK.B.N", "伯克希尔", "BRK-B"),
-            ("106.BRK_A", "伯克希尔-A", "BRK-A"),
-        ],
-    )
-    def test_eastmoney_us_symbol_shapes(self, monkeypatch, raw_code, name, expected):
-        import sys
-        from types import SimpleNamespace
-
-        import pandas as pd
-
-        akshare = SimpleNamespace(
-            stock_zh_a_spot_em=lambda: pd.DataFrame([]),
-            stock_hk_spot_em=lambda: pd.DataFrame([]),
-            stock_us_spot_em=lambda: pd.DataFrame([{"代码": raw_code, "名称": name}]),
-        )
-        monkeypatch.setitem(sys.modules, "akshare", akshare)
-        monkeypatch.setattr(name_resolver, "cached", lambda key, ttl, fetch: fetch())
-        assert name_resolver.resolve(name) == [{"code": expected, "name": name}]
-
-    def test_odd_provider_row_does_not_drop_the_market(self, monkeypatch):
-        import sys
-        from types import SimpleNamespace
-
-        import pandas as pd
-
-        rows = [{"代码": "105.AAPL", "名称": "苹果"}, {"代码": "106.ODD$", "名称": "异常代码"}]
-        akshare = SimpleNamespace(
-            stock_hk_spot_em=lambda: pd.DataFrame([{"代码": "00700", "名称": "腾讯控股"}, {"代码": "X", "名称": ""}]),
-            stock_us_spot_em=lambda: pd.DataFrame(rows),
-        )
-        monkeypatch.setitem(sys.modules, "akshare", akshare)
-        monkeypatch.setattr(name_resolver, "cached", lambda key, ttl, fetch: fetch())
-        assert name_resolver._load_international_stock_map() == [
-            {"code": "00700.HK", "name": "腾讯控股"},
-            {"code": "AAPL", "name": "苹果"},
+        calls = _search_response(monkeypatch, rows)
+        assert name_resolver._search("中芯", 20) == [
+            {"code": "600519", "name": "贵州茅台"},
+            {"code": "688981", "name": "中芯国际"},
+            {"code": "00981.HK", "name": "中芯国际"},
+            {"code": "BRK-B", "name": "伯克希尔-B"},
         ]
+        assert calls[0]["keyword"] == "中芯" and calls[0]["pageSize"] == 20
 
-    def test_unavailable_markets_are_tried_once_per_process(self, monkeypatch):
-        monkeypatch.setattr(name_resolver, "_load_stock_map", lambda: [{"code": "000725", "name": "京东方A"}])
-        calls = []
+    def test_provider_error_raises_runtime_error(self, monkeypatch):
+        _search_response(monkeypatch, None, code="400")
+        with pytest.raises(RuntimeError, match="eastmoney search unavailable"):
+            name_resolver.resolve("贵州茅台")
 
-        def down(key, ttl, fetch):
-            calls.append(key)
-            raise RuntimeError("rate limited")
-
-        monkeypatch.setattr(name_resolver, "cached", down)
-        name_resolver.resolve("京东")
-        name_resolver.resolve("京东")
-        assert calls == ["stock-name-map:hk:v1", "stock-name-map:us:v1"]
-
-    def test_a_share_substring_hit_still_offers_hk_names(self, set_stocks, monkeypatch):
-        set_stocks([{"code": "000725", "name": "京东方A"}])
-        monkeypatch.setattr(
-            name_resolver, "_load_international_stock_map", lambda: [{"code": "09618.HK", "name": "京东集团-SW"}]
+    def test_one_request_per_query(self, monkeypatch):
+        calls = _search_response(
+            monkeypatch, [{"code": "AAPL", "shortName": "苹果", "market": 105, "securityTypeName": "美股"}]
         )
-        assert [s["code"] for s in name_resolver.resolve("京东")] == ["000725", "09618.HK"]
-
-    def test_fuzzy_a_share_hit_does_not_hide_exact_us_name(self, set_stocks, monkeypatch):
-        set_stocks([{"code": "600535", "name": "天士力"}])
-        monkeypatch.setattr(
-            name_resolver, "_load_international_stock_map", lambda: [{"code": "TSLA", "name": "特斯拉"}]
-        )
-        assert name_resolver.resolve("特斯拉") == [{"code": "TSLA", "name": "特斯拉"}]
-
-    def test_exact_a_share_name_skips_international_maps(self, set_stocks, monkeypatch):
-        set_stocks(DEFAULT_STOCKS)
-        monkeypatch.setattr(name_resolver, "_load_international_stock_map", lambda: pytest.fail("not needed"))
-        assert name_resolver.resolve("贵州茅台")[0]["code"] == "600519"
-
-    def test_a_share_failure_does_not_hide_international_names(self, monkeypatch):
-        def unavailable():
-            raise RuntimeError("A provider down")
-
-        monkeypatch.setattr(name_resolver, "_load_stock_map", unavailable)
-        monkeypatch.setattr(
-            name_resolver, "_load_international_stock_map", lambda: [{"code": "00700.HK", "name": "腾讯控股"}]
-        )
-        assert name_resolver.resolve("腾讯控股") == [{"code": "00700.HK", "name": "腾讯控股"}]
-        with pytest.raises(RuntimeError, match="A provider down"):
-            name_resolver.resolve("600519")  # a miss must surface the load error, not "no such stock"
-        monkeypatch.setattr(
-            name_resolver, "_load_international_stock_map", lambda: [{"code": "06199.HK", "name": "贵州银行"}]
-        )
-        with pytest.raises(RuntimeError, match="A provider down"):
-            name_resolver.resolve("贵州茅台")  # a fuzzy HK hit is not an answer for an A-share name
+        assert name_resolver.resolve("aapl") == [{"code": "AAPL", "name": "苹果"}]
+        assert len(calls) == 1
 
 
 class TestExactMatch:
@@ -264,100 +176,10 @@ class TestFuzzyScoring:
 
 
 class TestEdgeCases:
-    def test_empty_query_is_prefix_of_everything(self, set_stocks):
-        set_stocks(DEFAULT_STOCKS)
-        assert name_resolver.resolve("", top=3) == DEFAULT_STOCKS[:3]
+    def test_blank_query_skips_the_provider(self, monkeypatch):
+        monkeypatch.setattr(name_resolver, "_search", lambda *a: pytest.fail("blank query reached provider"))
+        assert name_resolver.resolve("   ") == []
 
-    def test_whitespace_only_query(self, set_stocks):
-        set_stocks(DEFAULT_STOCKS)
-        assert name_resolver.resolve("   ") == DEFAULT_STOCKS[:5]
-
-    def test_empty_stock_map(self, set_stocks):
+    def test_empty_search_result(self, set_stocks):
         set_stocks([])
         assert name_resolver.resolve("600519") == []
-
-
-def test_name_map_is_reused_across_cli_processes(tmp_path):
-    import json
-    import os
-    import subprocess
-    import sys
-    import textwrap
-    from pathlib import Path
-
-    counter = tmp_path / "fetches.txt"
-    script = textwrap.dedent("""\
-        import json, sys
-        from pathlib import Path
-        from types import SimpleNamespace
-        import pandas as pd
-
-        def fetch():
-            with Path(sys.argv[1]).open("a") as stream:
-                stream.write("fetch\\n")
-            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
-
-        sys.modules["akshare"] = SimpleNamespace(stock_zh_a_spot_em=fetch)
-        from tools.name_resolver import resolve
-        print(json.dumps(resolve("贵州茅台")))
-        """)
-    for _ in range(2):
-        result = subprocess.run(
-            [sys.executable, "-c", script, str(counter)],
-            cwd=Path(__file__).resolve().parents[1],
-            env={**os.environ, "STOCK_CACHE_DIR": str(tmp_path / "cache")},
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout) == [{"code": "600519", "name": "贵州茅台"}]
-    assert len(counter.read_text().splitlines()) == 1
-
-
-@pytest.mark.parametrize("first", [[], [{"代码": "600519", "名称": None}], RuntimeError("provider down")])
-def test_empty_invalid_and_failed_maps_are_not_cached(monkeypatch, tmp_path, first):
-    import sys
-    from types import SimpleNamespace
-
-    import _cache
-    import pandas as pd
-
-    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
-    responses = iter([first, [{"代码": "600519", "名称": "贵州茅台"}]])
-
-    def fetch():
-        value = next(responses)
-        if isinstance(value, Exception):
-            raise value
-        return pd.DataFrame(value)
-
-    monkeypatch.setitem(sys.modules, "akshare", SimpleNamespace(stock_zh_a_spot_em=fetch))
-    if first == []:
-        assert name_resolver.resolve("600519") == []
-    else:
-        with pytest.raises(RuntimeError):
-            name_resolver.resolve("600519")
-    assert name_resolver.resolve("600519") == [{"code": "600519", "name": "贵州茅台"}]
-
-
-def test_name_map_refreshes_after_one_day(monkeypatch, tmp_path):
-    import sys
-    from types import SimpleNamespace
-
-    import _cache
-    import pandas as pd
-
-    monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path)
-    now = [1000.0]
-    monkeypatch.setattr(_cache.time, "time", lambda: now[0])
-    names = iter(["原名称", "新名称"])
-    monkeypatch.setitem(
-        sys.modules,
-        "akshare",
-        SimpleNamespace(stock_zh_a_spot_em=lambda: pd.DataFrame([{"代码": "600519", "名称": next(names)}])),
-    )
-    assert name_resolver.resolve("600519")[0]["name"] == "原名称"
-    assert name_resolver.resolve("600519")[0]["name"] == "原名称"
-    now[0] += 86401
-    assert name_resolver.resolve("600519")[0]["name"] == "新名称"

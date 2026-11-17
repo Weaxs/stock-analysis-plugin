@@ -67,7 +67,6 @@ interface Stats {
   flat_count?: Numeric;
   limit_up_count?: Numeric;
   limit_down_count?: Numeric;
-  avg_change_pct?: Numeric;
   median_change_pct?: Numeric;
   total_turnover?: Numeric;
   total_stocks?: Numeric;
@@ -752,7 +751,6 @@ function statsPanel(slot: Slot<Stats> | undefined): HTMLDivElement {
   const rows: Array<[string, string | number, string]> = [
     ["涨停", num(stats.limit_up_count) ?? "—", "up"],
     ["跌停", num(stats.limit_down_count) ?? "—", "down"],
-    ["平均涨幅", fmtPct(stats.avg_change_pct), dir(stats.avg_change_pct)],
     ["涨幅中位数", fmtPct(stats.median_change_pct), dir(stats.median_change_pct)],
     ["总成交额", fmtAmount(stats.total_turnover), ""],
     ["统计股票", num(stats.total_stocks) ?? up + flat + down, ""],

@@ -79,8 +79,8 @@
 
 | 代码格式 | 示例 | 市场 | 行情报价 Failover 链（K 线差异见下方） |
 |----------|------|------|---------------------|
-| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | 腾讯 → akshare → tushare → efinance → 新浪 |
-| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | 腾讯 → akshare（ETF/全市场接口）→ tushare → efinance → 新浪 |
+| 6 位纯数字 | `600519`, `000001`, `300750` | A 股 | 腾讯 → 东方财富 → tushare → 新浪 |
+| 6 位纯数字（51/52/56/58/15/16/18 开头） | `510300`, `159915` | A 股 ETF | 腾讯 → 东方财富 → tushare → 新浪 |
 | 带交易所前缀（`sh`/`sz`/`bj` + 6 位数字） | `sh000001`（上证指数）, `sz399006`（创业板指） | A 股（显式指定，含指数） | 腾讯 → 新浪 |
 | `.HK` 结尾 | `00700.HK`, `09988.HK` | 港股 | yfinance → 腾讯 → finnhub → longbridge |
 | 英文字母 | `AAPL`, `GOOGL`, `TSLA` | 美股 | yfinance → finnhub → longbridge → 腾讯 → alphavantage |
@@ -195,7 +195,7 @@
 | `get_dividends` | A/HK/US/JP/KR/TW 历史分红与除息日历、已实现 TTM 股息；排行仍仅 A/HK |
 | `get_kline` | K 线数据（OHLCV），支持日/周/月线；A 股股票/ETF 前复权，每条记录 `adjusted=qfq`，指数 `adjusted=none` |
 | `get_quote` | 实时行情快照（非交易时段返回最近交易日收盘价并以 as_of/stale 标注；`pe_basis` 区分 dynamic/trailing/unknown；ETF 的 premium_discount_rate 为正=溢价、负=折价）；场外基金用 `get_fund_quote`，TIAAxxxxxx 返回投顾组合识别、`advisor_org` 与无统一净值提示；长钱/海外长钱/稳钱另有有知有行 `official_disclosures`（`partial=true`，非实时完整持仓）；其他组合搜索可用时为 `search_partial`，否则 `unsupported_provider` |
-| `get_fund_quote` | 6 位场外公募基金净值；`nav` 是 `nav_date` 对应的已披露日终净值而非实时价，`accumulated_nav` 为累计净值、`change_pct` 为日涨跌幅；`estimated_nav` 可能为 `null`，QDII 净值可能滞后 1-2 交易日 |
+| `get_fund_quote` | 6 位场外公募基金净值；`nav` 是 `nav_date` 对应的已披露日终净值而非实时价，`accumulated_nav` 为累计净值、`change_pct` 为日涨跌幅；`estimated_nav` 目前恒为 `null`（东方财富单只基金估值接口已下线），QDII 净值可能滞后 1-2 交易日 |
 | `get_capital_flow` | 资金流向（仅 A 股） |
 | `get_news` | 个股相关新闻 |
 | `get_financials` | 财务指标；可选追加 A/港/美股年度 DCF 输入 |
@@ -205,7 +205,7 @@
 | `get_sector_rankings` | 板块涨跌排行（A 股行业/概念；美股 SPDR 行业 ETF 代理） |
 | `get_sector_constituents` | 板块成分股查询（仅 A 股，板块名模糊匹配） |
 | `resolve_stock_sectors` | 个股所属板块查询（A 股行业+概念 / 港股 GICS） |
-| `get_market_stats` | 市场统计（A/HK/US 涨跌家数、成交额；涨停仅 A 股） |
+| `get_market_stats` | 市场统计（A/HK/US 涨跌家数；成交额、涨停仅 A 股） |
 | `get_limit_up_pool` | 涨停池/涨停板复盘（连板数、封板资金、炸板次数等，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_dragon_tiger` | 龙虎榜（净买额/上榜原因/解读，仅 A 股；非交易日自动回退到最近交易日并以 requested_date/stale 标注） |
 | `get_hot_stocks` | 全市场人气热搜榜（东财→百度，仅 A 股） |

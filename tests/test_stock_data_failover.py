@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 from argparse import Namespace
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,8 +31,8 @@ from tools.stock_data import (
     _kline_tushare,
     _kline_yfinance,
     _news_search_intel_fallback,
-    _quote_akshare,
     _quote_alphavantage,
+    _quote_eastmoney,
     _quote_finnhub,
     _quote_longbridge,
     _quote_sina,
@@ -41,14 +41,15 @@ from tools.stock_data import (
     _quote_yfinance,
     _resolve_leg_down,
     _sector_rankings_efinance,
+    _snapshot_clist,
     _snapshot_tencent,
+    _snapshot_xuangu,
     _stock_boards_cninfo,
     _stock_boards_efinance,
     _stock_boards_em,
     _stock_boards_from_cache,
     _stock_boards_xueqiu,
     _stock_sectors_hk,
-    _tencent_batch_quotes,
     _to_baostock_code,
     _xq_symbol,
     _yf_hk_symbol,
@@ -68,7 +69,6 @@ from tools.stock_data import (
     quote_yf,
     resolve_stock_sectors,
     sector_constituents_a,
-    snapshot_a,
 )
 
 
@@ -401,20 +401,6 @@ class TestKlineFinnhub:
         assert call_args[0][0] == "0700"
 
 
-class TestQuoteEfinance:
-    def test_pe_basis_is_dynamic(self):
-        import pandas as pd
-
-        from tools.stock_data import _quote_efinance
-
-        mock_ef = MagicMock()
-        mock_ef.stock.get_realtime_quotes.return_value = pd.DataFrame([{"股票代码": "600519", "市盈率": 20}])
-        with patch.dict(sys.modules, {"efinance": mock_ef}):
-            result = _quote_efinance("600519")
-        assert result["pe"] == 20
-        assert result["pe_basis"] == "dynamic"
-
-
 class TestFundamentalContext:
     def test_preserves_quote_pe_basis(self, monkeypatch):
         from tools import stock_data
@@ -428,81 +414,6 @@ class TestFundamentalContext:
         with patch.dict(sys.modules, {"akshare": mock_ak}):
             result = stock_data.cmd_fundamental_context(Namespace(symbol="600519"))
         assert result["valuation"]["pe_basis"] == "dynamic"
-
-
-class TestSnapshotPeBasis:
-    @pytest.mark.parametrize(
-        ("function_name", "provider_method", "expected"),
-        [
-            ("_snapshot_akshare", "stock_zh_a_spot_em", "dynamic"),
-            ("_snapshot_efinance", None, "dynamic"),
-            ("snapshot_hk", "stock_hk_spot_em", "unknown"),
-            ("snapshot_us", "stock_us_spot_em", "unknown"),
-        ],
-    )
-    def test_snapshot_carries_pe_basis(self, function_name, provider_method, expected):
-        import pandas as pd
-
-        from tools import stock_data
-
-        provider = MagicMock()
-        if provider_method is None:
-            provider.stock.get_realtime_quotes.return_value = pd.DataFrame(
-                [{"股票代码": "600519", "股票名称": "x", "市盈率": 20}]
-            )
-            modules = {"efinance": provider}
-        else:
-            getattr(provider, provider_method).return_value = pd.DataFrame(
-                [{"代码": "600519", "名称": "x", "市盈率": 20}]
-            )
-            modules = {"akshare": provider}
-        with patch.dict(sys.modules, modules):
-            rows = getattr(stock_data, function_name)()
-        assert rows[0]["pe_basis"] == expected
-
-
-class TestSnapshotSymbolNormalization:
-    @pytest.mark.parametrize(
-        ("snapshot_name", "provider_method", "market", "raw_symbol", "expected"),
-        [
-            ("snapshot_hk", "stock_hk_spot_em", "HK", "00700", "00700.HK"),
-            ("snapshot_hk", "stock_hk_spot_em", "HK", "00700.HK", "00700.HK"),
-            ("snapshot_us", "stock_us_spot_em", "US", "AAPL.OQ", "AAPL"),
-            ("snapshot_us", "stock_us_spot_em", "US", "105.AAPL", "AAPL"),
-            ("snapshot_us", "stock_us_spot_em", "US", "105.AMZN", "AMZN"),
-            ("snapshot_us", "stock_us_spot_em", "US", "106.BA", "BA"),
-            ("snapshot_us", "stock_us_spot_em", "US", "BRK.B.N", "BRK-B"),
-            ("snapshot_us", "stock_us_spot_em", "US", "XYZ.A", "XYZ"),
-        ],
-    )
-    def test_snapshot_symbols_flow_into_screener_requests(
-        self, monkeypatch, snapshot_name, provider_method, market, raw_symbol, expected
-    ):
-        import pandas as pd
-
-        from tools import screener, stock_data
-
-        provider = MagicMock()
-        getattr(provider, provider_method).return_value = pd.DataFrame(
-            [{"代码": raw_symbol, "名称": "fixture", "市盈率": 20}]
-        )
-        monkeypatch.setattr(stock_data, "_akshare_retry", lambda fn: fn())
-        with patch.dict(sys.modules, {"akshare": provider}):
-            rows = getattr(stock_data, snapshot_name)()
-        assert rows[0]["symbol"] == expected
-        assert rows[0]["pe_basis"] == "unknown"
-
-        calls = []
-        monkeypatch.setattr(
-            screener,
-            "_fetch_json",
-            lambda args: calls.append(args) or ([] if args[0] == "kline" else {}),
-        )
-        screener._enrich_one(rows[0]["symbol"], market)
-        assert calls == [
-            ["kline", expected, "--period", "daily", "--count", "250"],
-            ["financials", expected],
-        ]
 
 
 class TestQuoteYfinance:
@@ -1163,210 +1074,240 @@ class TestKlineAFailover:
 
 
 class TestQuoteAFailover:
+    @pytest.fixture(autouse=True)
+    def _no_sticky(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data._disk_cache_get", lambda key: None)
+        monkeypatch.setattr("tools.stock_data._disk_cache_set", lambda key, value: None)
+
+    def _legs(self, **results):
+        """Patch every A-share quote leg; a leg given an Exception raises it."""
+        mocks = {}
+        for name in ("tencent", "eastmoney", "tushare", "sina"):
+            value = results.get(name, ValueError(f"{name} down"))
+            kwargs = {"side_effect": value} if isinstance(value, Exception) else {"return_value": value}
+            mocks[name] = patch(f"tools.stock_data._quote_{name}", **kwargs).start()
+        return mocks
+
+    def teardown_method(self):
+        patch.stopall()
+
     @pytest.mark.parametrize("symbol", ["600519", "510300"])
-    def test_single_symbol_source_before_full_market_spot(self, symbol):
-        """akshare's stock/ETF spot pages the whole market (~55 requests) for one row;
-        the single-symbol tencent endpoint answers first."""
-        with (
-            patch("tools.stock_data._quote_tencent", return_value={"price": 1.0}) as tencent,
-            patch("tools.stock_data._quote_akshare") as stock_spot,
-            patch("tools.stock_data._quote_akshare_etf") as etf_spot,
-        ):
-            assert quote_a(symbol) == {"price": 1.0}
-        tencent.assert_called_once_with(symbol)
-        stock_spot.assert_not_called()
-        etf_spot.assert_not_called()
+    def test_tencent_answers_first(self, symbol):
+        legs = self._legs(tencent={"price": 1.0}, eastmoney={"price": 2.0})
+        assert quote_a(symbol) == {"price": 1.0}
+        legs["eastmoney"].assert_not_called()
 
-    @patch("tools.stock_data._quote_sina")
-    @patch("tools.stock_data._quote_tencent")
-    @patch("tools.stock_data._quote_efinance")
-    @patch("tools.stock_data._quote_tushare")
-    @patch("tools.stock_data._quote_akshare")
-    def test_akshare_after_tencent_down(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
-        mock_tx.side_effect = ValueError("down")
-        mock_ak.return_value = {"price": 1800}
-        result = quote_a("600519")
-        assert result == {"price": 1800}
-        mock_ts.assert_not_called()
-        mock_sina.assert_not_called()
+    def test_eastmoney_after_tencent_down(self):
+        legs = self._legs(eastmoney={"price": 1800})
+        assert quote_a("600519") == {"price": 1800}
+        legs["tushare"].assert_not_called()
 
-    @patch("tools.stock_data._quote_sina")
-    @patch("tools.stock_data._quote_tencent")
-    @patch("tools.stock_data._quote_efinance")
-    @patch("tools.stock_data._quote_tushare")
-    @patch("tools.stock_data._quote_akshare")
-    def test_falls_through_to_efinance(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
-        mock_tx.side_effect = ValueError("down")
-        mock_ak.side_effect = ValueError("down")
-        mock_ts.side_effect = ValueError("down")
-        mock_ef.return_value = {"price": 1800}
-        result = quote_a("600519")
-        assert result == {"price": 1800}
+    def test_falls_through_to_sina(self):
+        self._legs(sina={"price": 1258.75})
+        assert quote_a("600519") == {"price": 1258.75}
 
-    @patch("tools.stock_data._quote_sina")
-    @patch("tools.stock_data._quote_tencent")
-    @patch("tools.stock_data._quote_efinance")
-    @patch("tools.stock_data._quote_tushare")
-    @patch("tools.stock_data._quote_akshare")
-    def test_falls_through_to_tencent(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
-        """The issue #25 scenario: eastmoney dead + no tushare token, tencent still answers."""
-        mock_ak.side_effect = ValueError("down")
-        mock_ts.side_effect = ValueError("down")
-        mock_ef.side_effect = ValueError("down")
-        mock_tx.return_value = {"price": 1258.75}
-        result = quote_a("600519")
-        assert result == {"price": 1258.75}
-        mock_sina.assert_not_called()
-
-    @patch("tools.stock_data._quote_sina")
-    @patch("tools.stock_data._quote_tencent")
-    @patch("tools.stock_data._quote_efinance")
-    @patch("tools.stock_data._quote_tushare")
-    @patch("tools.stock_data._quote_akshare")
-    def test_all_fail_raises_aggregated(self, mock_ak, mock_ts, mock_ef, mock_tx, mock_sina):
-        mock_ak.side_effect = ValueError("ak down")
-        mock_ts.side_effect = ValueError("ts down")
-        mock_ef.side_effect = ValueError("ef down")
-        mock_tx.side_effect = ValueError("tx down")
-        mock_sina.side_effect = ValueError("sina down")
+    def test_all_fail_raises_aggregated(self):
+        self._legs()
         with pytest.raises(RuntimeError, match="sina down"):
             quote_a("600519")
 
-    @patch("tools.stock_data._quote_akshare")
-    @patch("tools.stock_data._quote_sina")
-    @patch("tools.stock_data._quote_tencent")
-    def test_prefixed_symbol_skips_eastmoney_sources(self, mock_tx, mock_sina, mock_ak):
-        """sh000001-style explicit codes go straight to tencent/sina — the eastmoney
-        sources take bare 6-digit codes only and would fail slowly first."""
-        mock_tx.return_value = {"price": 3891.6}
+    def test_prefixed_symbol_skips_eastmoney(self):
+        legs = self._legs(tencent={"price": 3891.6})
         assert quote_a("sh000001") == {"price": 3891.6}
-        mock_ak.assert_not_called()
-        mock_sina.assert_not_called()
+        legs["eastmoney"].assert_not_called()
 
 
-class TestSnapshotAFailover:
-    def test_eastmoney_down_falls_through_to_sina(self):
-        import pandas as pd
+class FakeEastmoney:
+    """Routes _get_json(url, params) by URL fragment; records every request."""
 
-        mock_ef = MagicMock()
-        mock_ef.stock.get_realtime_quotes.side_effect = OSError("eastmoney down")
-        mock_ak = MagicMock()
-        mock_ak.stock_zh_a_spot_sina.return_value = pd.DataFrame(
-            {
-                "代码": ["sh600519"],
-                "名称": ["贵州茅台"],
-                "最新价": [1258.0],
-                "涨跌额": [-14.75],
-                "涨跌幅": [-1.16],
-                "成交量": [2_623_524],
-                "成交额": [3_307_926_407.0],
-                "昨收": [1272.75],
-                "今开": [1273.93],
-                "最高": [1274.98],
-                "最低": [1254.10],
-            }
+    def __init__(self, **routes):
+        self.routes = routes
+        self.calls = []
+
+    def __call__(self, url, params):
+        self.calls.append((url, dict(params)))
+        for fragment, response in self.routes.items():
+            if fragment in url:
+                return response(params) if callable(response) else response
+        raise AssertionError(f"unexpected request {url}")
+
+
+def _ranked(changes):
+    """clist responder over a change-ranked list: pn is a page index of size pz."""
+
+    def respond(params):
+        rows = sorted(changes, key=lambda c: -(c or 0)) if params["po"] else sorted(changes, key=lambda c: c or 0)
+        size, page = params["pz"], params["pn"]
+        diff = [{"f12": f"C{i}", "f14": f"n{i}", "f3": "-" if c is None else c} for i, c in enumerate(rows)]
+        return {"data": {"total": len(changes), "diff": diff[(page - 1) * size : page * size]}}
+
+    return respond
+
+
+class TestQuoteEastmoney:
+    def _quote(self, monkeypatch, symbol, **fields):
+        row = {"f12": symbol, "f14": "x", "f2": 4.2, "f3": 1.25, "f9": 20.5, "f23": 3.1, "f441": "-", "f38": 2e10}
+        fake = FakeEastmoney(**{"ulist.np": {"data": {"diff": [row | fields]}}})
+        monkeypatch.setattr("tools.stock_data._get_json", fake)
+        return _quote_eastmoney(symbol), fake
+
+    def test_stock_fields_and_one_secid(self, monkeypatch):
+        result, fake = self._quote(monkeypatch, "600519")
+        assert fake.calls[0][1]["secids"] == "1.600519"
+        assert result["pe"] == 20.5 and result["pe_basis"] == "dynamic" and result["pb"] == 3.1
+        for key in ("is_etf", "iopv", "premium_discount_rate", "fund_shares"):
+            assert key not in result
+
+    @pytest.mark.parametrize(
+        ("iopv", "rate"), [(4.1, (4.2 - 4.1) / 4.1 * 100), (4.5, (4.2 - 4.5) / 4.5 * 100), ("-", None)]
+    )
+    def test_etf_fund_fields(self, monkeypatch, iopv, rate):
+        result, fake = self._quote(monkeypatch, "159915", f441=iopv)
+        assert fake.calls[0][1]["secids"] == "0.159915"
+        assert result["is_etf"] is True and result["fund_shares"] == 2e10 and "pe" not in result
+        assert result["premium_discount_rate"] == (pytest.approx(rate, abs=1e-4) if rate is not None else None)
+
+    def test_missing_price_raises(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data._get_json", FakeEastmoney(**{"ulist.np": {"data": None}}))
+        with pytest.raises(ValueError, match="no quote"):
+            _quote_eastmoney("600519")
+
+
+class TestMarketSnapshot:
+    FILTERS = {"market_cap_min": 5e9, "pe_max": 100, "dividend_yield_min": 3}
+
+    def test_a_share_filters_server_side_and_pages(self, monkeypatch):
+        def xuangu(params):
+            if params["ps"] == 1:
+                return {"result": {"count": 5580, "data": [], "nextpage": True}}
+            row = {"SECURITY_CODE": f"60000{params['p']}", "PE9": 9.5, "TOTAL_MARKET_CAP": 1e10}
+            return {"result": {"count": 2, "data": [row], "nextpage": params["p"] < 2}}
+
+        fake = FakeEastmoney(xuangu=xuangu)
+        monkeypatch.setattr("tools.stock_data._get_json", fake)
+        total, rows = _snapshot_xuangu(self.FILTERS)
+        assert total == 5580 and [r["symbol"] for r in rows] == ["600001", "600002"]
+        assert rows[0]["pe_basis"] == "ttm" and rows[0]["pe"] == 9.5
+        assert fake.calls[0][1]["filter"] == "(TOTAL_MARKET_CAP>=5000000000.0)(PE9<=100)"
+
+    def test_tencent_leg_stops_below_market_cap_floor(self, monkeypatch):
+        rank = [
+            {"code": "sh601398", "zsz": "32290.41", "turnover": "313281", "pe_ttm": "8.40", "zxj": "9.06"},
+            {"code": "sz000001", "zsz": "40", "turnover": "1", "pe_ttm": "5", "zxj": "1"},
+        ]
+        fake = FakeEastmoney(getBoardRankList={"data": {"total": 5580, "rank_list": rank}})
+        monkeypatch.setattr("tools.stock_data._get_json", fake)
+        total, rows = _snapshot_tencent(self.FILTERS)
+        assert total == 5580 and len(rows) == 1 and len(fake.calls) == 1
+        assert rows[0]["symbol"] == "601398" and rows[0]["turnover"] == 3132810000 and rows[0]["pe_basis"] == "ttm"
+        assert rows[0]["market_cap"] == pytest.approx(3.229041e12)
+
+    @pytest.mark.parametrize(
+        ("market", "code", "symbol"), [("HK", "700", "00700.HK"), ("US", "BRK_B", "BRK-B"), ("US", "AAPL", "AAPL")]
+    )
+    def test_hk_us_walk_largest_caps_only(self, monkeypatch, market, code, symbol):
+        def clist(params):
+            assert params["fid"] == "f20" and params["po"] == 1
+            big = {"f12": code, "f14": "x", "f2": 10, "f20": 6e9, "f9": 12, "f23": 2, "f8": 0.1}
+            return {"data": {"total": 4000, "diff": [big] * 100 if params["pn"] == 1 else [big | {"f20": 1e9}]}}
+
+        fake = FakeEastmoney(clist=clist)
+        monkeypatch.setattr("tools.stock_data._get_json", fake)
+        total, rows = _snapshot_clist(market, 5e9)
+        assert total == 4000 and len(rows) == 100 and len(fake.calls) == 2
+        assert rows[0]["symbol"] == symbol and rows[0]["pe_basis"] == "unknown"
+        assert "turnover_rate" not in rows[0] and ("pb" in rows[0]) == (market == "HK")
+
+    def test_cli_falls_back_to_tencent_and_flags_truncation(self, monkeypatch):
+        from tools import stock_data
+
+        monkeypatch.setattr(stock_data, "_disk_cache_get", lambda key: None)
+        monkeypatch.setattr(stock_data, "_disk_cache_set", lambda key, value: None)
+        monkeypatch.setattr(stock_data, "_snapshot_xuangu", MagicMock(side_effect=ConnectionError("blocked")))
+        rows = [{"symbol": "601398"}] * stock_data._SNAPSHOT_MAX_ROWS
+        monkeypatch.setattr(stock_data, "_snapshot_tencent", lambda filters: (5580, rows))
+        result = stock_data.cmd_market_snapshot(Namespace(market="A", filters=json.dumps(self.FILTERS)))
+        assert result["total_stocks"] == 5580 and result["truncated"] is True
+
+    def test_cli_error_is_clean(self, monkeypatch):
+        from tools import stock_data
+
+        monkeypatch.setattr(stock_data, "_snapshot_clist", MagicMock(side_effect=ConnectionError("reset by peer")))
+        result = stock_data.cmd_market_snapshot(Namespace(market="US", filters="{}"))
+        assert result["error"].startswith("US snapshot unavailable") and "reset by peer" in result["error"]
+
+
+class TestMarketStats:
+    def test_a_share_breadth_from_distribution(self, monkeypatch):
+        fenbu = {"data": {"qdate": 20261117, "fenbu": [{"11": 3}, {"2": 2}, {"0": 2}, {"-1": 9}, {"-11": 1}]}}
+        pool = {"data": {"tc": 3, "pool": [{"c": "002451", "n": "摩恩电气", "zdp": 10.030863}]}}
+        changes = [10.0] * 5 + [0.0] * 2 + [None] * 3 + [-1.0] * 10  # three unquoted rows rank mid-list
+        fake = FakeEastmoney(
+            ZDFenBu=fenbu,
+            ZTPool=pool,
+            DTPool={"data": None},
+            **{"ulist.np": {"data": {"diff": [{"f6": 1e11}, {"f6": 2e11}, {"f6": 1e9}]}}, "clist": _ranked(changes)},
         )
-        with (
-            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
-            patch.dict(sys.modules, {"efinance": mock_ef, "akshare": mock_ak}),
-        ):
-            result = snapshot_a()
-        assert result[0]["symbol"] == "600519"
-        assert result[0]["price"] == 1258.0
-        assert result[0]["volume"] == 26235.24
+        monkeypatch.setattr("tools.stock_data._get_json", fake)
+        stats = cmd_market_stats(Namespace(market="A"))
+        assert (stats["up_count"], stats["down_count"], stats["flat_count"], stats["total_stocks"]) == (5, 10, 2, 17)
+        assert (stats["limit_up_count"], stats["limit_down_count"]) == (3, 1)
+        assert stats["median_change_pct"] == -1.0 and stats["avg_change_pct"] is None
+        assert stats["total_turnover"] == 3.01e11
+        assert stats["limit_up_samples"] == [{"symbol": "002451", "name": "摩恩电气", "change_pct": 10.03}]
+        assert stats["limit_down_samples"] == []
+        assert next(p for u, p in fake.calls if "ZTPool" in u)["date"] == "20261117"
+        assert len(fake.calls) == 7
 
-    def test_market_stats_returns_snapshot_error(self):
-        with patch("tools.stock_data.snapshot_a", return_value=[{"error": "all sources down"}]):
-            assert cmd_market_stats(Namespace(market="A")) == {"error": "all sources down"}
-
-    def test_all_sources_down_error_carries_leg_detail(self):
-        with (
-            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
-            patch("tools.stock_data._snapshot_efinance", side_effect=OSError("efinance down")),
-            patch("tools.stock_data._snapshot_sina", side_effect=OSError("sina down")),
-            patch("tools.stock_data._snapshot_tencent", side_effect=OSError("tencent down")),
-        ):
-            result = snapshot_a()
-        assert "error" in result[0]
-        assert "sina down" in result[0]["error"] and "tencent down" in result[0]["error"]
-
-
-def _tencent_batch_body(code_fields: dict) -> bytes:
-    """Build a gtimg batch body: {vname: fields-dict} → b'v_sz000001="...";v_sh600519="...";'."""
-    return b"".join(_tencent_quote_payload(fields, vname) for vname, fields in code_fields.items())
-
-
-class TestSnapshotTencent:
-    """The tencent snapshot leg: SSE list for SH + enumerated SZ ranges, validated
-    through Tencent batch quotes (the plain-HTTPS channel that survives eastmoney
-    blocking on datacenter IPs)."""
-
-    @patch("requests.get")
-    def test_batch_quotes_parse_filter_and_normalize(self, mock_get):
-        body = _tencent_batch_body(
-            {
-                "sh600519": {**TestQuoteTencent._FIELDS, 49: "1.14"},
-                # frozen payload (delisted/suspended): volume 0 → dropped
-                "sz000003": {**TestQuoteTencent._FIELDS, 1: "PT金田A", 6: "0", 37: "0"},
-                # sz003999 is absent from the body entirely — unknown codes are skipped
-            }
+    @pytest.mark.parametrize("market", ["HK", "US"])
+    def test_hk_us_breadth_by_binary_search(self, monkeypatch, market):
+        changes = [3.0] * 300 + [None] * 50 + [0.0] * 20 + [-2.0] * 630
+        fake = FakeEastmoney(clist=_ranked(changes))
+        monkeypatch.setattr("tools.stock_data._get_json", fake)
+        stats = cmd_market_stats(Namespace(market=market))
+        assert (stats["up_count"], stats["down_count"], stats["flat_count"], stats["total_stocks"]) == (
+            300,
+            630,
+            70,
+            1000,
         )
-        mock_get.return_value = MagicMock(content=body)
-        rows = _tencent_batch_quotes(["sh600519", "sz000003", "sz003999"])
-        assert [r["symbol"] for r in rows] == ["600519"]  # bare code
-        row = rows[0]
-        assert row["name"] == "贵州茅台"
-        assert row["price"] == 1258.75
-        assert row["turnover"] == 295576e4  # 万元 → 元
-        assert row["market_cap"] == 15735.40e8  # 亿元 → 元
-        assert row["pe"] == 19.32
-        assert row["turnover_rate"] == 0.19
-        assert row["volume_ratio"] == 1.14
+        assert stats["median_change_pct"] == -2.0
+        assert stats["limit_up_count"] is None and stats["total_turnover"] is None and stats["market"] == market
+        assert stats["top5_losers"][-1]["change_pct"] == -2.0 and stats["top5_gainers"][0]["change_pct"] == 3.0
+        assert len(fake.calls) < 30  # two binary searches over 1000 ranks, not 10 full pages
 
-    @patch("requests.get")
-    def test_batch_failure_is_skipped_not_fatal(self, mock_get):
-        def fake_get(url, timeout=10):
-            if "sz000003" in url:  # deterministic failure regardless of thread scheduling
-                raise ConnectionError("reset")
-            return MagicMock(content=_tencent_batch_body({"sz000001": TestQuoteTencent._FIELDS}))
+    def test_provider_failure_is_clean_error(self, monkeypatch):
+        monkeypatch.setattr("tools.stock_data._get_json", MagicMock(side_effect=ConnectionError("blocked")))
+        assert cmd_market_stats(Namespace(market="A")) == {"error": "blocked"}
 
-        mock_get.side_effect = fake_get
-        rows = _tencent_batch_quotes(["sz000003"] * 60 + ["sz000001"])  # 61 codes → 2 batches
-        assert [r["symbol"] for r in rows] == ["000001"]
 
-    @patch("requests.get")
-    def test_snapshot_leg_enumerates_and_validates(self, mock_get):
-        alive = {
-            "sh600519": TestQuoteTencent._FIELDS,
-            "sh688981": {**TestQuoteTencent._FIELDS, 1: "中芯国际", 2: "688981"},
-            "sz000001": {**TestQuoteTencent._FIELDS, 1: "平安银行", 2: "000001"},
-            "sz300001": {**TestQuoteTencent._FIELDS, 1: "特锐德", 2: "300001"},
-        }
+class TestCnIndices:
+    def test_eastmoney_rows_map_to_codes(self, monkeypatch):
+        diff = [{"f12": "000001", "f13": 1, "f14": "上证指数", "f2": 3584.58, "f3": -0.5}]
+        diff.append({"f12": "399001", "f13": 0, "f14": "深证成指", "f2": "-"})
+        monkeypatch.setattr("tools.stock_data._get_json", FakeEastmoney(**{"ulist.np": {"data": {"diff": diff}}}))
+        rows = cmd_market_indices(Namespace(region="cn"))
+        assert rows[0] == {
+            "code": "sh000001",
+            "name": "上证指数",
+            "price": 3584.58,
+            "change_pct": -0.5,
+        } | dict.fromkeys(("change", "volume", "turnover", "high", "low", "open", "prev_close"))
+        assert rows[1] == {"code": "sz399001", "name": "深证成指", "note": "data unavailable"}
 
-        def fake_get(url, timeout=10):
-            q = url.split("q=", 1)[1].split(",")
-            return MagicMock(content=_tencent_batch_body({c: alive[c] for c in q if c in alive}))
+    def test_falls_back_to_one_tencent_batch(self, monkeypatch):
+        from tools import stock_data
 
-        mock_get.side_effect = fake_get
-        rows = _snapshot_tencent()
-        # codes validated alive by the enumeration, across the SH/SZ ranges
-        assert {r["symbol"] for r in rows} == {"600519", "688981", "000001", "300001"}
-
-    def test_snapshot_leg_raises_when_nothing_alive(self):
-        with (
-            patch("requests.get", return_value=MagicMock(content=b"")),
-            pytest.raises(ValueError, match="tencent snapshot returned empty data"),
-        ):
-            _snapshot_tencent()
-
-    def test_snapshot_a_falls_back_to_tencent(self):
-        with (
-            patch("tools.stock_data._snapshot_akshare", side_effect=OSError("eastmoney down")),
-            patch("tools.stock_data._snapshot_efinance", side_effect=OSError("eastmoney down")),
-            patch("tools.stock_data._snapshot_sina", side_effect=OSError("sina down")),
-            patch("tools.stock_data._snapshot_tencent", return_value=[{"symbol": "600519"}]),
-        ):
-            assert snapshot_a() == [{"symbol": "600519"}]
+        monkeypatch.setattr(stock_data, "_cn_indices_eastmoney", MagicMock(side_effect=ConnectionError("blocked")))
+        fields = [""] * 50
+        fields[1], fields[3], fields[32], fields[37] = "上证指数", "3584.58", "-0.50", "69051464"
+        body = 'v_sh000001="' + "~".join(fields) + '";\n'
+        response = MagicMock(content=body.encode("gbk"))
+        with patch("requests.get", return_value=response) as get:
+            rows = cmd_market_indices(Namespace(region="cn"))
+        get.assert_called_once()
+        assert rows[0]["price"] == 3584.58 and rows[0]["turnover"] == 690514640000.0
+        assert rows[2] == {"code": "sz399006", "name": "创业板指", "note": "data unavailable"}
 
 
 class TestKlineYfFailoverExtended:
@@ -1450,11 +1391,6 @@ class TestNewMarketKlineChain:
 class TestAkshareETF:
     """A-share ETFs (51/15xxxx etc.) must route to fund APIs, not stock APIs."""
 
-    @pytest.fixture(autouse=True)
-    def _tencent_down(self, monkeypatch):
-        """These cases exercise the eastmoney legs behind the single-symbol tencent source."""
-        monkeypatch.setattr("tools.stock_data._quote_tencent", MagicMock(side_effect=ValueError("tencent down")))
-
     def _etf_hist_df(self):
         import pandas as pd
 
@@ -1490,157 +1426,6 @@ class TestAkshareETF:
             result = _kline_akshare("600519", "daily", 2)
         assert len(result) == 2
         mock_ak.stock_zh_a_hist_em.assert_called_once()
-
-    def test_etf_quote_uses_fund_spot(self):
-        import pandas as pd
-
-        mock_ak = MagicMock()
-        mock_ak.fund_etf_spot_em.return_value = pd.DataFrame(
-            {
-                "代码": ["510300"],
-                "名称": ["沪深300ETF"],
-                "最新价": [4.05],
-                "涨跌幅": [1.25],
-                "成交量": [100000],
-                "成交额": [400000.0],
-                "开盘价": [4.0],
-                "最高价": [4.1],
-                "最低价": [3.9],
-                "昨收": [4.0],
-                "换手率": [3.0],
-            }
-        )
-        mock_ak.stock_zh_a_spot_em.side_effect = AssertionError("stock spot must not be called first for ETF")
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = quote_a("510300")
-        assert result["name"] == "沪深300ETF"
-        assert result["price"] == 4.05
-        assert result["is_etf"] is True
-
-    @patch("tools.stock_data._quote_efinance")
-    @patch("tools.stock_data._quote_tushare")
-    @patch("tools.stock_data._quote_akshare")
-    def test_stock_quote_has_no_etf_source(self, mock_ak, mock_ts, mock_ef):
-        """Non-ETF A-share quote chain unchanged: no fund spot attempt."""
-        mock_ak.return_value = {"price": 1800}
-        result = quote_a("600519")
-        assert result == {"price": 1800}
-        mock_ak.assert_called_once()
-
-    def test_stock_sticky_does_not_demote_etf_fund_spot(self):
-        """A stock-side sticky winner (sina) must not leak into ETF queries: ETFs
-        use their own sticky chain key, so akshare_etf keeps its declared priority."""
-        with (
-            patch("tools.stock_data._quote_akshare", side_effect=ValueError("em down")),
-            patch("tools.stock_data._quote_tushare", side_effect=ValueError("no token")),
-            patch("tools.stock_data._quote_efinance", side_effect=ValueError("em down")),
-            patch("tools.stock_data._quote_sina", return_value={"price": 100}),
-        ):
-            assert quote_a("600519") == {"price": 100}  # sina wins → sticky-quote_a
-        with (
-            patch("tools.stock_data._quote_akshare_etf", return_value={"price": 4.05, "is_etf": True}) as mock_etf,
-            patch("tools.stock_data._quote_sina", return_value={"price": 4.04}),
-        ):
-            result = quote_a("510300")
-        mock_etf.assert_called_once()  # fund spot still tried first despite the stock-side sticky
-        assert result["is_etf"] is True
-
-    def _etf_spot_df(self, **overrides):
-        """One fund_etf_spot_em row (real akshare column names) for 510300; values are
-        the numeric form akshare yields after its own pd.to_numeric coercion."""
-        import pandas as pd
-
-        data = {
-            "代码": ["510300"],
-            "名称": ["沪深300ETF"],
-            "最新价": [4.2],
-            "IOPV实时估值": [4.1],
-            "基金折价率": [2.44],
-            "涨跌额": [0.2],
-            "涨跌幅": [1.25],
-            "成交量": [100000],
-            "成交额": [400000.0],
-            "开盘价": [4.0],
-            "最高价": [4.3],
-            "最低价": [3.9],
-            "昨收": [4.0],
-            "换手率": [3.0],
-            "量比": [1.2],
-            "最新份额": [20000000000],
-            "流通市值": [8.4e10],
-            "总市值": [8.4e10],
-        }
-        data.update(overrides)
-        return pd.DataFrame(data)
-
-    def test_etf_quote_has_fund_fields(self):
-        """The ETF spot row already carries fund-native columns — quote must surface
-        them: iopv, fund_shares and the derived premium_discount_rate (positive =
-        price above IOPV, i.e. 溢价)."""
-        mock_ak = MagicMock()
-        mock_ak.fund_etf_spot_em.return_value = self._etf_spot_df()
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = quote_a("510300")
-        # stock-shaped fields intact
-        assert result["name"] == "沪深300ETF"
-        assert result["price"] == 4.2
-        assert result["is_etf"] is True
-        # ETF-only fields added
-        assert result["iopv"] == 4.1
-        assert result["fund_shares"] == 20000000000
-        assert result["premium_discount_rate"] == pytest.approx((4.2 - 4.1) / 4.1 * 100, abs=1e-4)
-
-    def test_etf_quote_discount_is_negative(self):
-        """Price below IOPV (折价) must come out negative."""
-        mock_ak = MagicMock()
-        mock_ak.fund_etf_spot_em.return_value = self._etf_spot_df(最新价=[3.92], IOPV实时估值=[4.0])
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = quote_a("510300")
-        assert result["premium_discount_rate"] == pytest.approx(-2.0, abs=1e-4)
-
-    def test_etf_quote_without_iopv_has_null_rate(self):
-        """Some ETFs (money/bond) publish no intraday IOPV — the keys stay but are None."""
-        mock_ak = MagicMock()
-        mock_ak.fund_etf_spot_em.return_value = self._etf_spot_df(IOPV实时估值=[float("nan")])
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = quote_a("510300")
-        assert result["is_etf"] is True
-        assert result["iopv"] is None
-        assert result["premium_discount_rate"] is None
-
-    def test_stock_quote_has_no_etf_fields(self):
-        """Plain A-share stock quote shape is unchanged: no ETF-only keys."""
-        import pandas as pd
-
-        mock_ak = MagicMock()
-        mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame(
-            {
-                "代码": ["600519"],
-                "名称": ["贵州茅台"],
-                "最新价": [1258.0],
-                "涨跌额": [-14.75],
-                "涨跌幅": [-1.16],
-                "成交量": [2623524],
-                "成交额": [3307926407.0],
-                "最高": [1274.98],
-                "最低": [1254.10],
-                "今开": [1273.93],
-                "昨收": [1272.75],
-                "总市值": [1580000000000.0],
-                "市盈率-动态": [19.32],
-                "市净率": [7.5],
-                "换手率": [0.19],
-                "量比": [1.14],
-                "振幅": [1.64],
-                "60日涨跌幅": [5.0],
-            }
-        )
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = _quote_akshare("600519")
-        assert result["name"] == "贵州茅台"
-        assert result["pe_basis"] == "dynamic"
-        for key in ("is_etf", "iopv", "premium_discount_rate", "fund_shares"):
-            assert key not in result
 
 
 # --------------- sector constituents / stock sectors (issue #18) ---------------
@@ -1682,14 +1467,24 @@ class TestFuzzyMatchSector:
 
 
 class TestConstituentsEm:
-    """Eastmoney board constituents via akshare, with fuzzy name resolution."""
+    """Eastmoney board constituents: board searched by name, fuzzy-resolved, fetched by BK code."""
+
+    @pytest.fixture(autouse=True)
+    def _search(self, monkeypatch):
+        self.keywords = []
+        self.rows = []
+        monkeypatch.setattr(
+            "tools.stock_data._em_codetable", lambda keyword, count: self.keywords.append(keyword) or self.rows
+        )
 
     def _mock_ak(self, industry_names, concept_names, cons_df):
-        import pandas as pd
-
+        self.rows = [
+            {"code": f"BK{i:04d}", "shortName": name, "market": 90, "securityTypeName": kind}
+            for i, (name, kind) in enumerate(
+                [(n, "行业") for n in industry_names] + [(n, "概念") for n in concept_names]
+            )
+        ] + [{"code": "600519", "shortName": "贵州茅台", "market": 1, "securityTypeName": "沪A"}]
         mock_ak = MagicMock()
-        mock_ak.stock_board_industry_name_em.return_value = pd.DataFrame({"板块名称": industry_names})
-        mock_ak.stock_board_concept_name_em.return_value = pd.DataFrame({"板块名称": concept_names})
         mock_ak.stock_board_industry_cons_em.return_value = cons_df
         mock_ak.stock_board_concept_cons_em.return_value = cons_df
         return mock_ak
@@ -1706,7 +1501,8 @@ class TestConstituentsEm:
         assert result["source"] == "eastmoney"
         assert result["count"] == 2
         assert result["constituents"][0] == {"code": "600276", "name": "恒瑞医药"}
-        mock_ak.stock_board_industry_cons_em.assert_called_once_with(symbol="医药生物")
+        mock_ak.stock_board_industry_cons_em.assert_called_once_with(symbol="BK0000")
+        mock_ak.stock_board_industry_name_em.assert_not_called()
 
     def test_fuzzy_resolves_concept_board(self):
         import pandas as pd
@@ -1717,7 +1513,7 @@ class TestConstituentsEm:
             result = _constituents_em("创新", "concept")
         assert result["sector"] == "创新药"
         assert result["board_type"] == "concept"
-        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="创新药")
+        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="BK0002")
 
     def test_intel_phrase_with_suffix_resolves_board(self):
         """Spec scenario: the intel keyword 「创新药板块」 resolves to the board 创新药."""
@@ -1726,9 +1522,10 @@ class TestConstituentsEm:
         cons_df = pd.DataFrame({"代码": ["600276"], "名称": ["恒瑞医药"]})
         mock_ak = self._mock_ak(["半导体"], ["创新药"], cons_df)
         with patch.dict(sys.modules, {"akshare": mock_ak}):
-            result = _constituents_em("创新药板块", "concept")
+            result = _constituents_em("创新药 板块", "concept")
         assert result["sector"] == "创新药"
-        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="创新药")
+        assert self.keywords == ["创新药"]
+        mock_ak.stock_board_concept_cons_em.assert_called_once_with(symbol="BK0001")
 
     def test_no_matching_board_raises(self):
         import pandas as pd
@@ -1740,6 +1537,16 @@ class TestConstituentsEm:
             pytest.raises(ValueError, match="no eastmoney industry board"),
         ):
             _constituents_em("创新药", "industry")
+
+    def test_board_of_other_kind_is_not_matched(self):
+        import pandas as pd
+
+        mock_ak = self._mock_ak([], ["白酒"], pd.DataFrame({"代码": ["600519"], "名称": ["贵州茅台"]}))
+        with (
+            patch.dict(sys.modules, {"akshare": mock_ak}),
+            pytest.raises(ValueError, match="no eastmoney industry board"),
+        ):
+            _constituents_em("白酒", "industry")
 
     def test_empty_constituents_raises(self):
         import pandas as pd
@@ -2805,7 +2612,7 @@ class TestQuoteTencent:
 
     @patch("requests.get")
     def test_etf_flag_set(self, mock_get):
-        """Parity with _quote_akshare_etf: ETF quotes carry is_etf even on the fallback path."""
+        """Parity with _quote_eastmoney: ETF quotes carry is_etf on every leg."""
         mock_get.return_value = MagicMock(content=_tencent_quote_payload(self._FIELDS))
         assert _quote_tencent("510300")["is_etf"] is True
         assert "is_etf" not in _quote_tencent("600519")
@@ -3429,10 +3236,12 @@ class TestChainSocketTimeout:
             assert quote_a("sh000001") == {"price": 3891.6}
         assert seen == [25, None]
 
-    def test_snapshot_a_uses_shared_guard(self, record_socket_timeout):
+    def test_snapshot_uses_shared_guard(self, record_socket_timeout):
+        from tools.stock_data import cmd_market_snapshot
+
         seen = record_socket_timeout()
-        with patch("tools.stock_data._failover", return_value=[{"symbol": "600519"}]):
-            assert snapshot_a() == [{"symbol": "600519"}]
+        with patch("tools.stock_data._failover", return_value=(1, [{"symbol": "600519"}])):
+            assert cmd_market_snapshot(Namespace(market="A", filters="{}"))["rows"] == [{"symbol": "600519"}]
         assert seen == [25, None]
 
 
@@ -3471,64 +3280,6 @@ class TestCapitalFlowMarketDetection:
         result = cmd_capital_flow(Namespace(symbol=symbol, mode="detail"))
         assert captured == {"stock": stock, "market": market}
         assert result[0]["main_net_inflow"] == 1.0e6
-
-
-class TestSnapshotHkUsErrorDetail:
-    """snapshot_hk/snapshot_us must surface the exception summary (type + message,
-    truncated) instead of a bare fixed string — same shape as snapshot_a's error."""
-
-    @pytest.mark.parametrize("market", ["HK", "US"])
-    def test_snapshot_bounds_timeoutless_provider_requests(self, monkeypatch, market):
-        import requests
-
-        from tools import stock_data
-
-        timeouts = []
-
-        def send(session, request, **kwargs):
-            timeouts.append(kwargs.get("timeout"))
-            raise requests.exceptions.ReadTimeout("provider stalled")
-
-        provider = MagicMock()
-        getattr(provider, f"stock_{market.lower()}_spot_em").side_effect = lambda: requests.get(
-            "https://example.invalid/snapshot"
-        )
-        monkeypatch.setattr(requests.sessions.Session, "send", send)
-        monkeypatch.setattr(stock_data.time, "sleep", lambda _: None)
-        with patch.dict(sys.modules, {"akshare": provider}):
-            result = stock_data.cmd_market_snapshot(Namespace(market=market))
-        assert timeouts == [25, 25, 25]
-        assert result == [{"error": f"{market} snapshot unavailable: ReadTimeout: provider stalled"}]
-
-    def test_hk_error_carries_summary(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
-        mock_ak = MagicMock()
-        mock_ak.stock_hk_spot_em.side_effect = ConnectionError("reset by peer")
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            from tools.stock_data import snapshot_hk
-
-            result = snapshot_hk()
-        assert result == [{"error": "HK snapshot unavailable: ConnectionError: reset by peer"}]
-
-    def test_us_error_carries_summary(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
-        mock_ak = MagicMock()
-        mock_ak.stock_us_spot_em.side_effect = ValueError("bad payload")
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            from tools.stock_data import snapshot_us
-
-            result = snapshot_us()
-        assert result == [{"error": "US snapshot unavailable: ValueError: bad payload"}]
-
-    def test_long_error_truncated(self, monkeypatch):
-        monkeypatch.setattr("tools.stock_data.time.sleep", lambda s, **_kw: None)
-        mock_ak = MagicMock()
-        mock_ak.stock_hk_spot_em.side_effect = ConnectionError("x" * 500)
-        with patch.dict(sys.modules, {"akshare": mock_ak}):
-            from tools.stock_data import snapshot_hk
-
-            result = snapshot_hk()
-        assert len(result[0]["error"]) == 200
 
 
 class TestFinancialsAKeys:
@@ -3572,6 +3323,55 @@ def _financials_a_df():
             "流动比率": [3.0, 2.9, 2.8],
         }
     )
+
+
+class TestFinancialsAStartYear:
+    """Sina pages are per report year: fetch from the current year back only as far as periods need."""
+
+    def _run(self, monkeypatch, published, **kwargs):
+        import pandas as pd
+
+        from tools import stock_data
+
+        starts = []
+
+        def fake(symbol, start_year):
+            starts.append(int(start_year))
+            return pd.DataFrame(
+                {"日期": [d for d in published if int(d[:4]) >= int(start_year)], "净资产收益率(%)": 1.0}
+            )
+
+        mock_ak = MagicMock()
+        mock_ak.stock_financial_analysis_indicator.side_effect = fake
+        monkeypatch.setattr(stock_data, "_cn_now", lambda: datetime(2026, 11, 17))
+        with patch.dict(sys.modules, {"akshare": mock_ak}):
+            result = stock_data.financials_a("600519", **kwargs)
+        return starts, result
+
+    def test_falls_back_one_year_when_current_year_not_out(self, monkeypatch):
+        starts, result = self._run(monkeypatch, ["2025-09-30", "2025-06-30"])
+        assert starts == [2026, 2025]
+        assert result["report_date"] == "2025-09-30"
+
+    def test_default_fetches_current_year_only(self, monkeypatch):
+        starts, result = self._run(monkeypatch, ["2026-09-30", "2026-06-30", "2025-12-31"])
+        assert starts == [2026]
+        assert result["report_date"] == "2026-09-30"
+
+    def test_quarterly_periods_span_years(self, monkeypatch):
+        starts, result = self._run(
+            monkeypatch,
+            ["2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30"]
+            + ["2025-06-30", "2025-03-31", "2024-12-31"],
+            periods=8,
+        )
+        assert starts == [2025, 2024]
+        assert result["available_periods"] == 8
+
+    def test_annual_steps_back_until_report_published(self, monkeypatch):
+        starts, result = self._run(monkeypatch, ["2026-03-31", "2025-09-30", "2024-12-31"], annual=True)
+        assert starts == [2025, 2024]
+        assert result["report_date"] == "2024-12-31"
 
 
 class TestFinancialsPeriodsA:

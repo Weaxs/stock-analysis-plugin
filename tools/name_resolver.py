@@ -2,7 +2,6 @@
 """Resolve Chinese stock names / pinyin / fuzzy input to stock codes."""
 
 import argparse
-import functools
 import json
 import re
 import sys
@@ -11,67 +10,33 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _cache import DAY, cached  # noqa: E402
 from _subproc import error_message, utf8_stdio  # noqa: E402
-from stock_data import _akshare_retry, normalize_us_symbol  # noqa: E402
+from stock_data import _em_codetable, normalize_us_symbol  # noqa: E402
+
+_A_TYPES = {"沪A", "深A", "京A", "科创板", "创业板"}
 
 
-def _load_stock_map() -> list[dict]:
-    def fetch():
-        import akshare as ak
-
-        df = _akshare_retry(ak.stock_zh_a_spot_em)
-        records = []
-        for row in df.to_dict("records"):
-            code, name = str(row["代码"]), row["名称"]
-            if (
-                len(code) != 6
-                or not code.isascii()
-                or not code.isdigit()
-                or not isinstance(name, str)
-                or not name.strip()
-            ):
-                raise ValueError("Stock name map contains invalid codes or names")
-            records.append({"code": code, "name": name})
-        return records
-
-    try:
-        return cached("stock-name-map:v1", DAY, fetch)
-    except Exception as e:
-        raise RuntimeError(f"Failed to load stock list: {e}") from e
-
-
-@functools.cache  # one attempt per process: import_parser resolves many names and failures are not disk-cached
-def _load_international_stock_map() -> list[dict]:
-    # Odd provider rows are skipped: one unexpected code must not drop a whole market's names.
-    def fetch_hk():
-        import akshare as ak
-
-        records = []
-        for row in _akshare_retry(ak.stock_hk_spot_em).to_dict("records"):
-            code, name = str(row["代码"]).split(".", 1)[0].zfill(5), row["名称"]
-            if code.isdigit() and len(code) == 5 and isinstance(name, str) and name.strip():
-                records.append({"code": f"{code}.HK", "name": name})
-        return records
-
-    def fetch_us():
-        import akshare as ak
-
-        records = []
-        for row in _akshare_retry(ak.stock_us_spot_em).to_dict("records"):
-            code, name = normalize_us_symbol(row["代码"]), row["名称"]
-            if re.fullmatch(r"[A-Z0-9-]{1,10}", code) and isinstance(name, str) and name.strip():
-                records.append({"code": code, "name": name})
-        return records
-
-    records = []
-    for key, fetch in (("stock-name-map:hk:v1", fetch_hk), ("stock-name-map:us:v1", fetch_us)):
-        try:
-            records.extend(cached(key, DAY, fetch))
-        except Exception:
-            # One unavailable market must not hide the other markets' names.
+def _search(query: str, count: int) -> list[dict]:
+    """Eastmoney code-table search (code / name / pinyin / initials), kept to A/HK/US listed stocks."""
+    stocks = []
+    for row in _em_codetable(query, count):
+        code, name, market, kind = (
+            str(row.get("code", "")),
+            row.get("shortName"),
+            row.get("market"),
+            row.get("securityTypeName"),
+        )
+        if not isinstance(name, str) or not name.strip():
             continue
-    return records
+        if market in (0, 1) and kind in _A_TYPES and re.fullmatch(r"\d{6}", code):
+            stocks.append({"code": code, "name": name})
+        elif market == 116 and kind == "港股" and re.fullmatch(r"\d{5}", code):
+            stocks.append({"code": f"{code}.HK", "name": name})
+        elif market in (105, 106, 107) and kind == "美股":
+            symbol = normalize_us_symbol(code)
+            if re.fullmatch(r"[A-Z0-9-]{1,10}", symbol):
+                stocks.append({"code": symbol, "name": name})
+    return stocks
 
 
 def _to_pinyin(text: str) -> str:
@@ -140,27 +105,15 @@ def _resolve_stocks(query: str, top: int, stocks: list[dict]) -> list[dict]:
 
 
 def resolve(query: str, top: int = 5) -> list[dict]:
-    load_error = None
-    try:
-        stocks = _load_stock_map()
-        local = _resolve_stocks(query, top, stocks)
-    except Exception as exc:
-        stocks, local, load_error = [], [], exc
     query = query.strip()
-    code_like = re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]{0,14}", query)
-    # A substring hit (京东 → 京东方A) is not proof the user meant an A share (京东集团-SW is HK).
-    partial_name = bool(local) and "score" not in local[0] and query != local[0]["name"] and query in local[0]["name"]
-    # Pinyin/initials scores are not proof either (特斯拉 → 天士力 scores 0.9), so only literal hits short-circuit.
-    if local and "score" not in local[0] and not code_like and not partial_name:
-        return local
-    international = _load_international_stock_map()
-    if international:
-        hits = _resolve_stocks(query, top, stocks + international)
-        if load_error is None or (hits and "score" not in hits[0]):  # fuzzy-only hits are a miss
-            return hits
-    if load_error is not None:
-        raise load_error
-    return local
+    if not query:
+        return []
+    try:
+        # The provider ranks loosely; over-fetch so the local exact/prefix/contains/pinyin order decides.
+        stocks = _search(query, max(top, 20))
+    except Exception as e:
+        raise RuntimeError(f"Failed to search stock names: {error_message(e)}") from e
+    return _resolve_stocks(query, top, stocks)
 
 
 def main():

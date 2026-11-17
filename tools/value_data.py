@@ -19,7 +19,15 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cache import DAY, cached
 from _subproc import error_message, scrub_secrets, socket_timeout, utf8_stdio
-from stock_data import _A_INDEX_RE, _cn_code, _cn_now, _yf_hk_symbol, detect_market, normalize_stock_code
+from stock_data import (
+    _A_INDEX_RE,
+    _cn_code,
+    _cn_now,
+    _em_datacenter,
+    _yf_hk_symbol,
+    detect_market,
+    normalize_stock_code,
+)
 from trading_calendar import _MARKET_TZ, market_now
 
 YF_MARKETS = ("US", "JP", "KR", "TW")
@@ -395,10 +403,7 @@ def hk_board_meetings(board):
 
 
 def earnings_calendar(args):
-    import akshare as ak
-
     stamp = iso(args.report_date)
-    suffix = {"03-31": "一季", "06-30": "半年报", "09-30": "三季", "12-31": "年报"}
     if not 1 <= args.top <= 500 or (args.report_date and not stamp):
         raise ValueError("report_date must be a valid date and top must be in 1..500")
     market = detect_market(args.symbol) if args.symbol else "A"
@@ -470,37 +475,38 @@ def earnings_calendar(args):
             + ["provider-only schedules have unverified fiscal periods and are not assigned to requested report_date"],
             "as_of": today,
         }
-    if not stamp or stamp[5:] not in suffix:
+    if not stamp or stamp[5:] not in ("03-31", "06-30", "09-30", "12-31"):
         raise ValueError("report_date must be a quarter end for A-share earnings calendars")
     symbol = ""
     if args.symbol:
         market, symbol = stock_identity(args.symbol)
         if market != "A":
             raise ValueError("earnings calendar covers A shares only")
-    result = {"report_date": stamp, "source": "cninfo/eastmoney"}
-    capture(
-        result,
-        "disclosures",
-        lambda: dataset(
-            f"disclosure:{stamp}",
-            lambda: ak.stock_report_disclosure(market="沪深京", period=stamp[:4] + suffix[stamp[5:]]),
-        ),
-    )
-    capture(
-        result, "forecasts", lambda: dataset(f"forecast:{stamp}", lambda: ak.stock_yjyg_em(date=stamp.replace("-", "")))
-    )
+    result = {"report_date": stamp, "source": "eastmoney"}
+    # Server-side filter + limit: one page holds the requested rows, `count` the full total.
+    condition = f"(REPORT_DATE='{stamp}')" + (f'(SECURITY_CODE="{symbol}")' if symbol else "")
+    totals = {}
+    queries = {
+        "disclosures": ("RPT_PUBLIC_BS_APPOIN", "APPOINT_PUBLISH_DATE,SECURITY_CODE", "1,1"),
+        "forecasts": ("RPT_PUBLIC_OP_NEWPREDICT", "NOTICE_DATE,SECURITY_CODE", "-1,-1"),
+    }
+    for key, (report, sort, order) in queries.items():
+
+        def fetch(report=report, sort=sort, order=order, key=key):
+            totals[key], rows = _em_datacenter(report, condition, sort, args.top, order)
+            return rows
+
+        capture(result, key, fetch)
     for key in ("disclosures", "forecasts"):
-        rows = result.get(key, [])
-        if symbol:
-            rows = [r for r in rows if str(r.get("股票代码", "")).zfill(6) == symbol]
         output = []
-        for row in rows:
-            item = {"symbol": str(row.get("股票代码", "")).zfill(6), "name": row.get("股票简称")}
+        for row in result.get(key, []):
+            item = {"symbol": str(row.get("SECURITY_CODE", "")).zfill(6), "name": row.get("SECURITY_NAME_ABBR")}
             if key == "disclosures":
-                revised = [iso(row.get(c)) for c in ("首次预约", "初次变更", "二次变更", "三次变更")]
+                columns = ("FIRST_APPOINT_DATE", "FIRST_CHANGE_DATE", "SECOND_CHANGE_DATE", "THIRD_CHANGE_DATE")
+                revised = [iso(row.get(c)) for c in columns]
                 item.update(
                     scheduled_date=next((d for d in reversed(revised) if d), None),
-                    actual_date=iso(row.get("实际披露")),
+                    actual_date=iso(row.get("ACTUAL_PUBLISH_DATE")),
                     original_scheduled_date=revised[0],
                     scheduled_date_revisions=[
                         {"revision": i, "scheduled_date": d} for i, d in enumerate(revised[1:], 1) if d
@@ -508,16 +514,16 @@ def earnings_calendar(args):
                 )
             else:
                 item.update(
-                    announcement_date=iso(row.get("公告日期")),
-                    forecast_type=row.get("预告类型"),
-                    indicator=row.get("预测指标"),
-                    forecast_value=number(row.get("预测数值")),
-                    change_pct=number(row.get("业绩变动幅度")),
-                    reason=row.get("业绩变动原因"),
+                    announcement_date=iso(row.get("NOTICE_DATE")),
+                    forecast_type=row.get("PREDICT_TYPE"),
+                    indicator=row.get("PREDICT_FINANCE"),
+                    forecast_value=number(row.get("FORECAST_JZ")),
+                    change_pct=number(row.get("INCREASE_JZ")),
+                    reason=row.get("CHANGE_REASON_EXPLAIN"),
                 )
             output.append(item)
-        result[key + "_total"] = len(output)
-        result[key] = output[: args.top]
+        result[key + "_total"] = totals.get(key, 0)
+        result[key] = output
     if result.get("warnings") and not result["disclosures"] and not result["forecasts"]:
         raise ValueError("earnings calendar sources unavailable")
     return result
@@ -840,9 +846,10 @@ def hk_dividend_ranking(report_date=""):
     return cached(f"hk-dividend-ranking:{stamp}", DAY, fetch)
 
 
-def dividend_ranking(report_date="", market="A"):
-    import akshare as ak
+def dividend_ranking(report_date="", market="A", top=500, codes=None):
+    """Implemented cash-dividend plans ranked by yield, sorted and limited server-side.
 
+    `codes` (A only) restricts the query to those stocks — the screener asks only for its candidates."""
     if market == "HK":
         return hk_dividend_ranking(report_date)
     if market != "A":
@@ -850,23 +857,32 @@ def dividend_ranking(report_date="", market="A"):
     stamp = iso(report_date) if report_date else f"{_cn_now().date().year - 1}-12-31"
     if not stamp or stamp[5:] not in ("03-31", "06-30", "09-30", "12-31"):
         raise ValueError("dividend report_date must be a quarter end")
-    rows = dataset(f"dividend-ranking:{stamp}", lambda: ak.stock_fhps_em(date=stamp.replace("-", "")))
+    base = f"(REPORT_DATE='{stamp}')(ASSIGN_PROGRESS=\"实施分配\")"
+    if codes is None:
+        queries = [(base, top)]
+    else:
+        codes = [c for c in codes if re.fullmatch(r"\d{6}", str(c))]
+        chunks = [codes[i : i + 200] for i in range(0, len(codes), 200)]
+        queries = [(base + "(SECURITY_CODE in (" + ",".join(f'"{c}"' for c in chunk) + "))", 500) for chunk in chunks]
+    rows = []
+    for condition, size in queries:
+        rows += _em_datacenter("RPT_SHAREBONUS_DET", condition, "DIVIDENT_RATIO", size)[1]
     return {
         "report_date": stamp,
         "source": "eastmoney",
         "yield_basis": "provider report-period cash dividend yield, percent",
         "items": [
             {
-                "symbol": str(r.get("代码", "")).zfill(6),
-                "name": r.get("名称"),
+                "symbol": str(r.get("SECURITY_CODE", "")).zfill(6),
+                "name": r.get("SECURITY_NAME_ABBR"),
                 # Eastmoney reports this ratio as a fraction (0.0101 = 1.01%).
-                "dividend_yield": round(number(r.get("现金分红-股息率")) * 100, 6),
-                "ex_date": iso(r.get("除权除息日")),
-                "announcement_date": iso(r.get("最新公告日期")),
-                "status": r.get("方案进度"),
+                "dividend_yield": round(number(r.get("DIVIDENT_RATIO")) * 100, 6),
+                "ex_date": iso(r.get("EX_DIVIDEND_DATE")),
+                "announcement_date": iso(r.get("NOTICE_DATE")),
+                "status": r.get("ASSIGN_PROGRESS"),
             }
             for r in rows
-            if r.get("方案进度") == "实施分配" and number(r.get("现金分红-股息率")) is not None
+            if number(r.get("DIVIDENT_RATIO")) is not None
         ],
     }
 
@@ -877,7 +893,7 @@ def dividends(args):
     if args.mode == "ranking":
         if args.symbol:
             raise ValueError("ranking covers all A shares; omit symbol")
-        result = dividend_ranking(args.report_date, getattr(args, "market", "A"))
+        result = dividend_ranking(args.report_date, getattr(args, "market", "A"), top=args.top)
         result["items"] = sorted(result["items"], key=lambda r: r["dividend_yield"], reverse=True)[: args.top]
         return result
     market = detect_market(args.symbol)
