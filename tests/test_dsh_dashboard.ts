@@ -192,10 +192,14 @@ try {
       assert.deepEqual([found?.name, found?.version], [dshPkg.name, dshPkg.version], `${dir} resolves the dsh package.json`);
       assert.equal(found?.latest, undefined, "a checkout never offers a registry update");
     }
-    const installed = join(temp, "node_modules", "dsh-stock-analysis");
-    mkdirSync(join(installed, "dist"), { recursive: true });
-    writeFileSync(join(installed, "package.json"), JSON.stringify({ name: "dsh-stock-analysis", version: "0.2.11" }));
-    assert.equal(typeof installedPlugin(join(installed, "dist"))?.latest, "function", "registry installs check for updates");
+    for (const name of ["dsh-stock-analysis", "@weaxs/dsh-stock-analysis"]) {
+      const installed = join(temp, "node_modules", name);
+      mkdirSync(join(installed, "dist"), { recursive: true });
+      writeFileSync(join(installed, "package.json"), JSON.stringify({ name, version: "0.2.11" }));
+      const found = installedPlugin(join(installed, "dist"));
+      assert.equal(found?.name, name);
+      assert.equal(typeof found?.latest, "function", `${name} registry installs check for updates`);
+    }
     assert.equal(installedPlugin(join(temp, "nothing")), undefined);
   }
 

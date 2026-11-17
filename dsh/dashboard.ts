@@ -601,7 +601,7 @@ interface WebServerContext extends Context {
 }
 
 export function installedPlugin(here: string): PluginVersion | undefined {
-  // Source: dsh/package.json next to this file; published: dist/index.js sits one level below it.
+  // Version comes from dsh/package.json: next to this file in source, one level up from published dist/index.js.
   for (const file of [join(here, "package.json"), join(here, "..", "package.json")]) {
     try {
       const { name, version } = JSON.parse(readFileSync(file, "utf8")) as { name?: unknown; version?: unknown };
