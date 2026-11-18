@@ -200,7 +200,7 @@ function smokeHermes() {
   sh(python, ["-m", "pip", "install", "--quiet", "--upgrade", "pip"]);
   const source = join(WORK, "hermes-source");
   sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.23.2", "https://github.com/NousResearch/hermes-agent.git", source]);
-  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "3b421578588243f920886e6fe79a6faa87ea026e", "Hermes source commit must match verified release");
+  assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "ae2a81ccc00e9b7c06301523e5bb09608397149c", "Hermes source commit must match verified release");
   // Hermes' uv.lock carries dependency overrides that pip cannot represent.
   sh(python, ["-m", "pip", "install", "--quiet", "uv==0.13.6"]);
   const uv = join(binDir, process.platform === "win32" ? "uv.exe" : "uv");
