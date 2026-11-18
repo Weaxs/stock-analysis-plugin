@@ -558,6 +558,63 @@ def test_quotes_batch_keeps_input_order_and_isolates_failures(monkeypatch):
     assert result[1] == {"error": "provider down"}
 
 
+def test_klines_batch_passes_count_and_keeps_errors_per_row(monkeypatch):
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    seen = []
+
+    def kline(args):
+        seen.append((args.symbol, args.period, args.count))
+        return {"error": "no data"} if args.symbol == "BAD" else [{"close": 1}]
+
+    monkeypatch.setattr(stock_data, "cmd_kline", kline)
+    result = stock_data.cmd_klines(Namespace(symbols="sh000001,BAD", count=30))
+    assert result == [[{"close": 1}], {"error": "no data"}]
+    assert sorted(seen) == [("BAD", "daily", 30), ("sh000001", "daily", 30)]
+
+
+def test_baostock_sessions_do_not_overlap_across_threads(monkeypatch):
+    import contextlib
+    import sys
+    import threading
+    import time
+    import types
+
+    from tools import stock_data
+
+    active, overlaps = [], []
+
+    class Result:
+        error_code, fields = "0", ["date", "close"]
+
+        def next(self):
+            return False
+
+    def login():
+        overlaps.append(bool(active))
+        active.append(1)
+        time.sleep(0.05)
+
+    def logout():
+        active.pop()
+
+    fake = types.SimpleNamespace(login=login, logout=logout, query_history_k_data_plus=lambda *a, **k: Result())
+    monkeypatch.setitem(sys.modules, "baostock", fake)
+
+    def fetch():
+        with contextlib.suppress(ValueError):  # the fake session returns no rows
+            stock_data._kline_baostock("600519", "daily", 5)
+
+    threads = [threading.Thread(target=fetch) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert overlaps == [False, False, False]
+
+
 def test_quotes_batch_rejects_oversized_input():
     from argparse import Namespace
 

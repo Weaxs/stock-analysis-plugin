@@ -183,8 +183,8 @@ def test_missing_or_invalid_factors_fail_over_without_using_raw_prices(monkeypat
     rows = stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1))
     assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 11, "adjusted": "qfq"}]
     stock_data._kline_sina.assert_not_called()
-    # The winning adjusted source stays preferred on the next call.
-    assert stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=1))[0]["close"] == rows[0]["close"]
+    # The winning adjusted source stays preferred on the next call (count 200 misses the 60-bar cache bucket).
+    assert stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=200))[0]["close"] == rows[0]["close"]
     assert stock_data._kline_baostock.call_count == 2
 
 
@@ -226,7 +226,7 @@ def test_prefixed_stock_uses_stock_adjustment_chain():
     stock_data._kline_akshare.return_value = [{"close": 11}]
     rows = stock_data.cmd_kline(Namespace(symbol="sh600519", period="daily", count=1))
     assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 11, "adjusted": "qfq"}]
-    stock_data._kline_akshare.assert_called_once_with("600519", "daily", 1)
+    stock_data._kline_akshare.assert_called_once_with("600519", "daily", 60)
 
 
 def test_etf_skips_tushare_stock_prices(monkeypatch):
@@ -237,3 +237,13 @@ def test_etf_skips_tushare_stock_prices(monkeypatch):
     rows = stock_data.cmd_kline(Namespace(symbol="510300", period="daily", count=1))
     assert [{k: row[k] for k in ("close", "adjusted")} for row in rows] == [{"close": 3, "adjusted": "qfq"}]
     post.assert_not_called()
+
+
+def test_kline_counts_in_one_bucket_share_a_cached_fetch():
+    stock_data._kline_akshare.side_effect = None
+    stock_data._kline_akshare.return_value = [{"date": f"2026-05-{d:02d}", "close": d} for d in range(1, 31)]
+    first = stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=30))
+    second = stock_data.cmd_kline(Namespace(symbol="600519", period="daily", count=2))
+    stock_data._kline_akshare.assert_called_once_with("600519", "daily", 60)
+    assert len(first) == 30
+    assert [row["close"] for row in second] == [29, 30]
