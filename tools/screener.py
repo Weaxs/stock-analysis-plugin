@@ -374,7 +374,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     pool.shutdown(wait=False)
     snapshot = fetch_snapshot(market, filters)
     if isinstance(snapshot, dict) and "error" in snapshot:
-        return snapshot
+        return {**snapshot, "market": market}
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("rows"), list):
         return {"error": "failed to fetch market snapshot", "market": market}
 

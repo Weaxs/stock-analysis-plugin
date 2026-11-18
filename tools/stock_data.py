@@ -2262,6 +2262,45 @@ def _snapshot_clist(market: str, floor: float):
     return total, rows
 
 
+# Non-eastmoney HK/US leg: TradingView's public scanner, same columns as _CLIST_SNAPSHOT_COLUMNS.
+_TV_BASE = ["name", "description", "close", "change", "volume", "Value.Traded", "price_earnings_ttm"]
+_TV_SNAPSHOT_COLUMNS = {
+    "HK": ("hongkong", [*_TV_BASE, "price_book_fq", "market_cap_basic"]),
+    "US": ("america", [*_TV_BASE, "market_cap_basic"]),
+}
+_TV_KEYS = {"close": "price", "change": "change_pct", "Value.Traded": "turnover"}
+_TV_KEYS |= {"price_earnings_ttm": "pe", "price_book_fq": "pb", "market_cap_basic": "market_cap"}
+
+
+def _snapshot_tradingview(market: str, floor: float):
+    import requests
+
+    region, columns = _TV_SNAPSHOT_COLUMNS[market]
+    filters = [{"left": "type", "operation": "equal", "right": "stock"}]
+    filters += [{"left": "is_primary", "operation": "equal", "right": True}]
+    rows, total = [], None
+    while len(rows) < _SNAPSHOT_MAX_ROWS:
+        body = {"columns": columns, "filter": filters, "range": [len(rows), len(rows) + 1000]}
+        body["sort"] = {"sortBy": "market_cap_basic", "sortOrder": "desc"}
+        resp = requests.post(f"https://scanner.tradingview.com/{region}/scan", json=body, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+        total, data = payload.get("totalCount"), payload.get("data") or []
+        for item in data:
+            values = dict(zip(columns, item.get("d") or []))
+            cap = _parse_float(values.get("market_cap_basic"))
+            if cap is None or cap < floor:
+                return total, rows
+            row = {_TV_KEYS.get(col, col): _parse_float(values.get(col)) for col in columns[2:]}
+            row.update(symbol=_clist_symbol(market, values.get("name")), name=values.get("description"))
+            rows.append(_clean_row(row | {"pe_basis": "ttm"}))
+        if len(data) < 1000:
+            break
+    if not rows:
+        raise ValueError("tradingview scanner returned empty data")
+    return total, rows
+
+
 def normalize_us_symbol(value) -> str:
     symbol = str(value).strip().upper()
     symbol = re.sub(r"^(?:105|106|107)[.]", "", symbol)
@@ -2280,7 +2319,10 @@ def cmd_market_snapshot(args):
         if market == "A":
             legs = [("eastmoney", lambda: _snapshot_xuangu(filters)), ("tencent", lambda: _snapshot_tencent(filters))]
         elif market in _CLIST_SNAPSHOT_COLUMNS:
-            legs = [("eastmoney", lambda: _snapshot_clist(market, floor))]
+            legs = [
+                ("eastmoney", lambda: _snapshot_clist(market, floor)),
+                ("tradingview", lambda: _snapshot_tradingview(market, floor)),
+            ]
         else:
             return {"error": f"Unknown market: {market}"}
         with socket_timeout(25):
