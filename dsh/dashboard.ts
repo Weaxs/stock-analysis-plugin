@@ -221,6 +221,8 @@ interface Job {
   region: Region;
   priority: number;
   run: () => Promise<unknown>;
+  /** Shares a limiter slot through the quote batch instead of taking its own. */
+  batched?: boolean;
 }
 
 /** Small priority queue so a burst of trend/stat work never delays quotes. */
@@ -313,11 +315,34 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   const py = async (script: string, args: string[], timeoutMs: number) => parseJson(await runPy(script, args, timeoutMs, abort.signal));
 
+  let pendingQuotes: Array<{ symbol: string; priority: number; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+  function batchedQuote(symbol: string, priority: number): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!pendingQuotes.length) queueMicrotask(flushQuotes);
+      pendingQuotes.push({ symbol, priority, resolve, reject });
+    });
+  }
+  /** Every quote due in one tick shares one `stock_data.py quotes` process (<= 30 watchlist + 6 index codes; the CLI takes 40). */
+  function flushQuotes() {
+    const batch = pendingQuotes;
+    pendingQuotes = [];
+    const symbols = batch.map(item => item.symbol);
+    // The CLI times out slow rows itself after 30 s, so one hung provider cannot fail the whole batch.
+    limiter.run(Math.min(...batch.map(item => item.priority)), () => py("stock_data.py", ["quotes", symbols.join(",")], 40_000)).then(
+      rows => {
+        if (!Array.isArray(rows) || rows.length !== batch.length) {
+          throw new Error(safeError((rows as { error?: unknown } | null)?.error, "报价数据格式不正确"));
+        }
+        batch.forEach((item, index) => item.resolve(rows[index]));
+      },
+    ).catch(error => batch.forEach(item => item.reject(error)));
+  }
+
   function quoteJob(symbol: string, priority: number): Job {
     return {
-      key: `quote:${symbol}`, kind: "quote", region: symbolRegion(symbol), priority,
+      key: `quote:${symbol}`, kind: "quote", region: symbolRegion(symbol), priority, batched: true,
       run: async () => {
-        const value = await py("stock_data.py", ["quote", dashboardQuoteSymbol(symbol)], 20_000) as Record<string, unknown> | null;
+        const value = await batchedQuote(dashboardQuoteSymbol(symbol), priority) as Record<string, unknown> | null;
         if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("报价数据格式不正确");
         if (value.error) throw new Error(safeError(value.error, "报价暂不可用"));
         return { ...value, symbol };
@@ -409,7 +434,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     const entry = slot(job.key);
     entry.running = true;
     entry.force = false;
-    const task = limiter.run(job.priority, job.run).then(
+    const task = (job.batched ? job.run() : limiter.run(job.priority, job.run)).then(
       value => {
         entry.value = value;
         entry.error = null;

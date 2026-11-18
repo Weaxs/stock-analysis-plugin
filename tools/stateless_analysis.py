@@ -500,7 +500,7 @@ def portfolio(p):
             centered = raw_vector - raw_vector.mean()
             history_data[id(history)] = {
                 "days": days,
-                "days_array": np.array(days, dtype=str),
+                "ordinals": np.array(days, dtype="datetime64[D]").astype(np.int64),
                 "center": center,
                 "scale": scale,
                 "raw": raw_vector,
@@ -508,13 +508,14 @@ def portfolio(p):
                 "norm": np.linalg.norm(centered),
             }
 
-        def scaled_vector(history, common):
+        def scaled_vector(history, indices):
             data = history_data[id(history)]
-            if common == data["days"]:
+            days = data["days"]
+            if len(indices) == len(days):
                 return data["centered"], data["norm"]
 
             def exact_common_vector():
-                values = history_returns(history, common, returns_cache)
+                values = history_returns(history, [days[index] for index in indices], returns_cache)
                 center = values[0]
                 deviations = [value - center for value in values]
                 scale = max((abs(value) for value in deviations), default=0)
@@ -525,10 +526,9 @@ def portfolio(p):
             center, scale = data["center"], data["scale"]
             if scale == 0 or scale > 1000000 or scale < Fraction(1, 1000000):
                 return exact_common_vector()
-            indices = np.searchsorted(data["days_array"], common)
             subset = data["raw"][indices[1:] - 1].copy()
             for index in np.flatnonzero(np.diff(indices) != 1):
-                gap = history_returns(history, [common[index], common[index + 1]], returns_cache)[0]
+                gap = history_returns(history, [days[indices[index]], days[indices[index + 1]]], returns_cache)[0]
                 try:
                     gap_value = float((gap - center) / scale)
                 except OverflowError:
@@ -550,25 +550,23 @@ def portfolio(p):
 
         def correlation_row(pair):
             a, b = pair
-            common = [day for day in history_data[id(histories[a])]["days"] if day in histories[b]]
+            _, a_indices, b_indices = np.intersect1d(
+                history_data[id(histories[a])]["ordinals"],
+                history_data[id(histories[b])]["ordinals"],
+                assume_unique=True,
+                return_indices=True,
+            )
             corr = None
-            if len(common) >= 4:
-                x, x_norm = scaled_vector(histories[a], common)
-                y, y_norm = scaled_vector(histories[b], common)
+            if len(a_indices) >= 4:
+                x, x_norm = scaled_vector(histories[a], a_indices)
+                y, y_norm = scaled_vector(histories[b], b_indices)
                 if x_norm and y_norm:
                     correlation = float(np.dot(x, y) / (x_norm * y_norm))
                     corr = max(-1.0, min(1.0, correlation))
-            return {"symbols": [a, b], "correlation": corr, "return_samples": max(len(common) - 1, 0)}
+            return {"symbols": [a, b], "correlation": corr, "return_samples": max(len(a_indices) - 1, 0)}
 
         pairs = [(a, b) for i, a in enumerate(symbols) for b in symbols[i + 1 :]]
-        if pairs and max(len(history) for history in histories.values()) * len(pairs) > 200000:
-            import os
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=min(2, os.cpu_count() or 1)) as pool:
-                correlations = list(pool.map(correlation_row, pairs))
-        else:
-            correlations = [correlation_row(pair) for pair in pairs]
+        correlations = [correlation_row(pair) for pair in pairs]
     warnings = [
         "Price P&L uses current FX, excludes historical FX P&L, fees and distributions; stop risk is a scenario, not a guaranteed loss limit.",
         "Correlations use local-price returns on common dates, exclude FX, and do not forecast future dependence.",

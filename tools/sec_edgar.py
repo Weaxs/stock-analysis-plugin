@@ -19,6 +19,7 @@ from _cache import DAY, WEEK, cached
 from _subproc import utf8_stdio
 
 _last_request = 0.0
+SEC_MIN_INTERVAL = 0.5
 
 
 def identity():
@@ -31,7 +32,7 @@ def identity():
 def sec_get(url, as_json=True, stream=False):
     global _last_request
     agent = identity()
-    time.sleep(max(0, 0.5 - (time.monotonic() - _last_request)))
+    time.sleep(max(0, SEC_MIN_INTERVAL - (time.monotonic() - _last_request)))
     _last_request = time.monotonic()
     try:
         response = requests.get(
