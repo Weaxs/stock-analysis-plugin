@@ -10,6 +10,9 @@ def response(data):
     return SimpleNamespace(raise_for_status=lambda: None, json=lambda: data, text=data if isinstance(data, str) else "")
 
 
+pytestmark = pytest.mark.usefixtures("no_sec_throttle")
+
+
 @pytest.fixture(autouse=True)
 def sec_identity(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "stock-analysis-plugin test@example.com")

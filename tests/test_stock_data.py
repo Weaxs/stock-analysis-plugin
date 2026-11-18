@@ -540,3 +540,79 @@ def test_us_sector_rankings_use_etf_proxies(monkeypatch):
     assert result[0]["proxy"] == "SPDR Select Sector ETF"
     concept = stock_data.cmd_sector_rankings(Namespace(top=5, direction="top", board_type="concept", market="US"))
     assert "error" in concept
+
+
+def test_quotes_batch_keeps_input_order_and_isolates_failures(monkeypatch):
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    def quote(args):
+        if args.symbol == "BAD":
+            raise RuntimeError("provider down")
+        return {"symbol": args.symbol, "price": 1}
+
+    monkeypatch.setattr(stock_data, "cmd_quote", quote)
+    result = stock_data.cmd_quotes(Namespace(symbols="AAPL, BAD,sh600519,"))
+    assert [row.get("symbol") for row in result] == ["AAPL", None, "sh600519"]
+    assert result[1] == {"error": "provider down"}
+
+
+def test_quotes_batch_rejects_oversized_input():
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    assert "error" in stock_data.cmd_quotes(Namespace(symbols=",".join(f"S{i}" for i in range(41))))
+    assert "error" in stock_data.cmd_quotes(Namespace(symbols=" , "))
+
+
+def test_quotes_batch_times_out_only_the_slow_row(monkeypatch):
+    import time
+    from argparse import Namespace
+
+    from tools import stock_data
+
+    def quote(args):
+        if args.symbol == "SLOW":
+            time.sleep(1)
+        return {"symbol": args.symbol, "price": 1}
+
+    monkeypatch.setattr(stock_data, "cmd_quote", quote)
+    monkeypatch.setattr(stock_data, "QUOTES_DEADLINE", 0.2)
+    started = time.monotonic()
+    result = stock_data.cmd_quotes(Namespace(symbols="AAPL,SLOW,MSFT"))
+    assert time.monotonic() - started < 0.9
+    assert result == [{"symbol": "AAPL", "price": 1}, {"error": "quote timed out"}, {"symbol": "MSFT", "price": 1}]
+
+
+def test_quotes_cli_exits_cleanly_while_a_timed_out_thread_still_writes_stderr():
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = """
+import sys, time
+from tools import stock_data
+
+def quote(args):
+    if args.symbol == "SLOW":
+        while True:
+            sys.stderr.write("provider noise\\\\n")
+    return {"symbol": args.symbol, "price": 1}
+
+stock_data.cmd_quote = quote
+stock_data.QUOTES_DEADLINE = 0.2
+sys.argv = ["stock_data.py", "quotes", "AAPL,SLOW"]
+stock_data.main()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr[-300:]
+    assert json.loads(result.stdout) == [{"symbol": "AAPL", "price": 1}, {"error": "quote timed out"}]

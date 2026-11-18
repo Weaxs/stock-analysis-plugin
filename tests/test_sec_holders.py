@@ -8,6 +8,8 @@ import pytest
 
 from tools import sec_edgar
 
+pytestmark = pytest.mark.usefixtures("no_sec_throttle")
+
 
 def bulk_zip(submissions, covers, positions):
     output = io.BytesIO()

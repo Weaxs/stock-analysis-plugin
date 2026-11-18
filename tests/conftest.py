@@ -120,3 +120,14 @@ def isolate_slow_data_cache(tmp_path, monkeypatch):
     import _cache
 
     monkeypatch.setattr(_cache, "CACHE_DIR", tmp_path / "slow-data")
+
+
+@pytest.fixture
+def no_sec_throttle(monkeypatch):
+    """Drop sec_get's 0.5 s request spacing; tools/ also import sec_edgar flat, a second module object."""
+    import importlib
+
+    from tools import sec_edgar
+
+    for module in (sec_edgar, importlib.import_module("sec_edgar")):
+        monkeypatch.setattr(module, "SEC_MIN_INTERVAL", 0)

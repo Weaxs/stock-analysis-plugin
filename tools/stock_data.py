@@ -1450,6 +1450,37 @@ def cmd_quote(args):
     return result
 
 
+QUOTES_DEADLINE = 30  # dsh/dashboard.ts allows the whole process 40 s
+QUOTES_MAX = 40
+
+
+def cmd_quotes(args):
+    """Several quotes in one process for the dsh dashboard; rows follow input order, a failure stays per row."""
+    import threading
+
+    symbols = [symbol.strip() for symbol in args.symbols.split(",") if symbol.strip()]
+    if not 0 < len(symbols) <= QUOTES_MAX:
+        return {"error": f"quotes takes 1-{QUOTES_MAX} comma-separated symbols"}
+    rows = [{"error": "quote timed out"}] * len(symbols)
+    workers = threading.BoundedSemaphore(8)
+
+    def one(index, symbol):
+        with workers:
+            try:
+                rows[index] = cmd_quote(argparse.Namespace(symbol=symbol))
+            except Exception as e:
+                rows[index] = {"error": error_message(e)}
+
+    # Daemon threads: a provider that hangs past the deadline cannot keep the process (and every other row) alive.
+    threads = [threading.Thread(target=one, args=item, daemon=True) for item in enumerate(symbols)]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + QUOTES_DEADLINE
+    for thread in threads:
+        thread.join(max(0, deadline - time.monotonic()))
+    return list(rows)
+
+
 # --------------- open-end fund quote ---------------
 
 
@@ -3742,6 +3773,9 @@ def main():
     p_quote = sub.add_parser("quote")
     p_quote.add_argument("symbol")
 
+    p_quotes = sub.add_parser("quotes")
+    p_quotes.add_argument("symbols", help=f"comma-separated, at most {QUOTES_MAX}")
+
     p_fund_quote = sub.add_parser("fund_quote")
     p_fund_quote.add_argument("symbol")
 
@@ -3818,6 +3852,7 @@ def main():
     dispatch = {
         "kline": cmd_kline,
         "quote": cmd_quote,
+        "quotes": cmd_quotes,
         "fund_quote": cmd_fund_quote,
         "capital_flow": cmd_capital_flow,
         "news": cmd_news,
@@ -3844,6 +3879,10 @@ def main():
     output(result)
     if isinstance(result, dict) and "error" in result:
         sys.exit(1)
+    if args.command == "quotes":
+        # Timed-out daemon threads may hold stderr; normal shutdown would then abort and drop valid rows.
+        sys.stdout.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

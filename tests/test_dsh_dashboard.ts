@@ -84,6 +84,11 @@ function fakePython(options: { phase?: string; fail?: (script: string, args: str
     await new Promise(resolve => setTimeout(resolve, 2));
     active--;
     if (options.fail?.(script, args)) throw new Error("secret stderr\n  at /private/provider.py");
+    if (args[0] === "quotes") {
+      return JSON.stringify(args[1].split(",").map(symbol => options.fail?.(script, ["quote", symbol])
+        ? { error: "secret stderr at /private/provider.py" }
+        : { symbol, name: `Name ${symbol}`, price: 100, change_pct: 1.2, high: 101, low: 99 }));
+    }
     if (script === "trading_calendar.py") return JSON.stringify({ market: args[1], phase: options.phase ?? "post_market", phase_label: "盘后" });
     if (args[0] === "quote") return JSON.stringify({ symbol: args[1], name: `Name ${args[1]}`, price: 100, change_pct: 1.2, high: 101, low: 99 });
     if (args[0] === "market_indices") return JSON.stringify([{ code: "^HSI", name: "恒生指数", price: 20000, change_pct: -0.5 }]);
@@ -93,6 +98,11 @@ function fakePython(options: { phase?: string; fail?: (script: string, args: str
     throw new Error(`unexpected call: ${key}`);
   };
   return { runPy, calls, timeouts, maxActive: () => maxActive };
+}
+
+/** How many batched quote processes asked for `symbol`. */
+function quoted(calls: string[], symbol: string): number {
+  return calls.filter(call => call.startsWith("stock_data.py:quotes ") && call.slice("stock_data.py:quotes ".length).split(",").includes(symbol)).length;
 }
 
 try {
@@ -212,10 +222,10 @@ try {
     await handler.tick();
     await handler.settle();
     assert(py.maxActive() <= 4, `python concurrency ${py.maxActive()} exceeded four`);
+    assert.equal(py.calls.filter(call => call.startsWith("stock_data.py:quotes ")).length, 1, "one process serves every due quote");
+    for (const symbol of ["sh600519", "AAPL", "00700.HK", "sh000001"]) assert.equal(quoted(py.calls, symbol), 1, `missing quote ${symbol}`);
+    assert.equal(py.timeouts.get(py.calls.find(call => call.startsWith("stock_data.py:quotes "))!), 40_000, "the batch outlives the CLI's own 30 s per-row deadline");
     for (const expected of [
-      "stock_data.py:quote sh600519",
-      "stock_data.py:quote AAPL",
-      "stock_data.py:quote sh000001",
       "stock_data.py:market_indices --region hk",
       "stock_data.py:kline 600519 --period daily --count 30",
       "stock_data.py:kline ^HSI --period daily --count 30",
@@ -267,7 +277,7 @@ try {
     const mark = py.calls.length;
     await handler.tick();
     await handler.settle();
-    assert(py.calls.slice(mark).includes("stock_data.py:quote sh600519"), "closed-market quotes refresh every 30 minutes");
+    assert.equal(quoted(py.calls.slice(mark), "sh600519"), 1, "closed-market quotes refresh every 30 minutes");
   }
   {
     const tradingFile = join(temp, "trading", "watchlist.json");
@@ -276,7 +286,7 @@ try {
     const live = createDashboardHandler({ runPy: trading.runPy, watchlistFile: tradingFile, webDir });
     await live.tick();
     await live.settle();
-    const quoteCalls = () => trading.calls.filter(call => call === "stock_data.py:quote sh600519").length;
+    const quoteCalls = () => quoted(trading.calls, "sh600519");
     now += 40_000;
     await live.tick();
     await live.settle();
@@ -297,7 +307,7 @@ try {
     const idle = createDashboardHandler({ runPy: holiday.runPy, watchlistFile: holidayFile, webDir });
     await idle.tick();
     await idle.settle();
-    const quoteCalls = () => holiday.calls.filter(call => call === "stock_data.py:quote sh600519").length;
+    const quoteCalls = () => quoted(holiday.calls, "sh600519");
     now += 61 * MINUTE;
     await idle.tick();
     await idle.settle();
@@ -323,10 +333,10 @@ try {
     const snap = (await call(failHandler, get("/stock-analysis/api/snapshot"))).json();
     const item = snap.watchlist[0];
     assert.equal(item.quote.price, 100, "a failed refresh keeps the last good quote");
-    assert.equal(item.quoteError, "数据暂不可用");
+    assert.equal(item.quoteError, "报价暂不可用");
     assert(snap.market.indices.every((row: { updatedAt?: string | null }) => typeof row.updatedAt === "string"), "index rows carry their update time");
     assert(!JSON.stringify(snap).includes("secret") && !JSON.stringify(snap).includes("/private"), "provider errors are sanitized");
-    const attempts = () => flaky.calls.filter(call => call === "stock_data.py:quote AAPL").length;
+    const attempts = () => quoted(flaky.calls, "AAPL");
     const afterFailure = attempts();
     now += 30_000;
     await failHandler.tick();
@@ -341,6 +351,18 @@ try {
     await failHandler.settle();
     assert.equal(attempts(), afterFailure + 1, "repeated failures back off exponentially");
   }
+  {
+    const batchFile = join(temp, "batch-fail", "watchlist.json");
+    writeWatchlist(batchFile, ["600519", "AAPL"]);
+    const broken = fakePython({ fail: (_script, args) => args[0] === "quotes" });
+    const batchHandler = createDashboardHandler({ runPy: broken.runPy, watchlistFile: batchFile, webDir });
+    await batchHandler.tick();
+    await batchHandler.settle();
+    const snap = (await call(batchHandler, get("/stock-analysis/api/snapshot"))).json();
+    assert.deepEqual(snap.watchlist.map((row: { quoteError: string }) => row.quoteError), ["数据暂不可用", "数据暂不可用"], "a failed batch fails each quote");
+    assert.equal(snap.ribbon[0].error, "数据暂不可用");
+    await batchHandler.dispose();
+  }
 
   // ---------- manual refresh ----------
   {
@@ -350,7 +372,7 @@ try {
     const out = await call(handler, post("/stock-analysis/api/refresh", {}));
     assert.equal(out.status(), 202);
     await handler.settle();
-    assert(py.calls.slice(mark).includes("stock_data.py:quote AAPL"), "refresh refetches fresh entries");
+    assert(quoted(py.calls.slice(mark), "AAPL") > 0, "refresh refetches fresh entries");
     const crossSite = await call(handler, post("/stock-analysis/api/refresh", {}, "https://evil.example"));
     assert.equal(crossSite.status(), 403);
   }
@@ -361,7 +383,7 @@ try {
     assert.equal(out.status(), 200);
     assert.deepEqual(out.json().symbols, ["600519", "AAPL", "00700.HK", "7203.T"]);
     await handler.settle();
-    assert(py.calls.includes("stock_data.py:quote 7203.T"), "new symbols are fetched right away");
+    assert(quoted(py.calls, "7203.T") > 0, "new symbols are fetched right away");
     const dup = await call(handler, post("/stock-analysis/api/watchlist", { op: "add", symbols: ["sh600519"] }));
     assert.deepEqual(dup.json().symbols, ["600519", "AAPL", "00700.HK", "7203.T"], "prefixed spelling of a saved A-share is not added twice");
     const removed = await call(handler, post("/stock-analysis/api/watchlist", { op: "remove", symbols: ["sh600519"] }));
@@ -390,7 +412,7 @@ try {
     const indexDashboard = createDashboardHandler({ runPy: indexPy.runPy, watchlistFile: indexFile, webDir });
     await indexDashboard.tick();
     await indexDashboard.settle();
-    assert.equal(indexPy.calls.filter(key => key === "stock_data.py:quote sh000001").length, 1);
+    assert.equal(quoted(indexPy.calls, "sh000001"), 1);
     assert.equal(indexPy.calls.filter(key => key.startsWith("stock_data.py:kline sh000001 ")).length, 1);
     await indexDashboard.dispose();
 
