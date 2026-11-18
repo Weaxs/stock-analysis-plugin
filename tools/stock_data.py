@@ -2185,14 +2185,18 @@ def _snapshot_xuangu(filters: dict):
 
 def _snapshot_tencent(filters: dict):
     """Non-eastmoney A-share leg (issue #25): Tencent's board rank sorted by market cap."""
+    import requests
+
     floor = filters.get("market_cap_min") or 0
     rows, total = [], None
     while len(rows) < _SNAPSHOT_MAX_ROWS:
         params = {"_appver": "11.17.0", "board_code": "aStock", "sort_type": "marketValue", "direct": "down"}
-        body = _get_json(
-            "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList",
-            {**params, "offset": len(rows), "count": 200},
-        )
+        url = "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList"
+        # The rank caps pages at 200, so a 5e9 floor walks ~8 pages; one slow page should not fail the leg.
+        try:
+            body = _get_json(url, {**params, "offset": len(rows), "count": 200})
+        except (requests.Timeout, requests.ConnectionError):
+            body = _get_json(url, {**params, "offset": len(rows), "count": 200})
         data = body.get("data") or {}
         total, ranked = data.get("total"), data.get("rank_list") or []
         for item in ranked:

@@ -1202,6 +1202,22 @@ class TestMarketSnapshot:
         assert rows[0]["symbol"] == "601398" and rows[0]["turnover"] == 3132810000 and rows[0]["pe_basis"] == "ttm"
         assert rows[0]["market_cap"] == pytest.approx(3.229041e12)
 
+    def test_tencent_leg_retries_one_slow_page(self, monkeypatch):
+        import requests
+
+        rank = [{"code": "sh601398", "zsz": "40", "zxj": "1"}]
+        replies = iter([requests.Timeout("read timed out"), {"data": {"total": 5580, "rank_list": rank}}])
+
+        def get(url, params):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        monkeypatch.setattr("tools.stock_data._get_json", get)
+        total, rows = _snapshot_tencent(self.FILTERS)
+        assert total == 5580 and rows == []
+
     @pytest.mark.parametrize(
         ("market", "code", "symbol"), [("HK", "700", "00700.HK"), ("US", "BRK_B", "BRK-B"), ("US", "AAPL", "AAPL")]
     )
