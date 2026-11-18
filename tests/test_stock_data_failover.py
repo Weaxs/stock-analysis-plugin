@@ -1218,7 +1218,9 @@ class TestMarketSnapshot:
         assert rows[0]["symbol"] == symbol and rows[0]["pe_basis"] == "unknown"
         assert "turnover_rate" not in rows[0] and ("pb" in rows[0]) == (market == "HK")
 
-    @pytest.mark.parametrize(("market", "code", "symbol"), [("HK", "700", "00700.HK"), ("US", "BRK.B", "BRK-B")])
+    @pytest.mark.parametrize(
+        ("market", "code", "symbol"), [("HK", "700", "00700.HK"), ("US", "BRK.B", "BRK-B"), ("US", "BF.A", "BF-A")]
+    )
     def test_tradingview_leg_matches_clist_columns(self, monkeypatch, market, code, symbol):
         calls = []
 

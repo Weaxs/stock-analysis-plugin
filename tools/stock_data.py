@@ -2280,7 +2280,10 @@ def _snapshot_tradingview(market: str, floor: float):
             if cap is None or cap < floor:
                 return total, rows
             row = {_TV_KEYS.get(col, col): _parse_float(values.get(col)) for col in columns[2:]}
-            row.update(symbol=_clist_symbol(market, values.get("name")), name=values.get("description"))
+            code = str(values.get("name")).replace(
+                ".", "_"
+            )  # TradingView BRK.A; a bare ".A" reads as an exchange suffix
+            row.update(symbol=_clist_symbol(market, code), name=values.get("description"))
             rows.append(_clean_row(row | {"pe_basis": "ttm"}))
         if len(data) < 1000:
             break
