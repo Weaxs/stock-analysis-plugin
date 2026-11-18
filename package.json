@@ -85,8 +85,8 @@
   "license": "MIT",
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.4",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.4",
     "@types/node": "^24.19.2",
     "esbuild": "^0.28.2",
     "jiti": "^2.7.0",
@@ -94,9 +94,9 @@
     "tsx": "^4.23.15",
     "typebox": "^1.4.3",
     "typescript": "^5.5.0",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.4",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.4",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.4"
   },
   "overrides": {
     "zod": "4.6.7"

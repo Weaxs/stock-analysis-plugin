@@ -79,7 +79,7 @@ function findPython() {
       if (m && Number(m[1]) === 3 && Number(m[2]) === 14) return c;
     } catch { /* try next */ }
   }
-  throw new Error("Hermes v0.23.1 requires Python 3.14 (set SMOKE_PYTHON)");
+  throw new Error("Hermes v0.23.2 requires Python 3.14 (set SMOKE_PYTHON)");
 }
 
 // ---------------------------------------------------------------- pi -------
@@ -199,7 +199,7 @@ function smokeHermes() {
   const hermes = join(binDir, process.platform === "win32" ? "hermes.exe" : "hermes");
   sh(python, ["-m", "pip", "install", "--quiet", "--upgrade", "pip"]);
   const source = join(WORK, "hermes-source");
-  sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.23.1", "https://github.com/NousResearch/hermes-agent.git", source]);
+  sh("git", ["clone", "--quiet", "--depth", "1", "--branch", "v0.23.2", "https://github.com/NousResearch/hermes-agent.git", source]);
   assertCond(sh("git", ["-C", source, "rev-parse", "HEAD"]).trim() === "3b421578588243f920886e6fe79a6faa87ea026e", "Hermes source commit must match verified release");
   // Hermes' uv.lock carries dependency overrides that pip cannot represent.
   sh(python, ["-m", "pip", "install", "--quiet", "uv==0.13.6"]);

@@ -686,7 +686,8 @@ function renderTabs() {
     tab.setAttribute("aria-selected", String(selected));
     tab.tabIndex = selected ? 0 : -1;
     const phase = state.snap?.phases?.[region];
-    tab.append(el("span", `dot${isTrading(phase) ? " on" : ""}`), document.createTextNode(REGION_NAMES[region]));
+    if (isTrading(phase)) tab.append(el("span", "dot on"));
+    tab.append(document.createTextNode(REGION_NAMES[region]));
     if (phase?.phase_label) tab.title = phase.phase_label;
     node.append(tab);
   }

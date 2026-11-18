@@ -284,7 +284,7 @@ jobs:
           python-version: ${{ matrix.host == 'hermes' && '3.14' || '3.11' }}
 
       - uses: actions/setup-node@v7
-        # OpenClaw 2026.11.3 requires Node >=24.16.0 <25 || >=26.1.0.
+        # OpenClaw 2026.11.5 requires Node >=24.16.0 <25 || >=26.1.0.
         with:
           node-version: "24"
           cache: "npm"
@@ -304,11 +304,11 @@ jobs:
 
       - name: Install OpenClaw CLI
         if: matrix.host == 'openclaw'
-        run: npm i -g openclaw@2026.11.3
+        run: npm i -g openclaw@2026.11.5
 
       - name: Install dsh CLI and package manager
         if: matrix.host == 'dsh'
-        run: npm i -g @deepseek-ai/dsh@0.2.2-rc.1 pnpm@10
+        run: npm i -g @deepseek-ai/dsh@0.2.2-rc.4 pnpm@10
 
       - name: dsh research presets and persistent runtime (offline)
         if: matrix.host == 'dsh'
