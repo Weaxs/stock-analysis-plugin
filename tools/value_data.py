@@ -26,6 +26,7 @@ from stock_data import (
     _em_datacenter,
     _yf_hk_symbol,
     detect_market,
+    fund_pingzhong_js,
     normalize_stock_code,
 )
 from trading_calendar import _MARKET_TZ, market_now
@@ -1129,12 +1130,8 @@ def tracking_error(nav, benchmark):
 
 
 def fund_size_history(symbol):
-    import requests
-
     def fetch():
-        response = requests.get(f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js", timeout=15)
-        response.raise_for_status()
-        match = re.search(r"\bData_fluctuationScale\s*=\s*(.*?);", response.text, re.S)
+        match = re.search(r"\bData_fluctuationScale\s*=\s*(.*?);", fund_pingzhong_js(symbol), re.S)
         if not match:
             raise ValueError("fund scale history unavailable")
         data = json.loads(match.group(1))

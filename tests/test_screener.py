@@ -305,7 +305,7 @@ class TestScreenSnapshotErrors:
 
     def test_error_dict_passthrough(self, monkeypatch):
         monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap({"error": "provider down"}))
-        assert screen("US", 20, None) == {"error": "provider down"}
+        assert screen("US", 20, None) == {"error": "provider down", "market": "US"}
 
 
 _L2_ENRICH = {

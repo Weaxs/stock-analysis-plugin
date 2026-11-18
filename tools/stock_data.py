@@ -362,12 +362,16 @@ def _tencent_us_code(symbol: str) -> str:
     return "us" + symbol.upper().replace("-", ".")
 
 
-def _tencent_fields(code: str) -> list:
+def _tencent_raw(codes: str) -> bytes:
     import requests
 
-    resp = requests.get(f"https://qt.gtimg.cn/q={code}", timeout=10)
+    resp = requests.get(f"https://qt.gtimg.cn/q={codes}", timeout=10)
     resp.raise_for_status()
-    return _gbk_var_payload(resp.content).split("~")
+    return resp.content
+
+
+def _tencent_fields(code: str) -> list:
+    return _gbk_var_payload(_tencent_raw(code)).split("~")
 
 
 def _quote_tencent(symbol: str) -> dict:
@@ -626,17 +630,32 @@ def _kline_akshare(symbol: str, period: str, count: int) -> list:
     return [_clean_row(r) for r in df.to_dict("records")]
 
 
-def _kline_tushare(symbol: str, period: str, count: int) -> list:
-    """Tushare qfq kline via daily factors or the adjusted week/month endpoint."""
+def _tushare(api_name: str, params: dict, fields: str | None = None, error: str = "tushare returned no data"):
+    """POST one tushare HTTP API call; returns (fields, items) or raises with the API message."""
     import os
 
-    import pandas as pd
     import requests
 
     token = os.environ.get("TUSHARE_TOKEN")
     if not token:
         raise ValueError("TUSHARE_TOKEN not set")
+    body = {"api_name": api_name, "token": token, "params": params}
+    if fields:
+        body["fields"] = fields
+    data = requests.post("http://api.tushare.pro", json=body, timeout=15).json()
+    if data.get("code") != 0 or not data.get("data", {}).get("items"):
+        raise ValueError(f"{error}: {data.get('msg', '')}")
+    return data["data"]["fields"], data["data"]["items"]
 
+
+def _kline_tushare(symbol: str, period: str, count: int) -> list:
+    """Tushare qfq kline via daily factors or the adjusted week/month endpoint."""
+    import os
+
+    import pandas as pd
+
+    if not os.environ.get("TUSHARE_TOKEN"):
+        raise ValueError("TUSHARE_TOKEN not set")
     if normalize_stock_code(symbol)["is_etf"]:
         raise ValueError("tushare stock adjustment does not cover ETFs")
     end = _cn_now()
@@ -653,33 +672,17 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
         params["freq"] = "week" if period == "weekly" else "month"
     fields = prices if period == "daily" else [f"{c}_qfq" for c in prices]
 
-    resp = requests.post(
-        "http://api.tushare.pro",
-        json={
-            "api_name": "daily" if period == "daily" else "stk_week_month_adj",
-            "token": token,
-            "params": params,
-            "fields": ",".join(["trade_date", *fields, "vol", "amount", "pct_chg"]),
-        },
-        timeout=15,
-    )
-    data = resp.json()
-    if data.get("code") != 0 or not data.get("data", {}).get("items"):
-        raise ValueError(f"tushare returned no data: {data.get('msg', '')}")
-
-    df = pd.DataFrame(data["data"]["items"], columns=data["data"]["fields"])
+    api = "daily" if period == "daily" else "stk_week_month_adj"
+    columns, items = _tushare(api, params, ",".join(["trade_date", *fields, "vol", "amount", "pct_chg"]))
+    df = pd.DataFrame(items, columns=columns)
     if not set(fields).issubset(df.columns):
         raise ValueError("tushare returned incomplete adjusted prices")
     df[fields] = df[fields].apply(pd.to_numeric, errors="coerce")
     if period == "daily":
-        factor_resp = requests.post(
-            "http://api.tushare.pro",
-            json={"api_name": "adj_factor", "token": token, "params": params, "fields": "trade_date,adj_factor"},
-            timeout=15,
-        ).json()
-        if factor_resp.get("code") != 0 or not factor_resp.get("data", {}).get("items"):
-            raise ValueError("tushare returned no adjustment factors")
-        factors = pd.DataFrame(factor_resp["data"]["items"], columns=factor_resp["data"]["fields"])
+        columns, items = _tushare(
+            "adj_factor", params, "trade_date,adj_factor", "tushare returned no adjustment factors"
+        )
+        factors = pd.DataFrame(items, columns=columns)
         factors["adj_factor"] = pd.to_numeric(factors["adj_factor"], errors="coerce")
         if not (factors["adj_factor"].gt(0) & factors["adj_factor"].lt(float("inf"))).all():
             raise ValueError("tushare returned invalid adjustment factors")
@@ -713,30 +716,10 @@ def _kline_tushare(symbol: str, period: str, count: int) -> list:
 
 def _quote_tushare(symbol: str) -> dict:
     """Tushare realtime quote via HTTP API."""
-    import os
-
-    import requests
-
-    token = os.environ.get("TUSHARE_TOKEN")
-    if not token:
-        raise ValueError("TUSHARE_TOKEN not set")
-
     ts_code = f"{symbol}.SH" if symbol.startswith(("6", "9", "5")) else f"{symbol}.SZ"
 
-    resp = requests.post(
-        "http://api.tushare.pro",
-        json={
-            "api_name": "realtime_quote",
-            "token": token,
-            "params": {"ts_code": ts_code},
-        },
-        timeout=15,
-    )
-    data = resp.json()
-    if data.get("code") != 0 or not data.get("data", {}).get("items"):
-        raise ValueError(f"tushare quote failed: {data.get('msg', '')}")
-
-    row = dict(zip(data["data"]["fields"], data["data"]["items"][0]))
+    columns, items = _tushare("realtime_quote", {"ts_code": ts_code}, error="tushare quote failed")
+    row = dict(zip(columns, items[0]))
     return _clean_row(
         {
             "symbol": symbol,
@@ -1521,16 +1504,21 @@ def _fund_nav_date(stamp) -> str:
     return datetime.fromtimestamp(stamp / 1000, timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
+def fund_pingzhong_js(symbol: str) -> str:
+    """Eastmoney's per-fund JS bundle (NAV, scale, holdings series)."""
+    import requests
+
+    response = requests.get(f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js", timeout=15)
+    response.raise_for_status()
+    return response.text
+
+
 def cmd_fund_quote(args):
     symbol = args.symbol
     if not re.fullmatch(r"\d{6}", symbol):
         return {"error": "open-end fund symbol must be exactly 6 digits"}
     try:
-        import requests
-
-        response = requests.get(f"https://fund.eastmoney.com/pingzhongdata/{symbol}.js", timeout=15)
-        response.raise_for_status()
-        text = response.text
+        text = fund_pingzhong_js(symbol)
         if _fund_js_value(text, "fS_code") != symbol:
             raise ValueError(f"eastmoney returned a different fund for {symbol}")
         name = _fund_js_value(text, "fS_name")
@@ -2262,6 +2250,45 @@ def _snapshot_clist(market: str, floor: float):
     return total, rows
 
 
+# Non-eastmoney HK/US leg: TradingView's public scanner, same columns as _CLIST_SNAPSHOT_COLUMNS.
+_TV_BASE = ["name", "description", "close", "change", "volume", "Value.Traded", "price_earnings_ttm"]
+_TV_SNAPSHOT_COLUMNS = {
+    "HK": ("hongkong", [*_TV_BASE, "price_book_fq", "market_cap_basic"]),
+    "US": ("america", [*_TV_BASE, "market_cap_basic"]),
+}
+_TV_KEYS = {"close": "price", "change": "change_pct", "Value.Traded": "turnover"}
+_TV_KEYS |= {"price_earnings_ttm": "pe", "price_book_fq": "pb", "market_cap_basic": "market_cap"}
+
+
+def _snapshot_tradingview(market: str, floor: float):
+    import requests
+
+    region, columns = _TV_SNAPSHOT_COLUMNS[market]
+    filters = [{"left": "type", "operation": "equal", "right": "stock"}]
+    filters += [{"left": "is_primary", "operation": "equal", "right": True}]
+    rows, total = [], None
+    while len(rows) < _SNAPSHOT_MAX_ROWS:
+        body = {"columns": columns, "filter": filters, "range": [len(rows), len(rows) + 1000]}
+        body["sort"] = {"sortBy": "market_cap_basic", "sortOrder": "desc"}
+        resp = requests.post(f"https://scanner.tradingview.com/{region}/scan", json=body, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+        total, data = payload.get("totalCount"), payload.get("data") or []
+        for item in data:
+            values = dict(zip(columns, item.get("d") or []))
+            cap = _parse_float(values.get("market_cap_basic"))
+            if cap is None or cap < floor:
+                return total, rows
+            row = {_TV_KEYS.get(col, col): _parse_float(values.get(col)) for col in columns[2:]}
+            row.update(symbol=_clist_symbol(market, values.get("name")), name=values.get("description"))
+            rows.append(_clean_row(row | {"pe_basis": "ttm"}))
+        if len(data) < 1000:
+            break
+    if not rows:
+        raise ValueError("tradingview scanner returned empty data")
+    return total, rows
+
+
 def normalize_us_symbol(value) -> str:
     symbol = str(value).strip().upper()
     symbol = re.sub(r"^(?:105|106|107)[.]", "", symbol)
@@ -2280,7 +2307,10 @@ def cmd_market_snapshot(args):
         if market == "A":
             legs = [("eastmoney", lambda: _snapshot_xuangu(filters)), ("tencent", lambda: _snapshot_tencent(filters))]
         elif market in _CLIST_SNAPSHOT_COLUMNS:
-            legs = [("eastmoney", lambda: _snapshot_clist(market, floor))]
+            legs = [
+                ("eastmoney", lambda: _snapshot_clist(market, floor)),
+                ("tradingview", lambda: _snapshot_tradingview(market, floor)),
+            ]
         else:
             return {"error": f"Unknown market: {market}"}
         with socket_timeout(25):
@@ -2308,11 +2338,7 @@ _REGION_INDEX_SYMBOLS = {
 def _quote_tencent_hk_index(symbol: str) -> dict:
     """Tencent r_hk index quote, using the same `~` field positions as _tencent_payload_row.
     Volume is omitted: the index feed's volume field has no confirmed unit."""
-    import requests
-
-    resp = requests.get(f"https://qt.gtimg.cn/q=r_{_TENCENT_HK_INDEX[symbol]}", timeout=10)
-    resp.raise_for_status()
-    f = _gbk_var_payload(resp.content).split("~")
+    f = _tencent_fields(f"r_{_TENCENT_HK_INDEX[symbol]}")
     price = _parse_float(f[3]) if len(f) > 34 else None
     if price is None or price <= 0:
         raise ValueError(f"tencent returned no quote for {symbol}")
@@ -2365,12 +2391,9 @@ def _cn_indices_eastmoney() -> dict:
 
 def _cn_indices_tencent() -> dict:
     """One qt.gtimg.cn batch request for every CN index (eastmoney refuses some datacenter IPs)."""
-    import requests
-
-    resp = requests.get(f"https://qt.gtimg.cn/q={','.join(code for code, _ in _CN_INDICES)}", timeout=10)
-    resp.raise_for_status()
+    content = _tencent_raw(",".join(code for code, _ in _CN_INDICES))
     quotes = {}
-    for part in resp.content.decode("gbk", errors="replace").split(";"):
+    for part in content.decode("gbk", errors="replace").split(";"):
         name, _, payload = part.strip().partition('="')
         fields = payload.rstrip('"').split("~")
         if len(fields) > 37 and _parse_float(fields[3]):
