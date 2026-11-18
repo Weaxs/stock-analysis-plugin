@@ -8,6 +8,7 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -221,6 +222,9 @@ def _kline_efinance(symbol: str, period: str, count: int) -> list:
     return [_clean_row(r) for r in df.to_dict("records")]
 
 
+_BAOSTOCK_LOCK = threading.Lock()
+
+
 def _kline_baostock(symbol: str, period: str, count: int) -> list:
     import io
 
@@ -232,24 +236,26 @@ def _kline_baostock(symbol: str, period: str, count: int) -> list:
     start = end - timedelta(days=count * 7 if period == "weekly" else count * 31 if period == "monthly" else count * 2)
     # baostock login/logout print status lines to stdout — silence them so the
     # tool's JSON output on stdout stays clean for the calling host.
-    with contextlib.redirect_stdout(io.StringIO()):
-        bs.login()
-    try:
-        rs = bs.query_history_k_data_plus(
-            _to_baostock_code(symbol),
-            "date,open,high,low,close,volume,amount,pctChg",
-            start_date=start.strftime("%Y-%m-%d"),
-            end_date=end.strftime("%Y-%m-%d"),
-            frequency=freq_map.get(period, "d"),
-            adjustflag="2",
-        )
-        rows = []
-        while (rs.error_code == "0") and rs.next():
-            rows.append(rs.get_row_data())
-        df = pd.DataFrame(rows, columns=rs.fields)
-    finally:
+    # One global baostock session per process: `klines` threads must not interleave login/query/logout.
+    with _BAOSTOCK_LOCK:
         with contextlib.redirect_stdout(io.StringIO()):
-            bs.logout()
+            bs.login()
+        try:
+            rs = bs.query_history_k_data_plus(
+                _to_baostock_code(symbol),
+                "date,open,high,low,close,volume,amount,pctChg",
+                start_date=start.strftime("%Y-%m-%d"),
+                end_date=end.strftime("%Y-%m-%d"),
+                frequency=freq_map.get(period, "d"),
+                adjustflag="2",
+            )
+            rows = []
+            while (rs.error_code == "0") and rs.next():
+                rows.append(rs.get_row_data())
+            df = pd.DataFrame(rows, columns=rs.fields)
+        finally:
+            with contextlib.redirect_stdout(io.StringIO()):
+                bs.logout()
     if df.empty:
         raise ValueError("baostock returned empty data")
     col_map = {"amount": "turnover", "pctChg": "change_pct"}
@@ -1037,15 +1043,21 @@ def kline_yf(symbol: str, period: str, count: int, evidence: bool = False) -> li
 
 def cmd_kline(args):
     market = detect_market(args.symbol)
-    try:
+    # Round counts up so 30/60/80/120/250-bar callers share one fetch; the last intraday bar may be up to 60 s stale.
+    bucket = next((b for b in (60, 120, 250) if args.count <= b), args.count)
+
+    def fetch():
         if market == "A":
-            data = kline_a(args.symbol, args.period, args.count, evidence=True)
+            data = kline_a(args.symbol, args.period, bucket, evidence=True)
             if data:
                 adjusted = "none" if _A_INDEX_RE.fullmatch(args.symbol) else "qfq"
                 data = [dict(row, adjusted=adjusted) for row in data]
-        else:
-            data = kline_yf(args.symbol, args.period, args.count, evidence=True)
-        return data
+            return data
+        return kline_yf(args.symbol, args.period, bucket, evidence=True)
+
+    try:
+        data = cached(f"kline:v1:{args.symbol}:{args.period}:{bucket}", 60, fetch)
+        return data[-args.count :] if isinstance(data, list) else data
     except Exception as e:
         return {"error": error_message(e)}
 
@@ -1454,31 +1466,42 @@ QUOTES_DEADLINE = 30  # dsh/dashboard.ts allows the whole process 40 s
 QUOTES_MAX = 40
 
 
-def cmd_quotes(args):
-    """Several quotes in one process for the dsh dashboard; rows follow input order, a failure stays per row."""
-    import threading
-
-    symbols = [symbol.strip() for symbol in args.symbols.split(",") if symbol.strip()]
+def _batch(symbols_arg: str, one, label: str) -> list | dict:
+    """Run `one(symbol)` for several symbols in one process for the dsh dashboard; rows follow input order,
+    a failure or a row still running at the deadline stays per row."""
+    symbols = [symbol.strip() for symbol in symbols_arg.split(",") if symbol.strip()]
     if not 0 < len(symbols) <= QUOTES_MAX:
-        return {"error": f"quotes takes 1-{QUOTES_MAX} comma-separated symbols"}
-    rows = [{"error": "quote timed out"}] * len(symbols)
+        return {"error": f"{label}s takes 1-{QUOTES_MAX} comma-separated symbols"}
+    rows = [{"error": f"{label} timed out"}] * len(symbols)
     workers = threading.BoundedSemaphore(8)
 
-    def one(index, symbol):
+    def run(index, symbol):
         with workers:
             try:
-                rows[index] = cmd_quote(argparse.Namespace(symbol=symbol))
+                rows[index] = one(symbol)
             except Exception as e:
                 rows[index] = {"error": error_message(e)}
 
     # Daemon threads: a provider that hangs past the deadline cannot keep the process (and every other row) alive.
-    threads = [threading.Thread(target=one, args=item, daemon=True) for item in enumerate(symbols)]
+    threads = [threading.Thread(target=run, args=item, daemon=True) for item in enumerate(symbols)]
     for thread in threads:
         thread.start()
     deadline = time.monotonic() + QUOTES_DEADLINE
     for thread in threads:
         thread.join(max(0, deadline - time.monotonic()))
     return list(rows)
+
+
+def cmd_quotes(args):
+    return _batch(args.symbols, lambda symbol: cmd_quote(argparse.Namespace(symbol=symbol)), "quote")
+
+
+def cmd_klines(args):
+    return _batch(
+        args.symbols,
+        lambda symbol: cmd_kline(argparse.Namespace(symbol=symbol, period="daily", count=args.count)),
+        "kline",
+    )
 
 
 # --------------- open-end fund quote ---------------
@@ -2931,8 +2954,7 @@ def _resolve_leg_down(name: str) -> bool:
 
 
 def resolve_stock_sectors(symbol: str, info_map=None) -> dict:
-    if info_map is not None:
-        return _resolve_stock_sectors(symbol, info_map)
+    # info_map only saves the em leg's fetch on a miss; the result is the same, so share the cache.
     return cached(f"stock-sectors:{symbol}", WEEK, lambda: _resolve_stock_sectors(symbol, info_map))
 
 
@@ -3776,6 +3798,10 @@ def main():
     p_quotes = sub.add_parser("quotes")
     p_quotes.add_argument("symbols", help=f"comma-separated, at most {QUOTES_MAX}")
 
+    p_klines = sub.add_parser("klines")
+    p_klines.add_argument("symbols", help=f"comma-separated, at most {QUOTES_MAX}; daily bars")
+    p_klines.add_argument("--count", type=int, default=30)
+
     p_fund_quote = sub.add_parser("fund_quote")
     p_fund_quote.add_argument("symbol")
 
@@ -3853,6 +3879,7 @@ def main():
         "kline": cmd_kline,
         "quote": cmd_quote,
         "quotes": cmd_quotes,
+        "klines": cmd_klines,
         "fund_quote": cmd_fund_quote,
         "capital_flow": cmd_capital_flow,
         "news": cmd_news,
@@ -3879,7 +3906,7 @@ def main():
     output(result)
     if isinstance(result, dict) and "error" in result:
         sys.exit(1)
-    if args.command == "quotes":
+    if args.command in ("quotes", "klines"):
         # Timed-out daemon threads may hold stderr; normal shutdown would then abort and drop valid rows.
         sys.stdout.flush()
         os._exit(0)

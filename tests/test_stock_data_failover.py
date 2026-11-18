@@ -2180,9 +2180,23 @@ class TestResolveStockSectors:
         mock_em.reset_mock()
         mock_em.side_effect = ValueError("no industry")
         ts_before = _disk_cache_get("resolve-down-eastmoney")
-        result = resolve_stock_sectors("600519", info_map={"行业": float("nan")})
+        result = resolve_stock_sectors("000858", info_map={"行业": float("nan")})
         assert "error" in result
         assert _disk_cache_get("resolve-down-eastmoney") == ts_before  # not refreshed by an offline-data failure
+
+    @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
+    @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
+    @patch("tools.stock_data._stock_boards_xueqiu", return_value=[])
+    @patch("tools.stock_data._stock_boards_efinance", return_value=[])
+    @patch("tools.stock_data._stock_boards_em")
+    def test_info_map_call_uses_sector_cache(self, mock_em, mock_ef, _mock_xq, _mock_cn, _mock_cache):
+        """stock_info always passes info_map; the slow efinance leg must still be cached."""
+        mock_em.return_value = [{"name": "酿酒行业", "source": "eastmoney", "board_type": "industry"}]
+        first = resolve_stock_sectors("600519", info_map={"行业": "酿酒行业"})
+        second = resolve_stock_sectors("600519", info_map={"行业": "酿酒行业"})
+        assert first == second
+        assert mock_em.call_count == 1
+        assert mock_ef.call_count == 1
 
     @patch("tools.stock_data._stock_boards_from_cache", return_value=[])
     @patch("tools.stock_data._stock_boards_cninfo", return_value=[])
@@ -2821,7 +2835,7 @@ def test_hk_kline_falls_back_to_tencent_before_keyed_sources():
         patch("tools.stock_data._kline_finnhub") as fh,
     ):
         result = cmd_kline(Namespace(symbol="00700.HK", period="daily", count=1))
-    tx.assert_called_once_with("00700.HK", "daily", 1)
+    tx.assert_called_once_with("00700.HK", "daily", 60)
     fh.assert_not_called()
     assert (result[0]["source"], result[0]["adjusted"]) == ("tencent", "qfq")
 

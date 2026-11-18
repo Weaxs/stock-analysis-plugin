@@ -221,7 +221,7 @@ interface Job {
   region: Region;
   priority: number;
   run: () => Promise<unknown>;
-  /** Shares a limiter slot through the quote batch instead of taking its own. */
+  /** Shares a limiter slot through a quotes/klines batch instead of taking its own. */
   batched?: boolean;
 }
 
@@ -315,23 +315,31 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   const py = async (script: string, args: string[], timeoutMs: number) => parseJson(await runPy(script, args, timeoutMs, abort.signal));
 
-  let pendingQuotes: Array<{ symbol: string; priority: number; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
-  function batchedQuote(symbol: string, priority: number): Promise<unknown> {
+  const pendingBatches = new Map<string, Array<{ symbol: string; priority: number; resolve: (value: unknown) => void; reject: (error: unknown) => void }>>();
+  /**
+   * Every quote due in one tick shares one `stock_data.py quotes` process, and every trend one `klines`
+   * process per region (<= 30 watchlist + 6 index codes; the CLI takes 40).
+   */
+  function batched(command: "quotes" | "klines", group: string, symbol: string, priority: number): Promise<unknown> {
+    const key = `${command}:${group}`;
     return new Promise((resolve, reject) => {
-      if (!pendingQuotes.length) queueMicrotask(flushQuotes);
-      pendingQuotes.push({ symbol, priority, resolve, reject });
+      let batch = pendingBatches.get(key);
+      if (!batch) {
+        pendingBatches.set(key, batch = []);
+        queueMicrotask(() => flushBatch(command, key));
+      }
+      batch.push({ symbol, priority, resolve, reject });
     });
   }
-  /** Every quote due in one tick shares one `stock_data.py quotes` process (<= 30 watchlist + 6 index codes; the CLI takes 40). */
-  function flushQuotes() {
-    const batch = pendingQuotes;
-    pendingQuotes = [];
-    const symbols = batch.map(item => item.symbol);
+  function flushBatch(command: "quotes" | "klines", key: string) {
+    const batch = pendingBatches.get(key)!;
+    pendingBatches.delete(key);
+    const args = [command, batch.map(item => item.symbol).join(","), ...(command === "klines" ? ["--count", "30"] : [])];
     // The CLI times out slow rows itself after 30 s, so one hung provider cannot fail the whole batch.
-    limiter.run(Math.min(...batch.map(item => item.priority)), () => py("stock_data.py", ["quotes", symbols.join(",")], 40_000)).then(
+    limiter.run(Math.min(...batch.map(item => item.priority)), () => py("stock_data.py", args, 40_000)).then(
       rows => {
         if (!Array.isArray(rows) || rows.length !== batch.length) {
-          throw new Error(safeError((rows as { error?: unknown } | null)?.error, "报价数据格式不正确"));
+          throw new Error(safeError((rows as { error?: unknown } | null)?.error, command === "quotes" ? "报价数据格式不正确" : "K线数据格式不正确"));
         }
         batch.forEach((item, index) => item.resolve(rows[index]));
       },
@@ -342,7 +350,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     return {
       key: `quote:${symbol}`, kind: "quote", region: symbolRegion(symbol), priority, batched: true,
       run: async () => {
-        const value = await batchedQuote(dashboardQuoteSymbol(symbol), priority) as Record<string, unknown> | null;
+        const value = await batched("quotes", "all", dashboardQuoteSymbol(symbol), priority) as Record<string, unknown> | null;
         if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("报价数据格式不正确");
         if (value.error) throw new Error(safeError(value.error, "报价暂不可用"));
         return { ...value, symbol };
@@ -352,9 +360,15 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   function trendJob(symbol: string, region: Region, priority: number): Job {
     return {
-      key: `trend:${symbol}`, kind: "trend", region, priority,
-      // Yahoo-backed regions regularly need 20-30 s from mainland networks.
-      run: async () => trendRows(await py("stock_data.py", ["kline", symbol, "--period", "daily", "--count", "30"], region === "cn" ? 20_000 : 40_000)),
+      key: `trend:${symbol}`, kind: "trend", region, priority, batched: true,
+      // Per-region batches: Yahoo-backed regions regularly need 20-30 s from mainland networks and must not hold up A-share charts.
+      run: async () => {
+        const value = await batched("klines", region, symbol, priority);
+        if (value && typeof value === "object" && !Array.isArray(value) && "error" in value) {
+          throw new Error(safeError((value as { error?: unknown }).error, "K线暂不可用"));
+        }
+        return trendRows(value);
+      },
     };
   }
 
