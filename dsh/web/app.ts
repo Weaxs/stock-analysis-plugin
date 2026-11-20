@@ -123,11 +123,15 @@ const state = {
   sort: { key: "order" as SortKey, dir: -1 },
   filter: "all" as WatchRegion | "all",
   prices: new Map<string, number | null>(),
+  marketCache: new Map<Region, Snapshot["market"]>(),
+  sectionSigs: { ribbon: "", pulse: "", filters: "", rows: "", market: "" },
   pollTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+  undoTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   inflight: false,
   // A poll requested while one is in flight (e.g. right after a watchlist edit) runs once that one ends.
   dirty: false,
   saving: false,
+  refreshing: false,
   error: null as string | null,
   lastOk: 0,
   fromCache: false,
@@ -215,16 +219,20 @@ function dir(value: Numeric): Direction {
   return parsed > 0 ? "up" : parsed < 0 ? "down" : "flat";
 }
 
+const clockFmt = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+const clockSecFmt = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const stampFmt = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+
 function clock(value: string | number, withSeconds = false): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", ...(withSeconds ? { second: "2-digit" } : {}), hour12: false }).format(date);
+  return (withSeconds ? clockSecFmt : clockFmt).format(date);
 }
 
 function stamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value || "");
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+  return stampFmt.format(date);
 }
 
 const shortDate = (value: string) => (/^\d{4}-(\d{2})-(\d{2})/.exec(value || "") || []).slice(1).join("/") || value || "";
@@ -244,6 +252,10 @@ function skeleton(width: number): HTMLSpanElement {
 
 // ---------- sparkline with hover readout ----------
 
+let sparkSeq = 0;
+let activeSpark: SVGSVGElement | null = null;
+const sparkCache = new Map<string, { sig: string; svg: SVGSVGElement }>();
+
 function spark(rows: TrendRow[] | null | undefined, width: number, height: number, digits = 2, isNav = false): SVGSVGElement | null {
   const points = Array.isArray(rows)
     ? rows.map(row => ({ date: row.date, close: num(row.close) })).filter((row): row is { date: string; close: number } => row.close !== null && row.close > 0)
@@ -259,17 +271,36 @@ function spark(rows: TrendRow[] | null | undefined, width: number, height: numbe
   const xs = points.map((_, index) => pad + index / (points.length - 1) * (width - pad * 2));
   const ys = closes.map(close => pad + (max - close) / range * (height - pad * 2));
   const line = xs.map((x, index) => `${index ? "L" : "M"}${x.toFixed(1)},${ys[index].toFixed(1)}`).join("");
+  const gradId = `sg-${++sparkSeq}`;
   const svg = svgEl("svg", { class: `spark ${dir(last - first)}`, width, height, viewBox: `0 0 ${width} ${height}`, role: "img" });
   svg.setAttribute("aria-label", `近 ${points.length} 个${isNav ? "净值日" : "交易日"}走势，区间 ${fmtPct(periodChange(points))}`);
+  const defs = svgEl("defs");
+  const grad = svgEl("linearGradient", { id: gradId, x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(
+    svgEl("stop", { offset: "0%", "stop-color": "currentColor", "stop-opacity": 0.2 }),
+    svgEl("stop", { offset: "100%", "stop-color": "currentColor", "stop-opacity": 0 }),
+  );
+  defs.append(grad);
   svg.append(
+    defs,
     svgEl("line", { class: "base", x1: pad, x2: width - pad, y1: ys[0], y2: ys[0] }),
-    svgEl("path", { class: "area", d: `${line}L${xs[xs.length - 1].toFixed(1)},${height}L${xs[0].toFixed(1)},${height}Z` }),
+    svgEl("path", { class: "area", fill: `url(#${gradId})`, d: `${line}L${xs[xs.length - 1].toFixed(1)},${height}L${xs[0].toFixed(1)},${height}Z` }),
     svgEl("path", { class: "line", d: line }),
     svgEl("circle", { class: "end", cx: xs[xs.length - 1], cy: ys[ys.length - 1], r: 2 }),
   );
   let guide: SVGLineElement | null = null;
   let dot: SVGCircleElement | null = null;
   const tip = $("tip");
+  const hideTip = () => {
+    if (activeSpark === svg) {
+      tip.hidden = true;
+      activeSpark = null;
+    }
+    guide?.remove();
+    dot?.remove();
+    guide = null;
+    dot = null;
+  };
   svg.addEventListener("pointermove", event => {
     const box = svg.getBoundingClientRect();
     const x = (event.clientX - box.left) / box.width * width;
@@ -291,18 +322,30 @@ function spark(rows: TrendRow[] | null | undefined, width: number, height: numbe
       document.createTextNode("  "),
       el("span", "", `较首日 ${fmtPct(change)}`),
     );
+    activeSpark = svg;
     tip.hidden = false;
     const left = Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, event.clientX - tip.offsetWidth / 2));
+    const above = box.top - tip.offsetHeight - 8;
+    const top = above >= 8 ? above : (box.bottom ?? box.top + height) + 8;
     tip.style.left = `${left}px`;
-    tip.style.top = `${Math.max(8, box.top - tip.offsetHeight - 8)}px`;
+    tip.style.top = `${Math.max(8, top)}px`;
   });
-  svg.addEventListener("pointerleave", () => {
-    tip.hidden = true;
-    guide?.remove();
-    dot?.remove();
-    guide = null;
-    dot = null;
-  });
+  svg.addEventListener("pointerleave", hideTip);
+  svg.addEventListener("pointercancel", hideTip);
+  return svg;
+}
+
+function sparkCached(key: string, rows: TrendRow[] | null | undefined, width: number, height: number, digits = 2, isNav = false): SVGSVGElement | null {
+  if (!Array.isArray(rows) || rows.length < 2) {
+    sparkCache.delete(key);
+    return null;
+  }
+  const sig = `${width}x${height}:${digits}:${isNav ? 1 : 0}:${rows.length}:${rows[0]?.date}:${rows[0]?.close}:${rows[rows.length - 1]?.date}:${rows[rows.length - 1]?.close}`;
+  const cached = sparkCache.get(key);
+  if (cached && cached.sig === sig) return cached.svg;
+  const svg = spark(rows, width, height, digits, isNav);
+  if (svg) sparkCache.set(key, { sig, svg });
+  else sparkCache.delete(key);
   return svg;
 }
 
@@ -415,9 +458,12 @@ function groupByRegion(list: IndexRow[]): Map<Region, IndexRow[]> {
 }
 
 function renderRibbon() {
+  const snap = state.snap;
+  const sig = snap ? JSON.stringify({ ribbon: snap.ribbon, phases: snap.phases }) : "__loading__";
+  if (sig === state.sectionSigs.ribbon) return;
+  state.sectionSigs.ribbon = sig;
   const track = $("ribbon");
   track.replaceChildren();
-  const snap = state.snap;
   if (!snap) {
     for (let i = 0; i < 6; i++) {
       const tile = el("div", "tile");
@@ -453,7 +499,7 @@ function renderRibbon() {
         tile.append(el("span", "tile-price flat", "—"));
         tile.title = row.error || "该指数暂时没有报价";
       }
-      const chart = spark(row.trend, 114, 22);
+      const chart = sparkCached(`ribbon:${row.code}`, row.trend, 114, 22);
       if (chart) tile.append(chart);
       tiles.append(tile);
     }
@@ -494,6 +540,9 @@ function statsCounts(stats: Stats): [number, number, number] {
 const BREADTH_REGIONS = ["cn", "hk", "us"] as const;
 
 function renderPulse() {
+  const sig = JSON.stringify(BREADTH_REGIONS.map(region => state.snap?.stats?.[region] ?? null));
+  if (sig === state.sectionSigs.pulse) return;
+  state.sectionSigs.pulse = sig;
   const node = $("pulse");
   node.replaceChildren();
   for (const region of BREADTH_REGIONS) {
@@ -523,9 +572,13 @@ function renderFilters() {
   if (counts.size < 2) {
     node.hidden = true;
     state.filter = "all";
+    state.sectionSigs.filters = "hidden";
     return;
   }
   if (state.filter !== "all" && !counts.has(state.filter)) state.filter = "all";
+  const sig = `${state.filter}:${items.length}:${[...counts.entries()].map(([k, v]) => `${k}=${v}`).join(",")}`;
+  if (sig === state.sectionSigs.filters) return;
+  state.sectionSigs.filters = sig;
   node.hidden = false;
   node.replaceChildren();
   const chips: Array<[WatchRegion | "all", string, number]> = [
@@ -575,15 +628,22 @@ function rangeCell(quote: Quote | null, digits: number): HTMLElement {
   if (!quote || low === null || high === null || price === null || high <= low) return el("span", "amount", "—");
   const wrap = el("div", `range ${dir(quote.change_pct)}`);
   const track = el("div", "range-track");
-  const position = (value: number) => `${Math.min(100, Math.max(0, (value - low) / (high - low) * 100))}%`;
+  const pct = (value: number) => Math.min(100, Math.max(0, (value - low) / (high - low) * 100));
+  const pricePct = pct(price);
   const prev = num(quote.prev_close);
-  if (prev !== null && prev >= low && prev <= high) {
+  const hasPrev = prev !== null && prev >= low && prev <= high;
+  const fill = el("span", "range-fill");
+  const anchorPct = hasPrev ? pct(prev) : 0;
+  fill.style.left = `${Math.min(anchorPct, pricePct)}%`;
+  fill.style.width = `${Math.abs(pricePct - anchorPct)}%`;
+  track.append(fill);
+  if (hasPrev) {
     const tick = el("span", "range-prev");
-    tick.style.left = position(prev);
+    tick.style.left = `${anchorPct}%`;
     track.append(tick);
   }
   const mark = el("span", "range-mark");
-  mark.style.left = position(price);
+  mark.style.left = `${pricePct}%`;
   track.append(mark);
   const amplitude = prev ? `振幅 ${fixed((high - low) / prev * 100, 2)}%` : `${fixed(low, digits)}–${fixed(high, digits)}`;
   wrap.append(track, el("div", "range-label", amplitude));
@@ -605,6 +665,15 @@ function emptyRow(): HTMLTableRowElement {
 }
 
 function renderRows(flash: Map<string, Direction>) {
+  const items = state.snap ? visibleItems() : null;
+  const sig = items === null ? "__loading__" : JSON.stringify({
+    empty: !state.snap?.watchlist.length,
+    sort: state.sort,
+    filter: state.filter,
+    items,
+  });
+  if (flash.size === 0 && sig === state.sectionSigs.rows) return;
+  state.sectionSigs.rows = sig;
   const body = $("rows");
   body.replaceChildren();
   if (!state.snap) {
@@ -623,7 +692,7 @@ function renderRows(flash: Map<string, Direction>) {
     body.append(emptyRow());
     return;
   }
-  for (const item of visibleItems()) {
+  for (const item of items!) {
     const quote = item.quote;
     const price = watchPrice(item);
     const digits = priceDigits(item.symbol, item.region, price, false);
@@ -656,7 +725,7 @@ function renderRows(flash: Map<string, Direction>) {
     const flashed = flash.get(item.symbol);
     if (!loadingQuote && flashed) priceNode.classList.add(`flash-${flashed}`);
     const trendCell = el("div", "trend-cell");
-    const chart = spark(item.trend, 108, 30, digits, item.region === "fund");
+    const chart = sparkCached(`watch:${item.symbol}`, item.trend, 108, 30, digits, item.region === "fund");
     if (chart) {
       const period = periodChange(item.trend);
       trendCell.append(chart, el("span", `trend-pct ${dir(period)}`, fmtPct(period)));
@@ -669,6 +738,7 @@ function renderRows(flash: Map<string, Direction>) {
     const remove = el("button", "remove");
     remove.type = "button";
     remove.dataset.remove = item.symbol;
+    remove.dataset.label = quote?.name || item.symbol;
     remove.setAttribute("aria-label", `从自选中删除 ${quote?.name || item.symbol}`);
     remove.title = "删除";
     remove.append(icon(["M5.5 5.5l9 9", "M14.5 5.5l-9 9"]));
@@ -751,7 +821,7 @@ function indexPanel(market: Snapshot["market"], phase: Phase | null | undefined)
       pct.className = "ipct flat";
     }
     const chartCell = el("td", "ispark");
-    const chart = spark(row.trend, 110, 26);
+    const chart = sparkCached(`idx:${row.code}`, row.trend, 110, 26);
     if (chart) chartCell.append(chart);
     tr.append(name, price, pct, chartCell);
     body.append(tr);
@@ -843,29 +913,32 @@ function sessionPanel(region: Region, phase: Phase | null | undefined): HTMLDivE
 }
 
 function renderMarket() {
+  const snap = state.snap;
+  const market = snap?.market?.region === state.region ? snap.market : state.marketCache.get(state.region);
+  const phase = snap?.phases?.[state.region];
+  const stats = snap?.stats?.[state.region];
+  const sectors = state.region === "cn" ? snap?.sectors : null;
+  const sig = JSON.stringify({ region: state.region, phases: snap?.phases ?? null, market: market ?? null, stats: stats ?? null, sectors: sectors ?? null });
+  if (sig === state.sectionSigs.market) return;
+  state.sectionSigs.market = sig;
   renderTabs();
   const body = $("market-body");
   body.replaceChildren();
-  const snap = state.snap;
-  const market = snap?.market;
-  if (!snap || !market || market.region !== state.region) {
+  if (!snap || !market) {
     const loading = panel("指数", "加载中…");
     loading.append(el("p", "panel-note", "正在读取该市场的指数…"));
     body.append(loading);
     return;
   }
-  const phase = snap.phases?.[state.region];
   body.append(indexPanel(market, phase));
   const side = el("div", "side");
-  if (state.region === "cn") side.append(statsPanel("cn", snap.stats?.cn), sectorsPanel(snap.sectors));
-  else if ((BREADTH_REGIONS as readonly Region[]).includes(state.region)) side.append(statsPanel(state.region, snap.stats?.[state.region]), sessionPanel(state.region, phase));
+  if (state.region === "cn") side.append(statsPanel("cn", stats), sectorsPanel(snap.sectors));
+  else if ((BREADTH_REGIONS as readonly Region[]).includes(state.region)) side.append(statsPanel(state.region, stats), sessionPanel(state.region, phase));
   else side.append(sessionPanel(state.region, phase));
   body.append(side);
 }
 
 function render(flash = new Map<string, Direction>()) {
-  // Rebuilt charts never fire pointerleave, so an open tooltip would stay stuck.
-  $("tip").hidden = true;
   $("watch-count").textContent = state.snap ? `${state.snap.watchlist.length} / 30` : "";
   renderStatus();
   renderVersion();
@@ -874,9 +947,15 @@ function render(flash = new Map<string, Direction>()) {
   renderFilters();
   renderRows(flash);
   renderMarket();
+  // Only hide tooltip if the chart being hovered was detached by a section rebuild.
+  if (activeSpark && !document.documentElement.contains?.(activeSpark)) {
+    $("tip").hidden = true;
+    activeSpark = null;
+  }
 }
 
 function applySnapshot(snap: Snapshot, fromCache = false) {
+  if (snap.market?.region) state.marketCache.set(snap.market.region, snap.market);
   const flash = new Map<string, Direction>();
   if (!fromCache && !state.fromCache) {
     for (const item of snap.watchlist) {
@@ -949,21 +1028,52 @@ function setAddForm(open: boolean) {
   if (open) $<HTMLInputElement>("symbol-input").focus();
 }
 
-async function changeWatchlist(op: "add" | "remove", symbols: string[]) {
+function showUndo(symbol: string, label: string) {
+  clearTimeout(state.undoTimer);
+  const bar = $("watch-undo");
+  const button = el("button", "", "撤销");
+  button.type = "button";
+  button.dataset.undo = symbol;
+  bar.replaceChildren(el("span", "", `已移除 ${label}`), button);
+  bar.hidden = false;
+  state.undoTimer = setTimeout(() => {
+    bar.hidden = true;
+  }, 6000);
+}
+
+function hideUndo() {
+  clearTimeout(state.undoTimer);
+  $("watch-undo").hidden = true;
+}
+
+async function changeWatchlist(op: "add" | "remove", symbols: string[], label?: string) {
   if (state.saving) return;
   state.saving = true;
   const message = $("add-message");
-  message.className = "add-message";
-  message.textContent = op === "add" ? "正在保存…" : "";
+  const submit = document.getElementById("add-submit") as HTMLButtonElement | null;
+  const removingRow = op === "remove" && symbols.length === 1
+    ? document.querySelector<HTMLTableRowElement>(`#rows tr[data-symbol="${typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(symbols[0]) : symbols[0].replace(/"/g, '\\"')}"]`)
+    : null;
+  if (op === "add") {
+    if (submit) submit.disabled = true;
+    message.className = "add-message";
+    message.textContent = "正在保存…";
+  } else {
+    removingRow?.classList.add("is-removing");
+    hideUndo();
+  }
   try {
     await post("./api/watchlist", { op, symbols });
     if (op === "add") {
       $<HTMLInputElement>("symbol-input").value = "";
       message.textContent = "";
       setAddForm(false);
+    } else if (symbols.length === 1) {
+      showUndo(symbols[0], label || symbols[0]);
     }
     await poll();
   } catch (error) {
+    removingRow?.classList.remove("is-removing");
     const reason = (error as Error).message;
     if (op === "add") {
       message.className = "add-message error";
@@ -977,6 +1087,7 @@ async function changeWatchlist(op: "add" | "remove", symbols: string[]) {
       }, 6000);
     }
   } finally {
+    if (submit) submit.disabled = false;
     state.saving = false;
   }
 }
@@ -1003,22 +1114,37 @@ $("symbol-input").addEventListener("keydown", event => {
   if (event.key === "Escape") setAddForm(false);
 });
 $("refresh").addEventListener("click", async () => {
-  $("refresh").classList.add("busy");
+  if (state.refreshing) return;
+  const button = $<HTMLButtonElement>("refresh");
+  state.refreshing = true;
+  button.disabled = true;
+  button.classList.add("busy");
   try {
     await post("./api/refresh");
     state.error = null;
+    void poll();
   } catch (error) {
     state.error = (error as Error).message;
+    button.classList.remove("busy");
+    renderStatus();
+  } finally {
+    state.refreshing = false;
+    button.disabled = false;
   }
-  void poll();
 });
 $("rows").addEventListener("click", event => {
   const remove = closest<HTMLButtonElement>(event, "button[data-remove]");
   if (remove?.dataset.remove) {
-    void changeWatchlist("remove", [remove.dataset.remove]);
+    void changeWatchlist("remove", [remove.dataset.remove], remove.dataset.label);
     return;
   }
   if (closest(event, "[data-action='open-add']")) setAddForm(true);
+});
+$("watch-undo").addEventListener("click", event => {
+  const button = closest<HTMLButtonElement>(event, "button[data-undo]");
+  if (!button?.dataset.undo) return;
+  hideUndo();
+  void changeWatchlist("add", [button.dataset.undo]);
 });
 $("filters").addEventListener("click", event => {
   const chip = closest<HTMLButtonElement>(event, "button[data-filter]");
@@ -1077,6 +1203,7 @@ window.addEventListener("message", (event: MessageEvent<{ type?: string; scheme?
     const value = message.palette?.[key];
     const property = key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
     if (typeof value === "string" && value.length < 300) document.documentElement.style.setProperty(`--${property}`, value);
+    else document.documentElement.style.removeProperty?.(`--${property}`);
   }
 });
 $("update").addEventListener("click", event => {

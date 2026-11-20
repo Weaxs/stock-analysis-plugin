@@ -13,8 +13,7 @@
   <div class="app">
     <header class="bar">
       <div class="bar-title">
-        <h1>自选</h1>
-        <span id="watch-count" class="count">0</span>
+        <h1>行情</h1>
       </div>
       <p id="status" class="status" role="status" aria-live="polite">正在连接行情服务…</p>
       <div class="bar-actions">
@@ -36,27 +35,37 @@
     <form id="add-form" class="add" hidden>
       <label class="sr-only" for="symbol-input">证券、基金或投顾组合代码，多个用逗号分隔</label>
       <input id="symbol-input" type="text" placeholder="600519, 00700.HK, AAPL, 7203.T" autocomplete="off" spellcheck="false" maxlength="512" required>
-      <button class="btn primary" type="submit">加入自选</button>
-      <button id="add-cancel" class="btn ghost" type="button">取消</button>
+      <div class="add-actions">
+        <button id="add-submit" class="btn primary" type="submit">加入自选</button>
+        <button id="add-cancel" class="btn ghost" type="button">取消</button>
+      </div>
       <p class="add-hint">A 股和场外基金填 6 位代码，投顾组合填 TIAA 代码。港股 .HK、日股 .T、韩股 .KS/.KQ、台股 .TW，美股直接填代码。最多 30 项。</p>
       <p id="add-message" class="add-message" role="status" aria-live="polite"></p>
     </form>
 
-    <section id="ribbon-wrap" class="ribbon" aria-label="主要指数">
-      <div id="ribbon" class="ribbon-track"></div>
-      <button class="ribbon-nav prev" type="button" data-step="-1" aria-label="查看前面的指数" hidden>
-        <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5"/></svg>
-      </button>
-      <button class="ribbon-nav next" type="button" data-step="1" aria-label="查看更多市场指数" hidden>
-        <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5L13 10l-5.5 5.5"/></svg>
-      </button>
+    <section id="ribbon-wrap" class="ribbon" aria-label="主要指数与市场宽度">
+      <div class="ribbon-stage">
+        <div id="ribbon" class="ribbon-track"></div>
+        <button class="ribbon-nav prev" type="button" data-step="-1" aria-label="查看前面的指数" hidden>
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5"/></svg>
+        </button>
+        <button class="ribbon-nav next" type="button" data-step="1" aria-label="查看更多市场指数" hidden>
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5L13 10l-5.5 5.5"/></svg>
+        </button>
+      </div>
+      <div id="pulse" class="pulse" aria-label="A股、港股、美股市场宽度"></div>
     </section>
-    <div id="pulse" class="pulse" aria-label="A股、港股、美股市场宽度"></div>
 
     <section class="watch" aria-labelledby="watch-heading">
-      <h2 id="watch-heading" class="sr-only">自选行情</h2>
-      <div id="filters" class="filters" role="toolbar" aria-label="按市场或产品类型筛选" hidden></div>
+      <div class="watch-head">
+        <div class="watch-title">
+          <h2 id="watch-heading">自选</h2>
+          <span id="watch-count" class="count">0</span>
+        </div>
+        <div id="filters" class="filters" role="toolbar" aria-label="按市场或产品类型筛选" hidden></div>
+      </div>
       <div id="watch-error" class="notice" role="alert" hidden></div>
+      <div id="watch-undo" class="undo-bar" role="status" aria-live="polite" hidden></div>
       <div class="table-wrap">
         <table class="quotes">
           <thead>
