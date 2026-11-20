@@ -85,9 +85,12 @@ function fakePython(options: { phase?: string; fail?: (script: string, args: str
     active--;
     if (options.fail?.(script, args)) throw new Error("secret stderr\n  at /private/provider.py");
     if (args[0] === "quotes") {
-      return JSON.stringify(args[1].split(",").map(symbol => options.fail?.(script, ["quote", symbol])
-        ? { error: "secret stderr at /private/provider.py" }
-        : { symbol, name: `Name ${symbol}`, price: 100, change_pct: 1.2, high: 101, low: 99 }));
+      return JSON.stringify(args[1].split(",").map(symbol => {
+        if (options.fail?.(script, ["quote", symbol])) return { error: "secret stderr at /private/provider.py" };
+        if (symbol === "018147") return { symbol, asset_type: "open_end_fund", nav: 1.716, trend: [{ date: "2026-11-18", close: 1.716 }] };
+        if (symbol.startsWith("TIAA")) return { symbol, asset_type: "investment_advisory_portfolio", name: "长钱账户" };
+        return { symbol, name: `Name ${symbol}`, price: 100, change_pct: 1.2, high: 101, low: 99 };
+      }));
     }
     if (args[0] === "klines") {
       return JSON.stringify(args[1].split(",").map(symbol => options.fail?.(script, ["kline", symbol])
@@ -218,6 +221,26 @@ try {
     assert.equal(installedPlugin(join(temp, "nothing")), undefined);
   }
 
+  {
+    const file = join(temp, "non-stock", "watchlist.json");
+    writeWatchlist(file, ["018147", "TIAA001001"]);
+    const py = fakePython();
+    const dashboard = createDashboardHandler({ runPy: py.runPy, watchlistFile: file, webDir });
+    await dashboard.tick();
+    const [fund, advisor] = (await call(dashboard, get("/stock-analysis/api/snapshot"))).json().watchlist;
+    assert.equal(advisor.region, "advisor");
+    assert.equal(advisor.quote.name, "长钱账户");
+    assert.equal(advisor.trend, null);
+    assert.equal(quoted(py.calls, "TIAA001001", "klines"), 0);
+    assert.equal(fund.region, "fund");
+    assert.equal(fund.quote.nav, 1.716);
+    assert.deepEqual(fund.trend, [{ date: "2026-11-18", close: 1.716 }]);
+    await call(dashboard, post("/stock-analysis/api/refresh", {}));
+    await dashboard.settle();
+    assert(quoted(py.calls, "018147", "klines") <= 1, "a recognized fund uses its NAV series on refresh");
+    dashboard.dispose();
+  }
+
   // ---------- warm-up fetches the fixed job set within the worker budget ----------
   const file = join(temp, "api", "watchlist.json");
   writeWatchlist(file, ["600519", "AAPL", "00700.HK"]);
@@ -228,7 +251,8 @@ try {
     await handler.settle();
     assert(py.maxActive() <= 4, `python concurrency ${py.maxActive()} exceeded four`);
     assert.equal(py.calls.filter(call => call.startsWith("stock_data.py:quotes ")).length, 1, "one process serves every due quote");
-    for (const symbol of ["sh600519", "AAPL", "00700.HK", "sh000001"]) assert.equal(quoted(py.calls, symbol), 1, `missing quote ${symbol}`);
+    assert(py.calls.some(call => call.startsWith("stock_data.py:quotes ") && call.endsWith(" --watchlist")));
+    for (const symbol of ["600519", "AAPL", "00700.HK", "sh000001"]) assert.equal(quoted(py.calls, symbol), 1, `missing quote ${symbol}`);
     assert.equal(py.timeouts.get(py.calls.find(call => call.startsWith("stock_data.py:quotes "))!), 40_000, "the batch outlives the CLI's own 30 s per-row deadline");
     for (const expected of [
       "stock_data.py:market_indices --region hk",
@@ -282,7 +306,7 @@ try {
     const mark = py.calls.length;
     await handler.tick();
     await handler.settle();
-    assert.equal(quoted(py.calls.slice(mark), "sh600519"), 1, "closed-market quotes refresh every 30 minutes");
+    assert.equal(quoted(py.calls.slice(mark), "600519"), 1, "closed-market quotes refresh every 30 minutes");
   }
   {
     const tradingFile = join(temp, "trading", "watchlist.json");
@@ -291,7 +315,7 @@ try {
     const live = createDashboardHandler({ runPy: trading.runPy, watchlistFile: tradingFile, webDir });
     await live.tick();
     await live.settle();
-    const quoteCalls = () => quoted(trading.calls, "sh600519");
+    const quoteCalls = () => quoted(trading.calls, "600519");
     now += 40_000;
     await live.tick();
     await live.settle();
@@ -312,7 +336,7 @@ try {
     const idle = createDashboardHandler({ runPy: holiday.runPy, watchlistFile: holidayFile, webDir });
     await idle.tick();
     await idle.settle();
-    const quoteCalls = () => quoted(holiday.calls, "sh600519");
+    const quoteCalls = () => quoted(holiday.calls, "600519");
     now += 61 * MINUTE;
     await idle.tick();
     await idle.settle();

@@ -12,6 +12,7 @@ function element() {
     className: "",
     value: "",
     dataset: {},
+    children: [] as unknown[],
     style: { setProperty() {} },
     classList: { add() {}, remove() {}, toggle() {} },
     clientWidth: 100,
@@ -21,7 +22,10 @@ function element() {
     addEventListener(type: string, fn: (event: unknown) => void) {
       listeners.set(type, [...(listeners.get(type) ?? []), fn]);
     },
-    append() {}, appendChild() {}, replaceChildren() {}, remove() {},
+    append(...nodes: unknown[]) { this.children.push(...nodes); },
+    appendChild(node: unknown) { this.children.push(node); },
+    replaceChildren() { this.children.length = 0; },
+    remove() {},
     setAttribute() {}, focus() {}, scrollBy() {}, scrollIntoView() {},
     querySelector() { return element(); },
     querySelectorAll() { return []; },
@@ -58,9 +62,21 @@ let resolveFirst!: (value: unknown) => void;
 const firstSnapshot = new Promise(resolve => { resolveFirst = resolve; });
 const snapshotCalls: string[] = [];
 const writeCalls: unknown[] = [];
+const fundAndAdvisor = [
+  {
+    symbol: "018147", region: "fund",
+    quote: { name: "建信新兴市场混合(QDII)C", nav: 1.716, nav_date: "2026-11-18", change_pct: 1.06 },
+    trend: [{ date: "2026-11-18", close: 1.716 }],
+  },
+  {
+    symbol: "TIAA001001", region: "advisor",
+    quote: { name: "长钱账户", advisor_org: "嘉实财富管理有限公司" },
+    trend: null,
+  },
+];
 function payload() {
   return {
-    watchlist: [], ribbon: [], phases: {},
+    watchlist: fundAndAdvisor, ribbon: [], phases: {},
     market: { region: "cn", indices: [] },
     stats: {},
     sectors: { value: { top: [], bottom: [] }, error: null, updatedAt: null, loading: false },
@@ -121,4 +137,11 @@ while (snapshotCalls.length < 2 && Date.now() < deadline) {
   await new Promise(resolve => setTimeout(resolve, 5));
 }
 assert.equal(snapshotCalls.length, 2, "an addition during an unresolved poll triggers a follow-up snapshot");
-console.log("dsh web poll: adding while a snapshot is in flight forces exactly one follow-up poll");
+const rows = JSON.stringify(byId("rows").children);
+for (const label of ["场外基金", "1.7160", "净值日 2026-11-18", "投顾组合", "无统一净值", "嘉实财富管理有限公司"]) {
+  assert(rows.includes(label), `watchlist is missing ${label}`);
+}
+const filters = JSON.stringify(byId("filters").children);
+assert(filters.includes("场外基金 1") && filters.includes("投顾组合 1"));
+assert(!rows.includes("美股"));
+console.log("dsh web: watchlist polling, fund NAV and advisor rows passed");

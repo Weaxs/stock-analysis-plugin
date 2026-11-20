@@ -90,9 +90,8 @@ h1, h2, p { margin: 0; }
 h1 { font-size: 19px; font-weight: 650; letter-spacing: -.02em; line-height: 1.2; }
 .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .status { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status .live { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); animation: live 2.4s cubic-bezier(.16, 1, .3, 1) infinite; }
+.status .live { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 .status .warn { color: var(--warn); }
-@keyframes live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
 .bar-actions { display: flex; gap: 8px; }
 .btn { height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 7px; border: 1px solid transparent; font-size: 12.5px; font-weight: 600; white-space: nowrap; transition: background-color .16s ease, border-color .16s ease, opacity .16s ease; }
 .btn.primary { background: var(--accent); color: var(--on-accent); }

@@ -553,8 +553,8 @@ def test_quotes_batch_keeps_input_order_and_isolates_failures(monkeypatch):
         return {"symbol": args.symbol, "price": 1}
 
     monkeypatch.setattr(stock_data, "cmd_quote", quote)
-    result = stock_data.cmd_quotes(Namespace(symbols="AAPL, BAD,sh600519,"))
-    assert [row.get("symbol") for row in result] == ["AAPL", None, "sh600519"]
+    result = stock_data.cmd_quotes(Namespace(symbols="AAPL, BAD,sh600519,000001,"))
+    assert [row.get("symbol") for row in result] == ["AAPL", None, "sh600519", "000001"]
     assert result[1] == {"error": "provider down"}
 
 
