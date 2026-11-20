@@ -24,6 +24,7 @@ interface ThemeContext {
 interface ClientContext {
   get(name: "pluginNavigation"): { openBundle?(packageName: string): void } | undefined;
   inject(deps: ["theme"], callback: (ctx: ThemeContext) => void): void;
+  effect?(callback: () => void | (() => void)): void;
   slots: {
     inject(name: string, callback: () => unknown): void;
     register(spec: Record<string, unknown>, component: unknown): unknown;
@@ -93,11 +94,19 @@ window.__ModuleLoader__.load({
           frame.contentWindow.postMessage({ type: "stock-analysis:theme", scheme, palette: palette(), pluginPage: Boolean(pluginPage()) }, location.origin);
         }
       };
-      window.addEventListener("message", (event: MessageEvent<{ type?: string }>) => {
+      const onMessage = (event: MessageEvent<{ type?: string }>) => {
         if (event.origin !== location.origin || event.data?.type !== "stock-analysis:open-plugin") return;
         if (![...frames].some(frame => frame.contentWindow === event.source)) return;
         pluginPage()?.openBundle?.("@weaxs/dsh-stock-analysis");
-      });
+      };
+      if (typeof ctx.effect === "function") {
+        ctx.effect(() => {
+          window.addEventListener("message", onMessage);
+          return () => window.removeEventListener("message", onMessage);
+        });
+      } else {
+        window.addEventListener("message", onMessage);
+      }
       ctx.inject(["theme"], c => {
         const push = (snapshot: ThemeSnapshot) => {
           scheme = snapshot.active.colorScheme;
@@ -110,6 +119,7 @@ window.__ModuleLoader__.load({
       function DashboardPanel() {
         const ref = React.useRef<HTMLIFrameElement | null>(null);
         const [src] = React.useState(() => (scheme ? `${SRC}?theme=${scheme}` : SRC));
+        const [bg] = React.useState(() => palette().bg || "transparent");
         React.useEffect(() => {
           const frame = ref.current;
           if (frame) frames.add(frame);
@@ -120,7 +130,7 @@ window.__ModuleLoader__.load({
         return h("iframe", {
           ref, src, title: "股票仪表盘", allow: "fullscreen", referrerPolicy: "no-referrer",
           onLoad: (event: { currentTarget: HTMLIFrameElement }) => post(event.currentTarget),
-          style: { width: "100%", height: "100%", border: 0, display: "block", background: "Canvas" },
+          style: { width: "100%", height: "100%", border: 0, display: "block", background: bg },
         });
       }
 

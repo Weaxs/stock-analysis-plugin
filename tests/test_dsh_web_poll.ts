@@ -4,16 +4,22 @@ import { build } from "esbuild";
 
 function element() {
   const listeners = new Map<string, Array<(event: unknown) => void>>();
+  const styleProps = new Map<string, string>();
   return {
     listeners,
     hidden: false,
+    disabled: false,
     textContent: "",
     innerHTML: "",
     className: "",
     value: "",
-    dataset: {},
+    dataset: {} as Record<string, string>,
     children: [] as unknown[],
-    style: { setProperty() {} },
+    style: {
+      props: styleProps,
+      setProperty(name: string, value: string) { styleProps.set(name, value); },
+      removeProperty(name: string) { styleProps.delete(name); },
+    },
     classList: { add() {}, remove() {}, toggle() {} },
     clientWidth: 100,
     scrollWidth: 100,
@@ -51,10 +57,13 @@ const document = {
   querySelectorAll: () => [],
   addEventListener() {},
 };
+const windowListeners = new Map<string, Array<(event: unknown) => void>>();
 const window = {
   innerWidth: 1024,
   parent: null as unknown,
-  addEventListener() {},
+  addEventListener(type: string, fn: (event: unknown) => void) {
+    windowListeners.set(type, [...(windowListeners.get(type) ?? []), fn]);
+  },
 };
 window.parent = window;
 
@@ -144,4 +153,31 @@ for (const label of ["场外基金", "1.7160", "净值日 2026-11-18", "投顾�
 const filters = JSON.stringify(byId("filters").children);
 assert(filters.includes("场外基金 1") && filters.includes("投顾组合 1"));
 assert(!rows.includes("美股"));
-console.log("dsh web: watchlist polling, fund NAV and advisor rows passed");
+
+// Undo bar appears after removing an item and re-adds it when clicked.
+const removeBtn = { dataset: { remove: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-remove]" ? removeBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.deepEqual(writeCalls.at(-1), { op: "remove", symbols: ["018147"] });
+assert.equal(byId("watch-undo").hidden, false, "undo bar becomes visible after remove");
+const undoBtn = { dataset: { undo: "018147" } };
+for (const listener of byId("watch-undo").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-undo]" ? undoBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.deepEqual(writeCalls.at(-1), { op: "add", symbols: ["018147"] });
+assert.equal(byId("watch-undo").hidden, true, "undo bar hides once clicked");
+
+// Theme message clears stale inline palette variables when a token is omitted.
+for (const listener of windowListeners.get("message") ?? []) {
+  listener({ origin: "http://dashboard.local", source: window, data: { type: "stock-analysis:theme", scheme: "dark", palette: { bg: "#111111" } } });
+}
+assert.equal(document.documentElement.style.props.get("--bg"), "#111111");
+for (const listener of windowListeners.get("message") ?? []) {
+  listener({ origin: "http://dashboard.local", source: window, data: { type: "stock-analysis:theme", scheme: "light", palette: {} } });
+}
+assert.equal(document.documentElement.style.props.has("--bg"), false, "omitted theme token is removed");
+
+console.log("dsh web: watchlist polling, fund NAV, advisor rows, undo and theme cleanup passed");
