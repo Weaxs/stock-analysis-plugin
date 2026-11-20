@@ -34,11 +34,11 @@
     </header>
 
     <form id="add-form" class="add" hidden>
-      <label class="sr-only" for="symbol-input">股票代码，多个用逗号分隔</label>
+      <label class="sr-only" for="symbol-input">证券、基金或投顾组合代码，多个用逗号分隔</label>
       <input id="symbol-input" type="text" placeholder="600519, 00700.HK, AAPL, 7203.T" autocomplete="off" spellcheck="false" maxlength="512" required>
       <button class="btn primary" type="submit">加入自选</button>
       <button id="add-cancel" class="btn ghost" type="button">取消</button>
-      <p class="add-hint">A 股填 6 位代码；港股 .HK、日股 .T、韩股 .KS/.KQ、台股 .TW，美股直接填代码。最多 30 只。</p>
+      <p class="add-hint">A 股和场外基金填 6 位代码，投顾组合填 TIAA 代码。港股 .HK、日股 .T、韩股 .KS/.KQ、台股 .TW，美股直接填代码。最多 30 项。</p>
       <p id="add-message" class="add-message" role="status" aria-live="polite"></p>
     </form>
 
@@ -54,8 +54,8 @@
     <div id="pulse" class="pulse" aria-label="A股、港股、美股市场宽度"></div>
 
     <section class="watch" aria-labelledby="watch-heading">
-      <h2 id="watch-heading" class="sr-only">自选股行情</h2>
-      <div id="filters" class="filters" role="toolbar" aria-label="按市场筛选" hidden></div>
+      <h2 id="watch-heading" class="sr-only">自选行情</h2>
+      <div id="filters" class="filters" role="toolbar" aria-label="按市场或产品类型筛选" hidden></div>
       <div id="watch-error" class="notice" role="alert" hidden></div>
       <div class="table-wrap">
         <table class="quotes">
@@ -84,7 +84,7 @@
       <div id="market-body" class="market-body" role="tabpanel" aria-labelledby="market-heading"></div>
     </section>
 
-    <footer class="foot">报价可能延迟，悬停名称可查看来源与报价时间。交易时段内有页面打开时约每 30 秒更新一次，后台每 5 分钟预热；30 日走势为最近 30 个有效交易日收盘价。<span id="version"></span></footer>
+    <footer class="foot">报价可能延迟，悬停名称可查看来源与数据时间。交易时段内有页面打开时约每 30 秒更新一次，后台每 5 分钟预热。走势显示最近 30 个有效收盘价或单位净值。<span id="version"></span></footer>
   </div>
   <div id="tip" class="tip" role="tooltip" hidden></div>
 </body>

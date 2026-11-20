@@ -1,6 +1,7 @@
 // Dashboard page logic; esbuild compiles it to dist/web/app.js as an IIFE loaded by index.html.
 
 type Region = "cn" | "hk" | "us" | "jp" | "kr" | "tw";
+type WatchRegion = Region | "fund" | "advisor";
 type Numeric = number | string | null | undefined;
 type Direction = "up" | "down" | "flat";
 type SortKey = "order" | "price" | "change_pct" | "change" | "turnover" | "trend";
@@ -9,6 +10,9 @@ interface Quote {
   symbol?: string;
   name?: string;
   price?: Numeric;
+  nav?: Numeric;
+  nav_date?: string;
+  advisor_org?: string;
   change?: Numeric;
   change_pct?: Numeric;
   high?: Numeric;
@@ -43,7 +47,7 @@ interface Slot<T> {
 
 interface WatchItem {
   symbol: string;
-  region: Region;
+  region: WatchRegion;
   quote: Quote | null;
   quoteError: string | null;
   quoteLoading: boolean;
@@ -94,11 +98,12 @@ interface Snapshot {
 const POLL_IDLE = 15000;
 const POLL_BUSY = 5000;
 const REQUEST_TIMEOUT = 15000;
-const CACHE_KEY = "stock-dashboard:v2:snapshot";
+const CACHE_KEY = "stock-dashboard:v3:snapshot";
 const PREF_KEY = "stock-dashboard:v2:prefs";
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const REGION_NAMES: Record<Region, string> = { cn: "A股", hk: "港股", us: "美股", jp: "日股", kr: "韩股", tw: "台股" };
 const REGIONS = Object.keys(REGION_NAMES) as Region[];
+const WATCH_REGION_NAMES: Record<WatchRegion, string> = { ...REGION_NAMES, fund: "场外基金", advisor: "投顾组合" };
 const TRADING = new Set(["morning", "afternoon", "intraday"]);
 const INDEX_NAMES: Record<string, string> = {
   sh000001: "上证指数", sz399001: "深证成指", sz399006: "创业板指", sh000688: "科创50", sh000300: "沪深300", sh000016: "上证50",
@@ -110,12 +115,13 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const SORT_KEYS = new Set<SortKey>(["order", "price", "change_pct", "change", "turnover", "trend"]);
 
 const isRegion = (value: unknown): value is Region => typeof value === "string" && value in REGION_NAMES;
+const isWatchRegion = (value: unknown): value is WatchRegion => value === "fund" || value === "advisor" || isRegion(value);
 
 const state = {
   snap: null as Snapshot | null,
   region: "cn" as Region,
   sort: { key: "order" as SortKey, dir: -1 },
-  filter: "all" as Region | "all",
+  filter: "all" as WatchRegion | "all",
   prices: new Map<string, number | null>(),
   pollTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   inflight: false,
@@ -173,8 +179,9 @@ function fixed(value: number, digits: number): string {
   return formatter.format(value);
 }
 
-function priceDigits(symbol: string, region: Region, price: number | null, isIndex: boolean): number {
+function priceDigits(symbol: string, region: WatchRegion, price: number | null, isIndex: boolean): number {
   if (isIndex) return 2;
+  if (region === "fund") return 4;
   if (region === "cn") return /^(?:sh|sz)?[15]\d{5}$/.test(symbol) ? 3 : 2;
   if (region === "hk") return price !== null && price < 10 ? 3 : 2;
   return 2;
@@ -237,7 +244,7 @@ function skeleton(width: number): HTMLSpanElement {
 
 // ---------- sparkline with hover readout ----------
 
-function spark(rows: TrendRow[] | null | undefined, width: number, height: number, digits = 2): SVGSVGElement | null {
+function spark(rows: TrendRow[] | null | undefined, width: number, height: number, digits = 2, isNav = false): SVGSVGElement | null {
   const points = Array.isArray(rows)
     ? rows.map(row => ({ date: row.date, close: num(row.close) })).filter((row): row is { date: string; close: number } => row.close !== null && row.close > 0)
     : [];
@@ -253,7 +260,7 @@ function spark(rows: TrendRow[] | null | undefined, width: number, height: numbe
   const ys = closes.map(close => pad + (max - close) / range * (height - pad * 2));
   const line = xs.map((x, index) => `${index ? "L" : "M"}${x.toFixed(1)},${ys[index].toFixed(1)}`).join("");
   const svg = svgEl("svg", { class: `spark ${dir(last - first)}`, width, height, viewBox: `0 0 ${width} ${height}`, role: "img" });
-  svg.setAttribute("aria-label", `近 ${points.length} 个交易日走势，区间 ${fmtPct(periodChange(points))}`);
+  svg.setAttribute("aria-label", `近 ${points.length} 个${isNav ? "净值日" : "交易日"}走势，区间 ${fmtPct(periodChange(points))}`);
   svg.append(
     svgEl("line", { class: "base", x1: pad, x2: width - pad, y1: ys[0], y2: ys[0] }),
     svgEl("path", { class: "area", d: `${line}L${xs[xs.length - 1].toFixed(1)},${height}L${xs[0].toFixed(1)},${height}Z` }),
@@ -279,7 +286,7 @@ function spark(rows: TrendRow[] | null | undefined, width: number, height: numbe
     dot.setAttribute("cy", String(ys[index]));
     const change = (closes[index] / first - 1) * 100;
     tip.replaceChildren(
-      document.createTextNode(`${shortDate(points[index].date)}  收 `),
+      document.createTextNode(`${shortDate(points[index].date)}  ${isNav ? "单位净值" : "收"} `),
       el("b", "", fixed(closes[index], digits)),
       document.createTextNode("  "),
       el("span", "", `较首日 ${fmtPct(change)}`),
@@ -511,7 +518,7 @@ function renderPulse() {
 function renderFilters() {
   const node = $("filters");
   const items = state.snap?.watchlist || [];
-  const counts = new Map<Region, number>();
+  const counts = new Map<WatchRegion, number>();
   for (const item of items) counts.set(item.region, (counts.get(item.region) || 0) + 1);
   if (counts.size < 2) {
     node.hidden = true;
@@ -521,10 +528,12 @@ function renderFilters() {
   if (state.filter !== "all" && !counts.has(state.filter)) state.filter = "all";
   node.hidden = false;
   node.replaceChildren();
-  const chips: Array<[Region | "all", string, number]> = [
+  const chips: Array<[WatchRegion | "all", string, number]> = [
     ["all", "全部", items.length],
-    ...REGIONS.filter(region => counts.has(region)).map((region): [Region, string, number] => [region, REGION_NAMES[region], counts.get(region) ?? 0]),
   ];
+  for (const [region, label] of Object.entries(WATCH_REGION_NAMES)) {
+    if (isWatchRegion(region) && counts.has(region)) chips.push([region, label, counts.get(region)!]);
+  }
   for (const [key, label, count] of chips) {
     const chip = el("button", "chip", `${label} ${count}`);
     chip.type = "button";
@@ -534,7 +543,12 @@ function renderFilters() {
   }
 }
 
+function watchPrice(item: WatchItem): number | null {
+  return num(item.region === "fund" ? item.quote?.nav : item.quote?.price);
+}
+
 function sortValue(item: WatchItem, key: Exclude<SortKey, "order">): number | null {
+  if (key === "price") return watchPrice(item);
   if (key === "trend") return periodChange(item.trend);
   return num(item.quote?.[key]);
 }
@@ -611,7 +625,7 @@ function renderRows(flash: Map<string, Direction>) {
   }
   for (const item of visibleItems()) {
     const quote = item.quote;
-    const price = num(quote?.price);
+    const price = watchPrice(item);
     const digits = priceDigits(item.symbol, item.region, price, false);
     const change = dir(quote?.change_pct);
     const row = el("tr");
@@ -620,12 +634,15 @@ function renderRows(flash: Map<string, Direction>) {
     const nameCell = el("td", "c-name");
     nameCell.append(el("span", "name", quote?.name || item.symbol));
     const meta = el("div", "meta");
-    meta.append(el("span", "code", item.symbol), el("span", "tag", REGION_NAMES[item.region]));
-    if (quote?.stale) meta.append(el("span", "stale", "报价可能不是最新"));
-    if (item.quoteError) meta.append(el("span", "stale", quote ? "更新失败，显示上次报价" : item.quoteError));
+    meta.append(el("span", "code", item.symbol), el("span", "tag", WATCH_REGION_NAMES[item.region]));
+    if (item.region === "fund" && quote?.nav_date) meta.append(el("span", "", `净值日 ${quote.nav_date}`));
+    if (item.region === "advisor" && quote?.advisor_org) meta.append(el("span", "", quote.advisor_org));
+    if (item.region !== "fund" && quote?.stale) meta.append(el("span", "stale", "报价可能不是最新"));
+    if (item.quoteError) meta.append(el("span", "stale", quote ? "更新失败，显示上次数据" : item.quoteError));
     nameCell.append(meta);
-    const quotedAt = quote?.as_of || quote?.data_as_of;
-    const evidence = [quote?.source && `来源 ${quote.source}`, quotedAt && `报价 ${stamp(quotedAt)}`].filter(Boolean).join(" · ");
+    const quotedAt = item.region === "fund" ? quote?.nav_date : quote?.as_of || quote?.data_as_of;
+    const asOf = quotedAt && (item.region === "fund" ? `净值日 ${quotedAt}` : `数据时间 ${stamp(quotedAt)}`);
+    const evidence = [quote?.source && `来源 ${quote.source}`, asOf].filter(Boolean).join(" · ");
     if (evidence) nameCell.title = evidence;
 
     const loadingQuote = !quote && item.quoteLoading;
@@ -634,17 +651,18 @@ function renderRows(flash: Map<string, Direction>) {
       td.append(content);
       return td;
     };
-    const priceNode = loadingQuote ? skeleton(56) : el("span", `price ${change}`, fmtPrice(price, digits));
+    const priceNode = item.region === "advisor" ? el("span", "amount", "无统一净值")
+      : loadingQuote ? skeleton(56) : el("span", `price ${change}`, fmtPrice(price, digits));
     const flashed = flash.get(item.symbol);
     if (!loadingQuote && flashed) priceNode.classList.add(`flash-${flashed}`);
     const trendCell = el("div", "trend-cell");
-    const chart = spark(item.trend, 108, 30, digits);
+    const chart = spark(item.trend, 108, 30, digits, item.region === "fund");
     if (chart) {
       const period = periodChange(item.trend);
       trendCell.append(chart, el("span", `trend-pct ${dir(period)}`, fmtPct(period)));
-    } else if (item.trendError) {
+    } else if (item.trendError || item.region === "advisor" || (item.region === "fund" && !loadingQuote)) {
       trendCell.append(el("span", "amount", "暂无走势"));
-      trendCell.title = item.trendError;
+      if (item.trendError) trendCell.title = item.trendError;
     } else {
       trendCell.append(skeleton(108));
     }
@@ -862,12 +880,12 @@ function applySnapshot(snap: Snapshot, fromCache = false) {
   const flash = new Map<string, Direction>();
   if (!fromCache && !state.fromCache) {
     for (const item of snap.watchlist) {
-      const price = num(item.quote?.price);
+      const price = watchPrice(item);
       const previous = state.prices.get(item.symbol);
       if (price !== null && previous !== undefined && previous !== null && price !== previous) flash.set(item.symbol, price > previous ? "up" : "down");
     }
   }
-  state.prices = new Map(snap.watchlist.map(item => [item.symbol, num(item.quote?.price)]));
+  state.prices = new Map(snap.watchlist.map(item => [item.symbol, watchPrice(item)]));
   state.snap = snap;
   state.fromCache = fromCache;
   render(flash);
@@ -1005,7 +1023,7 @@ $("rows").addEventListener("click", event => {
 $("filters").addEventListener("click", event => {
   const chip = closest<HTMLButtonElement>(event, "button[data-filter]");
   const filter = chip?.dataset.filter;
-  if (!filter || (filter !== "all" && !isRegion(filter))) return;
+  if (!filter || (filter !== "all" && !isWatchRegion(filter))) return;
   state.filter = filter;
   savePrefs();
   renderFilters();
@@ -1076,7 +1094,7 @@ const prefs = readJson<{ region?: unknown; sort?: { key?: unknown; dir?: unknown
 if (prefs) {
   if (isRegion(prefs.region)) state.region = prefs.region;
   if (SORT_KEYS.has(prefs.sort?.key as SortKey) && (prefs.sort?.dir === 1 || prefs.sort?.dir === -1)) state.sort = { key: prefs.sort.key as SortKey, dir: prefs.sort.dir };
-  if (prefs.filter === "all" || isRegion(prefs.filter)) state.filter = prefs.filter;
+  if (prefs.filter === "all" || isWatchRegion(prefs.filter)) state.filter = prefs.filter;
 }
 const cached = readJson<{ savedAt: number; snap: Snapshot }>(CACHE_KEY);
 if (cached?.snap && Date.now() - cached.savedAt < CACHE_TTL && cached.snap.market?.region === state.region) applySnapshot(cached.snap, true);

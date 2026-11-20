@@ -11,6 +11,7 @@ export type RunPy = (script: string, args: string[], timeoutMs?: number, signal?
 
 export const REGIONS = ["cn", "hk", "us", "jp", "kr", "tw"] as const;
 export type Region = (typeof REGIONS)[number];
+type WatchRegion = Region | "fund" | "advisor";
 const STATS_MARKETS = { cn: "A", hk: "HK", us: "US" } as const;
 type StatsRegion = keyof typeof STATS_MARKETS;
 const STATIC_FILES = new Map([
@@ -191,7 +192,8 @@ export function dashboardQuoteSymbol(symbol: string): string {
   return `${/^[569]/.test(symbol) ? "sh" : "sz"}${symbol}`;
 }
 
-export function symbolRegion(symbol: string): Region {
+export function symbolRegion(symbol: string): Region | "advisor" {
+  if (/^TIAA\d{6}$/i.test(symbol)) return "advisor";
   if (/^(?:sh|sz|bj)?\d{6}$/.test(symbol)) return "cn";
   if (/\.HK$/.test(symbol)) return "hk";
   if (/\.T$/.test(symbol)) return "jp";
@@ -218,7 +220,7 @@ interface Slot {
 interface Job {
   key: string;
   kind: Kind;
-  region: Region;
+  region: WatchRegion;
   priority: number;
   run: () => Promise<unknown>;
   /** Shares a limiter slot through a quotes/klines batch instead of taking its own. */
@@ -295,10 +297,15 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     return value;
   };
 
-  const trading = (region: Region) => TRADING_PHASES.has((slots.get(`phase:${region}`)?.value as { phase?: string } | null)?.phase ?? "");
+  const trading = (region: WatchRegion) => TRADING_PHASES.has((slots.get(`phase:${region}`)?.value as { phase?: string } | null)?.phase ?? "");
+
+  function watchRegion(symbol: string): WatchRegion {
+    const quote = slots.get(`quote:${symbol}`)?.value as { asset_type?: string } | null;
+    return quote?.asset_type === "open_end_fund" ? "fund" : symbolRegion(symbol);
+  }
 
   /** How long a successful value stays fresh: tight while the market trades and someone watches. */
-  function freshFor(kind: Kind, region: Region): number {
+  function freshFor(kind: Kind, region: WatchRegion): number {
     const open = trading(region);
     const watched = Date.now() - lastSeen < 2 * MINUTE;
     if (kind === "phase") return watched ? MINUTE : 5 * MINUTE;
@@ -334,7 +341,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
   function flushBatch(command: "quotes" | "klines", key: string) {
     const batch = pendingBatches.get(key)!;
     pendingBatches.delete(key);
-    const args = [command, batch.map(item => item.symbol).join(","), ...(command === "klines" ? ["--count", "30"] : [])];
+    const args = [command, batch.map(item => item.symbol).join(","), ...(command === "klines" ? ["--count", "30"] : ["--watchlist"])];
     // The CLI times out slow rows itself after 30 s, so one hung provider cannot fail the whole batch.
     limiter.run(Math.min(...batch.map(item => item.priority)), () => py("stock_data.py", args, 40_000)).then(
       rows => {
@@ -348,9 +355,9 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   function quoteJob(symbol: string, priority: number): Job {
     return {
-      key: `quote:${symbol}`, kind: "quote", region: symbolRegion(symbol), priority, batched: true,
+      key: `quote:${symbol}`, kind: "quote", region: watchRegion(symbol), priority, batched: true,
       run: async () => {
-        const value = await batched("quotes", "all", dashboardQuoteSymbol(symbol), priority) as Record<string, unknown> | null;
+        const value = await batched("quotes", "all", symbol, priority) as Record<string, unknown> | null;
         if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("报价数据格式不正确");
         if (value.error) throw new Error(safeError(value.error, "报价暂不可用"));
         return { ...value, symbol };
@@ -400,7 +407,10 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         });
       }
     }
-    for (const symbol of symbols) list.push(trendJob(symbol, symbolRegion(symbol), 3));
+    for (const symbol of symbols) {
+      const region = watchRegion(symbol);
+      if (region !== "fund" && region !== "advisor") list.push(trendJob(symbol, region, 3));
+    }
     for (const region of REGIONS) {
       for (const code of INDEX_SYMBOLS[region]) {
         const ribbon = RIBBON.some(([, item]) => item === code);
@@ -529,14 +539,17 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
       watchlist: symbols.map(symbol => {
         const quote = slotView(`quote:${symbol}`);
         const trend = slotView(`trend:${symbol}`);
+        const region = watchRegion(symbol);
+        const { trend: navTrend, ...quoteFields } = (quote.value ?? {}) as Record<string, unknown>;
+        const fundTrend = Array.isArray(navTrend) ? trendRows(navTrend) : null;
         return {
           symbol,
-          region: symbolRegion(symbol),
-          quote: quote.value,
+          region,
+          quote: quote.value ? quoteFields : null,
           quoteError: quote.error,
           quoteLoading: quote.loading,
-          trend: trend.value,
-          trendError: trend.error,
+          trend: region === "fund" ? fundTrend : trend.value,
+          trendError: region === "fund" ? null : trend.error,
         };
       }),
       ribbon: RIBBON.map(([item, code]) => indexRow(item, code)),

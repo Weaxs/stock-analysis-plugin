@@ -1,3 +1,4 @@
+import json
 import re
 import subprocess
 import sys
@@ -49,6 +50,67 @@ def test_fund_quote_returns_published_nav_with_provider_date(monkeypatch):
     assert "not a real-time price" in result["note"]
     assert "QDII" in result["note"]
     assert "price" not in result
+
+
+def test_dashboard_quotes_use_published_nav_only_after_exchange_misses(monkeypatch):
+    fund_requests = []
+
+    def get(url, **kwargs):
+        if "/pingzhongdata/" in url:
+            fund_requests.append(url.rsplit("/", 1)[-1])
+            if url.endswith("/018148.js"):
+                raise requests.ConnectionError("NAV provider unavailable")
+            body = (
+                'var fS_name = "建信新兴市场混合(QDII)C"; var fS_code = "018147";'
+                'var Data_netWorthTrend = [{"x":1703865600000,"y":NaN},{"x":null,"y":2.00},'
+                '{"x":1704038400000,"y":2.01,"equityReturn":0.6},{"x":1704124800000,"y":null}];'
+            )
+            return SimpleNamespace(text=body, raise_for_status=lambda: None)
+        if "gtimg.cn" in url and url.endswith(("sz018147", "sz018148", "sz000001")):
+            return SimpleNamespace(content=b'v_pv_none_match="1";', raise_for_status=lambda: None)
+        if url.endswith(("sz018147", "sz018148")):
+            return SimpleNamespace(content=f'var hq_str_{url[-8:]}="";'.encode(), raise_for_status=lambda: None)
+        if url.endswith("sz000002"):
+            return SimpleNamespace(content=b"<html>maintenance</html>", raise_for_status=lambda: None)
+        raise requests.ConnectionError("exchange unavailable")
+
+    monkeypatch.setattr(requests, "get", get)
+    rows = stock_data.cmd_quotes(Namespace(symbols="018147,sz018147,000001,000002,018148", watchlist=True))
+    json.dumps(rows, allow_nan=False)
+    fund, explicit, outage, maintenance, nav_outage = rows
+
+    assert fund["asset_type"] == "open_end_fund"
+    assert (fund["nav"], fund["nav_date"]) == (2.01, "2024-01-01")
+    assert fund["change_pct"] == 0.6
+    assert fund["trend"] == [{"date": "2024-01-01", "close": 2.01}]
+    assert "price" not in fund
+    assert "error" in explicit
+    assert "exchange unavailable" in outage["error"]
+    assert "error" in maintenance
+    assert "NAV provider unavailable" in nav_outage["error"]
+    assert sorted(fund_requests) == ["018147.js", "018148.js"]
+
+
+def test_dashboard_uses_known_tiaa_names_without_optional_network_calls(monkeypatch):
+    import tiaa_disclosures
+
+    optional_calls = []
+
+    def offline(*args, **kwargs):
+        optional_calls.append("xueqiu")
+        raise requests.ConnectionError("Xueqiu unavailable")
+
+    def disclosures(*args):
+        optional_calls.append("disclosures")
+        return {"items": [], "as_of": None}
+
+    monkeypatch.setattr(requests.Session, "get", offline)
+    monkeypatch.setattr(tiaa_disclosures, "public_disclosures", disclosures)
+    monkeypatch.setattr(tiaa_disclosures, "advisor_metadata", lambda *args: {"advisor_org": "嘉实财富"})
+    rows = stock_data.cmd_quotes(Namespace(symbols="TIAA001001,TIAA001002", watchlist=True))
+    assert [row["name"] for row in rows] == ["长钱账户", "海外长钱"]
+    assert all(row["advisor_org"] == "嘉实财富" and row["nav"] is None for row in rows)
+    assert optional_calls == []
 
 
 def test_quote_recognizes_tiaa_without_running_stock_quote_providers(monkeypatch):

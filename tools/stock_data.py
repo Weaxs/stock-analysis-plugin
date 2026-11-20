@@ -99,8 +99,16 @@ _STICKY_CHAINS = {
 }
 
 
+class _QuoteMissing(ValueError):
+    """The provider answered but has no quote for this code."""
+
+
+class _ExchangeQuoteMissing(RuntimeError):
+    """All attempted providers explicitly reported no quote."""
+
+
 def _failover(sources: list, label: str, evidence: bool = False):
-    """Return first truthy result; else raise RuntimeError aggregating each source's error.
+    """Return first truthy result or aggregate errors, preserving unanimous quote misses.
 
     Sticky ordering (issue #25): for chains in _STICKY_CHAINS (keyed by the label
     before ":"), the last winning source is tried first next time; the rest keep
@@ -117,6 +125,7 @@ def _failover(sources: list, label: str, evidence: bool = False):
             first = "tencent" if chain == "quote_a" else sticky
             sources = sorted(sources, key=lambda s: (s[0] != first, s[0] != sticky))
     errors = []
+    misses = 0
     for name, fn in sources:
         try:
             result = fn()
@@ -140,9 +149,11 @@ def _failover(sources: list, label: str, evidence: bool = False):
                             )
                 return result
         except Exception as e:
+            misses += isinstance(e, _QuoteMissing)
             errors.append(f"{name}: {type(e).__name__}: {scrub_secrets(str(e))}")
     if errors:
-        raise RuntimeError(f"{label}: {'; '.join(errors)}")
+        error_type = _ExchangeQuoteMissing if misses == len(sources) else RuntimeError
+        raise error_type(f"{label}: {'; '.join(errors)}")
     return None
 
 
@@ -371,7 +382,10 @@ def _tencent_raw(codes: str) -> bytes:
 
 
 def _tencent_fields(code: str) -> list:
-    return _gbk_var_payload(_tencent_raw(code)).split("~")
+    body = _tencent_raw(code)
+    if _A_PREFIXED_RE.fullmatch(code) and body.strip() == b'v_pv_none_match="1";':
+        raise _QuoteMissing(f"tencent returned no quote for {code}")
+    return _gbk_var_payload(body).split("~")
 
 
 def _quote_tencent(symbol: str) -> dict:
@@ -465,11 +479,15 @@ def _quote_sina(symbol: str) -> dict:
     endpoint answers 403. GBK-encoded CSV; volume arrives in 股 → normalized to 手."""
     import requests
 
+    code = _cn_code(symbol)
     resp = requests.get(
-        f"https://hq.sinajs.cn/list={_cn_code(symbol)}",
+        f"https://hq.sinajs.cn/list={code}",
         headers={"Referer": "https://finance.sina.com.cn"},
         timeout=10,
     )
+    resp.raise_for_status()
+    if resp.content.strip() == f'var hq_str_{code}="";'.encode():
+        raise _QuoteMissing(f"sina returned no quote for {symbol}")
     f = _gbk_var_payload(resp.content).split(",")
     if len(f) < 10 or not f[0]:
         raise ValueError(f"sina returned no quote for {symbol}")
@@ -1296,13 +1314,13 @@ _YOUZHIYOUXING_TIAA = {
 }
 
 
-def _quote_tiaa(symbol: str) -> dict:
+def _quote_tiaa(symbol: str, *, include_disclosures: bool = True) -> dict:
     import requests
 
     disclosure_name = _YOUZHIYOUXING_TIAA.get(symbol)
     result = {
         "symbol": symbol,
-        "name": None,
+        "name": disclosure_name,
         "asset_type": "investment_advisory_portfolio",
         "type_description": "雪球投顾组合，无统一单位净值",
         "manager": None,
@@ -1331,6 +1349,15 @@ def _quote_tiaa(symbol: str) -> dict:
         ),
     }
     try:
+        from tiaa_disclosures import advisor_metadata
+
+        result.update(advisor_metadata(symbol))
+    except Exception:
+        result.setdefault("warnings", []).append("advisor organization metadata unavailable")
+    if not include_disclosures and disclosure_name:
+        return result
+
+    try:
         with requests.Session() as session:
             session.get(
                 "https://xueqiu.com/",
@@ -1352,14 +1379,19 @@ def _quote_tiaa(symbol: str) -> dict:
         if quote.get("symbol") != symbol:
             raise ValueError("xueqiu returned different portfolio metadata")
         result.update(
-            name=quote.get("name"),
+            name=quote.get("name") or disclosure_name,
             quote_type=quote.get("type"),
             exchange=quote.get("exchange"),
             source="xueqiu",
             data_as_of=_unix_quote_time(quote.get("timestamp")),
         )
     except Exception:
-        result["warnings"] = ["xueqiu portfolio name unavailable; type guidance remains available"]
+        result.setdefault("warnings", []).append(
+            "xueqiu portfolio metadata unavailable; type guidance remains available"
+        )
+    if not include_disclosures:
+        return result
+
     if disclosure_name and result["name"] in (None, disclosure_name):
         try:
             from tiaa_disclosures import public_disclosures
@@ -1383,27 +1415,30 @@ def _quote_tiaa(symbol: str) -> dict:
         if result["public_search_results"]:
             result["disclosure_provider"] = "web_search"
             result["disclosure_status"] = "search_partial"
-    try:
-        from tiaa_disclosures import advisor_metadata
-
-        result.update(advisor_metadata(symbol))
-    except Exception:
-        result.setdefault("warnings", []).append("advisor organization metadata unavailable")
     return result
 
 
 def cmd_quote(args):
+    watchlist = getattr(args, "watchlist", False)
     if re.fullmatch(r"TIAA\d{6}", args.symbol, re.IGNORECASE):
-        return _quote_tiaa(args.symbol.upper())
+        return _quote_tiaa(args.symbol.upper(), include_disclosures=not watchlist)
     # detect_market reads every ^index as US; known region indices keep their own calendar for freshness.
     market = next(
         (region.upper() for region, symbols in _REGION_INDEX_SYMBOLS.items() if args.symbol.upper() in symbols),
         None,
     ) or detect_market(args.symbol)
+    # Preserve explicit exchange prefixes for stocks and indices sharing a fund code.
+    fund_fallback = watchlist and re.fullmatch(r"[0-9]{6}", args.symbol)
+    symbol = _cn_code(args.symbol) if fund_fallback else args.symbol
     try:
-        result = quote_a(args.symbol, evidence=True) if market == "A" else quote_yf(args.symbol, evidence=True)
+        result = quote_a(symbol, evidence=True) if market == "A" else quote_yf(symbol, evidence=True)
     except Exception as e:
         result = {"error": error_message(e)}
+        if fund_fallback and isinstance(e, _ExchangeQuoteMissing):
+            fund = cmd_fund_quote(args, trend_count=30)
+            if "error" in fund:
+                return {"error": f"fund_quote:{args.symbol}: {fund['error']}"}
+            return fund
     # Exchange quotes cannot see open-end funds. Stock-only prefixes (SH 60/68, ChiNext 30, BSE) keep the bare error.
     if (
         isinstance(result, dict)
@@ -1416,6 +1451,8 @@ def cmd_quote(args):
         )
         return result
     if isinstance(result, dict) and "error" not in result:
+        if fund_fallback and "symbol" in result:
+            result["symbol"] = args.symbol
         marker = _quote_stale_marker(market)
         if marker:
             result.update(marker)
@@ -1476,7 +1513,10 @@ def _batch(symbols_arg: str, one, label: str) -> list | dict:
 
 
 def cmd_quotes(args):
-    return _batch(args.symbols, lambda symbol: cmd_quote(argparse.Namespace(symbol=symbol)), "quote")
+    watchlist = getattr(args, "watchlist", False)
+    return _batch(
+        args.symbols, lambda symbol: cmd_quote(argparse.Namespace(symbol=symbol, watchlist=watchlist)), "quote"
+    )
 
 
 def cmd_klines(args):
@@ -1513,7 +1553,7 @@ def fund_pingzhong_js(symbol: str) -> str:
     return response.text
 
 
-def cmd_fund_quote(args):
+def cmd_fund_quote(args, *, trend_count: int = 0):
     symbol = args.symbol
     if not re.fullmatch(r"\d{6}", symbol):
         return {"error": "open-end fund symbol must be exactly 6 digits"}
@@ -1523,11 +1563,24 @@ def cmd_fund_quote(args):
             raise ValueError(f"eastmoney returned a different fund for {symbol}")
         name = _fund_js_value(text, "fS_name")
         nav_rows = _fund_js_value(text, "Data_netWorthTrend")
-        accumulated_rows = _fund_js_value(text, "Data_ACWorthTrend")
-        if not nav_rows:
+        accumulated_rows = [] if trend_count else _fund_js_value(text, "Data_ACWorthTrend")
+        points = []
+        for row in reversed(nav_rows):
+            if not isinstance(row, dict):
+                continue
+            nav = _parse_float(row.get("y"))
+            if nav is None or not math.isfinite(nav) or nav <= 0:
+                continue
+            try:
+                day = _fund_nav_date(row.get("x"))
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
+            points.append((row, day, nav))
+            if len(points) >= max(1, trend_count):
+                break
+        if not points:
             raise ValueError(f"eastmoney returned no NAV for {symbol}")
-        latest = nav_rows[-1]
-        nav_date = _fund_nav_date(latest["x"])
+        latest, nav_date, nav = points[0]
         accumulated_by_date = {_fund_nav_date(row[0]): row[1] for row in accumulated_rows}
         today = _cn_now().date().isoformat()
         result = _clean_row(
@@ -1535,7 +1588,7 @@ def cmd_fund_quote(args):
                 "symbol": symbol,
                 "name": name,
                 "asset_type": "open_end_fund",
-                "nav": latest.get("y"),
+                "nav": nav,
                 "accumulated_nav": accumulated_by_date.get(nav_date),
                 "change_pct": latest.get("equityReturn"),
                 "nav_date": nav_date,
@@ -1558,6 +1611,8 @@ def cmd_fund_quote(args):
                 "estimate_status": "unavailable",
             }
         )
+        if trend_count:
+            result["trend"] = [{"date": day, "close": nav} for _, day, nav in reversed(points)]
         return result
     except Exception as e:
         return {"error": error_message(e)}
@@ -3820,6 +3875,9 @@ def main():
 
     p_quotes = sub.add_parser("quotes")
     p_quotes.add_argument("symbols", help=f"comma-separated, at most {QUOTES_MAX}")
+    p_quotes.add_argument(
+        "--watchlist", action="store_true", help="use watchlist quotes with fund NAV and TIAA metadata"
+    )
 
     p_klines = sub.add_parser("klines")
     p_klines.add_argument("symbols", help=f"comma-separated, at most {QUOTES_MAX}; daily bars")
