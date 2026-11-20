@@ -42,16 +42,19 @@ const RIBBON: Array<[Region, string]> = [
   ["jp", "^N225"], ["kr", "^KS11"], ["tw", "^TWII"],
 ];
 const TRADING_PHASES = new Set(["morning", "afternoon", "intraday"]);
-const UPDATE_CHECK_MS = 6 * 60 * MINUTE;
+const UPDATE_CHECK_MS = 60 * MINUTE;
+const UPDATE_RETRY_MS = 30 * SECOND;
+const NPM_REGISTRY = "https://registry.npmjs.org";
+const RELEASE_VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
 
 export interface PluginVersion {
   name: string;
   version: string;
-  latest?: () => Promise<string | null>;
+  latest?: (knownUpdate: string | null) => Promise<string | null>;
 }
 
 export function isNewerVersion(candidate: string, current: string): boolean {
-  const parse = (value: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number);
+  const parse = (value: string) => RELEASE_VERSION.exec(value)?.slice(1).map(Number);
   const next = parse(candidate);
   const now = parse(current);
   if (!next || !now) return false;
@@ -500,12 +503,25 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
 
   const kick = () => { void tick(); };
 
-  let latestVersion: string | null = null;
-  let latestCheckedAt = 0;
-  function checkLatest() {
-    if (!plugin?.latest || Date.now() - latestCheckedAt < UPDATE_CHECK_MS) return;
-    latestCheckedAt = Date.now();
-    plugin.latest().then(value => { latestVersion = value; }, () => { /* offline or registry error: keep the last known result */ });
+  let latestUpdate: string | null = null;
+  let nextVersionCheckAt = 0;
+  let versionCheckRunning = false;
+  async function checkLatest(force = false) {
+    if (!plugin?.latest || disposed || versionCheckRunning || (!force && Date.now() < nextVersionCheckAt)) return;
+    versionCheckRunning = true;
+    let delay = UPDATE_RETRY_MS;
+    try {
+      const value = await plugin.latest(latestUpdate);
+      if (value) {
+        latestUpdate = isNewerVersion(value, plugin.version) ? value : null;
+        delay = UPDATE_CHECK_MS;
+      }
+    } catch {
+      // Keep the last known update if the version check fails.
+    } finally {
+      nextVersionCheckAt = Date.now() + delay;
+      versionCheckRunning = false;
+    }
   }
 
   function slotView(key: string) {
@@ -534,7 +550,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
     viewedRegion = region;
     const symbols = readWatchlist(watchlistFile);
     kick();
-    checkLatest();
+    void checkLatest();
     return {
       watchlist: symbols.map(symbol => {
         const quote = slotView(`quote:${symbol}`);
@@ -562,7 +578,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
       plugin: plugin ? {
         name: plugin.name,
         version: plugin.version,
-        latest: latestVersion && isNewerVersion(latestVersion, plugin.version) ? latestVersion : null,
+        latest: latestUpdate,
       } : null,
       fetchedAt: new Date().toISOString(),
     };
@@ -596,6 +612,7 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
         for (const entry of slots.values()) if (!entry.running) entry.force = true;
         kick();
+        void checkLatest(true);
         return sendJson(res, 202, { ok: true, pending: limiter.queued });
       }
       if (rest === "/api/watchlist") {
@@ -663,19 +680,31 @@ export function installedPlugin(here: string): PluginVersion | undefined {
       const { name, version } = JSON.parse(readFileSync(file, "utf8")) as { name?: unknown; version?: unknown };
       if (typeof name === "string" && name.endsWith("dsh-stock-analysis") && typeof version === "string") {
         // A checkout or `add ./dsh` resolves to its real path; only registry installs live under node_modules.
-        return { name, version, latest: /[/\\]node_modules[/\\]/.test(here) ? () => npmLatest(name) : undefined };
+        return { name, version, latest: /[/\\]node_modules[/\\]/.test(here) ? knownUpdate => npmLatest(name, version, knownUpdate) : undefined };
       }
     } catch { /* try the next layout */ }
   }
   return undefined;
 }
 
-async function npmLatest(name: string): Promise<string | null> {
-  const registry = (process.env.npm_config_registry || "https://registry.npmjs.org").replace(/\/+$/, "");
-  const res = await fetch(`${registry}/${name.replace("/", "%2f")}/latest`, { signal: AbortSignal.timeout(5000) });
-  if (!res.ok) throw new Error(`registry ${res.status}`);
-  const { version } = await res.json() as { version?: unknown };
-  return typeof version === "string" ? version : null;
+async function npmLatest(name: string, installedVersion: string, knownUpdate: string | null): Promise<string | null> {
+  const registry = (process.env.npm_config_registry || NPM_REGISTRY).replace(/\/+$/, "");
+  const registries = registry === NPM_REGISTRY ? [registry, "https://registry.npmmirror.com"] : [registry];
+  const path = `${name.replace("/", "%2f")}/latest`;
+  for (const source of registries) {
+    try {
+      const res = await fetch(`${source}/${path}`, { signal: AbortSignal.timeout(8 * SECOND) });
+      if (!res.ok) continue;
+      const { version } = await res.json() as { version?: unknown };
+      if (typeof version !== "string" || !RELEASE_VERSION.test(version)) continue;
+      // A lagging mirror cannot disprove an update or confirm we are up to date.
+      if (source !== registry && version !== knownUpdate && !isNewerVersion(version, knownUpdate ?? installedVersion)) continue;
+      return version;
+    } catch {
+      // A failed request or invalid response can fall back to the next source.
+    }
+  }
+  return null;
 }
 
 export function registerDashboard(ctx: Context, runPy: RunPy) {
