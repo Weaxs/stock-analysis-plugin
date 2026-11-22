@@ -86,7 +86,7 @@ L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_sa
 
 ## 股息因子（A 股和港股，可选）
 
-配置 `filters.dividend_yield_min`、`filters.dividend_yield_max` 或按 `dividend_score`、`dividend_yield` 排序可启用股息因子。股息率使用百分数。默认查上一年年末，A 股使用已实施方案股息率，港股使用 HKEX/LSEG 年度股息率。港股年报数据源失败且配置省略 `dividend_report_date` 时，改用行情源股息率，`dividend_factor` 会给出来源和口径。指定报告期时，取数失败会返回错误。使用阈值时排除股息率未知的股票。
+配置 `filters.dividend_yield_min`、`filters.dividend_yield_max` 或按 `dividend_score`、`dividend_yield` 排序可启用股息因子。股息率使用百分数。默认查上一年年末，A 股使用已实施方案股息率，港股使用 HKEX/LSEG 年度股息率。港股配置省略 `dividend_report_date`，且年度源不可用或未覆盖任何候选股时，改用单一行情源的股息率。`dividend_factor` 给出来源、口径和覆盖数量。指定报告期时，取数失败会返回错误。使用阈值时排除股息率未知的股票。
 
 ```yaml
 filters:

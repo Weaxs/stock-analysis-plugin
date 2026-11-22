@@ -389,28 +389,42 @@ def _tencent_fields(code: str) -> list:
 
 
 def _tencent_batch_fields(codes: list[str]) -> dict[str, list[str]]:
+    body = _tencent_raw(",".join(codes))
     quotes = {}
-    for part in _tencent_raw(",".join(codes)).decode("gbk", errors="replace").split(";"):
+    for part in body.decode("gbk", errors="replace").split(";"):
         name, _, payload = part.strip().partition('="')
         fields = payload.rstrip('"').split("~")
         if name.startswith("v_") and len(fields) > 37:
             quotes[name[2:]] = fields
+    if not quotes and body.strip() != b'v_pv_none_match="1";':
+        raise ConnectionError("invalid Tencent batch quote response")
     return quotes
 
 
-def _hk_tencent_fields(symbols: list[str]) -> dict[str, list[str]]:
+def _hk_tencent_fields(symbols: list[str], *, batch_errors: list[str] | None = None) -> dict[str, list[str]]:
     from concurrent.futures import ThreadPoolExecutor
 
     by_code = {_tencent_hk_code(symbol): symbol for symbol in symbols}
     codes = list(by_code)
     batches = [codes[i : i + 60] for i in range(0, len(codes), 60)]
+    result = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
-        return {
-            by_code[code]: fields
-            for quotes in pool.map(_tencent_batch_fields, batches)
-            for code, fields in quotes.items()
-            if code in by_code and (_parse_float(fields[3]) or 0) > 0
-        }
+        for batch, future in [(batch, pool.submit(_tencent_batch_fields, batch)) for batch in batches]:
+            try:
+                quotes = future.result()
+            except OSError as exc:
+                if batch_errors is None:
+                    raise
+                batch_errors.append(f"{len(batch)} quotes ({type(exc).__name__})")
+                continue
+            result.update(
+                {
+                    by_code[code]: fields
+                    for code, fields in quotes.items()
+                    if code in by_code and (_parse_float(fields[3]) or 0) > 0
+                }
+            )
+    return result
 
 
 def hk_quote_dividend_yields(symbols: list[str]) -> dict[str, float | None]:
@@ -427,8 +441,10 @@ def _tencent_hk_valuations(fields: list[str]) -> tuple[float | None, float | Non
     return _sanitize(pe or None), _sanitize(pb or None)
 
 
-def hk_quote_valuations(symbols: list[str]) -> dict[str, tuple[float | None, float | None]]:
-    return {symbol: _tencent_hk_valuations(fields) for symbol, fields in _hk_tencent_fields(symbols).items()}
+def hk_quote_valuations(symbols: list[str]) -> tuple[dict[str, tuple[float | None, float | None]], list[str]]:
+    batch_errors: list[str] = []
+    quotes = _hk_tencent_fields(symbols, batch_errors=batch_errors)
+    return {symbol: _tencent_hk_valuations(fields) for symbol, fields in quotes.items()}, batch_errors
 
 
 def _quote_tencent(symbol: str) -> dict:
@@ -2335,7 +2351,7 @@ def _snapshot_clist(market: str, floor: float):
     rows, total, page = [], 0, 1
     while len(rows) < _SNAPSHOT_MAX_ROWS:
         total, ranked = _em_clist(market, "f20", ",".join(columns), page=page)
-        if market == "HK" and page == 1 and not ranked:
+        if market == "HK" and not total:
             raise ValueError("Eastmoney HK equity list unavailable")
         for item in ranked:
             cap = _parse_float(item.get("f20"))
@@ -2351,6 +2367,10 @@ def _snapshot_clist(market: str, floor: float):
                 row.update(pe=pe_ttm, pe_basis="ttm")
             rows.append(_clean_row(row))
         if len(ranked) < _EM_PAGE:
+            if market == "HK" and (page - 1) * _EM_PAGE + len(ranked) < total:
+                raise ValueError("incomplete Eastmoney HK equity page")
+            break
+        if market == "HK" and page * _EM_PAGE >= total:
             break
         page += 1
     if market == "HK" and not rows:
@@ -2393,6 +2413,8 @@ def _snapshot_tradingview(market: str, floor: float):
         body["sort"] = {"sortBy": "market_cap_basic", "sortOrder": "desc"}
         payload = _tradingview_scan(region, body)
         total, data = payload.get("totalCount"), payload.get("data") or []
+        if market == "HK" and not total:
+            raise ValueError("TradingView HK equity list unavailable")
         for item in data:
             values = dict(zip(columns, item.get("d") or []))
             cap = _parse_float(values.get("market_cap_basic"))
@@ -2404,6 +2426,10 @@ def _snapshot_tradingview(market: str, floor: float):
             row.update(symbol=_clist_symbol(market, values.get("name")), name=values.get("description"))
             rows.append(_clean_row(row | {"pe_basis": "ttm"}))
         if len(data) < 1000:
+            if market == "HK" and offset + len(data) < total:
+                raise ValueError("incomplete TradingView HK equity page")
+            break
+        if market == "HK" and offset + len(data) >= total:
             break
     if not rows:
         raise ValueError("tradingview scanner returned empty data")
@@ -3398,6 +3424,8 @@ def _clist_symbol(market: str, code) -> str:
 
 def _clist_change_at(market: str, rank: int, desc: bool = True):
     _, rows = _em_clist(market, "f3", "f3", page=rank, size=1, desc=desc)
+    if market == "HK" and len(rows) != 1:
+        raise ValueError("Eastmoney HK change rank unavailable")
     return _parse_float(rows[0].get("f3")) if rows else None
 
 
@@ -3416,6 +3444,8 @@ def _leading_count(market: str, total: int, desc: bool) -> int:
 
 def _movers(market: str, desc: bool) -> tuple:
     total, rows = _em_clist(market, "f3", "f12,f14,f3", size=5, desc=desc)
+    if market == "HK" and (not total or len(rows) != min(5, total)):
+        raise ValueError("incomplete Eastmoney HK movers list")
     movers = [
         {"symbol": _clist_symbol(market, r.get("f12")), "name": r.get("f14"), "change_pct": _parse_float(r.get("f3"))}
         for r in rows

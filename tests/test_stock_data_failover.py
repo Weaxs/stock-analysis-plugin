@@ -1281,6 +1281,31 @@ class TestMarketSnapshot:
         assert [(r["symbol"], r["pe"], r["pb"]) for r in result["rows"]] == [("00700.HK", 12, 2)]
         assert result["source"] == "TradingView"
 
+    @pytest.mark.parametrize("provider", ["Eastmoney", "TradingView"])
+    def test_hk_snapshot_rejects_a_missing_later_page(self, monkeypatch, provider):
+        from tools import stock_data
+
+        def clist(params):
+            if provider == "TradingView":
+                return {"data": None}
+            item = {"f12": "00005", "f2": 10, "f20": 6e9, "f9": 12, "f23": 2}
+            return {"data": {"total": 101, "diff": [item] * 100 if params["pn"] == 1 else []}}
+
+        def scan(region, body):
+            item = {"d": ["700", "Tencent", 10, 1, 200, 2000, 12, 2, 6e9, None]}
+            if provider == "Eastmoney":
+                return {"totalCount": 1, "data": [item]}
+            return {"totalCount": 1001, "data": [item] * 1000 if body["range"][0] == 0 else []}
+
+        monkeypatch.setattr(stock_data, "_get_json", FakeEastmoney(clist=clist))
+        monkeypatch.setattr(stock_data, "_tradingview_scan", scan)
+        monkeypatch.setattr(
+            stock_data, "_snapshot_hk_tencent", lambda floor: (1, [{"pe": 12, "pb": 2, "symbol": "00700.HK"}])
+        )
+        result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 5000000000}'))
+        assert result["source"] == ("TradingView" if provider == "Eastmoney" else "Tencent")
+        assert [r["symbol"] for r in result["rows"]] == ["00700.HK"]
+
     @pytest.mark.parametrize(("ttm", "pe", "basis"), [(12, 12, "ttm"), (0, 18, "unknown")])
     def test_hk_snapshot_uses_eastmoney_ttm_and_preserves_valid_empty_screen(self, monkeypatch, ttm, pe, basis):
         from tools import stock_data
@@ -1342,6 +1367,26 @@ class TestMarketSnapshot:
         assert result["rows"][0]["pe_basis"] == "ttm" and result["rows"][0]["dividend_yield"] == 4.85
         assert result["source"] == "Tencent"
 
+    @pytest.mark.parametrize("empty", [b'v_pv_none_match="1";', b"<!doctype html>Upstream temporarily unavailable"])
+    def test_hk_tencent_snapshot_only_accepts_recognized_empty_quote_batches(self, monkeypatch, empty):
+        from tools import stock_data
+
+        symbols = [f"{i:05d}.HK" for i in range(1, 61)] + ["00700.HK"]
+        monkeypatch.setattr(stock_data, "_hkex_equity_symbols", lambda: symbols)
+        blocked = MagicMock(side_effect=ConnectionError("other providers unavailable"))
+        monkeypatch.setattr(stock_data, "_em_clist", blocked)
+        monkeypatch.setattr(stock_data, "_tradingview_scan", blocked)
+        fields = [""] * 60
+        fields[2], fields[3], fields[45], fields[57], fields[58] = "00700", "300", "600", "12", "2"
+        quote = f'v_hk00700="{"~".join(fields)}";'.encode("gbk")
+        monkeypatch.setattr(stock_data, "_tencent_raw", lambda codes: quote if codes == "hk00700" else empty)
+
+        result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters="{}"))
+        if empty.startswith(b"v_pv_none_match"):
+            assert result["source"] == "Tencent" and [r["symbol"] for r in result["rows"]] == ["00700.HK"]
+        else:
+            assert "invalid Tencent batch quote response" in result["error"]
+
     def test_cli_error_is_clean(self, monkeypatch):
         from tools import stock_data
 
@@ -1393,6 +1438,30 @@ class TestMarketStats:
     def test_provider_failure_is_clean_error(self, monkeypatch):
         monkeypatch.setattr("tools.stock_data._get_json", MagicMock(side_effect=ConnectionError("blocked")))
         assert cmd_market_stats(Namespace(market="A")) == {"error": "blocked"}
+
+    def test_hk_breadth_does_not_count_missing_rank_responses_as_flat(self, monkeypatch):
+        def eastmoney(params):
+            if params["pz"] == 5:
+                return _ranked([2, 1, -1, -2, -3])(params)
+            return {"data": None}
+
+        def scan(region, body):
+            operation = body["filter"][-1]["operation"]
+            rows = {"greater": [1, 2], "equal": [0], "less": [-2, -1]}[operation]
+            return {
+                "totalCount": len(rows),
+                "data": [{"d": [str(i + 1), "Stock", value]} for i, value in enumerate(rows)],
+            }
+
+        monkeypatch.setattr("tools.stock_data._get_json", FakeEastmoney(clist=eastmoney))
+        monkeypatch.setattr("tools.stock_data._tradingview_scan", scan)
+        stats = cmd_market_stats(Namespace(market="HK"))
+        assert (stats["source"], stats["up_count"], stats["down_count"], stats["flat_count"]) == (
+            "tradingview_rank",
+            2,
+            2,
+            1,
+        )
 
     @pytest.mark.parametrize(
         ("changes", "median", "expected_calls"),

@@ -352,25 +352,34 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
         }
 
 
-def _fill_hk_valuations(rows: list[dict]) -> None:
+def _fill_hk_valuations(rows: list[dict]) -> list[str]:
     missing = [row for row in rows if row.get("price") is not None and (row.get("pe") is None or row.get("pb") is None)]
     if not missing:
-        return
+        return []
     from stock_data import hk_quote_valuations
 
-    valuations = hk_quote_valuations([row["symbol"] for row in missing])
+    valuations, batch_errors = hk_quote_valuations([row["symbol"] for row in missing])
     for row in missing:
         pe, pb = valuations.get(row["symbol"], (None, None))
         if row.get("pe") is None and pe is not None:
             row.update(pe=pe, pe_basis="ttm")
         if row.get("pb") is None and pb is not None:
             row["pb"] = pb
+    return [f"Tencent valuation batch failed for {error}; missing PE/PB remain unknown" for error in batch_errors]
 
 
 def _screen_dividend_yields(df: pd.DataFrame, market: str, report_date: str, filters: dict, snapshot_source) -> tuple:
     from value_data import dividend_ranking
 
+    def dividend_key(symbol):
+        return symbol.split(".")[0].lstrip("0") if market == "HK" else symbol
+
     missing = "unknown; excluded by dividend filters"
+    candidates = None
+    if market == "HK" and not report_date:
+        without_dividends = {key: value for key, value in filters.items() if not key.startswith("dividend_yield_")}
+        candidates = apply_filters(df, without_dividends)
+
     try:
         ranked = dividend_ranking(
             report_date=report_date, market=market, codes=list(df["symbol"]) if market == "A" else None
@@ -378,37 +387,46 @@ def _screen_dividend_yields(df: pd.DataFrame, market: str, report_date: str, fil
         if market == "HK" and not ranked["items"]:
             raise ValueError("HK fiscal-year yields unavailable")
     except Exception:
-        if market != "HK" or report_date:
+        if candidates is None:
             raise
-        from stock_data import hk_quote_dividend_yields
+    else:
+        ranked_yields = {dividend_key(r["symbol"]): r["dividend_yield"] for r in ranked["items"]}
+        annual_yields = df["symbol"].map(dividend_key).map(ranked_yields)
+        if candidates is None or candidates.empty or np.isfinite(annual_yields.loc[candidates.index]).any():
+            return annual_yields, {
+                "report_date": ranked["report_date"],
+                "yield_basis": ranked.get("yield_basis", "provider report-period cash dividend yield, percent"),
+                "missing": missing,
+            }
 
-        without_dividends = {key: value for key, value in filters.items() if not key.startswith("dividend_yield_")}
-        candidates = apply_filters(df, without_dividends)
-        yields = pd.to_numeric(
-            candidates.get("dividend_yield", pd.Series(index=candidates.index, dtype=float)), errors="coerce"
-        )
-        source = snapshot_source
-        if not candidates.empty and not np.isfinite(yields).any():
-            yields = pd.to_numeric(
+    from stock_data import hk_quote_dividend_yields
+
+    yields = pd.to_numeric(
+        candidates.get("dividend_yield", pd.Series(index=candidates.index, dtype=float)), errors="coerce"
+    )
+    source = snapshot_source
+    known = np.isfinite(yields)
+    if not known.all():
+        try:
+            tencent_yields = pd.to_numeric(
                 candidates["symbol"].map(hk_quote_dividend_yields(list(candidates["symbol"]))), errors="coerce"
             )
-            source = "Tencent"
-        if not candidates.empty and not np.isfinite(yields).any():
-            raise ValueError("Tencent quote yields unavailable") from None
-        return yields, {
-            "report_date": None,
-            "source": source,
-            "yield_basis": "provider quote dividend yield, percent",
-            "missing": missing,
-        }
-
-    def dividend_key(symbol):
-        return symbol.split(".")[0].lstrip("0") if market == "HK" else symbol
-
-    yields = {dividend_key(r["symbol"]): r["dividend_yield"] for r in ranked["items"]}
-    return df["symbol"].map(dividend_key).map(yields), {
-        "report_date": ranked["report_date"],
-        "yield_basis": ranked.get("yield_basis", "provider report-period cash dividend yield, percent"),
+        except Exception:
+            if not known.any():
+                raise
+        else:
+            tencent_known = np.isfinite(tencent_yields)
+            # Switch providers only when they cover every known symbol and add coverage.
+            if tencent_known[known].all() and tencent_known.sum() > known.sum():
+                yields, known, source = tencent_yields, tencent_known, "Tencent"
+    if not candidates.empty and not known.any():
+        raise ValueError("Tencent quote yields unavailable")
+    return yields.where(known), {
+        "report_date": None,
+        "source": source,
+        "yield_basis": "provider quote dividend yield, percent",
+        "candidate_count": len(candidates),
+        "known_yield_count": int(known.sum()),
         "missing": missing,
     }
 
@@ -466,7 +484,9 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         and {"pe_min", "pe_max", "pb_min", "pb_max"} & explicit.keys()
     ):
         try:
-            _fill_hk_valuations(rows)
+            warnings = _fill_hk_valuations(rows)
+            if warnings:
+                scan_meta.setdefault("warnings", []).extend(warnings)
         except Exception:
             scan_meta.setdefault("warnings", []).append(
                 "Tencent valuation fill unavailable; missing PE/PB remain unknown"
