@@ -2445,9 +2445,9 @@ def _hkex_equity_symbols() -> list[str]:
     columns = ["Stock Code", "Category", "Trading Currency"]
     sheet = pd.read_excel(BytesIO(response.content), header=2, usecols=columns, dtype=str)
     codes = sheet.loc[(sheet["Category"] == "Equity") & (sheet["Trading Currency"] == "HKD"), "Stock Code"]
-    if codes.empty or not codes.str.fullmatch(r"[0-9]{1,5}", na=False).all():
+    if codes.empty:
         raise ValueError("HKEX returned no usable equity codes")
-    return sorted({f"{code.zfill(5)}.HK" for code in codes})
+    return sorted({_clist_symbol("HK", code) for code in codes})
 
 
 def _snapshot_hk_tencent(floor: float):
@@ -2475,12 +2475,10 @@ def _snapshot_hk_tencent(floor: float):
 
 def _hk_snapshot_with_valuations(source, fetch, *args):
     total, rows = fetch(*args)
-    if not total or (rows and any(all(row.get(key) is None for row in rows) for key in ("pe", "pb"))):
-        raise ValueError("HK equity snapshot or valuation columns unavailable")
-    symbols = {row["symbol"] for row in rows}
-    if any(symbol == "00000.HK" or not re.fullmatch(r"[0-9]{5}\.HK", symbol) for symbol in symbols):
-        raise ValueError("invalid symbol in HK equity snapshot")
-    if len(symbols) != len(rows):
+    priced = [row for row in rows if (row.get("price") or 0) > 0]
+    if not total or (rows and (not priced or any(all(row.get(key) is None for row in priced) for key in ("pe", "pb")))):
+        raise ValueError("HK equity snapshot, prices or valuation columns unavailable")
+    if len({row["symbol"] for row in rows}) != len(rows):
         raise ValueError("duplicate symbols in HK equity snapshot")
     return total, rows, source
 
@@ -3410,7 +3408,11 @@ def cmd_chip_distribution(args):
 
 def _clist_symbol(market: str, code) -> str:
     code = str(code)
-    return f"{code.zfill(5)}.HK" if market == "HK" else normalize_us_symbol(code) if market == "US" else code
+    if market == "HK":
+        if not re.fullmatch(r"[0-9]{1,5}", code) or not int(code):
+            raise ValueError("invalid HK equity symbol")
+        return f"{code.zfill(5)}.HK"
+    return normalize_us_symbol(code) if market == "US" else code
 
 
 def _clist_change(market: str, item: dict) -> float | None:
@@ -3564,11 +3566,7 @@ def _market_stats_tradingview_hk() -> dict:
         rows = []
         for item in data:
             code, name, change = item["d"]
-            if (
-                not re.fullmatch(r"\d{1,5}", str(code))
-                or not isinstance(change, (int, float))
-                or not math.isfinite(change)
-            ):
+            if not isinstance(change, (int, float)) or not math.isfinite(change):
                 raise ValueError("invalid TradingView HK market breadth row")
             rows.append({"symbol": _clist_symbol("HK", code), "name": name, "change_pct": round(change, 4)})
         return count, rows

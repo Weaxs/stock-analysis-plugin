@@ -665,7 +665,8 @@ def test_hk_dividend_filter_retains_successful_tencent_batches(monkeypatch):
     assert "60 quotes (Timeout)" in factor["warning"]
 
 
-def test_hk_combined_valuation_and_dividend_filters_reuse_tencent_quotes(monkeypatch):
+@pytest.mark.parametrize("valuation_threshold", [{}, {"pe_max": 20}])
+def test_hk_combined_valuation_and_dividend_filters_reuse_tencent_quotes(monkeypatch, valuation_threshold):
     from unittest.mock import MagicMock
 
     import requests
@@ -680,7 +681,7 @@ def test_hk_combined_valuation_and_dividend_filters_reuse_tencent_quotes(monkeyp
     get = MagicMock(side_effect=[MagicMock(content=payload), requests.Timeout("duplicate request failed")])
     monkeypatch.setattr("requests.get", get)
 
-    result = screen("HK", 20, {"filters": {"pe_max": 20, "dividend_yield_min": 3}})
+    result = screen("HK", 20, {"filters": {"dividend_yield_min": 3} | valuation_threshold})
     assert [(r["symbol"], r["pe"], r["dividend_yield"]) for r in result["candidates"]] == [("00061.HK", 12, 4.8)]
     assert result["dividend_factor"]["source"] == "Tencent"
     get.assert_called_once_with("https://qt.gtimg.cn/q=hk00061", timeout=10)

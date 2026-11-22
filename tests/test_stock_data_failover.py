@@ -1138,7 +1138,7 @@ def _ranked(changes):
     def respond(params):
         rows = sorted(changes, key=lambda c: -(c or 0)) if params["po"] else sorted(changes, key=lambda c: c or 0)
         size, page = params["pz"], params["pn"]
-        diff = [{"f12": f"C{i}", "f14": f"n{i}", "f3": "-" if c is None else c} for i, c in enumerate(rows)]
+        diff = [{"f12": str(i + 1), "f14": f"n{i}", "f3": "-" if c is None else c} for i, c in enumerate(rows)]
         return {"data": {"total": len(changes), "diff": diff[(page - 1) * size : page * size]}}
 
     return respond
@@ -1272,6 +1272,7 @@ class TestMarketSnapshot:
             [{"f12": "00700", "f20": 6e9, "f2": 10}],
             [{"f12": None, "f20": 6e9, "f2": 10, "f9": 12, "f23": 2}],
             [{"f12": "", "f20": 6e9, "f2": 10, "f9": 12, "f23": 2}],
+            [{"f12": "00700", "f20": 6e9, "f9": 12, "f23": 2}],
         ],
     )
     def test_hk_snapshot_recovers_when_eastmoney_returns_unusable_rows(self, monkeypatch, eastmoney_rows):
@@ -1312,7 +1313,9 @@ class TestMarketSnapshot:
         monkeypatch.setattr(stock_data, "_get_json", FakeEastmoney(clist=clist))
         monkeypatch.setattr(stock_data, "_tradingview_scan", scan)
         monkeypatch.setattr(
-            stock_data, "_snapshot_hk_tencent", lambda floor: (1, [{"pe": 12, "pb": 2, "symbol": "00700.HK"}])
+            stock_data,
+            "_snapshot_hk_tencent",
+            lambda floor: (1, [{"price": 10, "pe": 12, "pb": 2, "symbol": "00700.HK"}]),
         )
         result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 5000000000}'))
         assert result["source"] == ("TradingView" if provider == "Eastmoney" else "Tencent")
@@ -1501,8 +1504,16 @@ class TestMarketStats:
             ([-1, 0, 0, 0, 1, 2], 0, 3),
         ],
     )
-    def test_hk_stats_fall_back_to_tradingview_rank_queries(self, monkeypatch, changes, median, expected_calls):
-        monkeypatch.setattr("tools.stock_data._get_json", MagicMock(side_effect=ConnectionError("rate limited")))
+    @pytest.mark.parametrize("malformed_symbol", [False, True])
+    def test_hk_stats_fall_back_to_tradingview_rank_queries(
+        self, monkeypatch, changes, median, expected_calls, malformed_symbol
+    ):
+        primary = (
+            FakeEastmoney(clist={"data": {"total": 1, "diff": [{"f12": None, "f3": 1.25}]}})
+            if malformed_symbol
+            else MagicMock(side_effect=ConnectionError("rate limited"))
+        )
+        monkeypatch.setattr("tools.stock_data._get_json", primary)
         calls = []
         listings = [(i, change) for i, change in enumerate([None, *changes], 1)]
         predicates = {"greater": lambda v: v > 0, "less": lambda v: v < 0, "equal": lambda v: v == 0}

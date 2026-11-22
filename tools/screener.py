@@ -494,11 +494,7 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
         )
     explicit = (config or {}).get("filters") or {}
     tencent_quotes = {}
-    if (
-        market == "HK"
-        and snapshot_source in {"Eastmoney", "TradingView"}
-        and {"pe_min", "pe_max", "pb_min", "pb_max"} & explicit.keys()
-    ):
+    if market == "HK" and snapshot_source in {"Eastmoney", "TradingView"}:
         try:
             tencent_quotes, warnings = _fill_hk_valuations(rows)
             if warnings:
