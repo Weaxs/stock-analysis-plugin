@@ -2475,7 +2475,13 @@ def _snapshot_hk_tencent(floor: float):
 
 def _hk_snapshot_with_valuations(source, fetch, *args):
     total, rows = fetch(*args)
-    priced = [row for row in rows if (row.get("price") or 0) > 0]
+    priced = []
+    for row in rows:
+        if (row.get("price") or 0) > 0:
+            priced.append(row)
+        else:
+            # Keep the scanned row count for pagination limits.
+            row["price"] = None
     if not total or (rows and (not priced or any(all(row.get(key) is None for row in priced) for key in ("pe", "pb")))):
         raise ValueError("HK equity snapshot, prices or valuation columns unavailable")
     if len({row["symbol"] for row in rows}) != len(rows):

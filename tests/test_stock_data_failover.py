@@ -1355,6 +1355,20 @@ class TestMarketSnapshot:
         assert snapshot["rows"] == [] and snapshot["total_stocks"] == 1
         backup.assert_not_called()
 
+    def test_hk_snapshot_masks_invalid_prices_alongside_valid_quotes(self, monkeypatch):
+        from tools import stock_data
+
+        row = {"f12": "00005", "f2": 10, "f20": 6e9, "f9": 12, "f23": 2}
+        rows = [row, row | {"f12": "00700", "f2": 0}, row | {"f12": "00939", "f2": -1}]
+        monkeypatch.setattr(stock_data, "_get_json", FakeEastmoney(clist={"data": {"total": len(rows), "diff": rows}}))
+        result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters="{}"))
+        assert result["source"] == "Eastmoney"
+        assert [(r["symbol"], r["price"]) for r in result["rows"]] == [
+            ("00005.HK", 10),
+            ("00700.HK", None),
+            ("00939.HK", None),
+        ]
+
     def test_hk_snapshot_falls_back_to_tencent_batch(self, monkeypatch):
         from io import BytesIO
 
