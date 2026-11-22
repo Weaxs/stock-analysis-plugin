@@ -427,24 +427,19 @@ def _hk_tencent_fields(symbols: list[str], *, batch_errors: list[str] | None = N
     return result
 
 
-def hk_quote_dividend_yields(symbols: list[str]) -> tuple[dict[str, float | None], list[str]]:
-    batch_errors: list[str] = []
-    quotes = _hk_tencent_fields(symbols, batch_errors=batch_errors)
+def _tencent_hk_factors(fields: list[str]) -> dict[str, float | None]:
+    fields += [""] * (59 - len(fields))
     return {
-        symbol: _sanitize(_parse_float(fields[47])) for symbol, fields in quotes.items() if len(fields) > 47
-    }, batch_errors
+        "pe": _sanitize(_parse_float(fields[57]) or None),
+        "pb": _sanitize(_parse_float(fields[58]) or None),
+        "dividend_yield": _sanitize(_parse_float(fields[47])),
+    }
 
 
-def _tencent_hk_valuations(fields: list[str]) -> tuple[float | None, float | None]:
-    pe = _parse_float(fields[57]) if len(fields) > 57 else None
-    pb = _parse_float(fields[58]) if len(fields) > 58 else None
-    return _sanitize(pe or None), _sanitize(pb or None)
-
-
-def hk_quote_valuations(symbols: list[str]) -> tuple[dict[str, tuple[float | None, float | None]], list[str]]:
+def hk_quote_factors(symbols: list[str]) -> tuple[dict[str, dict[str, float | None]], list[str]]:
     batch_errors: list[str] = []
     quotes = _hk_tencent_fields(symbols, batch_errors=batch_errors)
-    return {symbol: _tencent_hk_valuations(fields) for symbol, fields in quotes.items()}, batch_errors
+    return {symbol: _tencent_hk_factors(fields) for symbol, fields in quotes.items()}, batch_errors
 
 
 def _quote_tencent(symbol: str) -> dict:
@@ -2463,7 +2458,7 @@ def _snapshot_hk_tencent(floor: float):
         raise ValueError("Tencent returned no HK equity quotes")
     rows, has_cap = [], False
     for symbol, fields in quotes.items():
-        fields += [""] * (48 - len(fields))
+        fields += [""] * (46 - len(fields))
         cap = _parse_float(fields[45])
         if cap is None or not math.isfinite(cap):
             continue
@@ -2471,19 +2466,8 @@ def _snapshot_hk_tencent(floor: float):
         if cap * 1e8 < floor:
             continue
         row = _tencent_payload_row(fields, symbol)
-        pe, pb = _tencent_hk_valuations(fields)
         keys = ("symbol", "name", "price", "change_pct", "volume", "turnover", "market_cap")
-        rows.append(
-            _clean_row(
-                {key: row[key] for key in keys}
-                | {
-                    "pe": pe,
-                    "pb": pb,
-                    "pe_basis": "ttm",
-                    "dividend_yield": _parse_float(fields[47]),
-                }
-            )
-        )
+        rows.append(_clean_row({key: row[key] for key in keys} | _tencent_hk_factors(fields) | {"pe_basis": "ttm"}))
     if not has_cap:
         raise ValueError("Tencent HK market caps unavailable")
     return len(symbols), sorted(rows, key=lambda row: row["market_cap"], reverse=True)
@@ -2493,7 +2477,10 @@ def _hk_snapshot_with_valuations(source, fetch, *args):
     total, rows = fetch(*args)
     if not total or (rows and any(all(row.get(key) is None for row in rows) for key in ("pe", "pb"))):
         raise ValueError("HK equity snapshot or valuation columns unavailable")
-    if len({row["symbol"] for row in rows}) != len(rows):
+    symbols = {row["symbol"] for row in rows}
+    if any(symbol == "00000.HK" or not re.fullmatch(r"[0-9]{5}\.HK", symbol) for symbol in symbols):
+        raise ValueError("invalid symbol in HK equity snapshot")
+    if len(symbols) != len(rows):
         raise ValueError("duplicate symbols in HK equity snapshot")
     return total, rows, source
 

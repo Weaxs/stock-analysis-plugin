@@ -1265,8 +1265,16 @@ class TestMarketSnapshot:
         result = stock_data.cmd_market_snapshot(Namespace(market="A", filters=json.dumps(self.FILTERS)))
         assert result["total_stocks"] == 5580 and result["truncated"] is True
 
-    @pytest.mark.parametrize("eastmoney_rows", [[], [{"f12": "00700", "f20": 6e9, "f2": 10}]])
-    def test_hk_snapshot_recovers_when_eastmoney_returns_no_valuations(self, monkeypatch, eastmoney_rows):
+    @pytest.mark.parametrize(
+        "eastmoney_rows",
+        [
+            [],
+            [{"f12": "00700", "f20": 6e9, "f2": 10}],
+            [{"f12": None, "f20": 6e9, "f2": 10, "f9": 12, "f23": 2}],
+            [{"f12": "", "f20": 6e9, "f2": 10, "f9": 12, "f23": 2}],
+        ],
+    )
+    def test_hk_snapshot_recovers_when_eastmoney_returns_unusable_rows(self, monkeypatch, eastmoney_rows):
         from tools import stock_data
 
         fake = FakeEastmoney(clist={"data": {"total": len(eastmoney_rows), "diff": eastmoney_rows}})

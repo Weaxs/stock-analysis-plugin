@@ -625,7 +625,7 @@ def test_hk_snapshot_yield_is_opt_in_and_labels_its_source(monkeypatch):
     ranking = MagicMock(side_effect=ValueError("annual feed unavailable"))
     monkeypatch.setattr("value_data.dividend_ranking", ranking)
     quote = MagicMock(side_effect=AssertionError("the snapshot already has yields"))
-    monkeypatch.setattr("stock_data.hk_quote_dividend_yields", quote)
+    monkeypatch.setattr("stock_data.hk_quote_factors", quote)
 
     candidate = screen("HK", 20, None)["candidates"][0]
     assert "dividend_yield" not in candidate and "dividend" not in candidate["scores"]
@@ -634,6 +634,8 @@ def test_hk_snapshot_yield_is_opt_in_and_labels_its_source(monkeypatch):
     result = screen("HK", 20, {"sort_by": "dividend_yield"})
     assert result["candidates"][0]["dividend_yield"] == 4.55
     assert result["dividend_factor"]["source"] == "TradingView"
+    assert result["snapshot_source"] == "TradingView"
+    assert any("may omit HKEX listings" in warning for warning in result["warnings"])
     quote.assert_not_called()
 
 
@@ -663,6 +665,27 @@ def test_hk_dividend_filter_retains_successful_tencent_batches(monkeypatch):
     assert "60 quotes (Timeout)" in factor["warning"]
 
 
+def test_hk_combined_valuation_and_dividend_filters_reuse_tencent_quotes(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import requests
+
+    raw = [{"symbol": "00061.HK", "price": 20, "pe": None, "pb": 1, "market_cap": 1e10}]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": "TradingView"})
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("annual feed unavailable")))
+    fields = [""] * 60
+    fields[2], fields[3], fields[47], fields[57], fields[58] = "00061", "20", "4.8", "12", "2"
+    payload = f'v_hk00061="{"~".join(fields)}";'.encode("gbk")
+    get = MagicMock(side_effect=[MagicMock(content=payload), requests.Timeout("duplicate request failed")])
+    monkeypatch.setattr("requests.get", get)
+
+    result = screen("HK", 20, {"filters": {"pe_max": 20, "dividend_yield_min": 3}})
+    assert [(r["symbol"], r["pe"], r["dividend_yield"]) for r in result["candidates"]] == [("00061.HK", 12, 4.8)]
+    assert result["dividend_factor"]["source"] == "Tencent"
+    get.assert_called_once_with("https://qt.gtimg.cn/q=hk00061", timeout=10)
+
+
 def test_hk_dividend_filter_switches_to_one_quote_source_with_better_coverage(monkeypatch):
     from unittest.mock import MagicMock
 
@@ -673,8 +696,8 @@ def test_hk_dividend_filter_switches_to_one_quote_source_with_better_coverage(mo
     monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": "TradingView"})
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
     monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("annual feed unavailable")))
-    quote = MagicMock(return_value=({"00700.HK": 4, "00005.HK": 4.8}, []))
-    monkeypatch.setattr("stock_data.hk_quote_dividend_yields", quote)
+    quote = MagicMock(return_value=({"00700.HK": {"dividend_yield": 4}, "00005.HK": {"dividend_yield": 4.8}}, []))
+    monkeypatch.setattr("stock_data.hk_quote_factors", quote)
 
     result = screen("HK", 20, {"filters": {"dividend_yield_min": 3}})
 
@@ -700,9 +723,10 @@ def test_hk_dividend_filter_retains_snapshot_yields_when_tencent_cannot_preserve
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
     monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("annual feed unavailable")))
     quote = MagicMock(
-        return_value=(quote_yields, []), side_effect=ValueError("Tencent unavailable") if quote_yields is None else None
+        return_value=({symbol: {"dividend_yield": value} for symbol, value in (quote_yields or {}).items()}, []),
+        side_effect=ValueError("Tencent unavailable") if quote_yields is None else None,
     )
-    monkeypatch.setattr("stock_data.hk_quote_dividend_yields", quote)
+    monkeypatch.setattr("stock_data.hk_quote_factors", quote)
 
     result = screen("HK", 20, {"filters": {"dividend_yield_min": 3}})
 
@@ -784,9 +808,7 @@ def test_hk_valuation_fill_keeps_quotes_from_successful_batches(monkeypatch):
     result = screen("HK", 20, {"filters": {"pe_max": 10}})
 
     assert [(row["symbol"], row["pe"]) for row in result["candidates"]] == [("00061.HK", 8)]
-    assert result["warnings"] == [
-        "Tencent valuation batch failed for 60 quotes (Timeout); missing PE/PB remain unknown"
-    ]
+    assert "Tencent valuation batch failed for 60 quotes (Timeout); missing PE/PB remain unknown" in result["warnings"]
 
 
 def test_l2_coverage_exposes_missing_groups_and_actual_weights(monkeypatch):
