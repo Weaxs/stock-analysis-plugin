@@ -75,6 +75,8 @@ def merge_filters(config: dict | None) -> dict:
 
 def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     conditions = []
+    if "stock_connect" in filters:
+        conditions.append(df["stock_connect"] == filters["stock_connect"])
     for bound, op in [("dividend_yield_min", "min"), ("dividend_yield_max", "max")]:
         if bound in filters:
             if "dividend_yield" not in df.columns:
@@ -350,6 +352,52 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
         }
 
 
+def _screen_dividend_yields(df: pd.DataFrame, market: str, report_date: str, filters: dict, snapshot_source) -> tuple:
+    from value_data import dividend_ranking
+
+    missing = "unknown; excluded by dividend filters"
+    try:
+        ranked = dividend_ranking(
+            report_date=report_date, market=market, codes=list(df["symbol"]) if market == "A" else None
+        )
+        if market == "HK" and not ranked["items"]:
+            raise ValueError("HK fiscal-year yields unavailable")
+    except Exception:
+        if market != "HK" or report_date:
+            raise
+        from stock_data import hk_quote_dividend_yields
+
+        without_dividends = {key: value for key, value in filters.items() if not key.startswith("dividend_yield_")}
+        candidates = apply_filters(df, without_dividends)
+        yields = pd.to_numeric(
+            candidates.get("dividend_yield", pd.Series(index=candidates.index, dtype=float)), errors="coerce"
+        )
+        source = snapshot_source
+        if not candidates.empty and not np.isfinite(yields).any():
+            yields = pd.to_numeric(
+                candidates["symbol"].map(hk_quote_dividend_yields(list(candidates["symbol"]))), errors="coerce"
+            )
+            source = "Tencent"
+        if not candidates.empty and not np.isfinite(yields).any():
+            raise ValueError("Tencent quote yields unavailable") from None
+        return yields, {
+            "report_date": None,
+            "source": source,
+            "yield_basis": "provider quote dividend yield, percent",
+            "missing": missing,
+        }
+
+    def dividend_key(symbol):
+        return symbol.split(".")[0].lstrip("0") if market == "HK" else symbol
+
+    yields = {dividend_key(r["symbol"]): r["dividend_yield"] for r in ranked["items"]}
+    return df["symbol"].map(dividend_key).map(yields), {
+        "report_date": ranked["report_date"],
+        "yield_basis": ranked.get("yield_basis", "provider report-period cash dividend yield, percent"),
+        "missing": missing,
+    }
+
+
 def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict:
     if isinstance(top, bool) or not isinstance(top, int) or top <= 0:
         return {"error": "top must be a positive integer", "market": market}
@@ -358,6 +406,10 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     filters = merge_filters(config)
     supported = set(DEFAULT_FILTERS) | {"dividend_yield_min", "dividend_yield_max"}
     for key, value in filters.items():
+        if key == "stock_connect":
+            if market != "HK" or not isinstance(value, bool):
+                return {"error": "stock_connect must be a boolean and is supported for HK only", "market": market}
+            continue
         if key not in supported:
             return {"error": f"Unsupported filter: {key}", "market": market}
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
@@ -383,7 +435,8 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     multiplier = sentiment["multiplier"]
 
     # An empty server-filtered page still reports every requested filter as applied.
-    columns = ["symbol", *{key.rsplit("_", 1)[0] for key in filters}]
+    filter_fields = {key: key.removesuffix("_min").removesuffix("_max") for key in filters}
+    columns = ["symbol", *set(filter_fields.values())]
     df = pd.DataFrame(snapshot["rows"]) if snapshot["rows"] else pd.DataFrame(columns=columns)
     total = snapshot.get("total_stocks")
     scan_meta = {}
@@ -401,39 +454,33 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     if existing:
         df = df.dropna(subset=existing)
 
+    if "stock_connect" in filters:
+        try:
+            from value_data import hk_stock_connect
+
+            eligible = hk_stock_connect() if not df.empty else set()
+            df["stock_connect"] = df["symbol"].str.split(".").str[0].str.zfill(5).isin(eligible)
+        except Exception:
+            return {"error": "stock_connect data unavailable; requested filter was not applied", "market": market}
+
     dividend_meta = {}
     if dividend_requested:
         try:
-            from value_data import dividend_ranking
-
-            ranked = dividend_ranking(
-                report_date=(config or {}).get("dividend_report_date", ""),
-                market=market,
-                codes=list(df["symbol"]) if market == "A" else None,
+            df["dividend_yield"], dividend_meta["dividend_factor"] = _screen_dividend_yields(
+                df, market, (config or {}).get("dividend_report_date", ""), filters, snapshot.get("source")
             )
-
-            def dividend_key(symbol):
-                return symbol.split(".")[0].lstrip("0") if market == "HK" else symbol
-
-            yields = {dividend_key(r["symbol"]): r["dividend_yield"] for r in ranked["items"]}
-            df["dividend_yield"] = df["symbol"].map(dividend_key).map(yields)
-            dividend_meta = {
-                "dividend_factor": {
-                    "report_date": ranked["report_date"],
-                    "yield_basis": ranked.get("yield_basis", "provider report-period cash dividend yield, percent"),
-                    "missing": "unknown; excluded by dividend filters",
-                }
-            }
         except Exception:
             return {
                 "error": "dividend data unavailable; requested dividend criterion was not applied",
                 "market": market,
             }
+    else:
+        df = df.drop(columns="dividend_yield", errors="ignore")
     explicit = (config or {}).get("filters") or {}
-    missing = [key for key in explicit if key.rsplit("_", 1)[0] not in df]
+    missing = [key for key in explicit if filter_fields[key] not in df]
     if missing:
         return {"error": f"Requested filter data unavailable: {', '.join(missing)}", "market": market}
-    applied_filters = {key: value for key, value in filters.items() if key.rsplit("_", 1)[0] in df}
+    applied_filters = {key: value for key, value in filters.items() if filter_fields[key] in df}
     df = apply_filters(df, filters)
     filtered_count = len(df)
 

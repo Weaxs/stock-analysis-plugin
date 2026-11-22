@@ -8,7 +8,7 @@ import re
 import sys
 from datetime import date, datetime, timedelta
 from html import unescape
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from urllib.parse import unquote
 from xml.etree import ElementTree
@@ -528,6 +528,47 @@ def earnings_calendar(args):
     if result.get("warnings") and not result["disclosures"] and not result["forecasts"]:
         raise ValueError("earnings calendar sources unavailable")
     return result
+
+
+def hk_stock_connect() -> set[str]:
+    """Return the union of both exchanges' buy-and-sell eligibility lists."""
+    import requests
+
+    def fetch():
+        sh = requests.get(
+            "https://query.sse.com.cn/commonQuery.do",
+            params={
+                "sqlId": "COMMON_SSE_JYFW_HGT_XXPL_BDZQQD_L",
+                "isPagination": "true",
+                # shortcut: the current list fits one page; paginate if SSE grows past this size.
+                "pageHelp.pageSize": 1000,
+                "pageHelp.pageNo": 1,
+                "keyword": "",
+            },
+            headers={"Referer": "https://www.sse.com.cn/services/hkexsc/disclo/eligible/"},
+            timeout=10,
+        )
+        sh.raise_for_status()
+        payload = sh.json()
+        rows = payload.get("result") or []
+        if payload.get("actionErrors") or not rows or len(rows) != payload.get("pageHelp", {}).get("total"):
+            raise ValueError("incomplete SSE Stock Connect list")
+        sh_codes = [str(row.get("SECURITY_CODE", "")).strip() for row in rows]
+
+        sz = requests.get(
+            "https://www.szse.cn/api/report/ShowReport",
+            params={"SHOWTYPE": "xlsx", "CATALOGID": "SGT_GGTBDQD", "TABKEY": "tab1"},
+            headers={"Referer": "https://www.szse.cn/szhk/hkbussiness/underlylist/"},
+            timeout=10,
+        )
+        sz.raise_for_status()
+        sz_sheet = pd.read_excel(BytesIO(sz.content), usecols=["证券代码"], dtype=str)
+        sz_codes = sz_sheet["证券代码"].astype(str).str.strip().tolist()
+        if not sz_codes or not all(re.fullmatch(r"[0-9]{1,5}", code) for code in sh_codes + sz_codes):
+            raise ValueError("incomplete Stock Connect list: missing security codes")
+        return sorted({code.zfill(5) for code in sh_codes + sz_codes})
+
+    return set(cached("hk-stock-connect", DAY, fetch))
 
 
 def southbound_holdings(symbol):

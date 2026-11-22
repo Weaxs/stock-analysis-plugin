@@ -979,7 +979,7 @@
         },
         "config": {
           "type": "string",
-          "description": "自定义筛选配置YAML文件路径，不填用默认配置"
+          "description": "自定义筛选配置 YAML 文件路径。不填时使用默认配置。港股可用 filters.stock_connect: true/false 筛选是否具备南向买入资格。filters.dividend_yield_min 和 filters.dividend_yield_max 以百分数筛选股息率。"
         },
         "l2": {
           "type": "boolean",

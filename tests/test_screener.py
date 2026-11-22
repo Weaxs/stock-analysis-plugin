@@ -559,6 +559,83 @@ def test_hk_dividend_factor_normalizes_hk_symbols_and_preserves_basis(monkeypatc
     assert calls[0]["market"] == "HK"
 
 
+@pytest.mark.parametrize("report_date", ["", "2025-12-31"])
+def test_hk_dividend_filter_falls_back_to_current_quote_only_without_report_date(monkeypatch, report_date):
+    from unittest.mock import MagicMock
+
+    raw = [
+        {"symbol": "00700.HK", "price": 300, "pe": 12, "pb": 2, "market_cap": 1e10},
+        {"symbol": "00005.HK", "price": 60, "pe": 10, "pb": 1, "market_cap": 1e10},
+        {"symbol": "00001.HK", "price": 60, "pe": 10, "pb": 1, "market_cap": 1e10},
+    ]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw))
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("feed unavailable")))
+
+    def quote(code, price, yield_pct):
+        fields = [""] * 60
+        fields[2], fields[3], fields[47] = code, price, yield_pct
+        return f'v_hk{code}="{"~".join(fields)}";'
+
+    payload = (quote("00700", "300", "1.24") + "\n" + quote("00005", "60", "4.85")).encode("gbk")
+    get = MagicMock(return_value=MagicMock(content=payload))
+    monkeypatch.setattr("requests.get", get)
+    config = {"filters": {"pe_max": 20, "pb_max": 3, "dividend_yield_min": 3}, "dividend_report_date": report_date}
+    result = screen("HK", 20, config)
+    if report_date:
+        assert "error" in result
+        get.assert_not_called()
+    else:
+        assert [(r["symbol"], r["dividend_yield"]) for r in result["candidates"]] == [("00005.HK", 4.85)]
+        assert result["dividend_factor"]["report_date"] is None
+        assert result["dividend_factor"]["source"] == "Tencent"
+
+
+@pytest.mark.parametrize(("eligible", "expected"), [(True, "00700.HK"), (False, "00005.HK")])
+def test_hk_screener_filters_by_southbound_buy_eligibility(monkeypatch, eligible, expected):
+    raw = [
+        {"symbol": "00700.HK", "price": 300, "pe": 12, "pb": 2, "market_cap": 1e10},
+        {"symbol": "00005.HK", "price": 60, "pe": 10, "pb": 1, "market_cap": 1e10},
+    ]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw))
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    monkeypatch.setattr("value_data.hk_stock_connect", lambda: {"00700"}, raising=False)
+    result = screen("HK", 20, {"filters": {"stock_connect": eligible}})
+    assert [r["symbol"] for r in result["candidates"]] == [expected]
+    assert result["filters_applied"]["stock_connect"] is eligible
+
+
+def test_hk_screener_does_not_treat_unavailable_membership_as_ineligible(monkeypatch):
+    from unittest.mock import MagicMock
+
+    raw = [{"symbol": "00700.HK", "price": 300, "pe": 12, "pb": 2, "market_cap": 1e10}]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw))
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    monkeypatch.setattr("value_data.hk_stock_connect", MagicMock(side_effect=ValueError("down")), raising=False)
+    assert "stock_connect data unavailable" in screen("HK", 20, {"filters": {"stock_connect": False}})["error"]
+
+
+def test_hk_snapshot_yield_is_opt_in_and_labels_its_source(monkeypatch):
+    from unittest.mock import MagicMock
+
+    raw = [{"symbol": "00005.HK", "price": 60, "pe": 10, "pb": 1, "market_cap": 1e10, "dividend_yield": 4.55}]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": "TradingView"})
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    ranking = MagicMock(side_effect=ValueError("annual feed unavailable"))
+    monkeypatch.setattr("value_data.dividend_ranking", ranking)
+    quote = MagicMock(side_effect=AssertionError("the snapshot already has yields"))
+    monkeypatch.setattr("stock_data.hk_quote_dividend_yields", quote)
+
+    candidate = screen("HK", 20, None)["candidates"][0]
+    assert "dividend_yield" not in candidate and "dividend" not in candidate["scores"]
+    ranking.assert_not_called()
+
+    result = screen("HK", 20, {"sort_by": "dividend_yield"})
+    assert result["candidates"][0]["dividend_yield"] == 4.55
+    assert result["dividend_factor"]["source"] == "TradingView"
+    quote.assert_not_called()
+
+
 def test_l2_coverage_exposes_missing_groups_and_actual_weights(monkeypatch):
     _patch_screen(monkeypatch)
     monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})

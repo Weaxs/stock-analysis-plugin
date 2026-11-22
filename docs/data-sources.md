@@ -11,7 +11,7 @@
 - K 线响应保留原有 JSON 数组，每条 A 股记录新增 `adjusted`：股票/ETF 为 `"qfq"`，指数为 `"none"`。Tushare 日线通过 `adj_factor` 前复权，周/月线使用 `stk_week_month_adj` 的 qfq 字段；复权权限不足、因子缺失或源只返回原始价格时继续切换，所有可用复权源都失败时返回 JSON `error`，不降级到未复权股票价格。Tushare 复权接口需至少 2000 积分，见[复权因子](https://tushare.pro/document/2?doc_id=28)与[复权周/月线](https://tushare.pro/document/2?doc_id=365)。
 - **粘性优选**：A 股链路（K 线 / 行情 / 市场快照 / 板块成分）会记住最近一次成功的数据源（记录在缓存目录的 `state/` 下，24h 有效），下次调用优先从它开始（单票报价例外：固定先试腾讯，粘性源只在其后的备用源中优先）；若它已失效则自动顺延并更新记录。港美股链路不做粘性——一次 yfinance 瞬时失败不应让后续全天的 quote 降质。
 - 日/韩/台股仅 yfinance 一个数据源（免费数据延迟约 15 分钟）；港股 / 美股 / 日股 / 韩股 / 台股的 ETF 与其所在市场股票走相同链路。
-- **选股快照**：A 股为东方财富 → 腾讯；港股 / 美股为东方财富 → TradingView 公开选股接口（英文名称，PE 为 TTM，市值为本币）。
+- **选股快照**：A 股使用东方财富、腾讯。港股依次使用东方财富、TradingView、腾讯。腾讯备用源按港交所证券名单的港元股票代码批量报价，覆盖主板和创业板。美股使用东方财富和 TradingView。PE 口径见 `pe_basis`，市值为本币。
 
 ## 行情时间与复权口径
 
@@ -27,7 +27,7 @@
 
 ETF 使用披露资产规模历史（元）与披露持仓，保留持仓原始证券代码，不冒充实时完整申赎篮子；新增 `basket` 返回沪深交易所发布的完整当日 PCF（跨境代码原样保留），包含申赎单位、每篮子证券数量、现金替代规则与比例；校验基金代码、实际日期和全部组件数量，失败只提示不可用，不冒充完整。PCF 是申赎对价，不是实际持仓，证券数量也不是净值权重。`include_full_holdings=true` 时另取最近可得半年度/年度披露股票表，显式指定年份/月并请求较高行数上限，包含股票数量（股）、市值（人民币元）和实际报告期；返回全部收到的表格行，但不声称覆盖债券/现金等全资产或实时持仓，也不以 PCF 数量验证实际持仓。默认不取数百行明细。提供 `benchmark` 可另查基准指数成分。净值折溢价仅在行情/净值日期相同才计算，IOPV 折溢价另列。跟踪误差使用相同连续交易日区间的基金日净值增长与基准收盘收益差，取样本标准差乘 `sqrt(252)`，不填补缺失日期、不猜测基准。两融占比只匹配同一天的人民币元成交额，缺失则 null。
 
-股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。A 股排行/选股使用指定报告期已实施方案股息率；HK 指定 `market=HK` 时使用 HKEX/LSEG 公布的年度股息率（百分数），不是当前价 TTM；HK `report_date` 仅支持数据源可得年度的年末。港股股息选股因子也使用同一年度口径。筛选 YAML 可增加 `filters.dividend_yield_min: 3`、`sort_by: dividend_score` 与可选 `dividend_report_date`；缺失为未知，不按0填充。
+股息历史将预案与已实施分红分开，TTM 股息率以过去365天已实施名义每股现金/最新价计算（税前，未重算送转股）；空历史、已实施记录缺失日期/金额或分红币种与报价币种不一致时，受影响的总额/股息率返回未知，不猜测汇率；历史不完整时不推断连续分红年数。港股日历、现金历史与报价独立降级，保留可用部分并提示失败来源。日历独立返回已公告未来除息日期。A 股排行/选股使用指定报告期已实施方案股息率；HK 指定 `market=HK` 时使用 HKEX/LSEG 公布的年度股息率（百分数），不是当前价 TTM；HK `report_date` 仅支持数据源可得年度的年末。港股股息选股因子优先使用同一年度口径。省略 `dividend_report_date` 且年度源不可用时，使用行情提供方的股息率（百分数），在 `dividend_factor` 标注来源，`report_date` 为 null。筛选 YAML 可增加 `filters.dividend_yield_min: 3` 或 `sort_by: dividend_score`。缺失的股息率视为未知。港股通买入资格使用沪深交易所官方可买卖清单的并集，两份名单均取数成功后缓存一天。
 
 CDS 指数（`get_cds_index`）只提供市场级信用风险偏好，不是个股 CDS。`source=cn` 读取[中国货币网 CDS 指数](https://www.chinamoney.com.cn/chinese/cdsindx/)的 CFETS-SHCH 高等级、民企、长三角、科创、碳中和指数（bp），源站仅提供约一年历史，按不超过一个月的窗口分页查询并缓存 4 小时；传 `index` 时只为匹配到的指数拉历史，`tenor` 只保留该期限。`source=global` 读取 [DTCC 公开披露](https://pddata.dtcc.com/ppd/cftcdashboard)的 CFTC 信用类日终文件，只取新成交、非组合、利差记号为小数的 CDX.NA.IG、CDX.NA.HY、iTraxx Europe、iTraxx Europe Crossover，窗口截止到 DTCC 最新已发布的工作日文件（通常是前一个 UTC 工作日，周末文件不含指数成交，直接跳过），按日取成交最多的到期日（当前 5 年系列）的中位数；CDX.NA.HY 按价格报价，价格下跌表示信用走弱。指数换系列后到期日和成分都会变化，窗口统计只比较最新系列；`index` 只筛选输出，每个日文件含全部指数，仍需全部下载。这是公开成交的中位数，不是官方收盘价；过往日文件缓存一周。
 
@@ -47,7 +47,7 @@ A/港/美股 DCF 输入（`get_financials include_dcf_inputs=true`）：美股�
 
 美股估值历史（`get_valuation_history`）由 SEC companyfacts 派生：TTM `NetIncomeLoss`（10-Q 单季加由 10-K 推出的第四季）、`StockholdersEquity` 和封面股本，均按 SEC 申报日起生效，取每个期间最早申报值，避免用后来的重述回填；Yahoo 周收盘按拆股调整后的价格乘以同口径股本得到市值。多类股公司按所有类别股本合计、单一类别价格计算；无封面股本时退回加权稀释股本（`share_basis`）。
 
-港美股市场宽度（`get_market_stats market=HK|US`）用东方财富涨跌排行二分计数涨跌家数（不拉全市场），总成交额与涨跌停字段为 null；美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`，不是交易所官方行业数据。港股行业排行暂无可靠的公开行业指数源，未补。
+港美股市场宽度（`get_market_stats market=HK|US`）用东方财富涨跌排行二分计数涨跌家数，总成交额与涨跌停字段为 null。港股在东财失败时改用 TradingView 排行，按有涨跌幅报价的股票计数，来源为 `tradingview_rank`。美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`。港股行业排行暂无可靠的公开行业指数源。
 
 接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
 

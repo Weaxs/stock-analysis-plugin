@@ -234,7 +234,7 @@
 
 | 工具 | 说明 |
 |------|------|
-| `screen_stocks` | 全市场多因子筛选（流动性使用成交额 turnover；可选 L2；factor_coverage 展示缺失因子与实际权重） |
+| `screen_stocks` | 全市场多因子筛选，流动性使用成交额 turnover。港股支持 PE、PB、股息率和港股通买入资格。可选 L2，factor_coverage 展示因子覆盖与实际权重。 |
 | `screen_risk` | 风险因子筛查 |
 | `run_backtest` | YAML 策略回测，默认收盘信号于次日开盘成交，execution 返回模型与限制 |
 | `detect_market_regime` | A/HK/US/JP/KR/TW 市场状态检测（返回实际 as_of 和警告；板块热点仅 A 股） |

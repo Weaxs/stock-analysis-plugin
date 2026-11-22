@@ -1237,6 +1237,10 @@ class TestMarketSnapshot:
         total, rows = stock_data._snapshot_tradingview(market, 5e9)
         assert total == 4000 and len(rows) == 1005 and calls[1][1]["range"] == [1000, 2000]
         assert calls[0][1]["sort"] == {"sortBy": "market_cap_basic", "sortOrder": "desc"}
+        filters = {f["left"]: f["right"] for f in calls[0][1]["filter"]}
+        assert filters == (
+            {"type": "stock", "currency": "HKD"} if market == "HK" else {"type": "stock", "is_primary": True}
+        )
         assert rows[0]["symbol"] == symbol and rows[0]["market_cap"] == 6e9 and rows[0]["pe"] == 12
         assert ("pb" in rows[0]) == (market == "HK")
 
@@ -1260,6 +1264,78 @@ class TestMarketSnapshot:
         monkeypatch.setattr(stock_data, "_snapshot_tencent", lambda filters: (5580, rows))
         result = stock_data.cmd_market_snapshot(Namespace(market="A", filters=json.dumps(self.FILTERS)))
         assert result["total_stocks"] == 5580 and result["truncated"] is True
+
+    @pytest.mark.parametrize("eastmoney_rows", [[], [{"f12": "00700", "f20": 6e9, "f2": 10}]])
+    def test_hk_snapshot_recovers_when_eastmoney_returns_no_valuations(self, monkeypatch, eastmoney_rows):
+        from tools import stock_data
+
+        fake = FakeEastmoney(clist={"data": {"total": len(eastmoney_rows), "diff": eastmoney_rows}})
+        monkeypatch.setattr(stock_data, "_get_json", fake)
+        monkeypatch.setattr(
+            "requests.post",
+            lambda url, json, timeout: MagicMock(
+                json=lambda: {"totalCount": 1, "data": [{"d": ["700", "Tencent", 10, 1, 200, 2000, 12, 2, 6e9]}]}
+            ),
+        )
+        result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 5000000000}'))
+        assert [(r["symbol"], r["pe"], r["pb"]) for r in result["rows"]] == [("00700.HK", 12, 2)]
+        assert result["source"] == "TradingView"
+
+    @pytest.mark.parametrize(("ttm", "pe", "basis"), [(12, 12, "ttm"), (0, 18, "unknown")])
+    def test_hk_snapshot_uses_eastmoney_ttm_and_preserves_valid_empty_screen(self, monkeypatch, ttm, pe, basis):
+        from tools import stock_data
+
+        row = {"f12": "00005", "f2": 10, "f20": 6e9, "f115": ttm, "f9": 18, "f23": 2, "f133": 4.55}
+        monkeypatch.setattr(stock_data, "_get_json", FakeEastmoney(clist={"data": {"total": 1, "diff": [row]}}))
+        backup = MagicMock(side_effect=AssertionError("fallback shouldn't run"))
+        monkeypatch.setattr("requests.post", backup)
+
+        snapshot = stock_data.cmd_market_snapshot(Namespace(market="HK", filters="{}"))
+        assert snapshot["source"] == "Eastmoney"
+        result = snapshot["rows"][0]
+        assert (result["pe"], result["pe_basis"], result["pb"], result["dividend_yield"]) == (pe, basis, 2, 4.55)
+        snapshot = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 7000000000}'))
+        assert snapshot["rows"] == [] and snapshot["total_stocks"] == 1
+        backup.assert_not_called()
+
+    def test_hk_snapshot_falls_back_to_tencent_batch(self, monkeypatch):
+        from io import BytesIO
+
+        import pandas as pd
+
+        from tools import stock_data
+
+        listing = BytesIO()
+        pd.DataFrame(
+            [("00700", "Equity", "HKD"), ("00001", "Equity", "HKD"), ("03000", "Exchange Traded Products", "HKD")],
+            columns=["Stock Code", "Category", "Trading Currency"],
+        ).to_excel(listing, startrow=2, index=False)
+
+        def quote(code, cap):
+            fields = [""] * 60
+            fields[1], fields[2], fields[3], fields[6] = "腾讯控股", code, "300", "2000"
+            fields[37], fields[39], fields[44], fields[45] = "600000", "25", "20", cap
+            fields[47], fields[57], fields[58] = "4.85", "16.90", "2.51"
+            return f'v_hk{code}="{"~".join(fields)}";'
+
+        def get(url, **kwargs):
+            if url.endswith("ListOfSecurities.xlsx"):
+                return MagicMock(content=listing.getvalue())
+            assert url == "https://qt.gtimg.cn/q=hk00001,hk00700"
+            return MagicMock(content=(quote("00001", "30") + "\n" + quote("00700", "600.50")).encode("gbk"))
+
+        def blocked(_):
+            raise ConnectionError("rate limited")
+
+        monkeypatch.setattr(stock_data, "_get_json", FakeEastmoney(clist=blocked))
+        monkeypatch.setattr("requests.get", get)
+        monkeypatch.setattr("requests.post", MagicMock(side_effect=ConnectionError("blocked")))
+        result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 5000000000}'))
+        assert [(r["symbol"], r["pe"], r["pb"], r["market_cap"], r["turnover"]) for r in result["rows"]] == [
+            ("00700.HK", 16.9, 2.51, 60.05e9, 600000)
+        ]
+        assert result["rows"][0]["pe_basis"] == "ttm" and result["rows"][0]["dividend_yield"] == 4.85
+        assert result["source"] == "Tencent"
 
     def test_cli_error_is_clean(self, monkeypatch):
         from tools import stock_data
@@ -1312,6 +1388,54 @@ class TestMarketStats:
     def test_provider_failure_is_clean_error(self, monkeypatch):
         monkeypatch.setattr("tools.stock_data._get_json", MagicMock(side_effect=ConnectionError("blocked")))
         assert cmd_market_stats(Namespace(market="A")) == {"error": "blocked"}
+
+    @pytest.mark.parametrize(
+        ("changes", "median", "expected_calls"),
+        [
+            (list(range(-4, 10)), 3, 4),
+            (list(range(-9, 3)), -3, 4),
+            ([-1, 0, 0, 0, 1, 2], 0, 3),
+        ],
+    )
+    def test_hk_stats_fall_back_to_tradingview_rank_queries(self, monkeypatch, changes, median, expected_calls):
+        monkeypatch.setattr("tools.stock_data._get_json", MagicMock(side_effect=ConnectionError("rate limited")))
+        calls = []
+        listings = [(i, change) for i, change in enumerate([None, *changes], 1)]
+        predicates = {"greater": lambda v: v > 0, "less": lambda v: v < 0, "equal": lambda v: v == 0}
+
+        def post(url, json, timeout):
+            assert url == "https://scanner.tradingview.com/hongkong/scan"
+            filters = {item["left"]: item for item in json["filter"]}
+            assert filters["type"]["right"] == "stock" and filters["currency"]["right"] == "HKD"
+            pred = predicates[filters["change"]["operation"]]
+            matched = [(i, v) for i, v in listings if v is not None and pred(v)]
+            matched.sort(key=lambda item: item[1], reverse=json["sort"]["sortOrder"] == "desc")
+            offset, end = json["range"]
+            assert end - offset <= 5
+            calls.append(json)
+            return MagicMock(
+                json=lambda: {
+                    "totalCount": len(matched),
+                    "data": [{"d": [str(i), f"Stock {i}", v]} for i, v in matched[offset:end]],
+                }
+            )
+
+        monkeypatch.setattr("requests.post", post)
+        stats = cmd_market_stats(Namespace(market="HK"))
+        assert "error" not in stats, stats
+        assert stats["total_stocks"] == len(changes)  # The unquoted listing does not count as unchanged.
+        assert stats["up_count"] == sum(v > 0 for v in changes)
+        assert stats["down_count"] == sum(v < 0 for v in changes)
+        assert stats["flat_count"] == changes.count(0)
+        assert stats["median_change_pct"] == median
+        assert stats["source"] == "tradingview_rank" and stats["turnover_currency"] == "HKD"
+        assert stats["avg_change_pct"] is None and stats["total_turnover"] is None
+        assert [row["change_pct"] for row in stats["top5_gainers"]] == sorted(
+            (v for v in changes if v > 0), reverse=True
+        )[:5]
+        assert [row["change_pct"] for row in stats["top5_losers"]] == sorted(v for v in changes if v < 0)[:5][::-1]
+        assert stats["top5_gainers"][0]["symbol"].endswith(".HK")
+        assert len(calls) == expected_calls
 
 
 class TestCnIndices:
