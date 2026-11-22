@@ -1311,18 +1311,22 @@ class TestMarketSnapshot:
             columns=["Stock Code", "Category", "Trading Currency"],
         ).to_excel(listing, startrow=2, index=False)
 
-        def quote(code, cap):
+        def quote(code, cap, pe, pb):
             fields = [""] * 60
             fields[1], fields[2], fields[3], fields[6] = "腾讯控股", code, "300", "2000"
             fields[37], fields[39], fields[44], fields[45] = "600000", "25", "20", cap
-            fields[47], fields[57], fields[58] = "4.85", "16.90", "2.51"
+            fields[47], fields[57], fields[58] = "4.85", pe, pb
             return f'v_hk{code}="{"~".join(fields)}";'
 
         def get(url, **kwargs):
             if url.endswith("ListOfSecurities.xlsx"):
                 return MagicMock(content=listing.getvalue())
             assert url == "https://qt.gtimg.cn/q=hk00001,hk00700"
-            return MagicMock(content=(quote("00001", "30") + "\n" + quote("00700", "600.50")).encode("gbk"))
+            return MagicMock(
+                content=(quote("00001", "100", "0", "0") + "\n" + quote("00700", "600.50", "16.90", "2.51")).encode(
+                    "gbk"
+                )
+            )
 
         def blocked(_):
             raise ConnectionError("rate limited")
@@ -1332,7 +1336,8 @@ class TestMarketSnapshot:
         monkeypatch.setattr("requests.post", MagicMock(side_effect=ConnectionError("blocked")))
         result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 5000000000}'))
         assert [(r["symbol"], r["pe"], r["pb"], r["market_cap"], r["turnover"]) for r in result["rows"]] == [
-            ("00700.HK", 16.9, 2.51, 60.05e9, 600000)
+            ("00700.HK", 16.9, 2.51, 60.05e9, 600000),
+            ("00001.HK", None, None, 10e9, 600000),
         ]
         assert result["rows"][0]["pe_basis"] == "ttm" and result["rows"][0]["dividend_yield"] == 4.85
         assert result["source"] == "Tencent"

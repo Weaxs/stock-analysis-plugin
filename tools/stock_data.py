@@ -421,6 +421,16 @@ def hk_quote_dividend_yields(symbols: list[str]) -> dict[str, float | None]:
     }
 
 
+def _tencent_hk_valuations(fields: list[str]) -> tuple[float | None, float | None]:
+    pe = _parse_float(fields[57]) if len(fields) > 57 else None
+    pb = _parse_float(fields[58]) if len(fields) > 58 else None
+    return _sanitize(pe or None), _sanitize(pb or None)
+
+
+def hk_quote_valuations(symbols: list[str]) -> dict[str, tuple[float | None, float | None]]:
+    return {symbol: _tencent_hk_valuations(fields) for symbol, fields in _hk_tencent_fields(symbols).items()}
+
+
 def _quote_tencent(symbol: str) -> dict:
     """Tencent A/HK/US quote via qt.gtimg.cn, with a GBK-encoded `~` payload.
 
@@ -2425,7 +2435,7 @@ def _snapshot_hk_tencent(floor: float):
         raise ValueError("Tencent returned no HK equity quotes")
     rows, has_cap = [], False
     for symbol, fields in quotes.items():
-        fields += [""] * (59 - len(fields))
+        fields += [""] * (48 - len(fields))
         cap = _parse_float(fields[45])
         if cap is None or not math.isfinite(cap):
             continue
@@ -2433,13 +2443,14 @@ def _snapshot_hk_tencent(floor: float):
         if cap * 1e8 < floor:
             continue
         row = _tencent_payload_row(fields, symbol)
+        pe, pb = _tencent_hk_valuations(fields)
         keys = ("symbol", "name", "price", "change_pct", "volume", "turnover", "market_cap")
         rows.append(
             _clean_row(
                 {key: row[key] for key in keys}
                 | {
-                    "pe": _parse_float(fields[57]),
-                    "pb": _parse_float(fields[58]),
+                    "pe": pe,
+                    "pb": pb,
                     "pe_basis": "ttm",
                     "dividend_yield": _parse_float(fields[47]),
                 }

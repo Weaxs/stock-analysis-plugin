@@ -352,6 +352,21 @@ def _apply_l2(candidates: list, market: str, multiplier: float) -> None:
         }
 
 
+def _fill_hk_valuations(rows: list[dict]) -> None:
+    missing = [row for row in rows if row.get("price") is not None and (row.get("pe") is None or row.get("pb") is None)]
+    if not missing:
+        return
+    from stock_data import hk_quote_valuations
+
+    valuations = hk_quote_valuations([row["symbol"] for row in missing])
+    for row in missing:
+        pe, pb = valuations.get(row["symbol"], (None, None))
+        if row.get("pe") is None and pe is not None:
+            row.update(pe=pe, pe_basis="ttm")
+        if row.get("pb") is None and pb is not None:
+            row["pb"] = pb
+
+
 def _screen_dividend_yields(df: pd.DataFrame, market: str, report_date: str, filters: dict, snapshot_source) -> tuple:
     from value_data import dividend_ranking
 
@@ -437,13 +452,26 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
     # An empty server-filtered page still reports every requested filter as applied.
     filter_fields = {key: key.removesuffix("_min").removesuffix("_max") for key in filters}
     columns = ["symbol", *set(filter_fields.values())]
-    df = pd.DataFrame(snapshot["rows"]) if snapshot["rows"] else pd.DataFrame(columns=columns)
+    rows = snapshot["rows"]
     total = snapshot.get("total_stocks")
     scan_meta = {}
     if snapshot.get("truncated"):
         scan_meta["warnings"] = [
-            f"scanned only the {len(df)} largest stocks by market cap; raise market_cap_min to cover the rest"
+            f"scanned only the {len(rows)} largest stocks by market cap; raise market_cap_min to cover the rest"
         ]
+    explicit = (config or {}).get("filters") or {}
+    if (
+        market == "HK"
+        and snapshot.get("source") in {"Eastmoney", "TradingView"}
+        and {"pe_min", "pe_max", "pb_min", "pb_max"} & explicit.keys()
+    ):
+        try:
+            _fill_hk_valuations(rows)
+        except Exception:
+            scan_meta.setdefault("warnings", []).append(
+                "Tencent valuation fill unavailable; missing PE/PB remain unknown"
+            )
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=columns)
 
     for c in ["price", "change_pct", "volume", "turnover", "pe", "pb", "market_cap", "turnover_rate", "volume_ratio"]:
         if c in df.columns:
@@ -476,7 +504,6 @@ def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict
             }
     else:
         df = df.drop(columns="dividend_yield", errors="ignore")
-    explicit = (config or {}).get("filters") or {}
     missing = [key for key in explicit if filter_fields[key] not in df]
     if missing:
         return {"error": f"Requested filter data unavailable: {', '.join(missing)}", "market": market}

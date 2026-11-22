@@ -636,6 +636,28 @@ def test_hk_snapshot_yield_is_opt_in_and_labels_its_source(monkeypatch):
     quote.assert_not_called()
 
 
+def test_hk_explicit_valuation_filters_complete_missing_ttm_pe_from_tencent(monkeypatch):
+    from unittest.mock import MagicMock
+
+    raw = [{"symbol": "01398.HK", "price": 6.7, "pe": None, "pb": 0.62, "market_cap": 1e12}]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": "TradingView"})
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    fields = [""] * 60
+    fields[2], fields[3], fields[39], fields[57], fields[58] = "01398", "6.7", "0", "6.28", "0.6"
+    payload = f'v_hk01398="{"~".join(fields)}";'.encode("gbk")
+    get = MagicMock(return_value=MagicMock(content=payload))
+    monkeypatch.setattr("requests.get", get)
+
+    candidate = screen("HK", 20, {"filters": {"pe_max": 10, "pb_max": 1}})["candidates"][0]
+    assert (candidate["symbol"], candidate["pe"], candidate["pe_basis"], candidate["pb"]) == (
+        "01398.HK",
+        6.28,
+        "ttm",
+        0.62,
+    )
+    get.assert_called_once_with("https://qt.gtimg.cn/q=hk01398", timeout=10)
+
+
 def test_l2_coverage_exposes_missing_groups_and_actual_weights(monkeypatch):
     _patch_screen(monkeypatch)
     monkeypatch.setattr(screener, "_enrich_one", lambda symbol, market, **kwargs: {})
