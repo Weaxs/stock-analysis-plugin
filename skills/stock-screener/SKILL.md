@@ -76,6 +76,8 @@ L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_sa
 
 完成标准：列出实际生效的市场、过滤条件、排序口径和候选数量，且推荐理由只使用返回数据，并说明因子覆盖。
 
+港股的 `snapshot_source` 是实际选股快照来源。`total_stocks` 按该来源的名录计数。TradingView 的港元股票扫描可能遗漏个别港交所上市股票，港股通条件在快照覆盖的股票中执行。
+
 ## 策略模板
 
 如果用户没有明确条件，提供预设策略：
@@ -84,9 +86,9 @@ L2 的 `vol20` 只使用恰好 20 个有效日收益，`factor_coverage.vol20_sa
 - **趋势型**：放量突破 + 均线多头 + 高量比
 - **低估反转**：超跌 + 低PB + 资金净流入
 
-## 股息因子（A股，可选）
+## 股息因子（A 股和港股，可选）
 
-配置 `filters.dividend_yield_min` / `dividend_yield_max` 或 `sort_by: dividend_score` / `dividend_yield` 时才拉取股息数据。`dividend_report_date` 可指定报告期，默认上一年年末。这里使用已实施方案的**报告期股息率**（百分数），不是滚动十二个月股息率；缺失为未知，使用股息阈值时排除。启用后 value 分项加入股息横截面评分，未启用时不增加股息请求。
+配置 `filters.dividend_yield_min`、`filters.dividend_yield_max` 或按 `dividend_score`、`dividend_yield` 排序可启用股息因子。股息率使用百分数。默认查上一年年末，A 股使用已实施方案股息率，港股使用 HKEX/LSEG 年度股息率。港股配置省略 `dividend_report_date`，且年度源不可用或未覆盖任何候选股时，改用单一行情源的股息率。采用行情源时，`dividend_factor` 给出来源、口径和覆盖数量。指定报告期时，取数失败会返回错误。使用阈值时排除股息率未知的股票。
 
 ```yaml
 filters:
@@ -98,8 +100,8 @@ dividend_report_date: "2025-12-31"
 
 筛选结果仍需用 `get_dividends(mode="history", symbol=...)` 核查已实施现金分红、连续支付年数与除息时间，不能把高股息直接解释为低风险。
 
-### 补充数据覆盖
+## 港股通买入资格（港股，可选）
 
-股息筛选支持 A/HK：A 股为报告期已实施方案股息率，HK 为 HKEX/LSEG 年度股息率。两者都不是当前价 TTM；使用结果的 yield_basis 和 report_date，缺失不当零。
+在港股筛选配置中设置 `filters.stock_connect: true`，可保留沪港通或深港通允许南向买入的股票。设为 `false` 可保留无南向买入资格的股票。名单来自沪深交易所当期可买卖证券清单，任一名单取数失败时返回错误。
 
 选股的 top 必须为正整数；超时预算按候选数量与采集批次计算。
