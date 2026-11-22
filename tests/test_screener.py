@@ -637,6 +637,32 @@ def test_hk_snapshot_yield_is_opt_in_and_labels_its_source(monkeypatch):
     quote.assert_not_called()
 
 
+def test_hk_dividend_filter_retains_successful_tencent_batches(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import requests
+
+    rows = [{"symbol": f"{code:05d}.HK", "price": 20, "pe": 10, "pb": 1, "market_cap": 1e10} for code in range(1, 62)]
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(rows) | {"source": "TradingView"})
+    monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
+    monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("annual feed unavailable")))
+    fields = [""] * 60
+    fields[2], fields[3], fields[47] = "00061", "20", "4.8"
+    payload = f'v_hk00061="{"~".join(fields)}";'.encode("gbk")
+
+    def get(url, timeout):
+        if url.endswith("=hk00061"):
+            return MagicMock(content=payload)
+        raise requests.Timeout("first batch failed")
+
+    monkeypatch.setattr("requests.get", get)
+    result = screen("HK", 20, {"filters": {"dividend_yield_min": 3}})
+    assert [(r["symbol"], r["dividend_yield"]) for r in result["candidates"]] == [("00061.HK", 4.8)]
+    factor = result["dividend_factor"]
+    assert (factor["source"], factor["candidate_count"], factor["known_yield_count"]) == ("Tencent", 61, 1)
+    assert "60 quotes (Timeout)" in factor["warning"]
+
+
 def test_hk_dividend_filter_switches_to_one_quote_source_with_better_coverage(monkeypatch):
     from unittest.mock import MagicMock
 
@@ -647,7 +673,7 @@ def test_hk_dividend_filter_switches_to_one_quote_source_with_better_coverage(mo
     monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": "TradingView"})
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
     monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("annual feed unavailable")))
-    quote = MagicMock(return_value={"00700.HK": 4, "00005.HK": 4.8})
+    quote = MagicMock(return_value=({"00700.HK": 4, "00005.HK": 4.8}, []))
     monkeypatch.setattr("stock_data.hk_quote_dividend_yields", quote)
 
     result = screen("HK", 20, {"filters": {"dividend_yield_min": 3}})
@@ -657,29 +683,37 @@ def test_hk_dividend_filter_switches_to_one_quote_source_with_better_coverage(mo
     quote.assert_called_once_with(["00700.HK", "00005.HK"])
 
 
-@pytest.mark.parametrize("quote_yields", [None, {"00005.HK": 4.8, "00001.HK": 4}])
-def test_hk_dividend_filter_retains_snapshot_yields_when_tencent_cannot_preserve_coverage(monkeypatch, quote_yields):
+@pytest.mark.parametrize(
+    ("source", "quote_yields"),
+    [("TradingView", None), ("TradingView", {"00005.HK": 4.8, "00001.HK": 4}), ("Tencent", None)],
+)
+def test_hk_dividend_filter_retains_snapshot_yields_when_tencent_cannot_preserve_coverage(
+    monkeypatch, source, quote_yields
+):
     from unittest.mock import MagicMock
 
     raw = [
         {"symbol": symbol, "pe": 10, "pb": 1, "market_cap": 1e10, "dividend_yield": yield_pct}
         for symbol, yield_pct in [("00700.HK", 4.55), ("00005.HK", None), ("00001.HK", None)]
     ]
-    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": "TradingView"})
+    monkeypatch.setattr(screener, "fetch_snapshot", lambda *a: _snap(raw) | {"source": source})
     monkeypatch.setattr(screener, "compute_sentiment", lambda *a: {"multiplier": 1})
     monkeypatch.setattr("value_data.dividend_ranking", MagicMock(side_effect=ValueError("annual feed unavailable")))
     quote = MagicMock(
-        return_value=quote_yields, side_effect=ValueError("Tencent unavailable") if quote_yields is None else None
+        return_value=(quote_yields, []), side_effect=ValueError("Tencent unavailable") if quote_yields is None else None
     )
     monkeypatch.setattr("stock_data.hk_quote_dividend_yields", quote)
 
     result = screen("HK", 20, {"filters": {"dividend_yield_min": 3}})
 
     assert [(r["symbol"], r["dividend_yield"]) for r in result["candidates"]] == [("00700.HK", 4.55)]
-    assert result["dividend_factor"]["source"] == "TradingView"
+    assert result["dividend_factor"]["source"] == source
     assert result["dividend_factor"]["candidate_count"] == 3
     assert result["dividend_factor"]["known_yield_count"] == 1
-    quote.assert_called_once_with(["00700.HK", "00005.HK", "00001.HK"])
+    if source == "Tencent":
+        quote.assert_not_called()
+    else:
+        quote.assert_called_once_with(["00700.HK", "00005.HK", "00001.HK"])
 
 
 @pytest.mark.parametrize("report_date", ["", "2025-12-31"])

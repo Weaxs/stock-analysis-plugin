@@ -406,22 +406,22 @@ def _screen_dividend_yields(df: pd.DataFrame, market: str, report_date: str, fil
     )
     source = snapshot_source
     known = np.isfinite(yields)
-    if not known.all():
+    batch_errors = []
+    if source != "Tencent" and not known.all():
         try:
-            tencent_yields = pd.to_numeric(
-                candidates["symbol"].map(hk_quote_dividend_yields(list(candidates["symbol"]))), errors="coerce"
-            )
+            quotes, batch_errors = hk_quote_dividend_yields(list(candidates["symbol"]))
         except Exception:
             if not known.any():
                 raise
         else:
+            tencent_yields = pd.to_numeric(candidates["symbol"].map(quotes), errors="coerce")
             tencent_known = np.isfinite(tencent_yields)
             # Switch providers only when they cover every known symbol and add coverage.
             if tencent_known[known].all() and tencent_known.sum() > known.sum():
                 yields, known, source = tencent_yields, tencent_known, "Tencent"
     if not candidates.empty and not known.any():
         raise ValueError("Tencent quote yields unavailable")
-    return yields.where(known), {
+    factor = {
         "report_date": None,
         "source": source,
         "yield_basis": "provider quote dividend yield, percent",
@@ -429,6 +429,9 @@ def _screen_dividend_yields(df: pd.DataFrame, market: str, report_date: str, fil
         "known_yield_count": int(known.sum()),
         "missing": missing,
     }
+    if batch_errors:
+        factor["warning"] = f"Tencent dividend quote batches unavailable for {', '.join(batch_errors)}"
+    return yields.where(known), factor
 
 
 def screen(market: str, top: int, config: dict | None, l2: bool = False) -> dict:

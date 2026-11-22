@@ -427,12 +427,12 @@ def _hk_tencent_fields(symbols: list[str], *, batch_errors: list[str] | None = N
     return result
 
 
-def hk_quote_dividend_yields(symbols: list[str]) -> dict[str, float | None]:
+def hk_quote_dividend_yields(symbols: list[str]) -> tuple[dict[str, float | None], list[str]]:
+    batch_errors: list[str] = []
+    quotes = _hk_tencent_fields(symbols, batch_errors=batch_errors)
     return {
-        symbol: _sanitize(_parse_float(fields[47]))
-        for symbol, fields in _hk_tencent_fields(symbols).items()
-        if len(fields) > 47
-    }
+        symbol: _sanitize(_parse_float(fields[47])) for symbol, fields in quotes.items() if len(fields) > 47
+    }, batch_errors
 
 
 def _tencent_hk_valuations(fields: list[str]) -> tuple[float | None, float | None]:
@@ -2350,9 +2350,10 @@ def _snapshot_clist(market: str, floor: float):
     columns = _CLIST_SNAPSHOT_COLUMNS[market]
     rows, total, page = [], 0, 1
     while len(rows) < _SNAPSHOT_MAX_ROWS:
-        total, ranked = _em_clist(market, "f20", ",".join(columns), page=page)
-        if market == "HK" and not total:
-            raise ValueError("Eastmoney HK equity list unavailable")
+        count, ranked = _em_clist(market, "f20", ",".join(columns), page=page)
+        if market == "HK" and (not count or (page > 1 and count != total)):
+            raise ValueError("invalid Eastmoney HK equity count")
+        total = count
         for item in ranked:
             cap = _parse_float(item.get("f20"))
             if market == "HK" and (cap is None or not math.isfinite(cap)):
@@ -2412,9 +2413,10 @@ def _snapshot_tradingview(market: str, floor: float):
         body = {"columns": columns, "filter": filters, "range": [offset, offset + 1000]}
         body["sort"] = {"sortBy": "market_cap_basic", "sortOrder": "desc"}
         payload = _tradingview_scan(region, body)
-        total, data = payload.get("totalCount"), payload.get("data") or []
-        if market == "HK" and not total:
-            raise ValueError("TradingView HK equity list unavailable")
+        count, data = payload.get("totalCount"), payload.get("data") or []
+        if market == "HK" and (not count or (offset and count != total)):
+            raise ValueError("invalid TradingView HK equity count")
+        total = count
         for item in data:
             values = dict(zip(columns, item.get("d") or []))
             cap = _parse_float(values.get("market_cap_basic"))
@@ -2491,6 +2493,8 @@ def _hk_snapshot_with_valuations(source, fetch, *args):
     total, rows = fetch(*args)
     if not total or (rows and any(all(row.get(key) is None for row in rows) for key in ("pe", "pb"))):
         raise ValueError("HK equity snapshot or valuation columns unavailable")
+    if len({row["symbol"] for row in rows}) != len(rows):
+        raise ValueError("duplicate symbols in HK equity snapshot")
     return total, rows, source
 
 
@@ -3422,11 +3426,19 @@ def _clist_symbol(market: str, code) -> str:
     return f"{code.zfill(5)}.HK" if market == "HK" else normalize_us_symbol(code) if market == "US" else code
 
 
+def _clist_change(market: str, item: dict) -> float | None:
+    raw = item.get("f3")
+    change = _parse_float(raw)
+    if market == "HK" and raw != "-" and (change is None or not math.isfinite(change)):
+        raise ValueError("invalid Eastmoney HK change")
+    return change
+
+
 def _clist_change_at(market: str, rank: int, desc: bool = True):
     _, rows = _em_clist(market, "f3", "f3", page=rank, size=1, desc=desc)
     if market == "HK" and len(rows) != 1:
         raise ValueError("Eastmoney HK change rank unavailable")
-    return _parse_float(rows[0].get("f3")) if rows else None
+    return _clist_change(market, rows[0]) if rows else None
 
 
 def _leading_count(market: str, total: int, desc: bool) -> int:
@@ -3447,7 +3459,7 @@ def _movers(market: str, desc: bool) -> tuple:
     if market == "HK" and (not total or len(rows) != min(5, total)):
         raise ValueError("incomplete Eastmoney HK movers list")
     movers = [
-        {"symbol": _clist_symbol(market, r.get("f12")), "name": r.get("f14"), "change_pct": _parse_float(r.get("f3"))}
+        {"symbol": _clist_symbol(market, r.get("f12")), "name": r.get("f14"), "change_pct": _clist_change(market, r)}
         for r in rows
     ]
     return total, movers if desc else movers[::-1]  # losers keep the old order: least negative first

@@ -1282,20 +1282,24 @@ class TestMarketSnapshot:
         assert result["source"] == "TradingView"
 
     @pytest.mark.parametrize("provider", ["Eastmoney", "TradingView"])
-    def test_hk_snapshot_rejects_a_missing_later_page(self, monkeypatch, provider):
+    @pytest.mark.parametrize("total_drift", [False, True])
+    def test_hk_snapshot_rejects_a_missing_later_page(self, monkeypatch, provider, total_drift):
         from tools import stock_data
 
         def clist(params):
             if provider == "TradingView":
                 return {"data": None}
-            item = {"f12": "00005", "f2": 10, "f20": 6e9, "f9": 12, "f23": 2}
-            return {"data": {"total": 101, "diff": [item] * 100 if params["pn"] == 1 else []}}
+            ranked = [{"f12": str(code), "f2": 10, "f20": 6e9, "f9": 12, "f23": 2} for code in range(1, 101)]
+            first = params["pn"] == 1
+            return {"data": {"total": 100 if total_drift and not first else 101, "diff": ranked if first else []}}
 
         def scan(region, body):
             item = {"d": ["700", "Tencent", 10, 1, 200, 2000, 12, 2, 6e9, None]}
             if provider == "Eastmoney":
                 return {"totalCount": 1, "data": [item]}
-            return {"totalCount": 1001, "data": [item] * 1000 if body["range"][0] == 0 else []}
+            first = body["range"][0] == 0
+            ranked = [{"d": [str(code), *item["d"][1:]]} for code in range(1, 1001)]
+            return {"totalCount": 1000 if total_drift and not first else 1001, "data": ranked if first else []}
 
         monkeypatch.setattr(stock_data, "_get_json", FakeEastmoney(clist=clist))
         monkeypatch.setattr(stock_data, "_tradingview_scan", scan)
@@ -1304,6 +1308,23 @@ class TestMarketSnapshot:
         )
         result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters='{"market_cap_min": 5000000000}'))
         assert result["source"] == ("TradingView" if provider == "Eastmoney" else "Tencent")
+        assert [r["symbol"] for r in result["rows"]] == ["00700.HK"]
+
+    def test_hk_snapshot_falls_back_when_one_symbol_appears_on_multiple_pages(self, monkeypatch):
+        from tools import stock_data
+
+        ranked = [{"f12": str(code), "f2": 10, "f20": 6e9, "f9": 12, "f23": 2} for code in range(1, 101)]
+        fake = FakeEastmoney(
+            clist=lambda params: {"data": {"total": 101, "diff": ranked if params["pn"] == 1 else ranked[-1:]}}
+        )
+        monkeypatch.setattr(stock_data, "_get_json", fake)
+        monkeypatch.setattr(
+            stock_data,
+            "_tradingview_scan",
+            lambda *a: {"totalCount": 1, "data": [{"d": ["700", "Tencent", 10, 1, 200, 2000, 12, 2, 6e9]}]},
+        )
+        result = stock_data.cmd_market_snapshot(Namespace(market="HK", filters="{}"))
+        assert result["source"] == "TradingView"
         assert [r["symbol"] for r in result["rows"]] == ["00700.HK"]
 
     @pytest.mark.parametrize(("ttm", "pe", "basis"), [(12, 12, "ttm"), (0, 18, "unknown")])
@@ -1439,11 +1460,12 @@ class TestMarketStats:
         monkeypatch.setattr("tools.stock_data._get_json", MagicMock(side_effect=ConnectionError("blocked")))
         assert cmd_market_stats(Namespace(market="A")) == {"error": "blocked"}
 
-    def test_hk_breadth_does_not_count_missing_rank_responses_as_flat(self, monkeypatch):
+    @pytest.mark.parametrize("bad_rank", [None, {}, {"f3": None}, {"f3": "unavailable"}])
+    def test_hk_breadth_does_not_count_invalid_rank_responses_as_flat(self, monkeypatch, bad_rank):
         def eastmoney(params):
             if params["pz"] == 5:
                 return _ranked([2, 1, -1, -2, -3])(params)
-            return {"data": None}
+            return {"data": None if bad_rank is None else {"total": 5, "diff": [bad_rank]}}
 
         def scan(region, body):
             operation = body["filter"][-1]["operation"]
