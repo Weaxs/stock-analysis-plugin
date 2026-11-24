@@ -19,6 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check GitHub Actions workflows
+        run: |
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -28,10 +36,10 @@ jobs:
         run: pip install ruff==0.15.20
 
       - name: Ruff check
-        run: ruff check tools/ skills/ tests/ hermes/ mcp_host/
+        run: ruff check tools/ skills/ tests/ hermes/ mcp_host/ scripts/
 
       - name: Ruff format check
-        run: ruff format --check tools/ skills/ tests/ hermes/ mcp_host/
+        run: ruff format --check tools/ skills/ tests/ hermes/ mcp_host/ scripts/
 
       - uses: actions/setup-node@v7
         with:
@@ -357,6 +365,36 @@ jobs:
 
       - name: Build package
         run: npm pack
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Build Python distributions
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Smoke-test the installed MCP entry point
+        shell: bash
+        run: |
+          wheel_env="$RUNNER_TEMP/stock-analysis-wheel"
+          python -m venv "$wheel_env"
+          "$wheel_env/bin/python" -m pip install --no-deps dist/*.whl
+          cd "$RUNNER_TEMP"
+          # The stdlib-only handshake and catalog work without provider dependencies.
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | "$wheel_env/bin/stock-analysis-mcp" \
+            | jq -es '.[0].result.serverInfo.name == "stock-analysis" and any(.[1].result.tools[]; .name == "get_kline")'
+
+      - name: Verify npm host packages
+        run: |
+          node .github/scripts/prepare-host-package.mjs openclaw
+          node .github/scripts/prepare-host-package.mjs dsh
+          node .github/scripts/prepare-host-package.mjs dsh --unscoped
 
       - uses: actions/upload-artifact@v7
         with:

@@ -106,34 +106,8 @@ jobs:
       - name: Build compiled plugin entry (dist/index.js)
         run: npm run build:openclaw
 
-      - name: Stage payload into openclaw/
-        run: |
-          set -euo pipefail
-          for d in tools skills schemas templates strategies scripts; do
-            if [ -d "$d" ]; then
-              rm -rf "openclaw/$d"
-              cp -R "$d" "openclaw/$d"
-            fi
-          done
-          rm -f openclaw/scripts/sync-version.sh
-          cp LICENSE openclaw/LICENSE
-
-      # Guard against regression of the issue behind
-      # https://github.com/Weaxs/stock-analysis-plugin/issues/3 — a TS entry
-      # (./index.ts) with no compiled sibling makes registry installs fail.
-      # The two publish paths ship dist/index.js differently, so assert both:
-      #   - npm:     dist must survive the `files` whitelist into the tarball.
-      #   - clawhub: it ships the ./openclaw directory, so dist must exist on disk.
-      - name: Verify compiled entry is packaged
-        working-directory: openclaw
-        run: |
-          npm pack --dry-run 2>&1 | tee pack-dry-run.txt
-          grep -q "dist/index.js" pack-dry-run.txt \
-            || { echo "::error::dist/index.js missing from openclaw npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
-          grep -q "LICENSE" pack-dry-run.txt \
-            || { echo "::error::LICENSE missing from openclaw npm tarball"; exit 1; }
-          test -f dist/index.js \
-            || { echo "::error::openclaw/dist/index.js missing on disk — clawhub publish would ship no compiled entry"; exit 1; }
+      - name: Stage and verify OpenClaw package
+        run: node .github/scripts/prepare-host-package.mjs openclaw
 
       - name: Install clawhub CLI
         # Pinned — an unpinned clawhub@latest broke a release before; bump deliberately.
@@ -205,35 +179,8 @@ jobs:
       - name: Build compiled plugin entry (dist/index.js)
         run: npm run build:dsh
 
-      - name: Stage payload into dsh/
-        run: |
-          set -euo pipefail
-          for d in tools skills schemas templates strategies scripts; do
-            if [ -d "$d" ]; then
-              rm -rf "dsh/$d"
-              cp -R "$d" "dsh/$d"
-            fi
-          done
-          rm -f dsh/scripts/sync-version.sh
-          cp LICENSE dsh/LICENSE
-
-      # Same regression guard as the OpenClaw job: the dsh profile loader
-      # imports built JS, so dist must survive the `files` whitelist, and the
-      # bundle manifest must ship its patch file.
-      - name: Verify compiled entry and patch are packaged
-        working-directory: dsh
-        run: |
-          npm pack --dry-run 2>&1 | tee pack-dry-run.txt
-          grep -q "dist/index.js" pack-dry-run.txt \
-            || { echo "::error::dist/index.js missing from dsh npm tarball — build ran but files whitelist excludes dist/"; exit 1; }
-          grep -q "cordis.patch.yml" pack-dry-run.txt \
-            || { echo "::error::cordis.patch.yml missing from dsh npm tarball — dsh bundle manifest would dangle"; exit 1; }
-          for file in dist/research-role.js dist/client.js dist/web/index.html dist/web/app.js dist/web/style.css research.patch.yml deepseek-search.patch.yml; do
-            grep -q "$file" pack-dry-run.txt \
-              || { echo "::error::$file missing from dsh npm tarball"; exit 1; }
-          done
-          grep -q "LICENSE" pack-dry-run.txt \
-            || { echo "::error::LICENSE missing from dsh npm tarball"; exit 1; }
+      - name: Stage and verify dsh package
+        run: node .github/scripts/prepare-host-package.mjs dsh
 
       - name: npm publish
         working-directory: dsh
@@ -241,18 +188,16 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish unscoped variant to npm
+      - name: Prepare and verify unscoped dsh package
         # The bundle manifest references the plugin by package name, so the
         # unscoped variant's patch and browser module id must name the unscoped
         # package — otherwise a profile installing it would resolve the scoped name
         # at boot and fail. README already documents the unscoped name first.
+        run: node .github/scripts/prepare-host-package.mjs dsh --unscoped
+
+      - name: Publish unscoped variant to npm
         working-directory: dsh
-        run: |
-          npm pkg set name=dsh-stock-analysis
-          sed -i 's|@weaxs/dsh-stock-analysis|dsh-stock-analysis|g' cordis.patch.yml research.patch.yml dist/client.js
-          grep -q 'name: "dsh-stock-analysis"' cordis.patch.yml
-          grep -q 'id: "dsh-stock-analysis"' dist/client.js
-          npm publish --access public --provenance
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
