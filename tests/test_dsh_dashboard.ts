@@ -587,12 +587,9 @@ try {
   assert(pkg.dsh.client.inject.includes("@deepseek-ai/dsh-client-ui-sidebar"));
   assert(pkg.dsh.client.inject.includes("@deepseek-ai/dsh-client-ui-layout"));
   const publish = readFileSync(join(repoRoot, ".github", "workflows", "publish.yml"), "utf8");
-  assert(publish.includes("dist/client.js"), "unscoped publish must rewrite the browser module id too");
-  assert(publish.includes(`grep -q 'id: "dsh-stock-analysis"' dist/client.js`), "publish verifies the compiled (double-quoted) client id");
+  assert(publish.includes("run: node .github/scripts/prepare-host-package.mjs dsh --unscoped"), "publish prepares and verifies the unscoped archive");
   const clientSource = readFileSync(join(repoRoot, "dsh", "client.ts"), "utf8");
-  const unscopedClient = clientSource.replaceAll(pkg.name, "dsh-stock-analysis");
-  assert(unscopedClient.includes('id: "dsh-stock-analysis"'), "the unscoped bundle must register the unscoped client id");
-  assert(!unscopedClient.includes(`id: "${pkg.name}"`), "the scoped id must not remain after the twin rewrite");
+  assert(clientSource.includes(`id: "${pkg.name}"`), "the scoped bundle registers under its package name");
   assert(clientSource.includes(`openBundle?.("${pkg.name}")`), "the update pill opens this bundle's plugin page, rewritten for the twin");
 
   console.log("dsh dashboard: snapshot, warmer freshness, failures, watchlist, security, assets, and package manifest passed");
