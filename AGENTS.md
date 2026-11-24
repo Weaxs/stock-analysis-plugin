@@ -1,41 +1,67 @@
-# stock-analysis-plugin — Agent Guidelines
+# stock-analysis-plugin
 
-Stock analysis, screening, and backtesting live in the shared Python CLIs under [tools/](tools/). The four plugin adapters expose the same tool catalog, and MCP stdio reuses the Hermes schemas and handlers. Keep stock-analysis behavior in Python and host integration in the owning host.
+Stock analysis, screening, and backtesting live in the shared Python CLIs under [tools/](tools/). Four plugin adapters expose the same tool catalog, and the MCP stdio server reuses the Hermes schemas and handlers. Keep analysis logic in Python and keep host integration in the owning adapter.
 
 | Entry point | Responsibility |
 | --- | --- |
-| [Pi](pi/index.ts), [OpenClaw](openclaw/index.ts), [dsh](dsh/index.ts) | Host registration, schema conversion, and subprocess calls through [the shared JS mapping](scripts/tool-calls.mjs) |
-| [Hermes](hermes/__init__.py), [MCP](mcp_host/server.py) | Hermes registration or MCP JSON-RPC using [the same Python tool mapping](hermes/tools.py) |
-| [dsh dashboard](dsh/dashboard.ts), [client](dsh/client.ts), [web UI](dsh/web/app.ts) | Snapshot cache, watchlist API, and Web/Desktop UI. Dashboard calls reuse Python tools. |
+| [Pi](pi/index.ts), [OpenClaw](openclaw/index.ts), [dsh](dsh/index.ts) | Tool registration, CLI argument mapping via [scripts/tool-calls.mjs](scripts/tool-calls.mjs), skill discovery in Pi and dsh, and schema adaptation in OpenClaw and dsh |
+| [Hermes](hermes/__init__.py), [MCP](mcp_host/server.py) | Hermes plugin registration and MCP stdio JSON-RPC via [hermes/tools.py](hermes/tools.py) |
+| [dsh dashboard](dsh/dashboard.ts), [client](dsh/client.ts), [web UI](dsh/web/app.ts) | Snapshot cache, watchlist HTTP API, and web and desktop UI backed by Python tools |
 
 ## Working on a change
 
-1. **Define the outcome.** Trace the user's entry point through the owning code to the affected callers. State what should change and which defaults or contracts callers already rely on. For read-only work, report the source evidence and distinguish observed behavior from inference.
-2. **Get a baseline.** For a defect, reproduce it on the affected surface and trace it to its cause. For a Python behavior change, start with a focused pytest that fails for the intended reason. Before refactoring, pin the behavior at the public interface. For performance work, compare the same inputs in the same environment.
-3. **Work in verifiable units.** For a multi-step change, identify the dependency order and the check for each unit before implementation. Finish and verify each unit before building on it. A shared tool change is one unit across the CLI, schema, mappings, docs, and tests. Split independent investigation or verification across workers when available. Assign shared writes to one owner.
-4. **Prove the outcome.** Rerun the original reproduction or focused test and exercise the affected user entry point. Check the final diff against the scope. Report the commands and observed results, including which host, OS, installation mode, or published artifact was checked when it matters. If the target is unavailable, run the nearest useful check and state exactly what it leaves open.
+1. **Define the contract.** Trace the entry point across the Python CLI, adapters, dashboard routes, and [skills/](skills/) callers. State what changes and which defaults or output keys callers rely on. For read-only questions, cite the inspected files and separate observed behavior from inference.
+2. **Pin the baseline.** For a defect, reproduce it through the affected CLI, adapter, or OS, trace it to the first wrong decision, and check sibling adapters for the same bug. For a Python behavior change, write a focused pytest that fails on the old code for the intended reason first. For performance work, compare the same inputs with [scripts/profile-offline.py](scripts/profile-offline.py) or [scripts/profile-workflows.py](scripts/profile-workflows.py).
+3. **Work in verifiable units.** For multi-step work, set the dependency order and verification check for each unit before editing, and verify each unit before building on it. Follow [ponytail](https://github.com/DietrichGebert/ponytail) by reusing [scripts/tool-calls.mjs](scripts/tool-calls.mjs), [scripts/venv-python.mjs](scripts/venv-python.mjs), [tools/_subproc.py](tools/_subproc.py), and [tests/conftest.py](tests/conftest.py) instead of adding parallel helpers or dependencies.
+4. **Prove the change.** Rerun the failing reproduction and exercise the real affected entry point. Report the exact commands, observed results, and the host, OS, install mode, or artifact checked. When a target such as Windows, macOS, or an installed host is unavailable, run the nearest local check and state what remains unverified.
 
-Apply [ponytail](https://github.com/DietrichGebert/ponytail) by reusing existing code and fixtures after tracing the flow. Use `diagnosing-bugs` for regressions and `tdd` for Python behavior changes when the [workflow skills](https://github.com/mattpocock/skills) are available. Use the spec and ticket workflow for changes that break a public interface or span multiple implementation phases. Keep process drafts, review notes, and local skill installations out of commits.
+When the external [Matt Pocock skills](https://github.com/mattpocock/skills) are installed locally, use `diagnosing-bugs` for regressions, `tdd` for Python behavior changes, and `to-spec` with `to-tickets` for breaking or multi-phase changes. Keep specs, review notes, and external skill files out of commits.
+
+## Local setup and verification
+
+CI runs Node 24 and Python 3.10, 3.11, and 3.14. On Windows, replace `.venv/bin/python` with `.venv/Scripts/python.exe` in every command in this guide. The full pytest suite and [tests/test_subproc.py](tests/test_subproc.py) target POSIX, matching the Ubuntu `test` job in [.github/workflows/ci.yml](.github/workflows/ci.yml). On Windows, run the pytest subset from the `compat` job instead.
+
+First-time setup builds `.venv` through [scripts/setup-python.mjs](scripts/setup-python.mjs) and installs Python dev tools:
+
+```bash
+npm ci
+.venv/bin/python -m pip install -r requirements-dev.txt
+```
+
+Baseline verification:
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check tools/ skills/ tests/ hermes/ mcp_host/
+.venv/bin/python -m ruff format --check tools/ skills/ tests/ hermes/ mcp_host/
+npx tsc --noEmit
+```
+
+Run the focused checks for changed areas, and inspect [.github/workflows/ci.yml](.github/workflows/ci.yml) for the full CI matrix. Reuse fixtures in [tests/conftest.py](tests/conftest.py). Because [.gitignore](.gitignore) ignores `*.json` by default, allowlist any new committed fixture or JSON config file there. Keep default tests and offline host round-trips deterministic and free of live providers, LLMs, and credentials. Opt into live tests explicitly with `-m integration_network` or `-m integration_llm`.
 
 ## Python CLI behavior
 
-- Use the existing argparse subcommand and keep Python 3.10 compatibility. Emit one JSON value on stdout and send diagnostics to stderr. Expected failures emit a JSON object with an `error` key and exit nonzero. Use the [README CLI examples](README.md#独立-cli-使用) and [tool behavior reference](docs/tool-behavior.md) to find the user entry point.
-- **Output changes.** Find the consumers of every changed field. Preserve existing keys or update the consumers and assertions together. Verify the actual CLI JSON and exit status, including the failure case when it changes.
-- **Provider changes.** Read credentials from environment variables. Keep credentials, cookies, user content, raw provider responses, and tracebacks out of logs and model-facing output. Preserve fallback to configured sources when optional providers are unavailable.
-- **Runtime dependencies.** Keep [tools/requirements.txt](tools/requirements.txt) and the Hermes wheel dependencies in [pyproject.toml](pyproject.toml) consistent with the imports each install path needs. Check the npm-installed environment and the wheel when changing runtime dependencies.
+- **CLI contract.** Keep Python 3.10 compatibility and expose CLI actions as `argparse` subcommands. Call `utf8_stdio()` from [tools/_subproc.py](tools/_subproc.py) at CLI entry, and serialize output through `json_safe()` or `json.dumps(..., allow_nan=False)` so Windows stdout stays UTF-8 and non-finite floats never break strict `JSON.parse`. Print one JSON value to stdout and send diagnostics to stderr. On expected failures, print a JSON object with an `error` key and exit nonzero. Never turn a failed read, corrupt store line, or missing provider into silent empty data. Find CLI invocations in [scripts/tool-calls.mjs](scripts/tool-calls.mjs), [hermes/tools.py](hermes/tools.py), or [README CLI examples](README.md#独立-cli-使用), and check output and failure semantics in [docs/tool-behavior.md](docs/tool-behavior.md).
+- **Output changes.** Find every consumer of a changed field across adapters, [skills/](skills/), dashboard routes, and tests. Add new keys instead of renaming or removing existing ones, or update every consumer and test in the same change. Assert the CLI exit code and parsed JSON stdout. When failure paths change, assert the nonzero exit code and error JSON too.
+- **Provider changes.** Read credentials from environment variables only. Keep credentials, cookies, user content, raw provider responses, and tracebacks out of stderr, logs, and model-facing stdout. When an optional provider is missing or fails, fall back to the remaining configured providers.
+- **Runtime dependencies.** Keep [tools/requirements.txt](tools/requirements.txt) and the Python wheel dependencies in [pyproject.toml](pyproject.toml) identical, as enforced by [tests/test_hermes_integration.py](tests/test_hermes_integration.py). Put failover-only packages below the `# optional providers` marker in [tools/requirements.txt](tools/requirements.txt) so [scripts/setup-python.mjs](scripts/setup-python.mjs) can skip any optional provider that fails to install without failing setup. When runtime dependencies change, verify both the npm `.venv` and the Python wheel.
 
 ## Shared tool contract
 
-For a tool name or input change, first read the CLI parser, [tools/tool_schemas.json](tools/tool_schemas.json), [scripts/tool-calls.mjs](scripts/tool-calls.mjs), and [hermes/tools.py](hermes/tools.py). Update every affected part together. Update the [README tool list](README.md#工具列表) and the workflows in [skills/](skills/) that call the tool. For an add, removal, or rename, update [OpenClaw's manifest](openclaw/openclaw.plugin.json), [Hermes's manifest](hermes/plugin.yaml), and registration expectations. MCP inherits the Hermes mappings.
-
-For a new optional argument, run a real tool call that omits it and one that supplies it. Assert the returned JSON at an affected host boundary so the check would fail if the argument were dropped. Use an offline fixture, for example MCP `tools/call` with a local store. The parity check establishes schema and argv agreement, and registration checks establish host exposure. Two adapters can agree while both omit a flag. Exercise MCP separately when its protocol or execution path changes.
+- **Tool name or parameter changes.** Read the CLI parser, [tools/tool_schemas.json](tools/tool_schemas.json), [scripts/tool-calls.mjs](scripts/tool-calls.mjs), and [hermes/tools.py](hermes/tools.py) first, then update every affected file together. Update [README tool list](README.md#工具列表) and every reference under [skills/](skills/).
+- **Adding, removing, or renaming a tool.** Also update [tools/capabilities.py](tools/capabilities.py), [openclaw/openclaw.plugin.json](openclaw/openclaw.plugin.json), [hermes/plugin.yaml](hermes/plugin.yaml), [tools/cli_budgets.json](tools/cli_budgets.json) if the command needs a non-default timeout, and [dsh/research-role.ts](dsh/research-role.ts) plus [tests/e2e/test_dsh_research.mjs](tests/e2e/test_dsh_research.mjs) when research presets include the tool. Update tool lists, hardcoded tool counts, and sample inputs in [tests/test_pi_integration.ts](tests/test_pi_integration.ts), [tests/test_hermes_integration.py](tests/test_hermes_integration.py), [tests/test_openclaw_integration.ts](tests/test_openclaw_integration.ts), [tests/test_dsh_integration.ts](tests/test_dsh_integration.ts), [tests/test_adapter_parity.ts](tests/test_adapter_parity.ts), and [tests/test_dsh_discovery.ts](tests/test_dsh_discovery.ts).
+- **Adding, removing, or renaming a skill.** Update `pi.skills` in [package.json](package.json) and `EXPECTED_SKILLS` in [tests/test_hermes_integration.py](tests/test_hermes_integration.py).
+- **Optional parameter proof.** Run one real tool call that omits the new parameter and one that supplies it against an offline fixture, such as a local store or a stubbed provider. Assert the returned JSON at a real host boundary and run [tests/test_adapter_parity.ts](tests/test_adapter_parity.ts). Parity alone still passes if both [scripts/tool-calls.mjs](scripts/tool-calls.mjs) and [hermes/tools.py](hermes/tools.py) drop the new CLI flag. The e2e scripts below only exercise fixed offline tools, so add a focused boundary test for any other tool.
+- **Stub vs real SDK coverage.** The dsh integration, e2e, and parity scripts below stub `@deepseek-ai/dsh-tools` with [tests/_stubs/dsh-tools.ts](tests/_stubs/dsh-tools.ts), OpenClaw integration and e2e scripts stub `typebox` with [tests/_stubs/typebox.ts](tests/_stubs/typebox.ts), and all OpenClaw checkout tests stub `openclaw/plugin-sdk/plugin-entry` with [tests/_stubs/openclaw-sdk.ts](tests/_stubs/openclaw-sdk.ts). Run [tests/test_dsh_sdk_compat.ts](tests/test_dsh_sdk_compat.ts) to compile all schemas through the real `@deepseek-ai/dsh-tools` SDK and real `typebox`, validate closed JSON-input schemas with `validateJsonSchemaValue` and `typebox/value`, and run [tests/test_dsh_discovery.ts](tests/test_dsh_discovery.ts). Run [tests/test_llm_hosts.ts](tests/test_llm_hosts.ts) to verify offline Pi, OpenClaw, and dsh loading and Python dispatch. When MCP protocol or execution behavior changes, run [tests/test_mcp_integration.py](tests/test_mcp_integration.py).
 
 ```bash
 npx tsx tests/test_adapter_parity.ts
 npx tsx tests/test_pi_integration.ts
 npx tsx tests/test_openclaw_integration.ts
 npx tsx tests/test_dsh_integration.ts
-.venv/bin/python -m pytest -q tests/test_hermes_integration.py tests/test_mcp_integration.py
+npx tsx tests/test_dsh_sdk_compat.ts
+npx tsx tests/test_llm_hosts.ts
+.venv/bin/python -m pytest -q tests/test_capabilities.py tests/test_hermes_integration.py tests/test_mcp_integration.py
 .venv/bin/python -m pytest -q tests/e2e/test_host_to_python.py
 npx tsx tests/e2e/test_pi_e2e.ts
 npx tsx tests/e2e/test_openclaw_e2e.ts
@@ -44,45 +70,34 @@ npx tsx tests/e2e/test_dsh_e2e.ts
 
 ## Interpreter, installation, and subprocess changes
 
-- Reuse [scripts/venv-python.mjs](scripts/venv-python.mjs). JS adapters use `.venv/bin/python3` on POSIX with a `python3` fallback. On Windows they use `.venv/Scripts/python.exe` with a `python` fallback. Hermes falls back to `sys.executable`. Use the target interpreter's `-m pip`.
-- Retain support for native ESM and loaders that supply `__dirname`. Use `fileURLToPath(import.meta.url)` for the ESM path. OpenClaw must resolve both checkout and staged payloads. In an installed OpenClaw package, keep the venv under `node_modules/.stock-analysis-python` so the host's source capture excludes its symlinks. Verify installation bugs from the installed artifact.
-- For installer changes, exercise the relevant setup failure, recovery, or migration. For cancellation or timeout changes, verify the affected host stops descendant processes and that the original call returns correctly. See the Linux, macOS, and Windows `compat` matrix in [CI](.github/workflows/ci.yml). A checkout test with a stub host SDK covers that invocation path. Installed-host evidence comes from the installed host.
+- **Python resolution.** Reuse [scripts/venv-python.mjs](scripts/venv-python.mjs). JS adapters use `.venv/bin/python3` on POSIX with a `python3` fallback and `.venv/Scripts/python.exe` on Windows with a `python` fallback. [hermes/tools.py](hermes/tools.py) and [tools/_subproc.py](tools/_subproc.py) use the same `.venv` layout and fall back to `sys.executable`. Invoke pip through the target interpreter with `-m pip`, never a bare `pip` shim.
+- **Paths and packaged layouts.** Keep native ESM and `__dirname` loader support in [pi/index.ts](pi/index.ts). Convert `import.meta.url` with `fileURLToPath`, never `URL.pathname`. Preserve both checkout and packaged payload resolution in [openclaw/index.ts](openclaw/index.ts), [dsh/index.ts](dsh/index.ts), and [hermes/tools.py](hermes/tools.py). In an installed OpenClaw package, resolve from `api.rootDir` and keep the venv under `node_modules/.stock-analysis-python/.venv` so host source capture skips its symlinks.
+- **Setup and JSON input transport.** When changing [scripts/setup-python.mjs](scripts/setup-python.mjs), test failure, recovery, and migration in [tests/test_setup_python.mjs](tests/test_setup_python.mjs) and run affected host registration tests such as [tests/test_openclaw_integration.ts](tests/test_openclaw_integration.ts). When changing large JSON input transport, verify both [scripts/json-input.mjs](scripts/json-input.mjs) with [tests/test_json_input.ts](tests/test_json_input.ts) and `_run_analysis` in [hermes/tools.py](hermes/tools.py) with [tests/test_hermes_integration.py](tests/test_hermes_integration.py).
+- **Cancellation, timeouts, and installed hosts.** When changing timeouts, keep [tools/cli_budgets.json](tools/cli_budgets.json), [scripts/cli-timeout.mjs](scripts/cli-timeout.mjs), and [tools/_subproc.py](tools/_subproc.py) aligned. When changing cancellation or timeouts, verify that JS hosts kill descendant processes and return a JSON error, and that MCP cancellation kills descendant processes and suppresses the response for that request ID. Cover cross-platform fixes in the Linux, macOS, and Windows `compat` job of [.github/workflows/ci.yml](.github/workflows/ci.yml). Whenever the target OS and host are available, verify installed-host defects against a built, installed artifact because checkout tests with stub SDKs do not exercise installed layouts. Otherwise run the nearest local setup and adapter checks and state what remains unverified.
 
 ```bash
 node tests/test_setup_python.mjs
+npx tsx tests/test_json_input.ts
 npx tsx tests/test_process_tree.ts
-.venv/bin/python -m pytest -q tests/test_mcp_integration.py
+.venv/bin/python -m pytest -q tests/test_mcp_integration.py tests/test_subproc.py
 ```
 
 ## dsh dashboard and discovery
 
-- **Cache or watchlist API changes.** Exercise the snapshot and persistence behavior with `tests/test_dsh_dashboard.ts`.
-- **Web client or polling changes.** Use `tests/test_dsh_web_poll.ts`. For a watchlist race, control the order of the edit and snapshot responses. Assert the affected symbol appears or disappears in the rendered rows. A request count only verifies that a fetch occurred. The test uses a simulated DOM. For a host-only problem, also reproduce with the installed Web/Desktop bundle.
-- **Tool registration or discovery changes.** Verify registration and discovery with `tests/test_dsh_integration.ts` and `tests/test_dsh_discovery.ts`.
+- **Cache and watchlist API.** Verify snapshot caching, persistence, and HTTP routes in [dsh/dashboard.ts](dsh/dashboard.ts) with [tests/test_dsh_dashboard.ts](tests/test_dsh_dashboard.ts).
+- **Web UI and polling.** Verify browser polling and rendering in [dsh/web/app.ts](dsh/web/app.ts) with [tests/test_dsh_web_poll.ts](tests/test_dsh_web_poll.ts). For a watchlist race, control the arrival order of the write and snapshot responses and assert that the affected symbol appears or disappears in the rendered rows. Counting requests only proves that a fetch ran. [tests/test_dsh_web_poll.ts](tests/test_dsh_web_poll.ts) uses a simulated DOM. When the installed dsh web or desktop bundle is available, rebuild with `npm run build:dsh` and reproduce host-only UI issues there.
+- **Registration, SDK schemas, discovery, and research presets.** Verify [dsh/index.ts](dsh/index.ts) and [dsh/discovery.ts](dsh/discovery.ts) with [tests/test_dsh_integration.ts](tests/test_dsh_integration.ts) and [tests/test_dsh_sdk_compat.ts](tests/test_dsh_sdk_compat.ts). When only discovery changes, run [tests/test_dsh_discovery.ts](tests/test_dsh_discovery.ts) alone because [tests/test_dsh_sdk_compat.ts](tests/test_dsh_sdk_compat.ts) already invokes it. [tsconfig.json](tsconfig.json) omits [dsh/research-role.ts](dsh/research-role.ts). After changing research presets or roles, run `npm run build:dsh`, then verify offline against an installed `@deepseek-ai/dsh` package with `node tests/e2e/test_dsh_research.mjs "$(npm root -g)/@deepseek-ai/dsh"`.
 
 ```bash
 npx tsx tests/test_dsh_dashboard.ts
 npx tsx tests/test_dsh_web_poll.ts
-npx tsx tests/test_dsh_discovery.ts
+npx tsx tests/test_dsh_integration.ts
+npx tsx tests/test_dsh_sdk_compat.ts
 ```
-
-## Local setup and verification
-
-CI uses Node 24. Run `npm ci` to install JS dependencies and prepare the repo venv. Install the Python test dependencies into that environment. On Windows, use `.venv/Scripts/python.exe` in the commands below.
-
-```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
-ruff check tools/ skills/ tests/ hermes/ mcp_host/
-ruff format --check tools/ skills/ tests/ hermes/ mcp_host/
-npx tsc --noEmit
-```
-
-Use the focused checks for your change and [ci.yml](.github/workflows/ci.yml) for the full matrix. Reuse fixtures in [tests/conftest.py](tests/conftest.py). Keep default tests and ordinary host round-trips deterministic and independent of live providers, LLMs, and credentials. The `integration_network` and `integration_llm` markers opt into live dependencies.
 
 ## Packaging and releases
 
-- Use the corresponding [publish job](.github/workflows/publish.yml) to stage and check each affected package. `npm run build:openclaw` and `npm run build:dsh` build their bundles. Root `npm pack --dry-run` checks the root npm package. Pack staged OpenClaw and dsh packages from their directories to check their own compiled entry, Python payload, patches, and web assets as applicable.
-- Keep `@deepseek-ai/*` external in dsh bundles. Both scoped and unscoped npm names ship. For a package name change, check both variants, including dsh package references in `cordis.patch.yml`, `research.patch.yml`, and `dist/client.js`.
-- Releases derive versions from a `vX.Y.Z` tag. CI runs [scripts/sync-version.sh](scripts/sync-version.sh), which writes manifest versions. Use a disposable checkout for local version-sync probes.
-- The release workflow gates publication on the `e2e-host` checks, which run [host_smoke.mjs](tests/e2e/host_smoke.mjs) in the real Pi, Hermes, OpenClaw, and dsh runtimes. Setup is in the [README](README.md#参与开发). The provider and LLM integration jobs are advisory. Confirm each intended release artifact at its destination. ClawHub can emit a warning while the workflow succeeds.
+- **Staging and package contents.** Follow the matching job in [.github/workflows/publish.yml](.github/workflows/publish.yml) to stage and inspect each affected package. Build host bundles with `npm run build:openclaw` and `npm run build:dsh`. To verify the Python wheel, install `build` into `.venv` and run `.venv/bin/python -m build`. Run `npm pack --dry-run` at the repo root and inside staged `openclaw/` and `dsh/` directories to check compiled entries, Python payloads, patches, and web assets. Stage in a disposable checkout, or remove the copied payload directories and `LICENSE` files from `openclaw/` and `dsh/` afterward so adapters do not read stale copies or leave untracked `LICENSE` files.
+- **Externals and package names.** Keep `openclaw/*` external in OpenClaw bundles and `@deepseek-ai/*` external in dsh bundles. Every npm package publishes under both a scoped `@weaxs/*` name and an unscoped name. When a package name changes, check both variants, including the dsh package references in [dsh/cordis.patch.yml](dsh/cordis.patch.yml), [dsh/research.patch.yml](dsh/research.patch.yml), [dsh/client.ts](dsh/client.ts), and the unscoped rewrites in [.github/workflows/publish.yml](.github/workflows/publish.yml).
+- **Versioning.** Push a `vX.Y.Z` git tag to trigger [.github/workflows/publish.yml](.github/workflows/publish.yml) and derive release versions from the tag. Do not hand-edit manifest versions for a release. Run [scripts/sync-version.sh](scripts/sync-version.sh) locally only in a disposable checkout because it modifies manifests in place.
+- **Release gates.** [.github/workflows/publish.yml](.github/workflows/publish.yml) gates publication on [.github/workflows/ci.yml](.github/workflows/ci.yml), including the blocking `e2e-host` jobs that run [tests/e2e/host_smoke.mjs](tests/e2e/host_smoke.mjs) in real Pi, Hermes, OpenClaw, and dsh runtimes. The dsh `e2e-host` job also runs [tests/e2e/test_dsh_research.mjs](tests/e2e/test_dsh_research.mjs) offline after `npm run build:dsh`. For `e2e-host` and `e2e-llm` model credentials, see [README development section](README.md#参与开发). The `network` and `e2e-llm` jobs set `continue-on-error: true` and are advisory. After release, verify the published artifacts on npm for both scoped and unscoped root, OpenClaw, and dsh packages, on PyPI, and on the GitHub Release. ClawHub may emit a warning while the release workflow still succeeds.
