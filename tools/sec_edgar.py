@@ -252,6 +252,7 @@ def form4(cik, filing):
         for r in root.findall("reportingOwner")
     ]
     footnotes = {r.get("id"): "".join(r.itertext()) for r in root.findall("footnotes/footnote")}
+    remarks = (root.findtext("remarks") or "").strip() or None
     rows = []
     for table, tag, derivative in [
         ("nonDerivativeTable", "nonDerivativeTransaction", False),
@@ -274,6 +275,7 @@ def form4(cik, filing):
                     "ownership": row.findtext("ownershipNature/directOrIndirectOwnership/value"),
                     "footnotes": footnotes,
                     "footnote_refs": footnote_refs(row),
+                    "remarks": remarks,
                     "filing_date": filing["filingDate"],
                     "form": filing["form"],
                     "accession": filing["accessionNumber"],

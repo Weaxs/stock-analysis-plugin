@@ -510,11 +510,15 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         orig_gift,
         form="4/A",
         accession="0001-26-000051",
-        footnotes={"F1": "Filing amended solely to add gift recipient footnote."},
-        footnote_refs=["F1"],
+        footnotes={
+            "F1": "Filing amended solely to add gift recipient footnote.",
+            "F99": "Unrelated filing footnote that must not affect this row.",
+        },
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
     )
     res_orig_gift = _run_us(six_orig + [orig_gift, amend_gift_fn])
     assert res_orig_gift["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_orig_gift["checks"]["insider_trades"]["available"] is True
     assert res_orig_gift["veto_buy"] is True
 
     # Branch B (Weaxs): 6 orig S (6 shares) + 4/A explicitly correcting 6-share S to 7-share G -> 5 sales, no veto
@@ -527,12 +531,15 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         direction="other",
         shares=7,
         price=None,
-        footnotes={"F1": "Corrects previously misreported 6-share sale to a 7-share gift."},
-        footnote_refs=["F1"],
+        footnotes={
+            "F1": "Corrects previously misreported 6-share sale to a 7-share gift.",
+            "F99": "Inadvertently omitted unrelated transaction on another row.",
+        },
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1"]},
     )
     res_corr_7g = _run_us(six_small + [corr_7g])
     assert res_corr_7g["checks"]["insider_trades"]["sales_90d"] == 5
-    assert res_corr_7g["veto_buy"] is not True
+    assert res_corr_7g["veto_buy"] is False
 
     # Branch C (Weaxs): 2 orig same-day S + 4/A explicitly adding omitted 3rd S -> 3 sales, medium flag
     two_same = [
@@ -546,8 +553,11 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         transaction_date="2026-10-08",
         shares=100,
         price=150.0,
-        footnotes={"F1": "Amends original Form 4 to report an inadvertently omitted third sale."},
-        footnote_refs=["F1"],
+        footnotes={
+            "F1": "Amends original Form 4 to report an inadvertently omitted third sale.",
+            "F2": "Corrects an unrelated prior gift row.",
+        },
+        footnote_refs={"transactionDate/value": ["F1"]},
     )
     res_added_third = _run_us(two_same + [added_third])
     assert res_added_third["checks"]["insider_trades"]["sales_90d"] == 3
@@ -566,6 +576,12 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     res_blank_followup = _run_us(seven_orig + [g_with_px, g_blank_px])
     assert res_blank_followup["checks"]["insider_trades"]["sales_90d"] == 6
     assert res_blank_followup["veto_buy"] is True
+
+    # Same-accession blank-price gift BEFORE priced gift removes both $10 and $20 regardless of row order
+    g_same_blank = dict(g_blank_px, accession="0001-26-000062")
+    g_same_priced = dict(g_with_px, accession="0001-26-000062")
+    assert _run_us(seven_orig + [g_same_blank, g_same_priced])["checks"]["insider_trades"]["sales_90d"] == 5
+    assert _run_us(seven_orig + [g_same_priced, g_same_blank])["checks"]["insider_trades"]["sales_90d"] == 5
 
     # If ONLY the blank-price 4/A exists across two distinct-price candidates ($10 & $20), retain both & flag uncertainty
     res_ambig_blank = _run_us(seven_orig + [g_blank_px])
@@ -587,6 +603,204 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     res_restate_and_gift = _run_us(three_orig + [restate_first, reclass_first])
     assert res_restate_and_gift["checks"]["insider_trades"]["sales_90d"] == 2
     assert not any(f["category"] == "insider" for f in res_restate_and_gift["flags"])
+
+    # Branch G (CodeRabbit Major 590): 6 confirmed original S + explicitly added 7th S keeps veto_buy=True
+    seventh_add = dict(
+        six_orig[0],
+        form="4/A",
+        accession="0001-26-000090",
+        transaction_date="2026-10-20",
+        footnotes={"F1": "Reports previously omitted sale."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    res_seventh = _run_us(six_orig + [seventh_add])
+    assert res_seventh["checks"]["insider_trades"]["sales_90d"] == 7
+    assert res_seventh["veto_buy"] is True
+
+    # Branch H (Weaxs P2 & CodeRabbit Major 594): row-order invariance — each original sale matched at most once
+    orig_pair = [
+        dict(six_orig[0], transaction_date="2026-10-21", shares=100, price=150.0),
+        dict(six_orig[0], transaction_date="2026-10-21", shares=50, price=160.0),
+    ]
+    amend_155 = dict(orig_pair[0], form="4/A", accession="0001-26-000091", price=155.0)
+    amend_150 = dict(orig_pair[0], form="4/A", accession="0001-26-000091", price=150.0)
+    assert _run_us(orig_pair + [amend_155, amend_150])["checks"]["insider_trades"]["sales_90d"] == 3
+    assert _run_us(orig_pair + [amend_150, amend_155])["checks"]["insider_trades"]["sales_90d"] == 3
+
+    # Branch I (CodeRabbit Minor 608): later 4/A explicitly correcting an earlier 4/A added sale -> 3 sales, not 4
+    two_other = six_orig[:2]
+    add_oct22 = dict(
+        six_orig[0],
+        form="4/A",
+        filing_date="2026-10-23",
+        accession="0001-26-000092",
+        transaction_date="2026-10-22",
+        shares=100,
+        price=10.0,
+        footnotes={"F1": "Reports inadvertently omitted sale."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    corr_oct22 = dict(
+        add_oct22,
+        filing_date="2026-10-24",
+        accession="0001-26-000093",
+        price=11.0,
+        footnotes={"F1": "Corrects price of previously reported sale to $11."},
+        footnote_refs={"transactionAmounts/transactionPricePerShare/value": ["F1"]},
+    )
+    res_corr_added = _run_us(two_other + [add_oct22, corr_oct22])
+    assert res_corr_added["checks"]["insider_trades"]["sales_90d"] == 3
+
+
+def test_real_sec_form4_xml_boundary_with_risk_screening(monkeypatch):
+    import sec_edgar
+
+    monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
+    orig_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec XML</rptOwnerName></reportingOwnerId>
+        <reportingOwnerRelationship><isOfficer>1</isOfficer><officerTitle>CFO</officerTitle></reportingOwnerRelationship>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>100</value></transactionShares>
+            <transactionPricePerShare><value>150</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>50</value></transactionShares>
+            <transactionPricePerShare><value>160</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+    </ownershipDocument>"""
+    amend_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec XML</rptOwnerName></reportingOwnerId>
+        <reportingOwnerRelationship><isOfficer>1</isOfficer><officerTitle>CFO</officerTitle></reportingOwnerRelationship>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value><footnoteId id="F1"/></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>100</value></transactionShares>
+            <transactionPricePerShare><value>150</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-02</value><footnoteId id="F2"/></transactionDate>
+          <transactionCoding><transactionCode>G</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>25</value></transactionShares>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+      <footnotes>
+        <footnote id="F1">Reports an inadvertently omitted sale on 2026-10-01.</footnote>
+        <footnote id="F2">Corrects an unrelated separate gift filing.</footnote>
+      </footnotes>
+      <remarks>Amendment filed to report omitted sale F1 and update F2.</remarks>
+    </ownershipDocument>"""
+    xml_map = {"orig.xml": orig_xml, "amend.xml": amend_xml}
+    monkeypatch.setattr(sec_edgar, "sec_get", lambda url, as_json=True: xml_map[url.rsplit("/", 1)[-1]])
+    orig_rows = sec_edgar.form4(
+        "0000320193",
+        {
+            "accessionNumber": "0000320193-26-000100",
+            "filingDate": "2026-10-02",
+            "form": "4",
+            "primaryDocument": "orig.xml",
+        },
+    )
+    amend_rows = sec_edgar.form4(
+        "0000320193",
+        {
+            "accessionNumber": "0000320193-26-000101",
+            "filingDate": "2026-10-03",
+            "form": "4/A",
+            "primaryDocument": "amend.xml",
+        },
+    )
+    assert amend_rows[0]["remarks"] == "Amendment filed to report omitted sale F1 and update F2."
+    assert isinstance(amend_rows[0]["footnote_refs"], dict)
+    res = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "transactions": orig_rows + amend_rows,
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+            if script == "sec_edgar.py"
+            else []
+        ),
+    )
+    assert res["checks"]["insider_trades"]["sales_90d"] == 3
+    assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res["flags"])
+
+
+def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
+    # 1. Resumption / lifting of suspension must NOT trigger high-severity buy veto
+    res_resume = risk_screening.screen_risk(
+        "00700.HK",
+        "Tencent",
+        inputs={
+            "quote": {"pe": 18, "pb": 3},
+            "technical": {"signal_score": 65, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "announcements": [{"date": "2026-10-01", "title": "LIFTING OF SUSPENSION AND RESUMPTION OF TRADING"}],
+                "truncated": False,
+            }
+            if script == "value_data.py"
+            else []
+        ),
+    )
+    assert res_resume["veto_buy"] is False
+    assert res_resume["checks"]["disclosures"]["available"] is True
+    assert not any(f["category"] == "disclosure" for f in res_resume["flags"])
+
+    # 2. Provider-incomplete HKEX response (truncated=True with < 15 rows) marks unavailable & data_complete=False
+    res_trunc = risk_screening.screen_risk(
+        "00700.HK",
+        "Tencent",
+        inputs={
+            "quote": {"pe": 18, "pb": 3},
+            "technical": {"signal_score": 65, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
+        },
+        run=lambda script, args, **kw: (
+            {"announcements": [{"date": "2026-10-01", "title": "Profit Warning"}], "truncated": True}
+            if script == "value_data.py"
+            else []
+        ),
+    )
+    assert res_trunc["checks"]["disclosures"]["available"] is False
+    assert res_trunc["data_complete"] is False
+    assert any(f["category"] == "disclosure" and f["severity"] == "medium" for f in res_trunc["flags"])
+    assert any("incomplete/truncated" in w for w in res_trunc["warnings"])
 
 
 def test_us_risk_screening_truncated_sec_marks_incomplete_and_keeps_flags(monkeypatch):
