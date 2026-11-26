@@ -204,8 +204,10 @@ def diagnose(market: str = "all", probe: bool = False) -> dict:
         top_warnings.append(
             "No search engine configured (TAVILY/BRAVE/SERPAPI/BOCHA/SEARXNG); news search tools unavailable"
         )
-    if not any(s["name"] == "sec_edgar" and s["available"] for s in all_services):
-        top_warnings.append("SEC_USER_AGENT not set — US 13F / Form 4 / SEC filings unavailable")
+    sec_entry = next((s for s in all_services if s["name"] == "sec_edgar"), None)
+    if sec_entry and not sec_entry["available"]:
+        sec_reason = sec_entry.get("reason") or "SEC_USER_AGENT not set"
+        top_warnings.append(f"SEC EDGAR unavailable ({sec_reason}) — US 13F / Form 4 / SEC filings unavailable")
 
     result = {
         "meta": {

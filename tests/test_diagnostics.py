@@ -171,6 +171,8 @@ class TestDiagnose:
         assert sec["available"] is False
         assert "invalid SEC_USER_AGENT" in (sec["reason"] or "")
         assert res["summary"]["sec_edgar_ready"] is False
+        assert any("invalid SEC_USER_AGENT" in w for w in res["meta"]["warnings"])
+        assert not any("SEC_USER_AGENT not set" in w for w in res["meta"]["warnings"])
 
     def test_probe_flag_populates_reachability_without_hitting_live_network(self, monkeypatch):
         probed = []
@@ -227,6 +229,7 @@ class TestDiagnose:
         sec = next(s for s in res["services"] if s["name"] == "sec_edgar")
         assert sec["available"] is False
         assert "sec_edgar import failed" in (sec["reason"] or "")
+        assert any("sec_edgar import failed" in w for w in res["meta"]["warnings"])
 
 
 if __name__ == "__main__":

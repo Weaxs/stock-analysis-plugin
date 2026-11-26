@@ -395,6 +395,90 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     assert res_reclass["veto_buy"] is not True
     assert all(f["severity"] != "high" for f in res_reclass["flags"])
 
+    # Successive 4/A accessions reclassifying the same 4th same-day sale to G must be idempotent (3 sales, medium flag)
+    four_same_day = [
+        {
+            "form": "4",
+            "accession": "0001-26-000020",
+            "transaction_date": "2026-10-05",
+            "owners": [{"cik": "123", "name": "Exec A"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "transaction_code": "S",
+            "shares": shares,
+            "price": 150.0,
+        }
+        for shares in (100, 200, 300, 400)
+    ]
+    amend_g_1 = dict(four_same_day[3], form="4/A", accession="0001-26-000021", transaction_code="G", direction="other")
+    amend_g_2 = dict(four_same_day[3], form="4/A", accession="0001-26-000022", transaction_code="G", direction="other")
+    res_idem = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "transactions": four_same_day + [amend_g_1, amend_g_2],
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+            if script == "sec_edgar.py"
+            else []
+        ),
+    )
+    assert res_idem["checks"]["insider_trades"]["sales_90d"] == 3
+    assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res_idem["flags"])
+
+    # Unrelated same-day gift (different shares) must NOT remove a confirmed sale or suppress buy veto for 6 sales
+    unrelated_gift = dict(
+        six_orig[0], form="4/A", accession="0001-26-000030", transaction_code="G", direction="other", shares=250
+    )
+    res_gift = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "transactions": six_orig + [unrelated_gift],
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+            if script == "sec_edgar.py"
+            else []
+        ),
+    )
+    assert res_gift["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_gift["veto_buy"] is True
+
+    # 2 original sales + 1 Form 4/A restating one sale at a different price -> still 2 sales, NO medium flag
+    two_orig = six_orig[:2]
+    restated = dict(two_orig[0], form="4/A", accession="0001-26-000040", price=152.0)
+    res_restate = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "transactions": two_orig + [restated],
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+            if script == "sec_edgar.py"
+            else []
+        ),
+    )
+    assert res_restate["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_restate["flags"])
+
 
 def test_us_risk_screening_truncated_sec_marks_incomplete_and_keeps_flags(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
