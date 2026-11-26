@@ -253,6 +253,7 @@ def form4(cik, filing):
     ]
     footnotes = {r.get("id"): "".join(r.itertext()) for r in root.findall("footnotes/footnote")}
     remarks = (root.findtext("remarks") or "").strip() or None
+    original_filing_date = (root.findtext("dateOfOriginalSubmission") or "").strip() or None
     rows = []
     for table, tag, derivative in [
         ("nonDerivativeTable", "nonDerivativeTransaction", False),
@@ -276,6 +277,7 @@ def form4(cik, filing):
                     "footnotes": footnotes,
                     "footnote_refs": footnote_refs(row),
                     "remarks": remarks,
+                    "original_filing_date": original_filing_date,
                     "filing_date": filing["filingDate"],
                     "form": filing["form"],
                     "accession": filing["accessionNumber"],
@@ -571,7 +573,7 @@ def insider_trades(args):
     for filing in filings[: args.top]:
         try:
             rows = cached(
-                f"sec-form4-v2:{cik}:{filing['accessionNumber']}", WEEK, lambda filing=filing: form4(cik, filing)
+                f"sec-form4-v3:{cik}:{filing['accessionNumber']}", WEEK, lambda filing=filing: form4(cik, filing)
             )
             result["transactions"].extend(rows)
             result["filings_scanned"] += 1

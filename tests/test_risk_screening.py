@@ -314,6 +314,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     def fake_run(script, args, **kwargs):
         if script == "sec_edgar.py" and args[0] == "insider_trades":
             return {
+                "since_filing_date": "2026-08-01",
                 "transactions": orig + amended_copies,
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -345,6 +346,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         },
         run=lambda script, args, **kw: (
             {
+                "since_filing_date": "2026-08-01",
                 "transactions": orig + revised,
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -383,6 +385,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         },
         run=lambda script, args, **kw: (
             {
+                "since_filing_date": "2026-08-01",
                 "transactions": six_orig + amend_reclass,
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -421,6 +424,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         },
         run=lambda script, args, **kw: (
             {
+                "since_filing_date": "2026-08-01",
                 "transactions": four_same_day + [amend_g_1, amend_g_2],
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -445,6 +449,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         },
         run=lambda script, args, **kw: (
             {
+                "since_filing_date": "2026-08-01",
                 "transactions": six_orig + [unrelated_gift],
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -468,6 +473,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
         },
         run=lambda script, args, **kw: (
             {
+                "since_filing_date": "2026-08-01",
                 "transactions": two_orig + [restated],
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -489,6 +495,7 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
             },
             run=lambda script, args, **kw: (
                 {
+                    "since_filing_date": "2026-08-01",
                     "transactions": tx_list,
                     "truncated": False,
                     "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -590,8 +597,24 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
 
     # Branch E (CodeRabbit Minor 477): 1 orig S + two 4/A accessions each adding a different same-day S -> 3 sales, medium
     one_orig = [dict(six_orig[0], transaction_date="2026-10-15", shares=100, price=10.0)]
-    add_s1 = dict(one_orig[0], form="4/A", accession="0001-26-000070", shares=200, price=11.0)
-    add_s2 = dict(one_orig[0], form="4/A", accession="0001-26-000071", shares=300, price=12.0)
+    add_s1 = dict(
+        one_orig[0],
+        form="4/A",
+        accession="0001-26-000070",
+        shares=200,
+        price=11.0,
+        footnotes={"F1": "Reports an inadvertently omitted sale."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    add_s2 = dict(
+        one_orig[0],
+        form="4/A",
+        accession="0001-26-000071",
+        shares=300,
+        price=12.0,
+        footnotes={"F1": "Reports an inadvertently omitted sale."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
     res_two_adds = _run_us(one_orig + [add_s1, add_s2])
     assert res_two_adds["checks"]["insider_trades"]["sales_90d"] == 3
     assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res_two_adds["flags"])
@@ -618,14 +641,17 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     assert res_seventh["veto_buy"] is True
 
     # Branch H (Weaxs P2 & CodeRabbit Major 594): row-order invariance — each original sale matched at most once
-    orig_pair = [
-        dict(six_orig[0], transaction_date="2026-10-21", shares=100, price=150.0),
-        dict(six_orig[0], transaction_date="2026-10-21", shares=50, price=160.0),
-    ]
-    amend_155 = dict(orig_pair[0], form="4/A", accession="0001-26-000091", price=155.0)
-    amend_150 = dict(orig_pair[0], form="4/A", accession="0001-26-000091", price=150.0)
-    assert _run_us(orig_pair + [amend_155, amend_150])["checks"]["insider_trades"]["sales_90d"] == 3
-    assert _run_us(orig_pair + [amend_150, amend_155])["checks"]["insider_trades"]["sales_90d"] == 3
+    orig_single = [dict(six_orig[0], transaction_date="2026-10-21", shares=100, price=150.0)]
+    amend_155 = dict(orig_single[0], form="4/A", accession="0001-26-000091", price=155.0)
+    amend_150 = dict(orig_single[0], form="4/A", accession="0001-26-000091", price=150.0)
+    assert _run_us(orig_single + [amend_155, amend_150])["checks"]["insider_trades"]["sales_90d"] == 2
+    assert _run_us(orig_single + [amend_150, amend_155])["checks"]["insider_trades"]["sales_90d"] == 2
+    # With a 2nd unmatched original on the same day, unannotated amend_155 is uncertain in both row orders (no false 3rd)
+    orig_pair = orig_single + [dict(six_orig[0], transaction_date="2026-10-21", shares=50, price=160.0)]
+    for ordered in ([amend_155, amend_150], [amend_150, amend_155]):
+        res_pair = _run_us(orig_pair + ordered)
+        assert res_pair["checks"]["insider_trades"]["sales_90d"] == 2
+        assert res_pair["checks"]["insider_trades"]["count_uncertain"] is True
 
     # Branch I (CodeRabbit Minor 608): later 4/A explicitly correcting an earlier 4/A added sale -> 3 sales, not 4
     two_other = six_orig[:2]
@@ -749,6 +775,7 @@ def test_real_sec_form4_xml_boundary_with_risk_screening(monkeypatch):
         },
         run=lambda script, args, **kw: (
             {
+                "since_filing_date": "2026-08-01",
                 "transactions": orig_rows + amend_rows,
                 "truncated": False,
                 "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -770,13 +797,14 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
     }
 
-    def _screen(txs):
+    def _screen(txs, *, since_filing_date="2026-08-01"):
         return risk_screening.screen_risk(
             "AAPL",
             "Apple",
             inputs=base_inputs,
             run=lambda script, args, **kw: (
                 {
+                    "since_filing_date": since_filing_date,
                     "transactions": txs,
                     "truncated": False,
                     "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
@@ -960,6 +988,159 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     res_chain_share_change = _screen(orig_rows + add101_rows + reclass_102_rows)
     assert res_chain_share_change["checks"]["insider_trades"]["sales_90d"] == 2
     assert not any(f["category"] == "insider" for f in res_chain_share_change["flags"])
+
+    # 4. Restore sale when a later linked 4/A explicitly corrects a previously reclassified gift back to S
+    three_orig_rows = orig_rows + [dict(orig_rows[0], transaction_date="2026-10-02", shares=75, price=152.0)]
+    gift_first = dict(
+        three_orig_rows[0],
+        form="4/A",
+        accession="0000320193-26-000305",
+        filing_date="2026-10-03",
+        transaction_code="G",
+        direction="other",
+        footnotes={"F1": "Corrects previously misreported sale to a gift."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    restore_first = dict(
+        three_orig_rows[0],
+        form="4/A",
+        accession="0000320193-26-000306",
+        filing_date="2026-10-04",
+        footnotes={"F1": "Corrects prior Form 4/A: transaction was a sale, not a gift."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    res_restore = _screen(three_orig_rows + [gift_first, restore_first])
+    assert res_restore["checks"]["insider_trades"]["sales_90d"] == 3
+    assert res_restore["checks"]["insider_trades"]["count_uncertain"] is False
+    assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res_restore["flags"])
+
+    # Unannotated bare restatement of old S row after reclassification keeps gift state & surfaces uncertainty
+    bare_restate = dict(three_orig_rows[0], form="4/A", accession="0000320193-26-000307", filing_date="2026-10-04")
+    res_bare = _screen(three_orig_rows + [gift_first, bare_restate])
+    assert res_bare["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_bare["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 5. Unlinked same-day 4/A row (changed shares AND price, NO footnote/remarks) must NOT inflate count
+    unlinked_amend = dict(
+        orig_rows[0],
+        form="4/A",
+        accession="0000320193-26-000308",
+        filing_date="2026-10-03",
+        shares=75,
+        price=155.0,
+        footnotes={},
+        footnote_refs={},
+        remarks=None,
+    )
+    res_unlinked = _screen(orig_rows + [unlinked_amend])
+    assert res_unlinked["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_unlinked["checks"]["insider_trades"]["count_uncertain"] is True
+    assert not any(f["category"] == "insider" for f in res_unlinked["flags"])
+
+    # 6. Plural/counted remarks ("two omitted sales") with only 1 row footnote must NOT treat all additions as claimed
+    two_omit_r1 = dict(
+        orig_rows[0],
+        form="4/A",
+        accession="0000320193-26-000309",
+        filing_date="2026-10-03",
+        footnotes={"F1": "Reports an omitted sale."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+        remarks="Amending to report two omitted sales.",
+    )
+    two_omit_r2 = dict(
+        orig_rows[1],
+        form="4/A",
+        accession="0000320193-26-000309",
+        filing_date="2026-10-03",
+        footnotes={"F1": "Reports an omitted sale."},
+        footnote_refs={},
+        remarks="Amending to report two omitted sales.",
+    )
+    # 2 rows total -> single remaining unattributed row absorbs the 2nd remarked addition -> 4 sales
+    assert _screen(orig_rows + [two_omit_r1, two_omit_r2])["checks"]["insider_trades"]["sales_90d"] == 4
+    # 3 rows (2 unattributed rows for 1 remaining addition) -> cannot identify which is added -> count_uncertain=True
+    two_omit_r3 = dict(two_omit_r2, shares=100, price=150.0)
+    res_two_omit_ambig = _screen(orig_rows + [two_omit_r1, two_omit_r2, two_omit_r3])
+    assert res_two_omit_ambig["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 7. Unrelated same-day original gift must NOT hide a linked correction of a sale to a gift
+    six_sales = [dict(orig_rows[0], transaction_date=f"2026-10-0{i}") for i in range(1, 7)]
+    same_day_gift = dict(
+        six_sales[0], accession="0000320193-26-000310", transaction_code="G", direction="other", price=None
+    )
+    # 7a: priced correction matches sale ($150) rather than orig gift (None)
+    corr_sale_priced = dict(
+        six_sales[0],
+        form="4/A",
+        accession="0000320193-26-000311",
+        filing_date="2026-10-08",
+        transaction_code="G",
+        direction="other",
+        price=150.0,
+    )
+    res_corr_priced = _screen(six_sales + [same_day_gift, corr_sale_priced])
+    assert res_corr_priced["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_corr_priced["veto_buy"] is False
+    # 7b: blank-price explicit correction of sale to gift
+    corr_sale_text = dict(
+        corr_sale_priced,
+        price=None,
+        footnotes={"F1": "Corrects previously misreported sale to a bona fide gift."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    res_corr_text = _screen(six_sales + [same_day_gift, corr_sale_text])
+    assert res_corr_text["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_corr_text["veto_buy"] is False
+
+    # 8. Order-independent sell share-match with multiple distinct-price candidates ($10 and $20)
+    s_10 = dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=10.0)
+    s_20 = dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=20.0)
+    a_s11 = dict(s_10, form="4/A", accession="0000320193-26-000312", filing_date="2026-10-13", price=11.0)
+    a_g10 = dict(
+        s_10, form="4/A", accession="0000320193-26-000313", filing_date="2026-10-14", transaction_code="G", price=10.0
+    )
+    a_g11 = dict(
+        s_10, form="4/A", accession="0000320193-26-000314", filing_date="2026-10-15", transaction_code="G", price=11.0
+    )
+    res_order_a = _screen([s_10, s_20, a_s11, a_g10, a_g11])
+    res_order_b = _screen([s_20, s_10, a_s11, a_g10, a_g11])
+    assert res_order_a["checks"]["insider_trades"]["sales_90d"] == res_order_b["checks"]["insider_trades"]["sales_90d"]
+    assert res_order_a["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 9. Apply 90-day window to transaction_date (stale late-filed sales must not count or trigger veto)
+    stale_six = [dict(orig_rows[0], transaction_date=f"2026-05-0{i}", filing_date="2026-10-20") for i in range(1, 7)]
+    res_stale = _screen(stale_six, since_filing_date="2026-08-01")
+    assert res_stale["checks"]["insider_trades"]["sales_90d"] == 0
+    assert res_stale["veto_buy"] is False
+    assert not any(f["category"] == "insider" for f in res_stale["flags"])
+
+    # 10. dateOfOriginalSubmission binds correction to the original filing date rather than another filing's exact match
+    orig_f1 = dict(orig_rows[0], accession="0000320193-26-000320", filing_date="2026-10-02", shares=100, price=10.0)
+    orig_f2 = dict(orig_rows[0], accession="0000320193-26-000321", filing_date="2026-10-03", shares=100, price=20.0)
+    corr_f1_to_20 = dict(
+        orig_f1,
+        form="4/A",
+        accession="0000320193-26-000322",
+        filing_date="2026-10-04",
+        original_filing_date="2026-10-02",
+        price=20.0,
+        footnotes={"F1": "Corrects sale price to $20."},
+        footnote_refs={"transactionAmounts/transactionPricePerShare/value": ["F1"]},
+    )
+    # Reclassifying the corrected $20 sale from filing 1 via gift on 2026-10-02 leaves filing 2 active (1 sale)
+    gift_f1 = dict(
+        corr_f1_to_20,
+        accession="0000320193-26-000323",
+        filing_date="2026-10-05",
+        transaction_code="G",
+        direction="other",
+    )
+    res_orig_date = _screen([orig_f1, orig_f2, corr_f1_to_20, gift_f1])
+    assert res_orig_date["checks"]["insider_trades"]["sales_90d"] == 1
+    # When two distinct original filings share the SAME filing_date, date alone cannot separate them -> uncertain
+    orig_f2_same_day = dict(orig_f2, filing_date="2026-10-02")
+    res_same_fdate = _screen([orig_f1, orig_f2_same_day, corr_f1_to_20])
+    assert res_same_fdate["checks"]["insider_trades"]["count_uncertain"] is True
 
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():

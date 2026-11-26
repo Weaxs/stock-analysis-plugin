@@ -568,16 +568,22 @@ def test_valuation_facts_derive_q4_and_point_in_time_ttm(monkeypatch):
 
 
 def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch, tmp_path):
+    from datetime import date, timedelta
+
     import _cache as cache_mod
 
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path)
     accn = "0000320193-26-000201"
-    # Pre-seed legacy unversioned cache entry missing the `remarks` field.
-    sec_edgar.cached(
-        f"sec-form4:0000320193:{accn}",
-        sec_edgar.WEEK,
-        lambda: [{"form": "4/A", "transaction_code": "S", "shares": 10}],
-    )
+    recent_filing = (date.today() - timedelta(days=7)).isoformat()
+    orig_filing = (date.today() - timedelta(days=9)).isoformat()
+    tx_date = (date.today() - timedelta(days=10)).isoformat()
+    # Pre-seed legacy cache entries missing `remarks` / `original_filing_date`.
+    for prefix in ("sec-form4", "sec-form4-v2"):
+        sec_edgar.cached(
+            f"{prefix}:0000320193:{accn}",
+            sec_edgar.WEEK,
+            lambda: [{"form": "4/A", "transaction_code": "S", "shares": 10}],
+        )
 
     def get(url, **kwargs):
         if url.endswith("company_tickers.json"):
@@ -589,8 +595,8 @@ def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch
                         "recent": {
                             "form": ["4/A"],
                             "accessionNumber": [accn],
-                            "filingDate": ["2026-10-12"],
-                            "reportDate": ["2026-10-10"],
+                            "filingDate": [recent_filing],
+                            "reportDate": [tx_date],
                             "primaryDocument": ["form4a.xml"],
                         },
                         "files": [],
@@ -598,15 +604,17 @@ def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch
                 }
             )
         return response(
-            """<ownershipDocument><issuer><issuerCik>0000320193</issuerCik></issuer><nonDerivativeTable><nonDerivativeTransaction><transactionDate><value>2026-10-10</value></transactionDate><transactionCoding><transactionCode>S</transactionCode></transactionCoding><transactionAmounts><transactionShares><value>10</value></transactionShares><transactionPricePerShare><value>150</value></transactionPricePerShare><transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode></transactionAmounts></nonDerivativeTransaction></nonDerivativeTable><remarks>Amending to report an inadvertently omitted sale.</remarks></ownershipDocument>"""
+            f"""<ownershipDocument><dateOfOriginalSubmission>{orig_filing}</dateOfOriginalSubmission><issuer><issuerCik>0000320193</issuerCik></issuer><nonDerivativeTable><nonDerivativeTransaction><transactionDate><value>{tx_date}</value></transactionDate><transactionCoding><transactionCode>S</transactionCode></transactionCoding><transactionAmounts><transactionShares><value>10</value></transactionShares><transactionPricePerShare><value>150</value></transactionPricePerShare><transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode></transactionAmounts></nonDerivativeTransaction></nonDerivativeTable><remarks>Amending to report an inadvertently omitted sale.</remarks></ownershipDocument>"""
         )
 
     monkeypatch.setattr("requests.get", get)
     result = sec_edgar.insider_trades(Namespace(symbol="AAPL", days=90, top=10))
     assert result["transactions"][0]["remarks"] == "Amending to report an inadvertently omitted sale."
-    v2_rows = sec_edgar.cached(
-        f"sec-form4-v2:0000320193:{accn}",
+    assert result["transactions"][0]["original_filing_date"] == orig_filing
+    v3_rows = sec_edgar.cached(
+        f"sec-form4-v3:0000320193:{accn}",
         sec_edgar.WEEK,
-        lambda: pytest.fail("expected v2 Form 4 cache entry to be populated"),
+        lambda: pytest.fail("expected v3 Form 4 cache entry to be populated"),
     )
-    assert v2_rows[0]["remarks"] == "Amending to report an inadvertently omitted sale."
+    assert v3_rows[0]["remarks"] == "Amending to report an inadvertently omitted sale."
+    assert v3_rows[0]["original_filing_date"] == orig_filing
