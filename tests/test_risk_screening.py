@@ -1180,6 +1180,14 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_no_false_restore["checks"]["insider_trades"]["sales_90d"] == 5
     assert res_no_false_restore["veto_buy"] is False
 
+    # 12b. With a 7th sale on another date (6 confirmed sales remain after $10 becomes a gift), uniquely identified
+    #      price correction ("from $20 to $10") must preserve confirmed buy veto & count_uncertain=False.
+    pair_10_20_plus_5 = pair_10_20_plus_4 + [dict(orig_rows[0], transaction_date="2026-10-17", shares=100, price=150.0)]
+    res_preserve_veto = _screen(pair_10_20_plus_5 + [reclass_10_g, corr_20_to_10])
+    assert res_preserve_veto["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_preserve_veto["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_preserve_veto["veto_buy"] is True
+
     # 13. Linked transaction-date correction from Aug 3 to Jul 31 (before Aug 1 cutoff) excludes corrected sale
     aug_sales = [
         dict(orig_rows[0], accession="0000320193-26-000340", filing_date="2026-08-06", transaction_date="2026-08-05"),
@@ -1199,6 +1207,127 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     res_date_corr = _screen(aug_sales + [corr_date_to_jul31], since_filing_date="2026-08-01")
     assert res_date_corr["checks"]["insider_trades"]["sales_90d"] == 2
     assert not any(f["category"] == "insider" for f in res_date_corr["flags"])
+
+    # 14. Two original filings on the SAME filing_date (Aug 6) with distinct transaction dates (Aug 3 vs Aug 4):
+    #     stated prior date Aug 3 disambiguates the filing and excludes the corrected Jul 31 sale (2 sales, no flag).
+    same_fdate_sales = [
+        dict(orig_rows[0], accession="0000320193-26-000350", filing_date="2026-08-06", transaction_date="2026-08-03"),
+        dict(orig_rows[0], accession="0000320193-26-000351", filing_date="2026-08-06", transaction_date="2026-08-04"),
+        dict(orig_rows[0], accession="0000320193-26-000352", filing_date="2026-08-07", transaction_date="2026-08-05"),
+    ]
+    corr_same_fdate = dict(
+        same_fdate_sales[0],
+        form="4/A",
+        accession="0000320193-26-000353",
+        filing_date="2026-08-08",
+        original_filing_date="2026-08-06",
+        transaction_date="2026-07-31",
+        footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-07-31."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    res_same_fdate_disambig = _screen(same_fdate_sales + [corr_same_fdate], since_filing_date="2026-08-01")
+    assert res_same_fdate_disambig["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_same_fdate_disambig["flags"])
+
+    # 15. Unmatched stated prior date (Aug 3 already reclassified to G) must NOT substitute Aug 4 sale!
+    aug3_aug4_plus_5 = [
+        dict(orig_rows[0], transaction_date="2026-08-03", shares=100, price=10.0),
+        dict(orig_rows[0], transaction_date="2026-08-04", shares=100, price=10.0),
+    ] + [dict(orig_rows[0], transaction_date=f"2026-08-0{i}", shares=100, price=10.0) for i in range(5, 10)]
+    aug3_to_gift = dict(
+        aug3_aug4_plus_5[0],
+        form="4/A",
+        accession="0000320193-26-000360",
+        filing_date="2026-08-11",
+        transaction_code="G",
+        direction="other",
+    )
+    aug3_date_corr_no_restore = dict(
+        aug3_aug4_plus_5[0],
+        form="4/A",
+        accession="0000320193-26-000361",
+        filing_date="2026-08-12",
+        transaction_date="2026-07-31",
+        footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-07-31."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    res_no_sub = _screen(aug3_aug4_plus_5 + [aug3_to_gift, aug3_date_corr_no_restore], since_filing_date="2026-08-01")
+    assert res_no_sub["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_no_sub["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 16. Order-independent batch date corrections within one accession (both row orders give identical result)
+    batch_orig = [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000370",
+            filing_date="2026-08-05",
+            transaction_date="2026-08-03",
+            shares=100,
+            price=10.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000370",
+            filing_date="2026-08-05",
+            transaction_date="2026-08-03",
+            shares=200,
+            price=20.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000371",
+            filing_date="2026-08-06",
+            transaction_date="2026-08-05",
+            shares=50,
+            price=15.0,
+        ),
+    ]
+    batch_row1 = dict(
+        batch_orig[0],
+        form="4/A",
+        accession="0000320193-26-000372",
+        filing_date="2026-08-07",
+        original_filing_date="2026-08-05",
+        transaction_date="2026-08-04",
+        shares=100,
+        price=10.0,
+        footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-08-04."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    batch_row2 = dict(
+        batch_orig[1],
+        form="4/A",
+        accession="0000320193-26-000372",
+        filing_date="2026-08-07",
+        original_filing_date="2026-08-05",
+        transaction_date="2026-07-31",
+        shares=300,
+        price=30.0,
+        footnotes={"F2": "Corrects 200 shares at $20 on 2026-08-03 to 2026-07-31 (300 shares at $30)."},
+        footnote_refs={"transactionDate/value": ["F2"]},
+    )
+    res_batch_12 = _screen(batch_orig + [batch_row1, batch_row2], since_filing_date="2026-08-01")
+    res_batch_21 = _screen(batch_orig + [batch_row2, batch_row1], since_filing_date="2026-08-01")
+    assert res_batch_12["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_batch_21["checks"]["insider_trades"]["sales_90d"] == 2
+    assert (
+        res_batch_12["checks"]["insider_trades"]["count_uncertain"]
+        == res_batch_21["checks"]["insider_trades"]["count_uncertain"]
+    )
+    # Even when row 2 omits old shares/price, both row orders still produce identical counts and uncertainty flags
+    batch_row2_bare = dict(
+        batch_row2,
+        footnotes={"F2": "Corrects transaction date from 2026-08-03 to 2026-07-31."},
+    )
+    res_bare_12 = _screen(batch_orig + [batch_row1, batch_row2_bare], since_filing_date="2026-08-01")
+    res_bare_21 = _screen(batch_orig + [batch_row2_bare, batch_row1], since_filing_date="2026-08-01")
+    assert res_bare_12["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_bare_21["checks"]["insider_trades"]["sales_90d"] == 2
+    assert (
+        res_bare_12["checks"]["insider_trades"]["count_uncertain"]
+        == res_bare_21["checks"]["insider_trades"]["count_uncertain"]
+        is True
+    )
 
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():

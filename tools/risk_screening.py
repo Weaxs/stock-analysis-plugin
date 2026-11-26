@@ -451,6 +451,44 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         re.IGNORECASE,
     )
     _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+    _PRIOR_PRICE_RE = re.compile(
+        r"(?:from|previously(?:\s+reported)?(?:\s+at)?|was|instead\s+of|originally(?:\s+reported)?(?:\s+at)?)"
+        r"\s+(?:a\s+price\s+of\s+)?\$\s*(\d+(?:\.\d+)?)\b|"
+        r"\b(?:price|px)\s+(?:from|was|of)\s+\$?\s*(\d+(?:\.\d+)?)\b|"
+        r"\bat\s+\$\s*(\d+(?:\.\d+)?)\b",
+        re.IGNORECASE,
+    )
+    _PRIOR_SHARES_RE = re.compile(
+        r"(?:from|previously(?:\s+reported)?(?:\s+as)?|was|instead\s+of|originally(?:\s+reported)?(?:\s+as)?)"
+        r"\s+(\d+(?:,\d{3})*(?:\.\d+)?)\s+shares?\b|"
+        r"\b(\d+(?:,\d{3})*(?:\.\d+)?)\s+shares?\s+(?:at\s+\$|on\s+\d{4}-\d{2}-\d{2})",
+        re.IGNORECASE,
+    )
+
+    def _stated_prior_prices(rtext: str, new_price) -> set[float]:
+        out: set[float] = set()
+        new_f = _safe_float(new_price)
+        for m in _PRIOR_PRICE_RE.finditer(rtext):
+            tok = next((g for g in m.groups() if g), "")
+            val = _safe_float(tok)
+            if val is not None and (new_f is None or not math.isclose(val, new_f, rel_tol=0.0, abs_tol=1e-6)):
+                out.add(val)
+        return out
+
+    def _stated_prior_shares(rtext: str, new_shares) -> set[float]:
+        out: set[float] = set()
+        new_f = _safe_float(new_shares)
+        for m in _PRIOR_SHARES_RE.finditer(rtext):
+            tok = next((g for g in m.groups() if g), "").replace(",", "")
+            val = _safe_float(tok)
+            if val is not None and (new_f is None or not math.isclose(val, new_f, rel_tol=0.0, abs_tol=1e-6)):
+                out.add(val)
+        return out
+
+    def _matches_num_set(val, target_set: set[float]) -> bool:
+        vf = _safe_float(val)
+        return vf is not None and any(math.isclose(vf, t, rel_tol=0.0, abs_tol=1e-6) for t in target_set)
+
     _COUNT_WORDS = {
         "two": 2,
         "three": 3,
@@ -639,7 +677,13 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         refs = tx.get("footnote_refs")
         return isinstance(refs, dict) and any("transactiondate" in str(k).lower() for k in refs)
 
-    def _scoped_pool(tx: dict, prior_len: int, *, ignore_tx_date: bool = False) -> tuple[list[int], bool]:
+    def _scoped_pool(
+        tx: dict,
+        prior_len: int,
+        *,
+        ignore_tx_date: bool = False,
+        prior_dates: set[str] | None = None,
+    ) -> tuple[list[int], bool]:
         orig_date = str(tx.get("original_filing_date") or "").strip()
         if not orig_date or not any(ledger[i]["filing_dates"] for i in range(prior_len)):
             return list(range(prior_len)), False
@@ -648,18 +692,24 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             return [], True
         if ignore_tx_date:
             osig = _owner_sec_sig(tx)
-            same_accs = {
-                ledger[i]["orig_accession"]
-                for i in pool
-                if _owner_sec_sig(ledger[i]["tx"]) == osig and ledger[i]["orig_accession"]
-            }
-        else:
-            b = _base_sig(tx)
-            same_accs = {
-                ledger[i]["orig_accession"]
-                for i in pool
-                if _base_sig(ledger[i]["tx"]) == b and ledger[i]["orig_accession"]
-            }
+            eligible = [i for i in pool if _owner_sec_sig(ledger[i]["tx"]) == osig]
+            if prior_dates:
+                eligible = [
+                    i
+                    for i in eligible
+                    if str(ledger[i]["tx"].get("transaction_date") or ledger[i]["tx"].get("date") or "")[:10]
+                    in prior_dates
+                ]
+                if not eligible:
+                    return [], True
+            same_accs = {ledger[i]["orig_accession"] for i in eligible if ledger[i]["orig_accession"]}
+            if len(same_accs) > 1:
+                return [], True
+            return eligible if prior_dates else pool, False
+        b = _base_sig(tx)
+        same_accs = {
+            ledger[i]["orig_accession"] for i in pool if _base_sig(ledger[i]["tx"]) == b and ledger[i]["orig_accession"]
+        }
         if len(same_accs) > 1:
             return [], True
         return pool, False
@@ -910,13 +960,24 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             else:
                 after_exact.append((tx, is_corr, rtext))
 
-        # Sub-pass 2: share-matched restatements against remaining prior ledger entries (order-independent:
-        # multiple distinct-price or mixed-state candidates are left unresolved and marked uncertain).
-        after_share: list[tuple[dict, bool, str]] = []
-        for tx, is_corr, rtext in after_exact:
+        # Sub-pass 2: share-matched restatements against remaining prior ledger entries (order-independent batch
+        # waves: multiple distinct-price or mixed-state candidates are deferred and left uncertain unless uniquely
+        # resolved by stated prior price or non-conflicting reservations).
+        pending_share = list(enumerate(after_exact))
+        resolved_share: set[int] = set()
+        uncertain_share: set[int] = set()
+
+        def _share_match_cands(
+            tx: dict,
+            is_corr: bool,
+            rtext: str,
+            *,
+            p_len: int = prior_len,
+            matched: set[int] = acc_matched_sell,
+        ) -> tuple[list[int], bool, bool, bool]:
             b = _base_sig(tx)
             shares = tx.get("shares")
-            pool, _ = _scoped_pool(tx, prior_len)
+            pool, _ = _scoped_pool(tx, p_len)
             is_restore_intent = is_corr and bool(_RESTORE_SELL_RE.search(rtext))
             corr_td = str(tx.get("transaction_date") or tx.get("date") or "").strip()[:10]
             has_explicit_prior_date = (
@@ -924,132 +985,254 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 and _has_date_corr_evidence(tx, rtext)
                 and bool({d for d in _ISO_DATE_RE.findall(rtext) if d != corr_td})
             )
-            share_cands: list[int] = []
-            if not has_explicit_prior_date and shares is not None and b[0] != ("",) and bool(b[1]):
-                share_cands = [
-                    i
-                    for i in pool
-                    if i not in acc_matched_sell
-                    and _base_sig(ledger[i]["tx"]) == b
-                    and shares in ledger[i]["shares_set"]
-                    and (is_restore_intent or not ledger[i]["reclassified"] or not is_corr)
-                ]
-                if is_restore_intent:
-                    reclass_share = [i for i in share_cands if ledger[i]["reclassified"]]
-                    if reclass_share:
-                        share_cands = reclass_share
-            if len(share_cands) == 1 or (
-                len(share_cands) > 1
-                and len({(ledger[i]["tx"].get("price"), ledger[i]["reclassified"]) for i in share_cands}) == 1
-            ):
-                target = share_cands[0]
-                acc_matched_sell.add(target)
-                was_reclassified = ledger[target]["reclassified"]
-                _update_entry(target, tx, restore_if_reclassified=is_restore_intent)
-                if not (is_restore_intent and was_reclassified):
-                    _mark_uncertain(tx)
-            elif len(share_cands) > 1:
+            if has_explicit_prior_date or shares is None or b[0] == ("",) or not bool(b[1]):
+                return [], is_restore_intent, False, False
+            cands = [
+                i
+                for i in pool
+                if i not in matched
+                and _base_sig(ledger[i]["tx"]) == b
+                and shares in ledger[i]["shares_set"]
+                and (is_restore_intent or not ledger[i]["reclassified"] or not is_corr)
+            ]
+            if is_restore_intent:
+                reclass_share = [i for i in cands if ledger[i]["reclassified"]]
+                if reclass_share:
+                    cands = reclass_share
+            prior_prices = _stated_prior_prices(rtext, tx.get("price")) if is_corr else set()
+            if prior_prices and cands:
+                # Require matching the stated prior price; never substitute a different price when unmatched.
+                filtered = [i for i in cands if _matches_num_set(ledger[i]["tx"].get("price"), prior_prices)]
+                return filtered, is_restore_intent, True, True
+            return cands, is_restore_intent, False, False
+
+        while True:
+            single_claims: dict[int, list[tuple[int, dict, bool, bool]]] = {}
+            sym_claims: dict[tuple[int, ...], list[tuple[int, dict, bool, bool]]] = {}
+            for ridx, (tx, is_corr, rtext) in pending_share:
+                if ridx in resolved_share or ridx in uncertain_share:
+                    continue
+                cands, is_restore_intent, identified_prior, _ = _share_match_cands(tx, is_corr, rtext)
+                if len(cands) == 1:
+                    single_claims.setdefault(cands[0], []).append((ridx, tx, is_restore_intent, identified_prior))
+                elif (
+                    len(cands) > 1
+                    and len({(ledger[i]["tx"].get("price"), ledger[i]["reclassified"]) for i in cands}) == 1
+                ):
+                    sym_claims.setdefault(tuple(sorted(cands)), []).append(
+                        (ridx, tx, is_restore_intent, identified_prior)
+                    )
+            progressed = False
+            claimed_targets: set[int] = set()
+            for target, claimants in single_claims.items():
+                if len(claimants) == 1:
+                    ridx, tx, is_restore_intent, identified_prior = claimants[0]
+                    was_reclassified = ledger[target]["reclassified"]
+                    acc_matched_sell.add(target)
+                    claimed_targets.add(target)
+                    _update_entry(target, tx, restore_if_reclassified=is_restore_intent)
+                    if not (identified_prior or (is_restore_intent and was_reclassified)):
+                        _mark_uncertain(tx)
+                    resolved_share.add(ridx)
+                    progressed = True
+            for slots, claimants in sym_claims.items():
+                if any(s in claimed_targets for s in slots):
+                    continue
+                if len(claimants) <= len(slots):
+                    for slot, (ridx, tx, is_restore_intent, identified_prior) in zip(slots, claimants):
+                        was_reclassified = ledger[slot]["reclassified"]
+                        acc_matched_sell.add(slot)
+                        _update_entry(slot, tx, restore_if_reclassified=is_restore_intent)
+                        if not (identified_prior or (is_restore_intent and was_reclassified)):
+                            _mark_uncertain(tx)
+                        resolved_share.add(ridx)
+                        progressed = True
+            if not progressed:
+                break
+
+        after_share: list[tuple[dict, bool, str]] = []
+        for ridx, (tx, is_corr, rtext) in pending_share:
+            if ridx in resolved_share:
+                continue
+            cands, _is_restore, _ident, had_prior_price = _share_match_cands(tx, is_corr, rtext)
+            if len(cands) >= 1 or had_prior_price:
                 _mark_uncertain(tx)
             else:
                 after_share.append((tx, is_corr, rtext))
 
-        # Sub-pass 3: explicit corrections against remaining prior ledger entries (order-independent: resolve only
-        # when a unique or symmetric candidate exists; otherwise mark uncertain without inflating count).
+        # Sub-pass 3: explicit corrections against remaining prior ledger entries (order-independent batch waves:
+        # resolve non-conflicting unique assignments iteratively against the shared pre-wave ledger state so both
+        # row orders produce identical ledger dates, confirmed counts, and uncertainty marks).
         acc_new_sales: list[dict] = list(acc_explicit_adds)
-        for tx, is_corr, rtext in after_share:
+        corr_rows = [(idx, tx, rtext) for idx, (tx, is_corr, rtext) in enumerate(after_share) if is_corr]
+        unlinked_non_corr = [(tx, rtext) for tx, is_corr, rtext in after_share if not is_corr]
+
+        def _corr_match_cands(
+            tx: dict,
+            rtext: str,
+            *,
+            p_len: int = prior_len,
+            matched: set[int] = acc_matched_sell,
+        ) -> tuple[list[int], bool, bool, bool]:
+            b = _base_sig(tx)
+            if b[0] == ("",) or not bool(b[1]):
+                return [], False, False, False
+            is_restore_intent = bool(_RESTORE_SELL_RE.search(rtext))
+            corr_td = str(tx.get("transaction_date") or tx.get("date") or "").strip()[:10]
+            prior_dates = (
+                {d for d in _ISO_DATE_RE.findall(rtext) if d != corr_td}
+                if _has_date_corr_evidence(tx, rtext)
+                else set()
+            )
+            prior_prices = _stated_prior_prices(rtext, tx.get("price"))
+            prior_shares = _stated_prior_shares(rtext, tx.get("shares"))
+            if not prior_dates:
+                pool, pool_ambig = _scoped_pool(tx, p_len)
+                if not pool_ambig:
+                    base_cands = [
+                        i
+                        for i in pool
+                        if i not in matched
+                        and _base_sig(ledger[i]["tx"]) == b
+                        and (is_restore_intent or not ledger[i]["reclassified"])
+                    ]
+                    if prior_shares:
+                        base_cands = [
+                            i
+                            for i in base_cands
+                            if any(_matches_num_set(s, prior_shares) for s in ledger[i]["shares_set"])
+                        ]
+                    if prior_prices:
+                        base_cands = [
+                            i for i in base_cands if _matches_num_set(ledger[i]["tx"].get("price"), prior_prices)
+                        ]
+                    if base_cands:
+                        return base_cands, is_restore_intent, bool(prior_shares or prior_prices), False
+            # Explicit transaction-date correction: link via prior date / original filing when unique.
+            if _has_date_corr_evidence(tx, rtext):
+                dpool, dpool_ambig = _scoped_pool(
+                    tx,
+                    p_len,
+                    ignore_tx_date=True,
+                    prior_dates=prior_dates or None,
+                )
+                if dpool_ambig:
+                    return [], is_restore_intent, False, True
+                osig = _owner_sec_sig(tx)
+                date_cands = [
+                    i
+                    for i in dpool
+                    if i not in matched
+                    and _owner_sec_sig(ledger[i]["tx"]) == osig
+                    and (is_restore_intent or not ledger[i]["reclassified"])
+                ]
+                if prior_dates:
+                    # Strict prior-date match: never substitute a different date when the stated prior date is absent.
+                    date_cands = [
+                        i
+                        for i in date_cands
+                        if str(ledger[i]["tx"].get("transaction_date") or ledger[i]["tx"].get("date") or "")[:10]
+                        in prior_dates
+                    ]
+                if prior_shares:
+                    date_cands = [
+                        i for i in date_cands if any(_matches_num_set(s, prior_shares) for s in ledger[i]["shares_set"])
+                    ]
+                if prior_prices:
+                    date_cands = [i for i in date_cands if _matches_num_set(ledger[i]["tx"].get("price"), prior_prices)]
+                shares = tx.get("shares")
+                price = tx.get("price")
+                if len(date_cands) > 1 and shares is not None and price is not None:
+                    by_sp = [
+                        i
+                        for i in date_cands
+                        if shares in ledger[i]["shares_set"] and ledger[i]["tx"].get("price") == price
+                    ]
+                    if by_sp:
+                        date_cands = by_sp
+                if len(date_cands) > 1 and shares is not None:
+                    by_s = [i for i in date_cands if shares in ledger[i]["shares_set"]]
+                    if by_s:
+                        date_cands = by_s
+                return date_cands, is_restore_intent, bool(prior_shares or prior_prices), True
+            return [], is_restore_intent, False, False
+
+        resolved_corr: set[int] = set()
+        while True:
+            single_corr_claims: dict[int, list[tuple[int, dict, bool, bool, bool]]] = {}
+            sym_corr_claims: dict[tuple[int, ...], list[tuple[int, dict, bool, bool, bool]]] = {}
+            for ridx, tx, rtext in corr_rows:
+                if ridx in resolved_corr:
+                    continue
+                cands, is_restore_intent, identified_prior, is_date_match = _corr_match_cands(tx, rtext)
+                if len(cands) == 1:
+                    single_corr_claims.setdefault(cands[0], []).append(
+                        (ridx, tx, is_restore_intent, identified_prior, is_date_match)
+                    )
+                elif (
+                    len(cands) > 1
+                    and len(
+                        {
+                            (
+                                str(ledger[i]["tx"].get("transaction_date") or ledger[i]["tx"].get("date") or "")[:10],
+                                ledger[i]["tx"].get("shares"),
+                                ledger[i]["tx"].get("price"),
+                                ledger[i]["reclassified"],
+                            )
+                            for i in cands
+                        }
+                    )
+                    == 1
+                ):
+                    sym_corr_claims.setdefault(tuple(sorted(cands)), []).append(
+                        (ridx, tx, is_restore_intent, identified_prior, is_date_match)
+                    )
+            progressed = False
+            claimed_targets: set[int] = set()
+            for target, claimants in single_corr_claims.items():
+                if len(claimants) == 1:
+                    ridx, tx, is_restore_intent, identified_prior, is_date_match = claimants[0]
+                    same_sp = (
+                        tx.get("shares") is not None
+                        and tx.get("shares") in ledger[target]["shares_set"]
+                        and ledger[target]["tx"].get("price") == tx.get("price")
+                    )
+                    acc_matched_sell.add(target)
+                    claimed_targets.add(target)
+                    _update_entry(target, tx, restore_if_reclassified=is_restore_intent)
+                    if not ((is_date_match and (same_sp or identified_prior)) or identified_prior):
+                        _mark_uncertain(tx)
+                    resolved_corr.add(ridx)
+                    progressed = True
+            for slots, claimants in sym_corr_claims.items():
+                if any(s in claimed_targets for s in slots):
+                    continue
+                if len(claimants) <= len(slots):
+                    for slot, (ridx, tx, is_restore_intent, identified_prior, is_date_match) in zip(slots, claimants):
+                        same_sp = (
+                            tx.get("shares") is not None
+                            and tx.get("shares") in ledger[slot]["shares_set"]
+                            and ledger[slot]["tx"].get("price") == tx.get("price")
+                        )
+                        acc_matched_sell.add(slot)
+                        _update_entry(slot, tx, restore_if_reclassified=is_restore_intent)
+                        if not ((is_date_match and (same_sp or identified_prior)) or identified_prior):
+                            _mark_uncertain(tx)
+                        resolved_corr.add(ridx)
+                        progressed = True
+            if not progressed:
+                break
+
+        for ridx, tx, _rtext in corr_rows:
+            if ridx not in resolved_corr:
+                _mark_uncertain(tx)
+
+        # Sub-pass 4: only confirm an unlinked sell row as a new sale when filing evidence supports an addition
+        # (unclaimed remarks addition, or every prior entry on that base signature was already reserved in this
+        # same accession). Otherwise report uncertainty without inflating the confirmed sale count.
+        for tx, _rtext in unlinked_non_corr:
             b = _base_sig(tx)
             pool, _ = _scoped_pool(tx, prior_len)
-            is_restore_intent = is_corr and bool(_RESTORE_SELL_RE.search(rtext))
-            corr_td = str(tx.get("transaction_date") or tx.get("date") or "").strip()[:10]
-            has_explicit_prior_date = (
-                is_corr
-                and _has_date_corr_evidence(tx, rtext)
-                and bool({d for d in _ISO_DATE_RE.findall(rtext) if d != corr_td})
-            )
-            if is_corr:
-                if b[0] != ("",) and bool(b[1]):
-                    base_cands = (
-                        []
-                        if has_explicit_prior_date
-                        else [
-                            i
-                            for i in pool
-                            if i not in acc_matched_sell
-                            and _base_sig(ledger[i]["tx"]) == b
-                            and (is_restore_intent or not ledger[i]["reclassified"])
-                        ]
-                    )
-                    if len(base_cands) == 1 or (
-                        len(base_cands) > 1
-                        and len(
-                            {
-                                (ledger[i]["tx"].get("shares"), ledger[i]["tx"].get("price"), ledger[i]["reclassified"])
-                                for i in base_cands
-                            }
-                        )
-                        == 1
-                    ):
-                        target = base_cands[0]
-                        acc_matched_sell.add(target)
-                        _update_entry(target, tx, restore_if_reclassified=is_restore_intent)
-                        _mark_uncertain(tx)
-                        continue
-                    # Explicit transaction-date correction: link via prior date / original filing when unique.
-                    if not base_cands and _has_date_corr_evidence(tx, rtext):
-                        dpool, dpool_ambig = _scoped_pool(tx, prior_len, ignore_tx_date=True)
-                        if not dpool_ambig:
-                            osig = _owner_sec_sig(tx)
-                            corr_td = str(tx.get("transaction_date") or tx.get("date") or "").strip()[:10]
-                            prior_dates = {d for d in _ISO_DATE_RE.findall(rtext) if d != corr_td}
-                            date_cands = [
-                                i
-                                for i in dpool
-                                if i not in acc_matched_sell
-                                and _owner_sec_sig(ledger[i]["tx"]) == osig
-                                and (is_restore_intent or not ledger[i]["reclassified"])
-                            ]
-                            if prior_dates:
-                                by_prior = [
-                                    i
-                                    for i in date_cands
-                                    if str(
-                                        ledger[i]["tx"].get("transaction_date") or ledger[i]["tx"].get("date") or ""
-                                    )[:10]
-                                    in prior_dates
-                                ]
-                                if by_prior:
-                                    date_cands = by_prior
-                            shares = tx.get("shares")
-                            price = tx.get("price")
-                            if len(date_cands) > 1 and shares is not None and price is not None:
-                                by_sp = [
-                                    i
-                                    for i in date_cands
-                                    if shares in ledger[i]["shares_set"] and ledger[i]["tx"].get("price") == price
-                                ]
-                                if by_sp:
-                                    date_cands = by_sp
-                            if len(date_cands) > 1 and shares is not None:
-                                by_s = [i for i in date_cands if shares in ledger[i]["shares_set"]]
-                                if by_s:
-                                    date_cands = by_s
-                            if len(date_cands) == 1:
-                                target = date_cands[0]
-                                acc_matched_sell.add(target)
-                                same_sp = (
-                                    shares is not None
-                                    and shares in ledger[target]["shares_set"]
-                                    and ledger[target]["tx"].get("price") == price
-                                )
-                                _update_entry(target, tx, restore_if_reclassified=is_restore_intent)
-                                if not same_sp:
-                                    _mark_uncertain(tx)
-                                continue
-                _mark_uncertain(tx)
-                continue
-            # Sub-pass 4: only confirm an unlinked sell row as a new sale when filing evidence supports an addition
-            # (unclaimed remarks addition, or every prior entry on that base signature was already reserved in this
-            # same accession). Otherwise report uncertainty without inflating the confirmed sale count.
             has_prior_same_base = any(_base_sig(ledger[i]["tx"]) == b for i in pool)
             all_prior_same_base_reserved = has_prior_same_base and all(
                 i in acc_matched_sell for i in pool if _base_sig(ledger[i]["tx"]) == b
