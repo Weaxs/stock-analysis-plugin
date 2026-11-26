@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
@@ -351,11 +352,11 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     result["available"] = not truncated and not sec_warnings
     txs = [tx for tx in data["transactions"] if isinstance(tx, dict)]
 
+    def _tx_code(tx: dict) -> str:
+        return str(tx.get("code") or tx.get("transaction_code") or "").upper()
+
     def _is_sell(tx: dict) -> bool:
-        return (
-            str(tx.get("code") or tx.get("transaction_code") or "").upper() == "S"
-            or str(tx.get("action") or "").lower() == "sell"
-        )
+        return _tx_code(tx) == "S" or str(tx.get("action") or "").lower() == "sell"
 
     def _owner_key(tx: dict) -> tuple:
         owners = tx.get("owners")
@@ -381,20 +382,67 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             bool(tx.get("derivative")),
         )
 
+    _ADDITION_RE = re.compile(
+        r"(omit(?:ted|ting)?|inadvertently\s+omitted|previously\s+unreported|"
+        r"add(?:ed|ing|itional)\s+(?:a\s+)?(?:previously\s+omitted\s+)?transaction|"
+        r"late[- ]?report(?:ed|ing)|补报|漏报|遗漏)",
+        re.IGNORECASE,
+    )
+    _CORRECTION_RE = re.compile(
+        r"(correct(?:ed|ing|ion|s)?|reclassif(?:ied|y|ying)|instead\s+of|"
+        r"erroneously\s+reported|incorrectly\s+reported|misreported|should\s+have\s+been|"
+        r"replaces?|supersedes?|restat(?:ed|es|ing|ement)|更正|修正|重分类|误报)",
+        re.IGNORECASE,
+    )
+
+    def _amendment_text(tx: dict) -> str:
+        parts: list[str] = []
+        footnotes = tx.get("footnotes")
+        refs = tx.get("footnote_refs")
+        if isinstance(footnotes, dict) and footnotes:
+            if isinstance(refs, list) and refs:
+                parts.extend(str(footnotes.get(r) or "") for r in refs if footnotes.get(r))
+            else:
+                parts.extend(str(v) for v in footnotes.values() if v)
+        elif isinstance(footnotes, str) and footnotes:
+            parts.append(footnotes)
+        for key in ("remarks", "amendment_reason", "note"):
+            if tx.get(key):
+                parts.append(str(tx[key]))
+        return " ".join(parts)
+
+    def _amendment_intent(tx: dict) -> tuple[bool, bool]:
+        text = _amendment_text(tx)
+        if not text:
+            return False, False
+        return bool(_ADDITION_RE.search(text)), bool(_CORRECTION_RE.search(text))
+
     all_orig = [tx for tx in txs if str(tx.get("form") or "").upper() != "4/A"]
     all_amend = [tx for tx in txs if str(tx.get("form") or "").upper() == "4/A"]
     has_amendments = bool(all_amend) or any(
         "amendment" in w.lower() or "double-count" in w.lower() for w in sec_warnings
     )
 
-    # Start with original Form 4 sells, then reconcile Form 4/A amendments before counting.
+    # Start with original Form 4 sells and original Form 4 non-sells.
     active_orig_sells = [tx for tx in all_orig if _is_sell(tx)]
+    orig_non_sells = [tx for tx in all_orig if not _is_sell(tx)]
     reclassified_indices: set[int] = set()
     affected_owners: set[tuple] = set()
     unaligned_global = has_amendments and not all_amend
 
-    # 1. Reconcile non-sell 4/A rows (e.g., an S transaction corrected to Gift G) idempotently per accession.
-    # Require matching (owner, date, security, derivative) AND shares so an unrelated same-date gift never drops a sale.
+    def _mark_uncertain(tx: dict) -> None:
+        nonlocal unaligned_global
+        ok = _owner_key(tx)
+        if ok != ("",):
+            affected_owners.add(ok)
+        else:
+            unaligned_global = True
+
+    # 1. Reconcile non-sell 4/A rows idempotently per accession in two passes:
+    #    - First skip rows that match an existing original non-sell Form 4 (e.g., footnote-only amendment to a Form 4 gift).
+    #    - Pass A resolves unambiguous exact (base, shares, price) and unique (base, shares) matches across all accessions.
+    #    - Pass B resolves remaining rows (blank-price multi-candidate links or explicit corrections with changed shares),
+    #      retaining ambiguous candidates and flagging uncertainty rather than deleting an arbitrary sale.
     non_sell_by_acc: dict[str, list[dict]] = {}
     for tx in all_amend:
         if _is_sell(tx):
@@ -402,58 +450,122 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         acc = str(tx.get("accession") or f"__amend_nonsell_{id(tx)}")
         non_sell_by_acc.setdefault(acc, []).append(tx)
 
-    for acc_rows in non_sell_by_acc.values():
+    acc_nonsell_matched: dict[str, set[int]] = {}
+    deferred_nonsells: list[tuple[str, dict]] = []
+
+    for acc, acc_rows in non_sell_by_acc.items():
+        orig_ns_matched: set[int] = set()
         acc_matched: set[int] = set()
+        acc_nonsell_matched[acc] = acc_matched
         for tx in acc_rows:
-            exact = _exact_sig(tx)
+            is_add, is_corr = _amendment_intent(tx)
             base = _base_sig(tx)
+            code = _tx_code(tx)
             shares = tx.get("shares")
+            # Match against original non-sell Form 4 filings first so amending a Form 4 gift never removes a sale.
+            ns_idx = next(
+                (
+                    i
+                    for i, orig_ns in enumerate(orig_non_sells)
+                    if i not in orig_ns_matched
+                    and _base_sig(orig_ns) == base
+                    and _tx_code(orig_ns) == code
+                    and (shares is None or orig_ns.get("shares") == shares)
+                ),
+                None,
+            )
+            if ns_idx is not None:
+                orig_ns_matched.add(ns_idx)
+                continue
+            if is_add and not is_corr:
+                # Explicitly newly added non-sell transaction (e.g., omitted gift): keep separate from sales.
+                continue
+
+            exact = _exact_sig(tx)
             has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
-            matched_idx = None
+            if has_identity and tx.get("price") is not None:
+                exact_cands = [
+                    i for i, orig in enumerate(active_orig_sells) if i not in acc_matched and _exact_sig(orig) == exact
+                ]
+                if exact_cands:
+                    acc_matched.add(exact_cands[0])
+                    reclassified_indices.add(exact_cands[0])
+                    continue
             if has_identity:
-                matched_idx = next(
-                    (
-                        i
-                        for i, orig in enumerate(active_orig_sells)
-                        if i not in acc_matched and _exact_sig(orig) == exact
-                    ),
-                    None,
-                )
-                if matched_idx is None:
-                    matched_idx = next(
-                        (
-                            i
-                            for i, orig in enumerate(active_orig_sells)
-                            if i not in acc_matched and _base_sig(orig) == base and orig.get("shares") == shares
-                        ),
-                        None,
-                    )
-            if matched_idx is not None:
-                acc_matched.add(matched_idx)
-                reclassified_indices.add(matched_idx)
-            elif not has_identity:
-                # Missing owner/date/shares prevents confirming linkage; keep original sales and flag uncertainty.
-                ok = _owner_key(tx)
-                if ok != ("",):
-                    affected_owners.add(ok)
-                else:
-                    unaligned_global = True
-            # Otherwise (valid identity & shares that match no original sale), treat as an unrelated non-sell filing.
+                share_cands = [
+                    i
+                    for i, orig in enumerate(active_orig_sells)
+                    if i not in acc_matched and _base_sig(orig) == base and orig.get("shares") == shares
+                ]
+                if len(share_cands) == 1 or (
+                    len(share_cands) > 1 and len({active_orig_sells[i].get("price") for i in share_cands}) == 1
+                ):
+                    acc_matched.add(share_cands[0])
+                    reclassified_indices.add(share_cands[0])
+                    continue
+                if len(share_cands) > 1:
+                    deferred_nonsells.append((acc, tx))
+                    continue
+            deferred_nonsells.append((acc, tx))
+
+    for acc, tx in deferred_nonsells:
+        acc_matched = acc_nonsell_matched[acc]
+        is_add, is_corr = _amendment_intent(tx)
+        base = _base_sig(tx)
+        shares = tx.get("shares")
+        has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
+        if has_identity:
+            share_cands = [
+                i
+                for i, orig in enumerate(active_orig_sells)
+                if i not in acc_matched and _base_sig(orig) == base and orig.get("shares") == shares
+            ]
+            if len(share_cands) > 1:
+                already_reclass = [i for i in share_cands if i in reclassified_indices]
+                if len(already_reclass) == 1:
+                    # Successive correction omitting price links to the already-identified sale; do not drop another.
+                    acc_matched.add(already_reclass[0])
+                    continue
+                # Ambiguous blank-price correction across distinct candidates: retain all candidates & flag uncertainty.
+                _mark_uncertain(tx)
+                continue
+        if is_corr and base[0] != ("",) and bool(base[1]):
+            # Explicit correction where shares/price changed (e.g. 6-share S corrected to 7-share G).
+            base_cands = [
+                i for i, orig in enumerate(active_orig_sells) if i not in acc_matched and _base_sig(orig) == base
+            ]
+            if len(base_cands) == 1:
+                acc_matched.add(base_cands[0])
+                reclassified_indices.add(base_cands[0])
+                continue
+            already_reclass = [i for i in base_cands if i in reclassified_indices]
+            if len(already_reclass) == 1:
+                acc_matched.add(already_reclass[0])
+                continue
+            _mark_uncertain(tx)
+            continue
+        if not has_identity:
+            _mark_uncertain(tx)
+        # Otherwise: valid non-sell row with different shares and no correction note -> unrelated gift; keep separate.
 
     confirmed_orig_sells = [tx for i, tx in enumerate(active_orig_sells) if i not in reclassified_indices]
 
-    # 2. Match Form 4/A sell rows against confirmed original sells by base signature (owner, date, security, derivative)
-    # so restatements (e.g. revised price/shares) never inflate sales_90d; keep truly separate transactions idempotently.
-    orig_base_counts: dict[tuple, int] = {}
+    # 2. Match Form 4/A sell rows against ALL original Form 4 sells (before gift reclassification) so:
+    #    - Exact duplicates or share-matched price restatements never inflate sales_90d regardless of filing order;
+    #    - Explicitly omitted/added sales and distinct newly disclosed (shares, price) sales are counted separately;
+    #    - Identical newly added sales repeated across accessions are deduplicated idempotently by exact signature.
     orig_exact_counts: dict[tuple, int] = {}
-    for tx in confirmed_orig_sells:
-        b = _base_sig(tx)
+    orig_share_counts: dict[tuple, int] = {}
+    orig_base_counts: dict[tuple, int] = {}
+    for tx in active_orig_sells:
         e = _exact_sig(tx)
-        orig_base_counts[b] = orig_base_counts.get(b, 0) + 1
+        s_key = (_base_sig(tx), tx.get("shares"))
+        b = _base_sig(tx)
         orig_exact_counts[e] = orig_exact_counts.get(e, 0) + 1
+        orig_share_counts[s_key] = orig_share_counts.get(s_key, 0) + 1
+        orig_base_counts[b] = orig_base_counts.get(b, 0) + 1
 
-    max_base_seen = dict(orig_base_counts)
-    unique_amended_sells = 0
+    max_added_exact: dict[tuple, int] = {}
     amended_by_acc: dict[str, list[dict]] = {}
     for tx in all_amend:
         if not _is_sell(tx):
@@ -462,42 +574,58 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         amended_by_acc.setdefault(acc, []).append(tx)
 
     for acc_rows in amended_by_acc.values():
-        acc_base_counts: dict[tuple, int] = {}
-        acc_exact_counts: dict[tuple, int] = {}
-        acc_sample_base: dict[tuple, dict] = {}
-        acc_sample_exact: dict[tuple, dict] = {}
+        used_orig_exact: dict[tuple, int] = {}
+        used_orig_share: dict[tuple, int] = {}
+        used_orig_base: dict[tuple, int] = {}
+        acc_added_exact: dict[tuple, int] = {}
         for tx in acc_rows:
-            b = _base_sig(tx)
+            is_add, is_corr = _amendment_intent(tx)
             e = _exact_sig(tx)
-            acc_base_counts[b] = acc_base_counts.get(b, 0) + 1
-            acc_exact_counts[e] = acc_exact_counts.get(e, 0) + 1
-            acc_sample_base[b] = tx
-            acc_sample_exact[e] = tx
-        for b, cnt in acc_base_counts.items():
-            already = max_base_seen.get(b, 0)
-            if cnt > already:
-                unique_amended_sells += cnt - already
-                max_base_seen[b] = cnt
-                ok = _owner_key(acc_sample_base[b])
-                if ok != ("",):
-                    affected_owners.add(ok)
-                else:
-                    unaligned_global = True
-        for e, cnt in acc_exact_counts.items():
-            if cnt > orig_exact_counts.get(e, 0):
-                # Restatement with changed price/shares or new amended sell: mark owner uncertain for buy-veto threshold.
-                ok = _owner_key(acc_sample_exact[e])
-                if ok != ("",):
-                    affected_owners.add(ok)
-                else:
-                    unaligned_global = True
+            b = _base_sig(tx)
+            s_key = (b, tx.get("shares"))
 
+            # Explicit omitted/added transaction: count as an addition (do not swallow into existing same-day sells).
+            if is_add and not is_corr:
+                acc_added_exact[e] = acc_added_exact.get(e, 0) + 1
+                _mark_uncertain(tx)
+                continue
+
+            # Exact duplicate of an original Form 4 sell (before reclassification).
+            if used_orig_exact.get(e, 0) < orig_exact_counts.get(e, 0):
+                used_orig_exact[e] = used_orig_exact.get(e, 0) + 1
+                used_orig_share[s_key] = used_orig_share.get(s_key, 0) + 1
+                used_orig_base[b] = used_orig_base.get(b, 0) + 1
+                continue
+
+            # Share-matched restatement (e.g., price revised on an original Form 4 sell): adds 0 rows.
+            if tx.get("shares") is not None and used_orig_share.get(s_key, 0) < orig_share_counts.get(s_key, 0):
+                used_orig_share[s_key] = used_orig_share.get(s_key, 0) + 1
+                used_orig_base[b] = used_orig_base.get(b, 0) + 1
+                _mark_uncertain(tx)
+                continue
+
+            # Explicit correction changing share count of an original Form 4 sell: adds 0 rows, flags uncertainty.
+            if is_corr and used_orig_base.get(b, 0) < orig_base_counts.get(b, 0):
+                used_orig_base[b] = used_orig_base.get(b, 0) + 1
+                _mark_uncertain(tx)
+                continue
+
+            # Distinct sale first disclosed in this 4/A accession (different shares/price or new date/security).
+            acc_added_exact[e] = acc_added_exact.get(e, 0) + 1
+            _mark_uncertain(tx)
+
+        for e, cnt in acc_added_exact.items():
+            if cnt > max_added_exact.get(e, 0):
+                max_added_exact[e] = cnt
+
+    unique_amended_sells = sum(max_added_exact.values())
     dedup_sales = len(confirmed_orig_sells) + unique_amended_sells
     unaffected_orig_sells = (
         0 if unaligned_global else sum(1 for tx in confirmed_orig_sells if _owner_key(tx) not in affected_owners)
     )
     result["sales_90d"] = dedup_sales
     result["amendments_present"] = has_amendments
+    result["count_uncertain"] = bool(affected_owners or unaligned_global)
     # Only trigger high-severity buy veto when reconciled, unaffected original Form 4 sells reach threshold.
     if unaffected_orig_sells >= 6:
         result["flags"].append(
@@ -625,6 +753,7 @@ def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
                 "available": extra["available"],
                 "configured": extra["configured"],
                 "truncated": extra.get("truncated", False),
+                "count_uncertain": extra.get("count_uncertain", False),
             }
             all_flags.extend(extra["flags"])
             if not extra["configured"]:
@@ -632,6 +761,10 @@ def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
             else:
                 if extra.get("truncated"):
                     warnings.append("SEC Form 4 filings were truncated at top 10; insider sales coverage is incomplete")
+                if extra.get("count_uncertain"):
+                    warnings.append(
+                        "SEC Form 4/A amendments include unlinked or ambiguous revisions; insider sale count is uncertain"
+                    )
                 warnings.extend(extra.get("warnings") or [])
 
     checks["news_risks"] = {k: v for k, v in news.items() if k != "flags"}

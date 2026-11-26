@@ -479,6 +479,115 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     assert res_restate["checks"]["insider_trades"]["sales_90d"] == 2
     assert not any(f["category"] == "insider" for f in res_restate["flags"])
 
+    def _run_us(tx_list):
+        return risk_screening.screen_risk(
+            "AAPL",
+            "Apple",
+            inputs={
+                "quote": {"pe": 25, "pb": 5},
+                "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+            },
+            run=lambda script, args, **kw: (
+                {
+                    "transactions": tx_list,
+                    "truncated": False,
+                    "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+                }
+                if script == "sec_edgar.py"
+                else []
+            ),
+        )
+
+    # Branch A (Weaxs): 6 orig S + 1 orig Form 4 G (same shares as one S) + 4/A G adding footnote -> keep all 6 S & veto
+    orig_gift = dict(
+        six_orig[0],
+        accession="0001-26-000050",
+        transaction_code="G",
+        direction="other",
+        price=None,
+    )
+    amend_gift_fn = dict(
+        orig_gift,
+        form="4/A",
+        accession="0001-26-000051",
+        footnotes={"F1": "Filing amended solely to add gift recipient footnote."},
+        footnote_refs=["F1"],
+    )
+    res_orig_gift = _run_us(six_orig + [orig_gift, amend_gift_fn])
+    assert res_orig_gift["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_orig_gift["veto_buy"] is True
+
+    # Branch B (Weaxs): 6 orig S (6 shares) + 4/A explicitly correcting 6-share S to 7-share G -> 5 sales, no veto
+    six_small = [dict(r, shares=6) for r in six_orig]
+    corr_7g = dict(
+        six_small[5],
+        form="4/A",
+        accession="0001-26-000052",
+        transaction_code="G",
+        direction="other",
+        shares=7,
+        price=None,
+        footnotes={"F1": "Corrects previously misreported 6-share sale to a 7-share gift."},
+        footnote_refs=["F1"],
+    )
+    res_corr_7g = _run_us(six_small + [corr_7g])
+    assert res_corr_7g["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_corr_7g["veto_buy"] is not True
+
+    # Branch C (Weaxs): 2 orig same-day S + 4/A explicitly adding omitted 3rd S -> 3 sales, medium flag
+    two_same = [
+        dict(six_orig[0], transaction_date="2026-10-08", shares=100, price=150.0),
+        dict(six_orig[0], transaction_date="2026-10-08", shares=100, price=150.0),
+    ]
+    added_third = dict(
+        six_orig[0],
+        form="4/A",
+        accession="0001-26-000053",
+        transaction_date="2026-10-08",
+        shares=100,
+        price=150.0,
+        footnotes={"F1": "Amends original Form 4 to report an inadvertently omitted third sale."},
+        footnote_refs=["F1"],
+    )
+    res_added_third = _run_us(two_same + [added_third])
+    assert res_added_third["checks"]["insider_trades"]["sales_90d"] == 3
+    assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res_added_third["flags"])
+
+    # Branch D (CodeRabbit Major): 7 orig S incl. two same-day 100-sh ($10, $20); 4/A #1 G @ $20 + 4/A #2 G @ price=None
+    # Must remove only the $20 sale (6 remaining, veto preserved), NOT also remove the $10 sale.
+    seven_orig = [
+        dict(six_orig[0], transaction_date="2026-10-09", shares=100, price=10.0),
+        dict(six_orig[0], transaction_date="2026-10-09", shares=100, price=20.0),
+    ] + [dict(six_orig[i], transaction_date=f"2026-10-1{i}") for i in range(5)]
+    g_with_px = dict(seven_orig[1], form="4/A", accession="0001-26-000060", transaction_code="G", direction="other")
+    g_blank_px = dict(
+        seven_orig[1], form="4/A", accession="0001-26-000061", transaction_code="G", direction="other", price=None
+    )
+    res_blank_followup = _run_us(seven_orig + [g_with_px, g_blank_px])
+    assert res_blank_followup["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_blank_followup["veto_buy"] is True
+
+    # If ONLY the blank-price 4/A exists across two distinct-price candidates ($10 & $20), retain both & flag uncertainty
+    res_ambig_blank = _run_us(seven_orig + [g_blank_px])
+    assert res_ambig_blank["checks"]["insider_trades"]["sales_90d"] == 7
+    assert res_ambig_blank["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # Branch E (CodeRabbit Minor 477): 1 orig S + two 4/A accessions each adding a different same-day S -> 3 sales, medium
+    one_orig = [dict(six_orig[0], transaction_date="2026-10-15", shares=100, price=10.0)]
+    add_s1 = dict(one_orig[0], form="4/A", accession="0001-26-000070", shares=200, price=11.0)
+    add_s2 = dict(one_orig[0], form="4/A", accession="0001-26-000071", shares=300, price=12.0)
+    res_two_adds = _run_us(one_orig + [add_s1, add_s2])
+    assert res_two_adds["checks"]["insider_trades"]["sales_90d"] == 3
+    assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res_two_adds["flags"])
+
+    # Branch F (CodeRabbit Minor 452): 3 orig S + 4/A restating 1st S (new price) + 4/A reclassifying 1st S to G -> 2 sales, no flag
+    three_orig = six_orig[:3]
+    restate_first = dict(three_orig[0], form="4/A", accession="0001-26-000080", price=155.0)
+    reclass_first = dict(three_orig[0], form="4/A", accession="0001-26-000081", transaction_code="G", direction="other")
+    res_restate_and_gift = _run_us(three_orig + [restate_first, reclass_first])
+    assert res_restate_and_gift["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_restate_and_gift["flags"])
+
 
 def test_us_risk_screening_truncated_sec_marks_incomplete_and_keeps_flags(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
