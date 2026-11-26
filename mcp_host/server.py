@@ -49,6 +49,7 @@ CORE_TOOL_NAMES = frozenset(
         "build_watchlist_context",
         "diagnose_data_sources",
         "get_market_capabilities",
+        "render_stock_report",
     }
 )
 DISCOVERY_TOOL_DEF = {
@@ -68,15 +69,32 @@ _current = threading.local()
 # Each call is a Python process that loads pandas; parallel model calls must not fan out unbounded.
 _SLOTS = threading.BoundedSemaphore(4)
 _FRONTMATTER_RE = re.compile(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n?")
-_MCP_SKILL_PREAMBLE = (
-    "[MCP 执行说明]\n"
-    "你当前通过 MCP 协议接入 stock-analysis 工具集，无需也不要依赖本地 shell 脚本（如 `python3 scripts/gather.py`）或本地文件路径：\n"
-    "1. 请直接调用已注册的 MCP 工具完成数据采集与分析（如 `get_quote`、`get_kline`、`get_technical_analysis`、`get_financials`、"
-    "`get_fundamental_context`、`get_valuation_history`、`get_macro_anchors`、`screen_risk`、`detect_market_regime`、"
-    "`search_stock_news`、`render_stock_report` 等；若开启了 `--discovery`，先调用 `stock_tool_search` 加载所需工具）。\n"
-    "2. 若正文引用了 `references/...` 或 `schemas/...` 文件，请通过 MCP `resources/read` 读取对应的 "
-    "`stock-skill://<skill>/references/<file>` 或 `stock-schema://<file>` 资源（例如 `stock-schema://report_schema.json`）。\n\n"
-)
+
+
+def _mcp_skill_preamble(*, discovery: bool, profile: str) -> str:
+    if discovery:
+        tool_guidance = (
+            "1. 当前会话开启了 `--discovery` 按需发现模式：请先调用 `stock_tool_search` 按关键词搜索并加载所需 MCP 工具"
+            "（如 `get_quote`、`get_kline`、`get_technical_analysis`、`get_financials`、`screen_risk`、`render_stock_report` 等），再直接调用已加载工具完成分析。\n"
+        )
+    elif profile == "core":
+        tool_guidance = (
+            "1. 当前会话运行在 `--profile core` 核心子集模式（暴露 19 个核心工具，含行情/K线/技术面/财务/估值/宏观/风控/新闻与 `render_stock_report`）："
+            "请仅调用 `tools/list` 中已暴露的 MCP 工具完成采集与报告渲染；若正文中引用了未在当前列表中的扩展工具，请跳过该扩展环节并在结论中说明。\n"
+        )
+    else:
+        tool_guidance = (
+            "1. 请直接调用已注册的 MCP 工具完成数据采集与分析（如 `get_quote`、`get_kline`、`get_technical_analysis`、`get_financials`、"
+            "`get_fundamental_context`、`get_valuation_history`、`get_macro_anchors`、`screen_risk`、`detect_market_regime`、"
+            "`search_stock_news`、`render_stock_report` 等）。\n"
+        )
+    return (
+        "[MCP 执行说明]\n"
+        "你当前通过 MCP 协议接入 stock-analysis 工具集，无需也不要依赖本地 shell 脚本（如 `python3 scripts/gather.py`）或本地文件路径：\n"
+        f"{tool_guidance}"
+        "2. 若正文引用了 `references/...` 或 `schemas/...` 文件，请通过 MCP `resources/read` 读取对应的 "
+        "`stock-skill://<skill>/references/<file>` 或 `stock-schema://<file>` 资源（例如 `stock-schema://report_schema.json`）。\n\n"
+    )
 
 
 def _skills_dir() -> Path:
@@ -348,7 +366,7 @@ def handle(method: str, params: dict, *, session_state: dict | None = None) -> d
         if not isinstance(arguments, dict):
             raise RpcError(-32602, "Prompt arguments must be an object")
         req = arguments.get("request")
-        text = f"{_MCP_SKILL_PREAMBLE}{prompt['body']}"
+        text = f"{_mcp_skill_preamble(discovery=discovery, profile=profile)}{prompt['body']}"
         if isinstance(req, str) and req.strip():
             text = f"{text}\n\n---\n用户请求：{req.strip()}"
         return {
@@ -475,7 +493,7 @@ def main(argv: list[str] | None = None) -> None:
         "--profile",
         choices=("full", "core"),
         default=os.environ.get("STOCK_MCP_PROFILE", "full").lower() or "full",
-        help="Static tool set profile when --discovery is off (full=all tools, core=18 core tools)",
+        help="Static tool set profile when --discovery is off (full=all tools, core=19 core tools)",
     )
     args = parser.parse_args(argv)
     stdout = sys.stdout.buffer

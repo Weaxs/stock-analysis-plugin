@@ -1193,6 +1193,13 @@ def simulate_portfolio(
                 # Recompute port_value after initial buys
                 port_value = cash + sum(h["shares"] * exec_prices.get(s, h["buy_price"]) for s, h in holdings.items())
 
+            # Credit scheduled DCA budgets per active symbol before rebalance/deployment so suspended bars retain them
+            if dca_added > 0:
+                for sym in target_symbols:
+                    if sym in exited_alloc or sym in pending_exits:
+                        continue
+                    pending_dca[sym] = pending_dca.get(sym, 0.0) + dca_added * cfg["weights"][sym]
+
             if rebal_due and port_value > 0:
                 if cfg["drift_threshold"] is None:
                     do_rebalance = True
@@ -1226,13 +1233,14 @@ def simulate_portfolio(
                         target_val = port_value * cfg["weights"][sym]
                         cur_val = holdings[sym]["shares"] * px
                         if cur_val > target_val:
+                            pending_dca.pop(sym, None)
                             excess_shares = int((cur_val - target_val) / px / lot_size) * lot_size
                             if excess_shares > 0:
                                 if not is_tradable(row, "sell"):
                                     blocked_orders += 1
                                 else:
                                     sell_shares(sym, excess_shares, row, date_str, reason)
-                    # Buy underweight positions
+                    # Buy underweight positions; only clear pending DCA for symbols actually tradable/satisfied
                     for sym in symbols:
                         if sym in exited_alloc or sym in pending_exits:
                             continue
@@ -1248,18 +1256,16 @@ def simulate_portfolio(
                         if deficit > 0:
                             if not is_tradable(row, "buy"):
                                 blocked_orders += 1
-                            elif buy_amount(sym, deficit, row, date_str, reason):
-                                initially_allocated.add(sym)
+                            else:
+                                if buy_amount(sym, deficit, row, date_str, reason):
+                                    initially_allocated.add(sym)
+                                pending_dca.pop(sym, None)
+                        else:
+                            pending_dca.pop(sym, None)
                     rebalanced_today = True
-                    pending_dca.clear()
 
-            # Deploy fresh & retained blocked DCA budgets whenever rebalance did not already deploy them
+            # Deploy fresh & retained blocked DCA budgets whenever rebalance did not run on this bar
             if not rebalanced_today:
-                if dca_added > 0:
-                    for sym in target_symbols:
-                        if sym in exited_alloc or sym in pending_exits:
-                            continue
-                        pending_dca[sym] = pending_dca.get(sym, 0.0) + dca_added * cfg["weights"][sym]
                 for sym in list(pending_dca.keys()):
                     if sym in exited_alloc or sym in pending_exits:
                         pending_dca.pop(sym, None)

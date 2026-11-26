@@ -181,10 +181,25 @@ def test_discovery_and_core_profile_modes():
         finally:
             proc.kill()
 
-    core = _by_id(INIT, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, extra_args=("--profile", "core"))
+    core = _by_id(
+        INIT,
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "prompts/get",
+            "params": {"name": "stock-analysis", "arguments": {"request": "600519"}},
+        },
+        extra_args=("--profile", "core"),
+    )
     core_names = {t["name"] for t in core[2]["result"]["tools"]}
-    assert len(core_names) == 18
-    assert {"get_quote", "get_macro_anchors", "run_backtest"} <= core_names
+    assert len(core_names) == 19
+    assert {"get_quote", "get_macro_anchors", "run_backtest", "render_stock_report"} <= core_names
+    core_prompt = core[3]["result"]["messages"][0]["content"]["text"]
+    core_preamble = core_prompt.split("\n\n", 1)[0]
+    assert "--profile core" in core_preamble
+    assert "render_stock_report" in core_preamble
+    assert "stock_tool_search" not in core_preamble
 
 
 def test_unsupported_protocol_version_gets_server_latest():

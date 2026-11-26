@@ -293,6 +293,70 @@ def test_us_risk_screening_without_sec_env_stays_complete(monkeypatch):
     assert any("SEC_USER_AGENT" in w for w in result["warnings"])
 
 
+def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
+    orig = [
+        {
+            "form": "4",
+            "accession": "0001-26-000001",
+            "transaction_date": f"2026-10-0{i}",
+            "owners": [{"cik": "123", "name": "Exec A"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "transaction_code": "S",
+            "shares": 1000,
+            "price": 150.0,
+        }
+        for i in (1, 2, 3)
+    ]
+    amended_copies = [dict(row, form="4/A", accession="0001-26-000002") for row in orig]
+
+    def fake_run(script, args, **kwargs):
+        if script == "sec_edgar.py" and args[0] == "insider_trades":
+            return {
+                "transactions": orig + amended_copies,
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+        return []
+
+    res = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=fake_run,
+    )
+    assert res["checks"]["insider_trades"]["sales_90d"] == 3
+    assert res["veto_buy"] is not True
+    insider_flags = [f for f in res["flags"] if f["category"] == "insider"]
+    assert len(insider_flags) == 1 and insider_flags[0]["severity"] == "medium"
+
+    # Even when 4/A rows revise shares/price (cannot match 1-to-1), do not trigger buy veto from amended duplicates
+    revised = [dict(row, form="4/A", accession="0001-26-000003", price=151.0) for row in orig]
+    res_rev = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "transactions": orig + revised,
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+            if script == "sec_edgar.py"
+            else []
+        ),
+    )
+    assert res_rev["veto_buy"] is not True
+    assert all(f["severity"] != "high" for f in res_rev["flags"])
+
+
 def test_us_risk_screening_truncated_sec_marks_incomplete_and_keeps_flags(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
 

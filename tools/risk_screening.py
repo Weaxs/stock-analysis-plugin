@@ -349,28 +349,75 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     result["truncated"] = truncated
     result["warnings"] = sec_warnings
     result["available"] = not truncated and not sec_warnings
-    sales = [
+    raw_sales = [
         tx
         for tx in data["transactions"]
         if str(tx.get("code") or tx.get("transaction_code") or "").upper() == "S"
         or str(tx.get("action") or "").lower() == "sell"
     ]
-    result["sales_90d"] = len(sales)
-    if len(sales) >= 6:
+    has_amendments = any(str(tx.get("form") or "").upper() == "4/A" for tx in data["transactions"]) or any(
+        "amendment" in w.lower() or "double-count" in w.lower() for w in sec_warnings
+    )
+
+    def _sale_sig(tx: dict) -> tuple:
+        owners = tx.get("owners")
+        if isinstance(owners, list) and owners:
+            owner_key = tuple(sorted(str(o.get("cik") or o.get("name") or "") for o in owners if isinstance(o, dict)))
+        else:
+            owner_key = (str(tx.get("owner") or tx.get("insider") or ""),)
+        return (
+            owner_key,
+            str(tx.get("transaction_date") or tx.get("date") or ""),
+            str(tx.get("security") or ""),
+            bool(tx.get("derivative")),
+            tx.get("shares"),
+            tx.get("price"),
+        )
+
+    # Deduplicate Form 4/A rows that repeat an already-counted transaction from another accession.
+    originals = [tx for tx in raw_sales if str(tx.get("form") or "").upper() != "4/A"]
+    amended = [tx for tx in raw_sales if str(tx.get("form") or "").upper() == "4/A"]
+    seen_counts: dict[tuple, int] = {}
+    for tx in originals:
+        sig = _sale_sig(tx)
+        seen_counts[sig] = seen_counts.get(sig, 0) + 1
+    unique_amended = 0
+    amended_by_acc: dict[str, list[dict]] = {}
+    for tx in amended:
+        acc = str(tx.get("accession") or f"__amend_{id(tx)}")
+        amended_by_acc.setdefault(acc, []).append(tx)
+    for acc_rows in amended_by_acc.values():
+        acc_sig_counts: dict[tuple, int] = {}
+        for tx in acc_rows:
+            sig = _sale_sig(tx)
+            acc_sig_counts[sig] = acc_sig_counts.get(sig, 0) + 1
+        for sig, cnt in acc_sig_counts.items():
+            already = seen_counts.get(sig, 0)
+            if cnt > already:
+                unique_amended += cnt - already
+                seen_counts[sig] = cnt
+
+    dedup_sales = len(originals) + unique_amended
+    result["sales_90d"] = dedup_sales
+    result["amendments_present"] = has_amendments
+    # Only trigger high-severity buy veto when confirmed non-amended Form 4 sales reach threshold;
+    # when Form 4/A amendments could still revise/duplicate fields, cap at medium severity.
+    if len(originals) >= 6 or (not has_amendments and dedup_sales >= 6):
         result["flags"].append(
             {
                 "category": "insider",
                 "severity": "high",
-                "description": f"近90日 SEC Form 4 记录到 {len(sales)} 笔内部人卖出",
+                "description": f"近90日 SEC Form 4 记录到 {dedup_sales} 笔内部人卖出",
                 "source": "data",
             }
         )
-    elif len(sales) >= 3:
+    elif dedup_sales >= 3:
+        note = "（含 Form 4/A 修订申报，未因可能重复计数触发一票否决）" if has_amendments and dedup_sales >= 6 else ""
         result["flags"].append(
             {
                 "category": "insider",
                 "severity": "medium",
-                "description": f"近90日 SEC Form 4 记录到 {len(sales)} 笔内部人卖出",
+                "description": f"近90日 SEC Form 4 记录到 {dedup_sales} 笔内部人卖出{note}",
                 "source": "data",
             }
         )

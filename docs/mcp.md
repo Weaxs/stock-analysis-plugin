@@ -41,7 +41,7 @@
 ### 按需发现与精简模式（降低上下文占用）
 
 - **按需发现模式**：在 `args` 追加 `"--discovery"`（或设置 `STOCK_MCP_DISCOVERY=1`），初始只暴露 `stock_tool_search`，按中英文关键词搜索命中后返回完整 schema 并在支持动态刷新的客户端中触发 `notifications/tools/list_changed`。
-- **核心子集模式**：在 `args` 追加 `"--profile", "core"`（或设置 `STOCK_MCP_PROFILE=core`），静态暴露 18 个高频核心工具。
+- **核心子集模式**：在 `args` 追加 `"--profile", "core"`（或设置 `STOCK_MCP_PROFILE=core`），静态暴露 19 个高频核心工具（含 `render_stock_report`）。
 - **边界说明**：`--discovery` 与 `--profile core` 仅用于收敛 `tools/list` 的上下文体积，不作为安全授权边界；工具调用权限仍由宿主客户端控制。
 
 ## 行为说明

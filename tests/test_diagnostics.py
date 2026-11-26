@@ -189,6 +189,26 @@ class TestDiagnose:
         assert providers["sina"]["reachable"] is False
         assert providers["sina"]["probe_error"] == "connection refused"
 
+    def test_cli_returns_structured_json_when_requests_is_unavailable(self):
+        import json
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[1] / "tools" / "diagnostics.py"
+        # python -S disables site-packages (including requests), verifying diagnostics never crashes on import
+        proc = subprocess.run(
+            [sys.executable, "-S", str(script), "check", "--market", "US"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout)
+        sec = next(s for s in payload["services"] if s["name"] == "sec_edgar")
+        assert sec["available"] is False
+        assert "requests" in (sec["reason"] or "")
+
 
 if __name__ == "__main__":
     import subprocess

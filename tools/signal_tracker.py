@@ -314,9 +314,10 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
     if any(any(marker in w for marker in blocked_markers) for w in warnings):
         return False
 
-    # Verify fresh history coverage through at least last_date (do not trust request-time `as_of`).
+    # Verify fresh history coverage spans anchor_date..last_date (never trust request-time `as_of`).
     years_returned = div_data.get("history_years_requested")
     current_through_raw = div_data.get("history_current_through")
+    covered_from_raw = div_data.get("history_covered_from")
     if (
         isinstance(years_returned, bool)
         or not isinstance(years_returned, (int, float))
@@ -335,6 +336,15 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
             return False
     else:
         return False
+    if covered_from_raw is not None:
+        if not isinstance(covered_from_raw, str) or len(covered_from_raw) < 10:
+            return False
+        try:
+            covered_from_dt = datetime.strptime(covered_from_raw[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        if covered_from_dt > anchor_dt:
+            return False
 
     # Require at least one past/paid event (not only future calendar rows) so history confirms actual coverage.
     events = list(div_data.get("history") or []) + list(div_data.get("calendar") or [])

@@ -266,3 +266,27 @@ def test_blocked_dca_contribution_retries_on_next_tradable_bar():
     assert res["final_cash"] == 0.0
     dca_buys = [t for t in res["trades"] if t["type"] == "buy" and "定期定投" in t["reason"]]
     assert len(dca_buys) == 1 and dca_buys[0]["date"] == str(dates[feb_idx + 1].date())
+
+
+def test_rebalance_plus_dca_retains_blocked_symbol_budget_until_tradable():
+    dates = pd.bdate_range("2025-01-02", periods=30)
+    feb_idx = next(i for i, d in enumerate(dates) if d.month == 2)
+    df = _make_df(dates, np.full(len(dates), 10.0))
+    df.loc[feb_idx, "volume"] = 0
+    strategy = {
+        "portfolio": {"rebalance": "monthly", "weighting": "equal"},
+        "dca": {"frequency": "monthly", "amount": 100},
+        "simulation": {"execution": "next_open", "slippage": 0.0, "commission": 0.0, "stamp_tax": 0.0},
+    }
+    res = backtest.simulate_portfolio({"AAPL": df}, strategy, capital=1_000, start="2025-01-03")
+    assert res["execution"]["blocked_orders"] == 1
+    assert res["execution"]["unfilled_order"] is False
+    # Jan 100 shares + Feb 10 shares deployed on next tradable bar after rebalance bar was suspended
+    assert res["final_holdings"][0]["shares"] == 110
+    assert res["final_cash"] == 0.0
+
+    # If the suspended bar is the final bar, unfilled_order stays True
+    df_end = df.iloc[: feb_idx + 1].copy()
+    res_end = backtest.simulate_portfolio({"AAPL": df_end}, strategy, capital=1_000, start="2025-01-03")
+    assert res_end["execution"]["unfilled_order"] is True
+    assert res_end["final_cash"] == 100.0

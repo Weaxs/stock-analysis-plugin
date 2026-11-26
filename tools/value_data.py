@@ -955,7 +955,8 @@ def dividends(args):
         "market": market,
         "as_of": today.isoformat(),
         "cache_bypassed": no_cache,
-        "history_current_through": today.isoformat() if no_cache else None,
+        "history_covered_from": None,
+        "history_current_through": None,
         "yield_basis": "cash paid per share in trailing 365 days / latest price, before tax; nominal source cash amounts",
     }
     if market == "A":
@@ -997,6 +998,8 @@ def dividends(args):
             price_as_of=quote.get("as_of"),
             splits=splits,
             splits_checked=splits_checked,
+            # Eastmoney stock_fhps_detail_em is a live corporate-action registry query when --no-cache is set.
+            history_current_through=today.isoformat() if (no_cache and rows) else None,
         )
     else:
         import yfinance as yf
@@ -1044,6 +1047,37 @@ def dividends(args):
                 "calendar": [r for r in calendar if r.get("ex_date") and r["ex_date"] > today.isoformat()],
             }
 
+        def _series_to_rows(series, value_col):
+            nonzero = series[series.notna() & (series != 0)]
+            frame = nonzero.to_frame(value_col).reset_index()
+            if len(frame.columns) >= 1 and frame.columns[0] != "Date":
+                frame = frame.rename(columns={frame.columns[0]: "Date"})
+            return records(frame)
+
+        def verified_actions_bundle():
+            # Make one maximum-history request with actions and errors enabled, deriving cash dividends,
+            # splits, and the provider's actual covered date range from that single verified frame.
+            hist = ticker.history(period="max", actions=True, raise_errors=True)
+            if (
+                not isinstance(hist, pd.DataFrame)
+                or hist.empty
+                or "Stock Splits" not in hist.columns
+                or "Dividends" not in hist.columns
+            ):
+                raise RuntimeError("yfinance history returned no action-bearing price frame")
+            covered_from = market_date(hist.index.min(), market)
+            covered_through = market_date(hist.index.max(), market)
+            if not covered_from or not covered_through:
+                raise RuntimeError("yfinance history returned invalid bar dates")
+            cash_rows = _series_to_rows(hist["Dividends"], "cash_per_share")
+            split_rows = _series_to_rows(hist["Stock Splits"], "ratio")
+            return {
+                "cash": cash_rows,
+                "splits": split_rows,
+                "covered_from": covered_from,
+                "covered_through": covered_through,
+            }
+
         def cash_history():
             raw = ticker.dividends
             frame = (
@@ -1053,31 +1087,35 @@ def dividends(args):
             )
             return frame.reset_index()
 
-        def split_history_verified():
-            # Fetch action-bearing price history with raise_errors=True so failed yfinance requests
-            # (which ticker.splits can silently turn into an empty Series) never set splits_checked=True.
-            if not callable(getattr(ticker, "history", None)):
-                raise RuntimeError("split history requires ticker.history")
-            hist = ticker.history(period="max", actions=True, raise_errors=True)
-            if not isinstance(hist, pd.DataFrame) or hist.empty or "Stock Splits" not in hist.columns:
-                raise RuntimeError("yfinance history returned no action-bearing price frame")
-            splits_series = hist["Stock Splits"]
-            nonzero = splits_series[splits_series.notna() & (splits_series != 0)]
-            frame = nonzero.to_frame("ratio").reset_index()
-            if len(frame.columns) >= 1 and frame.columns[0] != "Date":
-                frame = frame.rename(columns={frame.columns[0]: "Date"})
-            return frame
-
-        capture(sources, "cash", lambda: load_dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
         splits_ok = False
         splits_rows = []
-        try:
-            splits_rows = load_dataset(f"{market.lower()}-splits:{symbol}", split_history_verified)
-            splits_ok = isinstance(splits_rows, list)
-        except Exception:
-            splits_ok = False
+        covered_from = None
+        covered_through = None
+        paid = []
+        used_actions_bundle = False
+        if callable(getattr(ticker, "history", None)):
+            bundle_key = f"{market.lower()}-actions:{symbol}"
+            try:
+                bundle = verified_actions_bundle() if no_cache else cached(bundle_key, DAY, verified_actions_bundle)
+            except Exception as exc:
+                bundle = None
+                if no_cache:
+                    sources.setdefault("warnings", []).append(f"actions: unavailable ({type(exc).__name__})")
+            if (
+                isinstance(bundle, dict)
+                and isinstance(bundle.get("splits"), list)
+                and isinstance(bundle.get("cash"), list)
+            ):
+                paid = bundle["cash"]
+                splits_rows = bundle["splits"]
+                splits_ok = True
+                covered_from = bundle.get("covered_from")
+                covered_through = bundle.get("covered_through") if no_cache else None
+                used_actions_bundle = True
+        if not used_actions_bundle and not no_cache:
+            capture(sources, "cash", lambda: load_dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
+            paid = sources.get("cash", [])
         capture(sources, "quote", lambda: ticker.info)
-        paid = sources.get("cash", [])
         info = sources.get("quote") or {}
         if sources.get("warnings"):
             result["warnings"] = sources["warnings"]
@@ -1104,6 +1142,8 @@ def dividends(args):
             price=price,
             splits=splits,
             splits_checked=splits_ok,
+            history_covered_from=covered_from,
+            history_current_through=covered_through,
         )
         result["calendar"] = [r for r in calendar if r["ex_date"] and r["ex_date"] > today.isoformat()]
     cutoff = (today - timedelta(days=365.25 * args.years)).isoformat()

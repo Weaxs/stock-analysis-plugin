@@ -143,6 +143,7 @@ const state = {
   sectionSigs: { ribbon: "", pulse: "", filters: "", rows: "", market: "" },
   pollTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   undoTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+  toastTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   searchTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   searchSeq: 0,
   inflight: false,
@@ -1118,11 +1119,11 @@ function hideSearchResults() {
 }
 
 function showToast(text: string) {
-  clearTimeout(state.undoTimer);
-  const bar = $("watch-undo");
+  clearTimeout(state.toastTimer);
+  const bar = $("watch-toast");
   bar.replaceChildren(el("span", "", text));
   bar.hidden = false;
-  state.undoTimer = setTimeout(() => {
+  state.toastTimer = setTimeout(() => {
     bar.hidden = true;
   }, 4500);
 }
@@ -1250,12 +1251,10 @@ $("add-form").addEventListener("submit", event => {
   if (symbols.length) void changeWatchlist("add", symbols);
 });
 $("symbol-input").addEventListener("input", () => {
-  clearTimeout(state.searchTimer);
-  state.searchSeq++;
+  hideSearchResults();
   const value = $<HTMLInputElement>("symbol-input").value;
   const q = value.trim();
   if (!q || /[\s,，、;；]/.test(q) || EXACT_CODE_RE.test(q)) {
-    hideSearchResults();
     return;
   }
   state.searchTimer = setTimeout(() => { void runNameSearch(value); }, 250);

@@ -212,7 +212,13 @@ for (const listener of windowListeners.get("message") ?? []) {
 }
 assert.equal(document.documentElement.style.props.has("--bg"), false, "omitted theme token is removed");
 
-// Quick analyze copies prompt to clipboard and reports honest result (no unhandled ask-agent postMessage).
+// Quick analyze copies prompt to clipboard into #watch-toast WITHOUT clobbering an active #watch-undo bar.
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-remove]" ? removeBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.equal(byId("watch-undo").hidden, false, "undo bar visible before toast");
+
 const analyzeBtn = { dataset: { analyze: "018147", label: "建信新兴市场混合(QDII)C" } };
 for (const listener of byId("rows").listeners.get("click") ?? []) {
   listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
@@ -221,14 +227,17 @@ await new Promise(resolve => setTimeout(resolve, 10));
 assert.equal(postedMessages.some(m => (m as { type?: string }).type === "stock-analysis:ask-agent"), false);
 assert.equal(copiedTexts.length, 1);
 assert(copiedTexts[0].includes("018147"));
-assert(JSON.stringify(byId("watch-undo").children).includes("已复制"));
+assert.equal(byId("watch-toast").hidden, false, "toast renders in dedicated #watch-toast");
+assert(JSON.stringify(byId("watch-toast").children).includes("已复制"));
+assert.equal(byId("watch-undo").hidden, false, "toast must not hide active undo bar");
+assert(JSON.stringify(byId("watch-undo").children).includes("撤销"), "undo button preserved while toast is shown");
 
 clipboardShouldReject = true;
 for (const listener of byId("rows").listeners.get("click") ?? []) {
   listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
 }
 await new Promise(resolve => setTimeout(resolve, 10));
-assert(JSON.stringify(byId("watch-undo").children).includes("剪贴板不可用"));
+assert(JSON.stringify(byId("watch-toast").children).includes("剪贴板不可用"));
 clipboardShouldReject = false;
 
 // Group & price alert thresholds: whitespace like '>= 1.5' parses cleanly, invalid non-empty input preserves existing alert.
@@ -250,10 +259,11 @@ window.prompt = () => "not-a-valid-alert";
 for (const listener of byId("rows").listeners.get("click") ?? []) {
   listener({ target: { closest: (sel: string) => (sel === "button[data-alert]" ? alertBtn : null) } });
 }
-assert(JSON.stringify(byId("watch-undo").children).includes("提醒格式无效"), "invalid alert format notifies user");
+assert(JSON.stringify(byId("watch-toast").children).includes("提醒格式无效"), "invalid alert format notifies user in toast");
+assert(JSON.stringify(byId("watch-undo").children).includes("撤销"), "invalid alert toast preserves undo bar");
 assert(JSON.stringify(byId("rows").children).includes("触达 ≥ 1.5"), "existing alert preserved after invalid input");
 
-// Full pinyin search reaches /api/search, exact code skips search, and cleared input invalidates in-flight response.
+// Full pinyin search reaches /api/search, switching to another valid query clears stale suggestions immediately.
 byId("symbol-input").value = "guizhoumaotai";
 for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
   listener({});
@@ -263,6 +273,14 @@ if (typeof pinyinTimer === "function") pinyinTimer();
 await new Promise(resolve => setTimeout(resolve, 10));
 assert(searchCalls.some(p => p.includes("guizhoumaotai")), "full pinyin reaches /api/search");
 assert(JSON.stringify(byId("search-results").children).includes("贵州茅台"));
+
+// Switching query to "腾讯" clears the previous "贵州茅台" suggestions during the 250ms debounce window.
+byId("symbol-input").value = "腾讯";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+assert.equal(byId("search-results").hidden, true, "switching valid query immediately hides stale suggestions");
+assert.equal(byId("search-results").children.length, 0, "switching valid query clears stale suggestion buttons");
 
 const beforeCodeCount = searchCalls.length;
 byId("symbol-input").value = "600519";

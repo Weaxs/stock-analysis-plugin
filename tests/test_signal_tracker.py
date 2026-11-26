@@ -725,6 +725,77 @@ def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_to
     assert seen_div_args == [["dividends", "--symbol", "AAPL", "--mode", "history", "--years", "2", "--no-cache"]]
 
 
+def test_keyless_us_dividends_provider_coverage_stops_before_last_bar_stays_unverified(
+    store, mock_run_tool, monkeypatch
+):
+    import pandas as pd
+
+    from tools import value_data
+
+    class _NovNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 26)
+
+    monkeypatch.setattr(st, "datetime", _NovNow)
+    st.cmd_record(
+        _rec_args(
+            store, symbol="AAPL", date="2026-11-23", entry_price=200, stop_price=180, target_price=220, horizon_days=2
+        )
+    )
+    bars = [
+        {"date": "2026-11-23", "open": 199, "high": 202, "low": 198, "close": 200, "adjusted": "total_return"},
+        {"date": "2026-11-24", "open": 201, "high": 225, "low": 200, "close": 222, "adjusted": "total_return"},
+    ]
+
+    # Yahoo action-bearing daily history ends on 2026-09-12 -> must NOT verify 2026-11-23..11-24
+    stale_ticker = Namespace(
+        history=lambda **kw: pd.DataFrame(
+            {"Close": [190.0, 195.0], "Dividends": [0.25, 0.0], "Stock Splits": [0.0, 0.0]},
+            index=pd.DatetimeIndex(["2026-08-10", "2026-09-12"], tz="America/New_York", name="Date"),
+        ),
+        info={"currentPrice": 200.0, "currency": "USD"},
+        calendar={},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: stale_ticker)
+
+    def bridge(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            years = int(args[args.index("--years") + 1])
+            return value_data.dividends(
+                Namespace(
+                    symbol=args[args.index("--symbol") + 1],
+                    mode="history",
+                    report_date="",
+                    top=20,
+                    years=years,
+                    no_cache="--no-cache" in args,
+                )
+            )
+        return None
+
+    mock_run_tool.side_effect = bridge
+    res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res["closed"] == 0
+    assert res["results"][0]["outcome"] == "skipped_price_basis"
+
+    # Once Yahoo's action-bearing history actually covers through 2026-11-24, verification succeeds
+    fresh_ticker = Namespace(
+        history=lambda **kw: pd.DataFrame(
+            {"Close": [190.0, 222.0], "Dividends": [0.25, 0.0], "Stock Splits": [0.0, 0.0]},
+            index=pd.DatetimeIndex(["2026-08-10", "2026-11-24"], tz="America/New_York", name="Date"),
+        ),
+        info={"currentPrice": 222.0, "currency": "USD"},
+        calendar={},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: fresh_ticker)
+    res_ok = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res_ok["closed"] == 1
+    assert res_ok["results"][0]["outcome"] == "target_hit"
+
+
 def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_tool):
     st.cmd_record(_rec_args(store, entry_price=100, stop_price=90, target_price=120, horizon_days=1))
     bars = [_bar("2026-09-01", 50, 50, 50), _bar("2026-09-02", 51, 50, 51)]
