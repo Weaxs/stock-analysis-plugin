@@ -565,3 +565,48 @@ def test_valuation_facts_derive_q4_and_point_in_time_ttm(monkeypatch):
     assert facts["ttm_net_income"] == [{"filed": "2026-02-01", "end": "2025-12-31", "val": 100}]
     assert facts["shares"] == [{"filed": "2026-02-01", "end": "2026-01-20", "val": 10}]
     assert facts["share_basis"] == "cover_shares_outstanding"
+
+
+def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch, tmp_path):
+    import _cache as cache_mod
+
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path)
+    accn = "0000320193-26-000201"
+    # Pre-seed legacy unversioned cache entry missing the `remarks` field.
+    sec_edgar.cached(
+        f"sec-form4:0000320193:{accn}",
+        sec_edgar.WEEK,
+        lambda: [{"form": "4/A", "transaction_code": "S", "shares": 10}],
+    )
+
+    def get(url, **kwargs):
+        if url.endswith("company_tickers.json"):
+            return response({"0": {"ticker": "AAPL", "cik_str": 320193}})
+        if "submissions" in url:
+            return response(
+                {
+                    "filings": {
+                        "recent": {
+                            "form": ["4/A"],
+                            "accessionNumber": [accn],
+                            "filingDate": ["2026-10-12"],
+                            "reportDate": ["2026-10-10"],
+                            "primaryDocument": ["form4a.xml"],
+                        },
+                        "files": [],
+                    }
+                }
+            )
+        return response(
+            """<ownershipDocument><issuer><issuerCik>0000320193</issuerCik></issuer><nonDerivativeTable><nonDerivativeTransaction><transactionDate><value>2026-10-10</value></transactionDate><transactionCoding><transactionCode>S</transactionCode></transactionCoding><transactionAmounts><transactionShares><value>10</value></transactionShares><transactionPricePerShare><value>150</value></transactionPricePerShare><transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode></transactionAmounts></nonDerivativeTransaction></nonDerivativeTable><remarks>Amending to report an inadvertently omitted sale.</remarks></ownershipDocument>"""
+        )
+
+    monkeypatch.setattr("requests.get", get)
+    result = sec_edgar.insider_trades(Namespace(symbol="AAPL", days=90, top=10))
+    assert result["transactions"][0]["remarks"] == "Amending to report an inadvertently omitted sale."
+    v2_rows = sec_edgar.cached(
+        f"sec-form4-v2:0000320193:{accn}",
+        sec_edgar.WEEK,
+        lambda: pytest.fail("expected v2 Form 4 cache entry to be populated"),
+    )
+    assert v2_rows[0]["remarks"] == "Amending to report an inadvertently omitted sale."

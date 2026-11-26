@@ -278,7 +278,7 @@ def check_news_risks(symbol: str, name: str = "", *, run=None, market: str | Non
 
 
 _HK_DISCLOSURE_HIGH_ALWAYS = ("清盘", "winding up", "监管调查", "investigation")
-_HK_DISCLOSURE_SUSPENSION = ("停牌", "trading halt", "suspension")
+_HK_DISCLOSURE_SUSPENSION = ("停牌", "trading halt", "halt in trading", "suspension")
 _HK_RESUMPTION_RE = re.compile(
     r"(resumption\s+of\s+trading|lifting\s+of\s+(?:trading\s+)?suspension|恢复买卖|复牌)",
     re.IGNORECASE,
@@ -315,15 +315,22 @@ def check_hk_disclosures(symbol: str, *, run=None) -> dict:
         result["warnings"].append("HKEX disclosure response was incomplete/truncated; coverage may miss risk filings")
     for item in announcements:
         title = str(item.get("title") or "")
+        ann_type = str(item.get("type") or "")
         low = title.lower()
+        type_low = ann_type.lower()
         sev = None
         is_resumption_only = (
             bool(_HK_RESUMPTION_RE.search(title))
-            and not any(k in _HK_LIFTING_PHRASE_RE.sub("", low) for k in ("trading halt", "suspension"))
+            and not any(
+                k in _HK_LIFTING_PHRASE_RE.sub("", low) for k in ("trading halt", "halt in trading", "suspension")
+            )
             and "停牌" not in title.replace("复牌", "")
         )
+        has_suspension = any(
+            k in low or k in title or k in type_low or k in ann_type for k in _HK_DISCLOSURE_SUSPENSION
+        )
         if any(k in low or k in title for k in _HK_DISCLOSURE_HIGH_ALWAYS) or (
-            not is_resumption_only and any(k in low or k in title for k in _HK_DISCLOSURE_SUSPENSION)
+            not is_resumption_only and has_suspension
         ):
             sev = "high"
         elif any(k in low or k in title for k in _HK_DISCLOSURE_MEDIUM):
@@ -442,7 +449,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                     out.append(str(fid))
         return out
 
-    def _amendment_intent(tx: dict) -> tuple[bool, bool]:
+    def _row_scoped_intent(tx: dict) -> tuple[bool, bool]:
         footnotes = tx.get("footnotes")
         ref_ids = _extract_ref_ids(tx.get("footnote_refs"))
         row_parts: list[str] = []
@@ -450,17 +457,41 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             row_parts.extend(str(footnotes[fid]) for fid in ref_ids if footnotes.get(fid))
         elif isinstance(footnotes, str) and footnotes:
             row_parts.append(footnotes)
-        if row_parts:
-            row_text = " ".join(row_parts)
-            row_add, row_corr = bool(_ADDITION_RE.search(row_text)), bool(_CORRECTION_RE.search(row_text))
-            if row_add or row_corr:
-                return row_add, row_corr
-        # Fall back to filing-level remarks / explicit amendment notes only when row-scoped footnotes do not decide.
-        filing_parts = [str(tx[k]) for k in ("remarks", "amendment_reason", "note") if tx.get(k)]
-        if filing_parts:
-            filing_text = " ".join(filing_parts)
-            return bool(_ADDITION_RE.search(filing_text)), bool(_CORRECTION_RE.search(filing_text))
-        return False, False
+        row_parts.extend(str(tx[k]) for k in ("amendment_reason", "note") if tx.get(k))
+        if not row_parts:
+            return False, False
+        row_text = " ".join(row_parts)
+        return bool(_ADDITION_RE.search(row_text)), bool(_CORRECTION_RE.search(row_text))
+
+    def _resolve_accession_intents(acc_rows: list[dict]) -> tuple[list[tuple[bool, bool]], list[bool]]:
+        row_intents = [_row_scoped_intent(tx) for tx in acc_rows]
+        ambiguous = [False] * len(acc_rows)
+        seen_remarks: set[str] = set()
+        remarks_parts: list[str] = []
+        for tx in acc_rows:
+            rem = str(tx.get("remarks") or "").strip()
+            if rem and rem not in seen_remarks:
+                seen_remarks.add(rem)
+                remarks_parts.append(rem)
+        if not remarks_parts:
+            return row_intents, ambiguous
+        rem_text = " ".join(remarks_parts)
+        rem_add, rem_corr = bool(_ADDITION_RE.search(rem_text)), bool(_CORRECTION_RE.search(rem_text))
+        if not (rem_add or rem_corr):
+            return row_intents, ambiguous
+        unclaimed_add = rem_add and not any(ra for ra, _ in row_intents)
+        unclaimed_corr = rem_corr and not any(rc for _, rc in row_intents)
+        if not (unclaimed_add or unclaimed_corr):
+            return row_intents, ambiguous
+        unattributed = [i for i, (ra, rc) in enumerate(row_intents) if not (ra or rc)]
+        if len(unattributed) == 1 and (unclaimed_add != unclaimed_corr):
+            row_intents[unattributed[0]] = (unclaimed_add, unclaimed_corr)
+        else:
+            # Filing-level remarks cannot be uniquely attributed (multiple unattributed rows or mixed intent);
+            # keep rows conservative and surface uncertainty instead of broadcasting to every row.
+            for i in unattributed:
+                ambiguous[i] = True
+        return row_intents, ambiguous
 
     all_orig = [tx for tx in txs if str(tx.get("form") or "").upper() != "4/A"]
     all_amend = [tx for tx in txs if str(tx.get("form") or "").upper() == "4/A"]
@@ -468,10 +499,20 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         "amendment" in w.lower() or "double-count" in w.lower() for w in sec_warnings
     )
 
-    # Start with original Form 4 sells and original Form 4 non-sells.
-    active_orig_sells = [tx for tx in all_orig if _is_sell(tx)]
-    orig_non_sells = [tx for tx in all_orig if not _is_sell(tx)]
-    reclassified_indices: set[int] = set()
+    def _make_ledger_entry(tx: dict, *, from_orig: bool) -> dict:
+        shares = tx.get("shares")
+        return {
+            "tx": tx,
+            "orig_tx": tx,
+            "sigs": {_exact_sig(tx)},
+            "shares_set": {shares} if shares is not None else set(),
+            "from_orig": from_orig,
+            "reclassified": False,
+        }
+
+    # Unified chronological transaction ledger initialized from original Form 4 filings.
+    ledger: list[dict] = [_make_ledger_entry(tx, from_orig=True) for tx in all_orig if _is_sell(tx)]
+    known_non_sells: list[dict] = [tx for tx in all_orig if not _is_sell(tx)]
     affected_owners: set[tuple] = set()
     unaligned_global = has_amendments and not all_amend
 
@@ -483,36 +524,48 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         else:
             unaligned_global = True
 
-    # 1. Reconcile non-sell 4/A rows idempotently per accession in order-independent passes:
-    #    - First match against original non-sell Form 4 rows (e.g., footnote-only amendment to a Form 4 gift).
-    #    - Pass A1 resolves exact (base, shares, price) matches across ALL accessions first (independent of row order).
-    #    - Pass A2 resolves unique (base, shares) matches per accession after exact matches have been reserved.
-    #    - Pass B resolves remaining deferred rows (blank-price multi-candidate links or explicit corrections with
-    #      changed shares), retaining ambiguous candidates and flagging uncertainty rather than dropping an arbitrary sale.
-    non_sell_by_acc: dict[str, list[dict]] = {}
+    # Group ALL Form 4/A rows (sells and non-sells together) by accession and process chronologically so later
+    # amendments can correct or reclassify sales first introduced in earlier Form 4/A filings.
+    amend_by_acc: dict[str, list[dict]] = {}
     for tx in all_amend:
-        if _is_sell(tx):
-            continue
-        acc = str(tx.get("accession") or f"__amend_nonsell_{id(tx)}")
-        non_sell_by_acc.setdefault(acc, []).append(tx)
+        acc = str(tx.get("accession") or f"__amend_{id(tx)}")
+        amend_by_acc.setdefault(acc, []).append(tx)
 
-    acc_nonsell_matched: dict[str, set[int]] = {}
-    unmatched_after_ns: dict[str, list[dict]] = {}
+    sorted_acc_items = sorted(
+        amend_by_acc.items(),
+        key=lambda item: (min(str(r.get("filing_date") or "") for r in item[1]), item[0]),
+    )
 
-    for acc, acc_rows in non_sell_by_acc.items():
-        orig_ns_matched: set[int] = set()
-        acc_nonsell_matched[acc] = set()
-        rem: list[dict] = []
-        for tx in acc_rows:
-            is_add, is_corr = _amendment_intent(tx)
+    for _acc, acc_rows in sorted_acc_items:
+        intents, ambig_flags = _resolve_accession_intents(acc_rows)
+        acc_sells: list[tuple[dict, tuple[bool, bool], bool]] = []
+        acc_non_sells: list[tuple[dict, tuple[bool, bool], bool]] = []
+        for tx, intent, is_ambig in zip(acc_rows, intents, ambig_flags):
+            if is_ambig:
+                _mark_uncertain(tx)
+            if _is_sell(tx):
+                acc_sells.append((tx, intent, is_ambig))
+            else:
+                acc_non_sells.append((tx, intent, is_ambig))
+
+        # Match against the ledger snapshot as of BEFORE this accession's own newly added sales.
+        prior_len = len(ledger)
+
+        # 1. Reconcile this accession's non-sell 4/A rows against known non-sells and prior ledger entries
+        #    (original Form 4 sells + sells added by earlier Form 4/A accessions) in order-independent passes.
+        acc_orig_ns_matched: set[int] = set()
+        acc_matched_ns: set[int] = set()
+        acc_added_non_sells: list[dict] = []
+        ns_candidates: list[tuple[dict, bool, bool]] = []
+        for tx, (is_add, is_corr), _is_ambig in acc_non_sells:
             base = _base_sig(tx)
             code = _tx_code(tx)
             shares = tx.get("shares")
             ns_idx = next(
                 (
                     i
-                    for i, orig_ns in enumerate(orig_non_sells)
-                    if i not in orig_ns_matched
+                    for i, orig_ns in enumerate(known_non_sells)
+                    if i not in acc_orig_ns_matched
                     and _base_sig(orig_ns) == base
                     and _tx_code(orig_ns) == code
                     and (shares is None or orig_ns.get("shares") == shares)
@@ -520,144 +573,118 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 None,
             )
             if ns_idx is not None:
-                orig_ns_matched.add(ns_idx)
+                acc_orig_ns_matched.add(ns_idx)
                 continue
             if is_add and not is_corr:
+                acc_added_non_sells.append(tx)
                 continue
-            rem.append(tx)
-        unmatched_after_ns[acc] = rem
+            ns_candidates.append((tx, is_add, is_corr))
 
-    # Pass A1: exact (base, shares, price) matches across all accessions first.
-    after_a1: dict[str, list[dict]] = {}
-    for acc, rows in unmatched_after_ns.items():
-        acc_matched = acc_nonsell_matched[acc]
-        rem: list[dict] = []
-        for tx in rows:
+        # Pass A1: exact (base, shares, price) matches first (independent of row order within accession).
+        after_ns_a1: list[tuple[dict, bool, bool]] = []
+        for tx, is_add, is_corr in ns_candidates:
             base = _base_sig(tx)
             shares = tx.get("shares")
             has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
             if has_identity and tx.get("price") is not None:
                 exact = _exact_sig(tx)
-                exact_cands = [
-                    i for i, orig in enumerate(active_orig_sells) if i not in acc_matched and _exact_sig(orig) == exact
-                ]
+                exact_cands = [i for i in range(prior_len) if i not in acc_matched_ns and exact in ledger[i]["sigs"]]
                 if exact_cands:
-                    acc_matched.add(exact_cands[0])
-                    reclassified_indices.add(exact_cands[0])
+                    acc_matched_ns.add(exact_cands[0])
+                    ledger[exact_cands[0]]["reclassified"] = True
                     continue
-            rem.append(tx)
-        after_a1[acc] = rem
+            after_ns_a1.append((tx, is_add, is_corr))
 
-    # Pass A2: unique (base, shares) matches (or uniform-price candidates) after exact matches are reserved.
-    deferred_nonsells: list[tuple[str, dict]] = []
-    for acc, rows in after_a1.items():
-        acc_matched = acc_nonsell_matched[acc]
-        for tx in rows:
+        # Pass A2: unique (base, shares) matches (or uniform-price candidates) after exact matches are reserved.
+        deferred_ns: list[tuple[dict, bool, bool]] = []
+        for tx, is_add, is_corr in after_ns_a1:
             base = _base_sig(tx)
             shares = tx.get("shares")
             has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
             if has_identity:
                 share_cands = [
                     i
-                    for i, orig in enumerate(active_orig_sells)
-                    if i not in acc_matched and _base_sig(orig) == base and orig.get("shares") == shares
+                    for i in range(prior_len)
+                    if i not in acc_matched_ns
+                    and _base_sig(ledger[i]["tx"]) == base
+                    and shares in ledger[i]["shares_set"]
                 ]
                 if len(share_cands) == 1 or (
-                    len(share_cands) > 1 and len({active_orig_sells[i].get("price") for i in share_cands}) == 1
+                    len(share_cands) > 1 and len({ledger[i]["tx"].get("price") for i in share_cands}) == 1
                 ):
-                    acc_matched.add(share_cands[0])
-                    reclassified_indices.add(share_cands[0])
+                    acc_matched_ns.add(share_cands[0])
+                    ledger[share_cands[0]]["reclassified"] = True
                     continue
-            deferred_nonsells.append((acc, tx))
+            deferred_ns.append((tx, is_add, is_corr))
 
-    # Pass B: handle remaining multi-candidate blank-price links and explicit share-changing corrections.
-    for acc, tx in deferred_nonsells:
-        acc_matched = acc_nonsell_matched[acc]
-        is_add, is_corr = _amendment_intent(tx)
-        base = _base_sig(tx)
-        shares = tx.get("shares")
-        has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
-        if has_identity:
-            share_cands = [
-                i
-                for i, orig in enumerate(active_orig_sells)
-                if i not in acc_matched and _base_sig(orig) == base and orig.get("shares") == shares
-            ]
-            if len(share_cands) == 1:
-                acc_matched.add(share_cands[0])
-                reclassified_indices.add(share_cands[0])
-                continue
-            if len(share_cands) > 1:
-                already_reclass = [i for i in share_cands if i in reclassified_indices]
+        # Pass B: handle remaining multi-candidate blank-price links and explicit share-changing corrections.
+        for tx, _is_add, is_corr in deferred_ns:
+            base = _base_sig(tx)
+            shares = tx.get("shares")
+            has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
+            if has_identity:
+                share_cands = [
+                    i
+                    for i in range(prior_len)
+                    if i not in acc_matched_ns
+                    and _base_sig(ledger[i]["tx"]) == base
+                    and shares in ledger[i]["shares_set"]
+                ]
+                if len(share_cands) == 1:
+                    acc_matched_ns.add(share_cands[0])
+                    ledger[share_cands[0]]["reclassified"] = True
+                    continue
+                if len(share_cands) > 1:
+                    already_reclass = [i for i in share_cands if ledger[i]["reclassified"]]
+                    if len(already_reclass) == 1:
+                        acc_matched_ns.add(already_reclass[0])
+                        continue
+                    _mark_uncertain(tx)
+                    continue
+            if is_corr and base[0] != ("",) and bool(base[1]):
+                base_cands = [
+                    i for i in range(prior_len) if i not in acc_matched_ns and _base_sig(ledger[i]["tx"]) == base
+                ]
+                if len(base_cands) == 1:
+                    acc_matched_ns.add(base_cands[0])
+                    ledger[base_cands[0]]["reclassified"] = True
+                    continue
+                already_reclass = [i for i in base_cands if ledger[i]["reclassified"]]
                 if len(already_reclass) == 1:
-                    acc_matched.add(already_reclass[0])
+                    acc_matched_ns.add(already_reclass[0])
                     continue
                 _mark_uncertain(tx)
                 continue
-        if is_corr and base[0] != ("",) and bool(base[1]):
-            base_cands = [
-                i for i, orig in enumerate(active_orig_sells) if i not in acc_matched and _base_sig(orig) == base
-            ]
-            if len(base_cands) == 1:
-                acc_matched.add(base_cands[0])
-                reclassified_indices.add(base_cands[0])
-                continue
-            already_reclass = [i for i in base_cands if i in reclassified_indices]
-            if len(already_reclass) == 1:
-                acc_matched.add(already_reclass[0])
-                continue
-            _mark_uncertain(tx)
-            continue
-        if not has_identity:
-            _mark_uncertain(tx)
+            if not has_identity:
+                _mark_uncertain(tx)
 
-    confirmed_orig_sells = [tx for i, tx in enumerate(active_orig_sells) if i not in reclassified_indices]
+        known_non_sells.extend(acc_added_non_sells)
 
-    # 2. Match Form 4/A sell rows against ALL original Form 4 sells (before gift reclassification) reserving each
-    #    original by row identity across all match types, exact matches first (independent of XML row order).
-    #    Process accessions chronologically so later amendments can correct previously added sales.
-    amended_by_acc: dict[str, list[dict]] = {}
-    for tx in all_amend:
-        if not _is_sell(tx):
-            continue
-        acc = str(tx.get("accession") or f"__amend_{id(tx)}")
-        amended_by_acc.setdefault(acc, []).append(tx)
-
-    sorted_acc_items = sorted(
-        amended_by_acc.items(),
-        key=lambda item: (min(str(r.get("filing_date") or "") for r in item[1]), item[0]),
-    )
-
-    added_sales: list[dict] = []
-    for _acc, acc_rows in sorted_acc_items:
-        acc_matched_orig: set[int] = set()
+        # 2. Match this accession's sell 4/A rows against all prior ledger entries (reserving each entry by row
+        #    identity across match types, exact matches first, independent of XML row order).
+        acc_matched_sell: set[int] = set()
         acc_explicit_adds: list[dict] = []
-        acc_candidates: list[tuple[dict, bool]] = []  # (tx, is_corr)
-        for tx in acc_rows:
-            is_add, is_corr = _amendment_intent(tx)
+        sell_candidates: list[tuple[dict, bool]] = []
+        for tx, (is_add, is_corr), _is_ambig in acc_sells:
             if is_add and not is_corr:
                 acc_explicit_adds.append(tx)
             else:
-                acc_candidates.append((tx, is_corr))
+                sell_candidates.append((tx, is_corr))
 
-        # Sub-pass 1: exact matches against original Form 4 sells first.
+        # Sub-pass 1: exact matches against prior ledger entries first.
         after_exact: list[tuple[dict, bool]] = []
-        for tx, is_corr in acc_candidates:
+        for tx, is_corr in sell_candidates:
             exact = _exact_sig(tx)
             idx = next(
-                (
-                    i
-                    for i, orig in enumerate(active_orig_sells)
-                    if i not in acc_matched_orig and _exact_sig(orig) == exact
-                ),
+                (i for i in range(prior_len) if i not in acc_matched_sell and exact in ledger[i]["sigs"]),
                 None,
             )
             if idx is not None:
-                acc_matched_orig.add(idx)
+                acc_matched_sell.add(idx)
             else:
                 after_exact.append((tx, is_corr))
 
-        # Sub-pass 2: share-matched restatements against remaining unmatched original Form 4 sells.
+        # Sub-pass 2: share-matched restatements against remaining prior ledger entries.
         after_share: list[tuple[dict, bool]] = []
         for tx, is_corr in after_exact:
             b = _base_sig(tx)
@@ -667,73 +694,60 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 idx = next(
                     (
                         i
-                        for i, orig in enumerate(active_orig_sells)
-                        if i not in acc_matched_orig and _base_sig(orig) == b and orig.get("shares") == shares
+                        for i in range(prior_len)
+                        if i not in acc_matched_sell
+                        and _base_sig(ledger[i]["tx"]) == b
+                        and shares in ledger[i]["shares_set"]
                     ),
                     None,
                 )
             if idx is not None:
-                acc_matched_orig.add(idx)
+                acc_matched_sell.add(idx)
+                ledger[idx]["tx"] = tx
+                ledger[idx]["sigs"].add(_exact_sig(tx))
                 _mark_uncertain(tx)
             else:
                 after_share.append((tx, is_corr))
 
-        # Sub-pass 3: explicit corrections against remaining original sells OR previously added 4/A sales.
+        # Sub-pass 3: explicit corrections against remaining prior ledger entries (original or earlier 4/A sales).
         acc_new_sales: list[dict] = list(acc_explicit_adds)
         for tx, is_corr in after_share:
             b = _base_sig(tx)
             if is_corr and b[0] != ("",) and bool(b[1]):
                 idx = next(
-                    (
-                        i
-                        for i, orig in enumerate(active_orig_sells)
-                        if i not in acc_matched_orig and _base_sig(orig) == b
-                    ),
+                    (i for i in range(prior_len) if i not in acc_matched_sell and _base_sig(ledger[i]["tx"]) == b),
                     None,
                 )
                 if idx is not None:
-                    acc_matched_orig.add(idx)
-                    _mark_uncertain(tx)
-                    continue
-                # Check if this explicit correction updates a previously added 4/A sale.
-                shares = tx.get("shares")
-                add_idx = None
-                if shares is not None:
-                    add_idx = next(
-                        (
-                            i
-                            for i, prev in enumerate(added_sales)
-                            if _base_sig(prev) == b and prev.get("shares") == shares
-                        ),
-                        None,
-                    )
-                if add_idx is None:
-                    base_add_cands = [i for i, prev in enumerate(added_sales) if _base_sig(prev) == b]
-                    if len(base_add_cands) == 1:
-                        add_idx = base_add_cands[0]
-                if add_idx is not None:
-                    added_sales[add_idx] = tx
+                    acc_matched_sell.add(idx)
+                    ledger[idx]["tx"] = tx
+                    ledger[idx]["sigs"].add(_exact_sig(tx))
+                    if tx.get("shares") is not None:
+                        ledger[idx]["shares_set"].add(tx.get("shares"))
                     _mark_uncertain(tx)
                     continue
             acc_new_sales.append(tx)
 
-        # Merge newly disclosed sales from this accession idempotently by exact signature.
+        # Merge newly disclosed sales from this accession idempotently against existing 4/A-added ledger entries.
         acc_new_counts: dict[tuple, list[dict]] = {}
         for tx in acc_new_sales:
             acc_new_counts.setdefault(_exact_sig(tx), []).append(tx)
         existing_counts: dict[tuple, int] = {}
-        for prev in added_sales:
-            e = _exact_sig(prev)
-            existing_counts[e] = existing_counts.get(e, 0) + 1
+        for entry in ledger:
+            if not entry["from_orig"]:
+                for sig in entry["sigs"]:
+                    existing_counts[sig] = existing_counts.get(sig, 0) + 1
         for e, rows in acc_new_counts.items():
             need = len(rows) - existing_counts.get(e, 0)
             if need > 0:
-                added_sales.extend(rows[:need])
+                ledger.extend(_make_ledger_entry(tx, from_orig=False) for tx in rows[:need])
 
-    unique_amended_sells = len(added_sales)
-    dedup_sales = len(confirmed_orig_sells) + unique_amended_sells
+    active_sales = [entry for entry in ledger if not entry["reclassified"]]
+    dedup_sales = len(active_sales)
     unaffected_orig_sells = (
-        0 if unaligned_global else sum(1 for tx in confirmed_orig_sells if _owner_key(tx) not in affected_owners)
+        0
+        if unaligned_global
+        else sum(1 for entry in active_sales if entry["from_orig"] and _owner_key(entry["tx"]) not in affected_owners)
     )
     result["sales_90d"] = dedup_sales
     result["amendments_present"] = has_amendments

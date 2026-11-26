@@ -571,7 +571,7 @@ def insider_trades(args):
     for filing in filings[: args.top]:
         try:
             rows = cached(
-                f"sec-form4:{cik}:{filing['accessionNumber']}", WEEK, lambda filing=filing: form4(cik, filing)
+                f"sec-form4-v2:{cik}:{filing['accessionNumber']}", WEEK, lambda filing=filing: form4(cik, filing)
             )
             result["transactions"].extend(rows)
             result["filings_scanned"] += 1

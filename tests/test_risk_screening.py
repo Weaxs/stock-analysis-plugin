@@ -761,18 +761,226 @@ def test_real_sec_form4_xml_boundary_with_risk_screening(monkeypatch):
     assert any(f["category"] == "insider" and f["severity"] == "medium" for f in res["flags"])
 
 
+def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypatch):
+    import sec_edgar
+
+    monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
+    base_inputs = {
+        "quote": {"pe": 25, "pb": 5},
+        "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+    }
+
+    def _screen(txs):
+        return risk_screening.screen_risk(
+            "AAPL",
+            "Apple",
+            inputs=base_inputs,
+            run=lambda script, args, **kw: (
+                {
+                    "transactions": txs,
+                    "truncated": False,
+                    "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+                }
+                if script == "sec_edgar.py"
+                else []
+            ),
+        )
+
+    orig_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec Chain</rptOwnerName></reportingOwnerId>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>100</value></transactionShares>
+            <transactionPricePerShare><value>150</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>50</value></transactionShares>
+            <transactionPricePerShare><value>160</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+    </ownershipDocument>"""
+
+    # 1. Scoped remarks: Row 1 claims F1 ("omitted sale"), Row 2 has NO footnote and restates orig 50-sh sale,
+    #    filing <remarks> says "Amending to report one omitted sale". Row 2 must NOT inherit addition intent!
+    scoped_rem_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec Chain</rptOwnerName></reportingOwnerId>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value><footnoteId id="F1"/></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>100</value></transactionShares>
+            <transactionPricePerShare><value>150</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>50</value></transactionShares>
+            <transactionPricePerShare><value>160</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+      <footnotes>
+        <footnote id="F1">Reports an inadvertently omitted sale on 2026-10-01.</footnote>
+      </footnotes>
+      <remarks>Amending to report one omitted sale.</remarks>
+    </ownershipDocument>"""
+
+    # 2. Mixed remarks without row footnotes: Row 0 restates 100 @ $150 -> $155, Row 1 adds distinct 200 @ $170.
+    #    Must count 3 sales (NOT drop Row 1 as a correction of 50 @ $160) AND mark count_uncertain=True.
+    mixed_rem_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec Chain</rptOwnerName></reportingOwnerId>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>100</value></transactionShares>
+            <transactionPricePerShare><value>155</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-01</value></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>200</value></transactionShares>
+            <transactionPricePerShare><value>170</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+      <remarks>Corrects one line and adds another omitted transaction.</remarks>
+    </ownershipDocument>"""
+
+    # 3. Chronological chain: 2 orig sales -> 4/A #1 adds omitted 101-sh sale -> 4/A #2 corrects that 101-sh sale to G.
+    add_101_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec Chain</rptOwnerName></reportingOwnerId>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-03</value><footnoteId id="F1"/></transactionDate>
+          <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>101</value></transactionShares>
+            <transactionPricePerShare><value>155</value></transactionPricePerShare>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+      <footnotes><footnote id="F1">Reports an inadvertently omitted sale.</footnote></footnotes>
+    </ownershipDocument>"""
+
+    reclass_101_xml = """<ownershipDocument>
+      <issuer><issuerCik>0000320193</issuerCik></issuer>
+      <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0001111111</rptOwnerCik><rptOwnerName>Exec Chain</rptOwnerName></reportingOwnerId>
+      </reportingOwner>
+      <nonDerivativeTable>
+        <nonDerivativeTransaction>
+          <securityTitle><value>Common Stock</value></securityTitle>
+          <transactionDate><value>2026-10-03</value><footnoteId id="F1"/></transactionDate>
+          <transactionCoding><transactionCode>G</transactionCode></transactionCoding>
+          <transactionAmounts>
+            <transactionShares><value>101</value></transactionShares>
+            <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+      </nonDerivativeTable>
+      <footnotes><footnote id="F1">Corrects previously misreported 101-share sale to a bona fide gift.</footnote></footnotes>
+    </ownershipDocument>"""
+
+    xml_map = {
+        "orig.xml": orig_xml,
+        "scoped.xml": scoped_rem_xml,
+        "mixed.xml": mixed_rem_xml,
+        "add101.xml": add_101_xml,
+        "reclass101.xml": reclass_101_xml,
+    }
+    monkeypatch.setattr(sec_edgar, "sec_get", lambda url, as_json=True: xml_map[url.rsplit("/", 1)[-1]])
+
+    def _parse(accn, fdate, form, doc):
+        return sec_edgar.form4(
+            "0000320193",
+            {"accessionNumber": accn, "filingDate": fdate, "form": form, "primaryDocument": doc},
+        )
+
+    orig_rows = _parse("0000320193-26-000300", "2026-10-02", "4", "orig.xml")
+    scoped_rows = _parse("0000320193-26-000301", "2026-10-03", "4/A", "scoped.xml")
+    mixed_rows = _parse("0000320193-26-000302", "2026-10-03", "4/A", "mixed.xml")
+    add101_rows = _parse("0000320193-26-000303", "2026-10-04", "4/A", "add101.xml")
+    reclass101_rows = _parse("0000320193-26-000304", "2026-10-05", "4/A", "reclass101.xml")
+
+    res_scoped = _screen(orig_rows + scoped_rows)
+    assert res_scoped["checks"]["insider_trades"]["sales_90d"] == 3
+    assert res_scoped["checks"]["insider_trades"]["count_uncertain"] is False
+
+    res_mixed = _screen(orig_rows + mixed_rows)
+    assert res_mixed["checks"]["insider_trades"]["sales_90d"] == 3
+    assert res_mixed["checks"]["insider_trades"]["count_uncertain"] is True
+
+    res_chain = _screen(orig_rows + add101_rows + reclass101_rows)
+    assert res_chain["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_chain["flags"])
+
+    # Also test share-changed explicit gift correction against the earlier 4/A added sale (101 -> 102 shares G)
+    reclass_102_rows = [dict(reclass101_rows[0], shares=102)]
+    res_chain_share_change = _screen(orig_rows + add101_rows + reclass_102_rows)
+    assert res_chain_share_change["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_chain_share_change["flags"])
+
+
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
-    # 1. Resumption / lifting of suspension must NOT trigger high-severity buy veto
+    base_inputs = {
+        "quote": {"pe": 18, "pb": 3},
+        "technical": {"signal_score": 65, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
+    }
+    # 1. Resumption / lifting of suspension must NOT trigger high-severity buy veto even if categorized as Trading Halt
     res_resume = risk_screening.screen_risk(
         "00700.HK",
         "Tencent",
-        inputs={
-            "quote": {"pe": 18, "pb": 3},
-            "technical": {"signal_score": 65, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
-        },
+        inputs=base_inputs,
         run=lambda script, args, **kw: (
             {
-                "announcements": [{"date": "2026-10-01", "title": "LIFTING OF SUSPENSION AND RESUMPTION OF TRADING"}],
+                "announcements": [
+                    {
+                        "date": "2026-10-01",
+                        "title": "LIFTING OF SUSPENSION AND RESUMPTION OF TRADING",
+                        "type": "Trading Halt",
+                    }
+                ],
                 "truncated": False,
             }
             if script == "value_data.py"
@@ -783,14 +991,27 @@ def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_
     assert res_resume["checks"]["disclosures"]["available"] is True
     assert not any(f["category"] == "disclosure" for f in res_resume["flags"])
 
-    # 2. Provider-incomplete HKEX response (truncated=True with < 15 rows) marks unavailable & data_complete=False
+    # 2. HKEX "HALT IN TRADING" wording and "Trading Halt" announcement type trigger high-severity buy veto
+    for ann in (
+        {"date": "2026-10-01", "title": "INSIDE INFORMATION - FURTHER UPDATE AND CONTINUED HALT IN TRADING"},
+        {"date": "2026-10-01", "title": "INSIDE INFORMATION - FURTHER UPDATE", "type": "Trading Halt"},
+    ):
+        res_halt = risk_screening.screen_risk(
+            "00700.HK",
+            "Tencent",
+            inputs=base_inputs,
+            run=lambda script, args, ann=ann, **kw: (
+                {"announcements": [ann], "truncated": False} if script == "value_data.py" else []
+            ),
+        )
+        assert res_halt["veto_buy"] is True
+        assert any(f["category"] == "disclosure" and f["severity"] == "high" for f in res_halt["flags"])
+
+    # 3. Provider-incomplete HKEX response (truncated=True with < 15 rows) marks unavailable & data_complete=False
     res_trunc = risk_screening.screen_risk(
         "00700.HK",
         "Tencent",
-        inputs={
-            "quote": {"pe": 18, "pb": 3},
-            "technical": {"signal_score": 65, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
-        },
+        inputs=base_inputs,
         run=lambda script, args, **kw: (
             {"announcements": [{"date": "2026-10-01", "title": "Profit Warning"}], "truncated": True}
             if script == "value_data.py"
