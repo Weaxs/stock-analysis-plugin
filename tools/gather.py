@@ -101,13 +101,21 @@ def gather_analysis(symbol: str, *, session=None) -> dict:
         "quote": ("stock_data.py", ["quote", symbol]),
         "kline": ("stock_data.py", ["kline", symbol, "--period", "daily", "--count", "120"]),
         "financials": ("stock_data.py", ["financials", symbol]),
-        "capital_flow": ("stock_data.py", ["capital_flow", symbol]),
-        "chip_distribution": ("stock_data.py", ["chip_distribution", symbol]),
         "news": ("search_intel.py", ["search", _news_query(symbol)]),
         "social_sentiment": ("search_intel.py", ["sentiment", symbol]),
     }
+    if market == "A":
+        tasks["capital_flow"] = ("stock_data.py", ["capital_flow", symbol])
+        tasks["chip_distribution"] = ("stock_data.py", ["chip_distribution", symbol])
     tasks["regime"] = ("market_regime.py", ["detect", market])
-    return _run_all(tasks, symbol, session=session, with_risk=True)
+    supports_risk = market in ("A", "HK", "US")
+    result = _run_all(tasks, symbol, session=session, with_risk=supports_risk)
+    if market != "A":
+        result["capital_flow"] = {"error": "capital_flow only available for A-shares"}
+        result["chip_distribution"] = {"error": "chip_distribution only available for A-shares"}
+    if not supports_risk:
+        result["risk"] = {"error": f"screen_risk only supports A, HK, and US markets (got {market})"}
+    return result
 
 
 def gather_technical(symbol: str, kline_count: int = 120, with_quote: bool = False) -> dict:
@@ -138,8 +146,13 @@ def gather_fundamental(symbol: str) -> dict:
     }
     if market == "A":
         tasks["sector_rankings"] = ("stock_data.py", ["sector_rankings", "--top", "5", "--direction", "both"])
+    elif market in ("HK", "US"):
+        tasks["sector_rankings"] = (
+            "stock_data.py",
+            ["sector_rankings", "--market", market, "--top", "5", "--direction", "both"],
+        )
     result = _run_all(tasks, symbol)
-    if market != "A":
+    if market not in ("A", "HK", "US"):
         result["sector_rankings"] = {"error": f"Sector rankings unavailable for {market}"}
     return result
 

@@ -220,3 +220,123 @@ def test_screen_reuses_supplied_failed_inputs_and_parallelizes_other_sources():
     assert result["checks"]["valuation"]["available"] is False
     assert result["checks"]["technical"]["available"] is False
     assert result["checks"]["lockup"]["available"] is True
+
+
+def test_hk_risk_screening_uses_disclosures_and_skips_lockup():
+    calls = []
+
+    def fake_run(script, args, **kwargs):
+        calls.append((script, args))
+        if script == "value_data.py" and args[0] == "announcements":
+            return {"announcements": [{"date": "2026-10-01", "title": "Profit Warning and Trading Halt"}]}
+        return []
+
+    result = risk_screening.screen_risk(
+        "00700.HK",
+        "Tencent",
+        inputs={
+            "quote": {"pe": 18, "pb": 3},
+            "technical": {"signal_score": 65, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
+        },
+        run=fake_run,
+    )
+    assert result["market"] == "HK"
+    assert result["data_complete"] is True
+    assert result["checks"]["lockup"]["applicable"] is False
+    assert result["checks"]["disclosures"]["available"] is True
+    assert any(f["category"] == "disclosure" and f["severity"] == "high" for f in result["flags"])
+    assert result["veto_buy"] is True
+    assert not any(args[0] == "lockup" for _, args in calls)
+    search_queries = [args[1] for script, args in calls if script == "search_intel.py"]
+    assert any("profit warning" in q for q in search_queries)
+
+
+def test_us_risk_screening_uses_sec_form4_when_configured(monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
+    calls = []
+
+    def fake_run(script, args, **kwargs):
+        calls.append((script, args))
+        if script == "sec_edgar.py" and args[0] == "insider_trades":
+            return {"transactions": [{"code": "S"}, {"code": "S"}, {"code": "S"}]}
+        return []
+
+    result = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 28, "pb": 12},
+            "technical": {"signal_score": 70, "buy_signal": "BUY", "trend": {"overall": "bullish"}},
+        },
+        run=fake_run,
+    )
+    assert result["market"] == "US"
+    assert result["data_complete"] is True
+    assert result["checks"]["insider_trades"]["sales_90d"] == 3
+    assert any(f["category"] == "insider" and f["source"] == "data" for f in result["flags"])
+    assert not any(args[0] == "lockup" for _, args in calls)
+
+
+def test_us_risk_screening_without_sec_env_stays_complete(monkeypatch):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    result = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda *a, **kw: [],
+    )
+    assert result["data_complete"] is True
+    assert result["checks"]["insider_trades"]["configured"] is False
+    assert any("SEC_USER_AGENT" in w for w in result["warnings"])
+
+
+def test_unsupported_market_returns_error():
+    result = risk_screening.screen_risk("7203.T")
+    assert "error" in result
+    assert result["market"] == "JP"
+
+
+def test_hk_sector_rankings_tradingview_and_etf_fallback(monkeypatch):
+    import argparse
+
+    import pandas as pd
+
+    from tools import stock_data
+
+    def fake_tv(region, body):
+        assert region == "hongkong"
+        return {
+            "data": [
+                {"d": ["00700", "Tencent", "Technology Services", 3.0, 4_000_000_000_000, 10_000_000_000]},
+                {"d": ["09988", "Alibaba", "Technology Services", 1.0, 2_000_000_000_000, 8_000_000_000]},
+                {"d": ["00005", "HSBC", "Finance", -1.0, 1_500_000_000_000, 5_000_000_000]},
+            ]
+        }
+
+    monkeypatch.setattr(stock_data, "_tradingview_scan", fake_tv)
+    args = argparse.Namespace(top=5, direction="both", board_type="industry", market="HK")
+    res = stock_data.cmd_sector_rankings(args)
+    assert res["top"][0]["name"] == "Technology Services"
+    assert res["top"][0]["change_pct"] == 2.3333
+    assert res["top"][0]["leading_stock"] == "Tencent"
+    assert res["bottom"][0]["name"] == "Finance"
+    assert res["top"][0]["market"] == "HK"
+
+    # Concept board rejected cleanly
+    bad = stock_data.cmd_sector_rankings(argparse.Namespace(top=5, direction="top", board_type="concept", market="HK"))
+    assert "error" in bad
+
+    # Fallback to HK ETF proxies when TradingView fails
+    monkeypatch.setattr(stock_data, "_tradingview_scan", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("down")))
+    idx = pd.to_datetime(["2026-10-01", "2026-10-02"])
+    closes = pd.DataFrame({"3033.HK": [4.0, 4.2], "2800.HK": [20.0, 19.8]}, index=idx)
+    import yfinance as yf
+
+    monkeypatch.setattr(yf, "download", lambda *a, **kw: {"Close": closes})
+    fb = stock_data.cmd_sector_rankings(argparse.Namespace(top=5, direction="top", board_type="industry", market="HK"))
+    assert fb[0]["etf"] == "3033.HK"
+    assert fb[0]["proxy"] == "HK Sector ETF"
+    assert fb[0]["change_pct"] == 5.0

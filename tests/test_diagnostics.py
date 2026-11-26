@@ -144,6 +144,41 @@ class TestDiagnose:
         providers = {p["name"] for p in diagnostics.diagnose("A")["markets"][0]["providers"]}
         assert "baostock" in providers
 
+    def test_services_and_summary_cover_search_sec_sentiment_and_tradingview(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "fake-key")
+        monkeypatch.setenv("SEC_USER_AGENT", "app user@example.com")
+        monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
+        res = diagnostics.diagnose("HK")
+        hk_providers = {p["name"] for p in res["markets"][0]["providers"]}
+        assert "tradingview" in hk_providers
+        svc = {s["name"]: s for s in res["services"]}
+        assert svc["tavily"]["available"] is True
+        assert svc["sec_edgar"]["available"] is True
+        assert svc["adanos_sentiment"]["available"] is False
+        assert svc["cninfo"]["available"] is True
+        assert svc["hkexnews"]["available"] is True
+        assert res["summary"]["search_engines_ready"] == ["tavily"]
+        assert res["summary"]["sec_edgar_ready"] is True
+        assert res["summary"]["sentiment_api_ready"] is False
+        assert res["meta"]["probed"] is False
+
+    def test_probe_flag_populates_reachability_without_hitting_live_network(self, monkeypatch):
+        probed = []
+
+        def fake_probe(name, timeout=4.0):
+            probed.append(name)
+            return (True, 12, None) if name != "sina" else (False, None, "connection refused")
+
+        monkeypatch.setattr(diagnostics, "_probe_url", fake_probe)
+        res = diagnostics.diagnose("A", probe=True)
+        assert res["meta"]["probed"] is True
+        assert "tencent" in probed and "sina" in probed
+        providers = {p["name"]: p for p in res["markets"][0]["providers"]}
+        assert providers["tencent"]["reachable"] is True
+        assert providers["tencent"]["latency_ms"] == 12
+        assert providers["sina"]["reachable"] is False
+        assert providers["sina"]["probe_error"] == "connection refused"
+
 
 if __name__ == "__main__":
     import subprocess

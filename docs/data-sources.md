@@ -41,13 +41,13 @@ CDS 指数（`get_cds_index`）只提供市场级信用风险偏好，不是个�
 
 SEC 配置 `SEC_USER_AGENT`，包含应用名称与真实联系邮箱，仅通过环境变量提供。单进程最多每秒 2 次请求（多个并行进程需控制账户/IP 总量不超过 SEC 的每秒 10 次），并缓存 ticker/CIK、申报元数据和 XML 解析结果。13F 返回机构最近季度的原始申报，不是实时完整组合；通常在季度后 45 天内披露（节假日顺延），实际数据年龄以季度末为准，2023-01-03 起金额单位为美元，更早申报为千美元。修订文件另列原文链接，避免错误合并补充与重述；发行人 CIK 反查现已通过 `mode=issuer` 支持：从结构化 Schedule 13D/G 校验发行人 CIK、提取 CUSIP，再扫描官方最新已发布 13F 批量窗口。`auto` 默认有当前或已检索历史 13F 时查机构，否则查发行人；Berkshire 等兼具两种身份时显式选择 `issuer`。修订按 `RESTATEMENT` 替换与 `NEW HOLDINGS` 补充重建；无法判断的修订或缺少基础版时总量为 null，并给出 `unresolved_manager_count`。
 
-Form 4 的 `days` 是申报日期窗口，`top=1..20` 限制文件数，返回全部已解析交易。保留多人联报、衍生品、交易代码、脚注、直接/间接持有和修订信息；仅 P/S 标为买/卖，其余行为不推断方向，价格未披露为 null。读取 `truncated/warnings`，原件与修订不要重复计数。风险组合工具 `screen_risk` 仍为 A 股专用。
+Form 4 的 `days` 是申报日期窗口，`top=1..20` 限制文件数，返回全部已解析交易。保留多人联报、衍生品、交易代码、脚注、直接/间接持有和修订信息；仅 P/S 标为买/卖，其余行为不推断方向，价格未披露为 null。读取 `truncated/warnings`，原件与修订不要重复计数。风险组合工具 `screen_risk` 现已覆盖 A 股、港股和美股（A 股查限售解禁与中文风险线索，港股查 HKEXnews 风险公告与双语线索，美股查英文风险线索及已配置 `SEC_USER_AGENT` 时的 Form 4 内部人卖出）。
 
 A/港/美股 DCF 输入（`get_financials include_dcf_inputs=true`）：美股以 SEC companyfacts 为主源，A 股和港股配置 `LIXINGER_TOKEN` 时以理杏仁年报为主源（理杏仁港股无营业利润、资本开支、折旧摊销字段；A 股 `total_debt` 含“一年内到期的非流动负债”，其中可能有一年内到期的租赁负债），未配置时用 Yahoo（A 股为 `.SS/.SZ`，北交所无 Yahoo 财报），主源缺失字段仅在同一财年末（±10 天）且币种一致时用 Yahoo 补齐，`field_sources` 标明每个字段来源，`missing_fields` 列出仍缺字段。`total_debt` 三个来源都不含租赁（Yahoo 用 Current Debt + Long Term Debt，不用含租赁的 Total Debt），租赁负债在 `lease_liabilities` 单列。
 
 美股估值历史（`get_valuation_history`）由 SEC companyfacts 派生：TTM `NetIncomeLoss`（10-Q 单季加由 10-K 推出的第四季）、`StockholdersEquity` 和封面股本，均按 SEC 申报日起生效，取每个期间最早申报值，避免用后来的重述回填；Yahoo 周收盘按拆股调整后的价格乘以同口径股本得到市值。多类股公司按所有类别股本合计、单一类别价格计算；无封面股本时退回加权稀释股本（`share_basis`）。
 
-港美股市场宽度（`get_market_stats market=HK|US`）用东方财富涨跌排行二分计数涨跌家数，总成交额与涨跌停字段为 null。港股在东财失败时改用 TradingView 排行，按有涨跌幅报价的股票计数，来源为 `tradingview_rank`。美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`。港股行业排行暂无可靠的公开行业指数源。
+港美股市场宽度（`get_market_stats market=HK|US`）用东方财富涨跌排行二分计数涨跌家数，总成交额与涨跌停字段为 null。港股在东财失败时改用 TradingView 排行，按有涨跌幅报价的股票计数，来源为 `tradingview_rank`。美股行业表现（`get_sector_rankings market=US`）用 11 只 SPDR Select Sector ETF 最近两个收盘作为代理，标注 `proxy`。港股行业表现（`get_sector_rankings market=HK`）优先按 TradingView 港股前 500 市值股票聚合行业涨跌幅（市值加权），失败时回退至港股行业/主题 ETF 代理（`proxy="HK Sector ETF"`）。宏观与利率/汇率基准（`get_macro_anchors`）聚合中美 10Y/美债 2Y 收益率（yfinance / FRED CSV / akshare 债券表容灾）、DXY/USD-CNH/USD-HKD/推导 HKD-CNY 与 VIX/黄金/原油，缓存 1 小时。
 
 接口依据：[巨潮公告查询](https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search)、[理杏仁港股财报](https://www.lixinger.com/api/open-api/html-doc/hk/company/fs/non_financial)、[理杏仁港股估值](https://www.lixinger.com/api/open-api/html-doc/hk/company/fundamental/non_financial)、[SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)。
 

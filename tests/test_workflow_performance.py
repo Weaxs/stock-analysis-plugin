@@ -129,7 +129,7 @@ def test_independent_risk_collection_starts_while_bars_are_pending(monkeypatch):
         return "{}"
 
     monkeypatch.setattr(gather, "_run", collect)
-    gather.gather_analysis("AAPL")
+    gather.gather_analysis("600519")
     assert observed == [True]
 
 

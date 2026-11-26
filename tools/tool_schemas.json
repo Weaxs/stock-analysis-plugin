@@ -403,6 +403,30 @@
     }
   },
   {
+    "name": "get_macro_anchors",
+    "description": "查询跨市场宏观、利率、汇率与风险偏好基准（免Key，缓存1小时）：包含中美10年期国债收益率与美债2Y（及中美利差/美债10Y-2Y利差bp）、美元指数DXY、USD/CNH、USD/HKD、推导HKD/CNY，以及VIX、COMEX黄金与WTI原油。适用于DCF无风险利率锚、跨币种组合汇率参考与大盘复盘宏观背景",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "type": "string",
+          "enum": [
+            "all",
+            "rates",
+            "fx",
+            "risk"
+          ],
+          "description": "基准分组：all=全部（默认），rates=中美无风险利率，fx=汇率与美元指数，risk=VIX/黄金/原油"
+        },
+        "days": {
+          "type": "number",
+          "description": "历史统计窗口天数（2..365，默认 30）"
+        }
+      },
+      "required": []
+    }
+  },
+  {
     "name": "get_earnings_calendar",
     "description": "查询财报日历：A股report_date必填季度期末，返回预约/修订/实际披露与业绩预告；HK需symbol，优先HKEX已公告业绩审批董事会排期（不是实际披露日）；US/JP需symbol并返回yfinance供应商预计日期（provider_only，非官方确认）。HK可按已知财政期末过滤，未知期次与US/JP请求report_date时另列unverified_schedules；KR/TW不可用。",
     "parameters": {
@@ -731,7 +755,7 @@
   },
   {
     "name": "get_sector_rankings",
-    "description": "获取板块涨跌幅排行。market=A（默认）为A股板块（含领涨股、涨跌家数等），board_type=industry（默认）为行业、concept为概念；market=US用SPDR行业ETF最近两个收盘作美股11个行业代理（仅industry，proxy字段标注，非交易所官方行业数据）。支持查看涨幅榜/跌幅榜/双向",
+    "description": "获取板块涨跌幅排行。market=A（默认）为A股板块（含领涨股、涨跌家数等），board_type=industry（默认）为行业、concept为概念；market=HK按TradingView港股前500市值股聚合行业涨跌幅（失败回退港股行业ETF代理，仅industry）；market=US用SPDR行业ETF最近两个收盘作美股11个行业代理（仅industry，proxy字段标注，非交易所官方行业数据）。支持查看涨幅榜/跌幅榜/双向",
     "parameters": {
       "type": "object",
       "properties": {
@@ -760,9 +784,10 @@
           "type": "string",
           "enum": [
             "A",
+            "HK",
             "US"
           ],
-          "description": "市场：A=A股（默认），US=美股行业ETF代理"
+          "description": "市场：A=A股（默认），HK=港股行业聚合/ETF代理，US=美股行业ETF代理"
         }
       }
     }
@@ -990,7 +1015,7 @@
   },
   {
     "name": "run_backtest",
-    "description": "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算。默认前日收盘信号、次日开盘成交；YAML simulation.execution=same_close可复现旧假设。execution返回模型、阻止成交次数和未模拟约束；零成交量及带历史限价的一字板不成交。支持 monthly_momentum：月初首根有效日K收盘观察过去period根对数收益，次日开盘；长周期需预热。",
+    "description": "策略回测（AlphaEvo）。读取YAML策略定义，在历史数据上模拟交易，输出收益率/回撤/胜率等指标。支持单标的择时策略，也支持逗号分隔多标的组合回测、多仓位（max_positions）、定期再平衡（portfolio.rebalance）与定期定投（dca.frequency/amount，输出时间加权收益 time_weighted_return 与期末持仓）。只想知道单个技术信号的历史胜率用更轻量的 evaluate_signal。period为实际数据期间，requested_period保留请求期间，warnings提示覆盖差异；年化按实际期间计算。默认前日收盘信号、次日开盘成交；YAML simulation.execution=same_close可复现旧假设。",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1000,7 +1025,7 @@
         },
         "symbol": {
           "type": "string",
-          "description": "股票代码（A股如600519，美股如AAPL，港股如00700.HK）"
+          "description": "股票代码，支持单个或逗号分隔多标的同市场组合（如 600519 或 510300,510500,518880）"
         },
         "start": {
           "type": "string",
@@ -1317,13 +1342,13 @@
   },
   {
     "name": "screen_risk",
-    "description": "A股风险专项筛查 — 检查估值、技术预警、解禁、减持、业绩预警、监管和行业政策，返回风险评级和 veto_buy。新闻搜索命中是待核实线索，不是已证实风险。data_complete和warnings标明覆盖；数据不足时risk_level=unknown，risk_score或veto_buy可为null，不能视为低风险",
+    "description": "风险专项筛查（支持A股、港股、美股） — 检查估值、技术预警、新闻风险线索，并按市场附加专项检查（A股限售解禁、港股HKEX风险公告、美股SEC Form 4内部人卖出，配置SEC_USER_AGENT时启用），返回风险评级和 veto_buy。新闻搜索命中是待核实线索，不是已证实风险。data_complete和warnings标明覆盖；数据不足时risk_level=unknown，risk_score或veto_buy可为null，不能视为低风险",
     "parameters": {
       "type": "object",
       "properties": {
         "symbol": {
           "type": "string",
-          "description": "A股股票代码，如 600519"
+          "description": "股票代码（A股如 600519，港股如 00700.HK，美股如 AAPL）"
         },
         "name": {
           "type": "string",
@@ -1421,7 +1446,7 @@
   },
   {
     "name": "diagnose_data_sources",
-    "description": "数据源诊断 — 检查当前环境各数据 provider 的包与凭据就绪情况（不探测网络可达性），输出每个市场的可用链路、缺失 env、warnings。工具拿不到数据或报错时调用排查",
+    "description": "数据源诊断 — 检查当前环境各行情 provider 与辅助服务（搜索引擎、SEC EDGAR、巨潮/HKEX公告、舆情、CDS/宏观）的包与凭据就绪情况；默认不访问网络，probe=true 时可选执行轻量公开端点连通性探测。工具拿不到数据或报错时调用排查",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1437,6 +1462,10 @@
             "all"
           ],
           "description": "市场，默认 all"
+        },
+        "probe": {
+          "type": "boolean",
+          "description": "是否对已就绪的公开端点执行轻量 HTTP 连通性探测，默认 false"
         }
       }
     }

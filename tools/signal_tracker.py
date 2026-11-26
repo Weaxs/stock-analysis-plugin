@@ -261,46 +261,91 @@ def _valid_bar(bar, require_open=True) -> bool:
     )
 
 
-def _price_factor(rec, bars):
+def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_price_date: bool, remaining: float) -> bool:
+    """Verify via dividend history + anchor-bar price consistency that no ex-dividend/split
+    invalidated the 1:1 price correspondence between entry_price and adjusted bars."""
+    anchor = bars[anchor_idx]
+    entry = rec.get("entry_price")
+    low = anchor.get("low")
+    high = anchor.get("high")
+    if not (
+        isinstance(entry, (int, float))
+        and isinstance(low, (int, float))
+        and isinstance(high, (int, float))
+        and low * 0.9 <= entry <= high * 1.1
+    ):
+        return False
+
+    market = rec.get("market") or detect_market(rec["symbol"])
+    anchor_date = anchor["date"]
+    last_date = max(bar["date"] for bar in bars)
+    div_data = run_tool(
+        "value_data.py",
+        ["dividends", "--market", market, "--symbol", rec["symbol"], "--mode", "history", "--years", "2"],
+        timeout=min(30, max(remaining, 1)),
+    )
+    if not isinstance(div_data, dict) or "error" in div_data or not isinstance(div_data.get("history"), list):
+        return False
+    if not div_data.get("source"):
+        return False
+    warnings = div_data.get("warnings") or []
+    if any("missing/invalid" in str(w) or "unavailable" in str(w).lower() for w in warnings):
+        return False
+
+    events = list(div_data.get("history") or []) + list(div_data.get("calendar") or [])
+    for ev in events:
+        if not isinstance(ev, dict):
+            return False
+        status = str(ev.get("status") or "")
+        ex_date = ev.get("ex_date")
+        if status in ("实施分配", "paid") and not ex_date:
+            return False
+        if not isinstance(ex_date, str) or len(ex_date) < 10:
+            continue
+        ex_day = ex_date[:10]
+        if anchor_date < ex_day <= last_date:
+            return False
+        if not has_price_date and ex_day == anchor_date:
+            return False
+    return True
+
+
+def _price_factor(rec, bars, *, remaining: float | None = None):
     market = rec.get("market") or detect_market(rec["symbol"])
     price_date = _price_date(rec.get("price_date") or rec.get("price_as_of"), market)
     if price_date and price_date > rec["record_date"]:
-        return None
+        return None, None
     if all(bar.get("adjusted") == "none" for bar in bars):
-        return 1.0
+        return 1.0, "unadjusted"
     anchor_date = price_date or rec["record_date"]
     has_price_date = price_date is not None
     anchor_idx = next((i for i, bar in enumerate(bars) if bar["date"] == anchor_date), None)
     if anchor_idx is None:
         anchor_idx = next((i for i in range(len(bars) - 1, -1, -1) if bars[i]["date"] <= anchor_date), None)
         if anchor_idx is None:
-            return None
+            return None, None
         next_bar = next((bar for bar in bars if bar["date"] > anchor_date), None)
         if (
             not has_price_date
             and next_bar is not None
             and next_bar.get("adjustment_factor") != bars[anchor_idx].get("adjustment_factor")
         ):
-            return None
+            return None, None
     elif (
         anchor_idx
         and not has_price_date
         and bars[anchor_idx - 1].get("adjustment_factor") != bars[anchor_idx].get("adjustment_factor")
     ):
-        return None
+        return None, None
     anchor = bars[anchor_idx]
     factor = anchor.get("adjustment_factor")
     basis = anchor.get("adjusted")
-    if (
-        basis in ("qfq", "total_return")
-        and all(bar.get("adjusted") == basis for bar in bars)
-        and not isinstance(factor, bool)
-        and isinstance(factor, (int, float))
-        and math.isfinite(factor)
-        and factor > 0
-    ):
-        return factor
-    return None
+    if basis in ("qfq", "total_return") and all(bar.get("adjusted") == basis for bar in bars):
+        if not isinstance(factor, bool) and isinstance(factor, (int, float)) and math.isfinite(factor) and factor > 0:
+            return factor, "adjustment_factor"
+        if remaining is not None and _verify_no_corporate_action(rec, bars, anchor_idx, has_price_date, remaining):
+            return 1.0, "no_corporate_action_verified"
+    return None, None
 
 
 def cmd_evaluate(args):
@@ -339,40 +384,45 @@ def cmd_evaluate(args):
             or min(str(b.get("date", ""))[:10] for b in bars) > rec["record_date"]
         ):
             entry.update({"outcome": "skipped_no_data", "return_pct": None, "exit_date": None})
-        elif (factor := _price_factor(rec, bars)) is None:
-            entry.update(
-                outcome="skipped_price_basis",
-                return_pct=None,
-                exit_date=None,
-                warning="Adjusted or unknown prices lack a verified conversion to the original signal prices",
-            )
         else:
-            decimal_factor = Decimal(str(factor))
-            priced = dict(rec)
-            for key in ("entry_price", "target_price", "stop_price"):
-                if priced.get(key) is not None:
-                    priced[key] = float(Decimal(str(priced[key])) * decimal_factor)
-            ev = _evaluate_bars(priced, bars)
-            if ev is None:
-                entry.update({"outcome": "open", "return_pct": None, "exit_date": None})
-            else:
-                outcome, exit_price, exit_date = ev
-                exit_price = float(Decimal(str(exit_price)) / decimal_factor)
-                ret = round((exit_price - rec["entry_price"]) / rec["entry_price"] * 100, 2)
-                if rec.get("direction") == "sell":
-                    ret = -ret
-                rec.update(
-                    {
-                        "status": "closed",
-                        "outcome": outcome,
-                        "exit_price": exit_price,
-                        "exit_date": exit_date,
-                        "return_pct": ret,
-                        "evaluation_price_basis": {"adjusted": bars[0].get("adjusted"), "factor": factor},
-                    }
+            factor, verification = _price_factor(rec, bars, remaining=max(deadline - time.monotonic(), 0))
+            if factor is None:
+                entry.update(
+                    outcome="skipped_price_basis",
+                    return_pct=None,
+                    exit_date=None,
+                    warning="Adjusted or unknown prices lack a verified conversion to the original signal prices",
                 )
-                changed = True
-                entry.update({"outcome": outcome, "return_pct": ret, "exit_date": exit_date})
+            else:
+                decimal_factor = Decimal(str(factor))
+                priced = dict(rec)
+                for key in ("entry_price", "target_price", "stop_price"):
+                    if priced.get(key) is not None:
+                        priced[key] = float(Decimal(str(priced[key])) * decimal_factor)
+                ev = _evaluate_bars(priced, bars)
+                if ev is None:
+                    entry.update({"outcome": "open", "return_pct": None, "exit_date": None})
+                else:
+                    outcome, exit_price, exit_date = ev
+                    exit_price = float(Decimal(str(exit_price)) / decimal_factor)
+                    ret = round((exit_price - rec["entry_price"]) / rec["entry_price"] * 100, 2)
+                    if rec.get("direction") == "sell":
+                        ret = -ret
+                    basis_info = {"adjusted": bars[0].get("adjusted"), "factor": factor}
+                    if verification == "no_corporate_action_verified":
+                        basis_info["verification"] = verification
+                    rec.update(
+                        {
+                            "status": "closed",
+                            "outcome": outcome,
+                            "exit_price": exit_price,
+                            "exit_date": exit_date,
+                            "return_pct": ret,
+                            "evaluation_price_basis": basis_info,
+                        }
+                    )
+                    changed = True
+                    entry.update({"outcome": outcome, "return_pct": ret, "exit_date": exit_date})
         results.append(entry)
     if results:
         try:

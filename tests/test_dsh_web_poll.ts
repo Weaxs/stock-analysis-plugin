@@ -58,9 +58,12 @@ const document = {
   addEventListener() {},
 };
 const windowListeners = new Map<string, Array<(event: unknown) => void>>();
+const postedMessages: unknown[] = [];
 const window = {
   innerWidth: 1024,
   parent: null as unknown,
+  prompt: undefined as ((msg?: string, def?: string) => string | null) | undefined,
+  postMessage(msg: unknown) { postedMessages.push(msg); },
   addEventListener(type: string, fn: (event: unknown) => void) {
     windowListeners.set(type, [...(windowListeners.get(type) ?? []), fn]);
   },
@@ -101,6 +104,13 @@ async function fetch(path: string, options: { method?: string; body?: string } =
   if (path === "./api/watchlist") {
     writeCalls.push(JSON.parse(options.body ?? "{}"));
     return { ok: true, status: 200, json: async () => ({ symbols: ["AAPL"] }) };
+  }
+  if (path.startsWith("./api/search")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ query: "茅台", results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] }),
+    };
   }
   throw new Error("unexpected fetch: " + path);
 }
@@ -180,4 +190,36 @@ for (const listener of windowListeners.get("message") ?? []) {
 }
 assert.equal(document.documentElement.style.props.has("--bg"), false, "omitted theme token is removed");
 
-console.log("dsh web: watchlist polling, fund NAV, advisor rows, undo and theme cleanup passed");
+// Quick analyze posts ask-agent message to parent shell and shows confirmation toast.
+const analyzeBtn = { dataset: { analyze: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
+}
+assert(postedMessages.some(m => (m as { type?: string; symbol?: string }).type === "stock-analysis:ask-agent" && (m as { symbol?: string }).symbol === "018147"));
+
+// Group & price alert thresholds render badges and highlight rows when triggered.
+window.prompt = () => "核心";
+const groupBtn = { dataset: { group: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-group]" ? groupBtn : null) } });
+}
+window.prompt = () => ">=1.5";
+const alertBtn = { dataset: { alert: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-alert]" ? alertBtn : null) } });
+}
+const updatedRows = JSON.stringify(byId("rows").children);
+assert(updatedRows.includes("#核心"), "custom group badge rendered");
+assert(updatedRows.includes("触达 ≥ 1.5"), "triggered price alert badge rendered");
+
+// Name search dropdown picks symbol into watchlist.
+byId("symbol-input").value = "茅台";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+const lastTimerFn = [...timers.values()].at(-1) as (() => void) | undefined;
+if (typeof lastTimerFn === "function") lastTimerFn();
+await new Promise(resolve => setTimeout(resolve, 10));
+assert(JSON.stringify(byId("search-results").children).includes("贵州茅台"));
+
+console.log("dsh web: watchlist polling, fund NAV, advisor rows, search, groups, alerts, analyze, undo and theme cleanup passed");

@@ -626,6 +626,27 @@ export function createDashboardHandler(options: DashboardOptions): DashboardHand
         }
         return sendJson(res, 405, { error: "Method not allowed" });
       }
+      if (rest === "/api/search") {
+        if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed" });
+        const q = (url.searchParams.get("q") ?? "").trim();
+        if (!q) return sendJson(res, 200, { query: "", results: [] });
+        if (q.length > 64) throw new HttpError(400, "搜索关键词过长");
+        const raw = await limiter.run(0, () => runPy("name_resolver.py", ["resolve", q, "--top", "8"], 15_000, abort.signal));
+        const parsed = parseJson(raw);
+        if (!Array.isArray(parsed)) {
+          const err = (parsed as { error?: unknown } | null)?.error;
+          throw new HttpError(502, typeof err === "string" ? err : "搜索服务暂时不可用");
+        }
+        const results = parsed
+          .filter((item): item is { code: string; name?: string; score?: number } => typeof item?.code === "string" && item.code.length > 0)
+          .map(item => ({
+            symbol: item.code,
+            name: typeof item.name === "string" ? item.name : item.code,
+            region: symbolRegion(item.code),
+            score: typeof item.score === "number" ? item.score : null,
+          }));
+        return sendJson(res, 200, { query: q, results });
+      }
       if (rest.startsWith("/api/")) return sendJson(res, 404, { error: "Not found" });
       if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 404, { error: "Not found" });
 

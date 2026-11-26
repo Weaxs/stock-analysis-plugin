@@ -589,6 +589,63 @@ def test_unverified_price_basis_never_closes_original_price_signal(store, mock_r
     )
 
 
+def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
+    bars = [
+        {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+
+    def fake_run(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            return {
+                "source": "eastmoney",
+                "history": [{"ex_date": "2026-06-15", "cash_per_share": 1.2, "status": "实施分配"}],
+                "calendar": [],
+                "warnings": [],
+            }
+        return None
+
+    mock_run_tool.side_effect = fake_run
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert result["closed"] == 1
+    assert result["results"][0]["outcome"] == "target_hit"
+    assert result["results"][0]["return_pct"] == 20.0
+    saved = st._load_records(store)[0]
+    assert saved["evaluation_price_basis"] == {
+        "adjusted": "qfq",
+        "factor": 1.0,
+        "verification": "no_corporate_action_verified",
+    }
+
+
+def test_keyless_qfq_skips_when_ex_dividend_occurred_in_window(store, mock_run_tool):
+    st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
+    bars = [
+        {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+
+    def fake_run(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            return {
+                "source": "eastmoney",
+                "history": [{"ex_date": "2026-09-02", "cash_per_share": 2.0, "status": "实施分配"}],
+                "calendar": [],
+                "warnings": [],
+            }
+        return None
+
+    mock_run_tool.side_effect = fake_run
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert result["closed"] == 0
+    assert result["results"][0]["outcome"] == "skipped_price_basis"
+
+
 def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_tool):
     st.cmd_record(_rec_args(store, entry_price=100, stop_price=90, target_price=120, horizon_days=1))
     bars = [_bar("2026-09-01", 50, 50, 50), _bar("2026-09-02", 51, 50, 51)]

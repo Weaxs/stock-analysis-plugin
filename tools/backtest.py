@@ -2,6 +2,7 @@
 """AlphaEvo — strategy backtesting engine with YAML DSL."""
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -658,6 +659,520 @@ def simulate_monthly_market(
     }
 
 
+def _schedule_bucket(ts: pd.Timestamp, frequency: str):
+    if frequency == "weekly":
+        iso = ts.isocalendar()
+        return (int(iso.year), int(iso.week))
+    if frequency == "biweekly":
+        iso = ts.isocalendar()
+        return (int(iso.year), int(iso.week) // 2)
+    if frequency == "monthly":
+        return (ts.year, ts.month)
+    if frequency == "quarterly":
+        return (ts.year, (ts.month - 1) // 3)
+    raise ValueError(f"Unsupported schedule frequency: {frequency}")
+
+
+def _parse_portfolio_config(strategy: dict, symbols: list[str]) -> dict:
+    portfolio_cfg = strategy.get("portfolio") or {}
+    pos_cfg = strategy.get("position") or {}
+    dca_cfg = strategy.get("dca") or {}
+
+    rebalance = str(portfolio_cfg.get("rebalance", "none")).lower()
+    if rebalance not in ("none", "weekly", "monthly", "quarterly"):
+        raise ValueError("portfolio.rebalance must be one of none, weekly, monthly, quarterly")
+
+    weighting = str(portfolio_cfg.get("weighting", "equal")).lower()
+    if weighting not in ("equal", "custom"):
+        raise ValueError("portfolio.weighting must be equal or custom")
+
+    if weighting == "custom":
+        raw_weights = portfolio_cfg.get("weights")
+        if not isinstance(raw_weights, dict) or not raw_weights:
+            raise ValueError("portfolio.weights must be a non-empty mapping when weighting=custom")
+        weights = {}
+        for sym in symbols:
+            w = float(raw_weights.get(sym, 0.0))
+            if not math.isfinite(w) or w < 0:
+                raise ValueError(f"portfolio.weights[{sym}] must be a non-negative finite number")
+            weights[sym] = w
+        total_w = sum(weights.values())
+        if not (0 < total_w <= 1.0001):
+            raise ValueError(f"portfolio.weights sum must be in (0, 1], got {round(total_w, 4)}")
+    else:
+        w = 1.0 / len(symbols)
+        weights = {sym: w for sym in symbols}
+
+    drift = portfolio_cfg.get("drift_threshold")
+    if drift is not None:
+        drift = float(drift)
+        if not math.isfinite(drift) or not 0 < drift < 1:
+            raise ValueError("portfolio.drift_threshold must be in (0, 1)")
+
+    max_positions = portfolio_cfg.get("max_positions", pos_cfg.get("max_positions", len(symbols)))
+    if isinstance(max_positions, bool) or not isinstance(max_positions, int) or max_positions <= 0:
+        raise ValueError("max_positions must be a positive integer")
+
+    dca = None
+    if dca_cfg:
+        freq = str(dca_cfg.get("frequency", "monthly")).lower()
+        if freq not in ("weekly", "biweekly", "monthly", "quarterly"):
+            raise ValueError("dca.frequency must be weekly, biweekly, monthly, or quarterly")
+        amt = float(dca_cfg.get("amount", 0))
+        if not math.isfinite(amt) or amt <= 0:
+            raise ValueError("dca.amount must be a finite positive number")
+        dca = {"frequency": freq, "amount": amt}
+
+    return {
+        "rebalance": rebalance,
+        "weighting": weighting,
+        "weights": weights,
+        "drift_threshold": drift,
+        "max_positions": max_positions,
+        "dca": dca,
+    }
+
+
+def simulate_portfolio(
+    datasets: dict[str, pd.DataFrame],
+    strategy: dict,
+    capital: float,
+    *,
+    start: str | None = None,
+) -> dict:
+    """Multi-asset portfolio simulation with optional periodic rebalancing, DCA, and multi-position signals."""
+    if not datasets:
+        raise ValueError("datasets must contain at least one symbol")
+    if not math.isfinite(capital) or capital <= 0:
+        raise ValueError("capital must be finite and positive")
+
+    symbols = list(datasets.keys())
+    markets = {detect_market(sym) for sym in symbols}
+    if len(markets) > 1:
+        raise ValueError(f"Portfolio symbols must belong to a single market/currency, got {sorted(markets)}")
+    market = next(iter(markets))
+    lot_size = 100 if market == "A" else 1
+
+    sim_cfg = strategy.get("simulation") or {}
+    execution = sim_cfg.get("execution", "next_open")
+    if execution not in ("next_open", "same_close"):
+        raise ValueError("simulation.execution must be next_open or same_close")
+    slippage = float(sim_cfg.get("slippage", 0.001))
+    commission = float(sim_cfg.get("commission", 0.0015))
+    tax_raw = sim_cfg.get("stamp_tax")
+    stamp_tax = float(0.0 if tax_raw is None else tax_raw)
+    for name, rate in (("slippage", slippage), ("commission", commission), ("stamp_tax", stamp_tax)):
+        if not 0 <= rate < 1:
+            raise ValueError(f"simulation.{name} must be a rate in [0, 1), got {rate}")
+    if commission + stamp_tax >= 1:
+        raise ValueError(f"simulation commission + stamp_tax must be < 1, got {commission + stamp_tax}")
+
+    cfg = _parse_portfolio_config(strategy, symbols)
+    entry_cfg = strategy.get("entry") or {}
+    exit_cfg = strategy.get("exit") or {}
+    entry_conditions = entry_cfg.get("conditions") or []
+    entry_logic = entry_cfg.get("logic", "all")
+    exit_conditions = exit_cfg.get("conditions") or []
+    exit_logic = exit_cfg.get("logic", "any")
+    for side, logic in (("entry", entry_logic), ("exit", exit_logic)):
+        if logic not in ("all", "any"):
+            raise ValueError(f"{side}.logic must be all or any")
+
+    stop_loss = float(exit_cfg.get("stop_loss", -1.0)) if "stop_loss" in exit_cfg else None
+    take_profit = float(exit_cfg.get("take_profit", 1e9)) if "take_profit" in exit_cfg else None
+    ts_val = exit_cfg.get("trailing_stop")
+    trailing_stop = float(ts_val) if ts_val is not None else None
+    if stop_loss is not None and (not math.isfinite(stop_loss) or stop_loss >= 0):
+        raise ValueError("exit.stop_loss must be a finite negative fraction")
+    if take_profit is not None and (not math.isfinite(take_profit) or take_profit <= 0):
+        raise ValueError("exit.take_profit must be a finite positive fraction")
+    if trailing_stop is not None and (not math.isfinite(trailing_stop) or not 0 < trailing_stop < 1):
+        raise ValueError("exit.trailing_stop must be a finite fraction in (0, 1)")
+
+    # Validate each dataset and build date maps + indicator caches
+    per_sym: dict[str, dict] = {}
+    all_dates: set[pd.Timestamp] = set()
+    for sym, raw_df in datasets.items():
+        df = raw_df.copy().reset_index(drop=True)
+        _validate_adjustment_basis(df)
+        if not np.isfinite(df["close"]).all() or (df["close"] <= 0).any():
+            raise ValueError(f"backtest prices for {sym} must be finite and positive")
+        if execution == "next_open" and (
+            "open" not in df or not np.isfinite(df["open"]).all() or (df["open"] <= 0).any()
+        ):
+            raise ValueError(f"next_open requires finite positive open prices for {sym}")
+        dates = pd.to_datetime(df["date"], errors="coerce")
+        if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+            raise ValueError(f"backtest dates for {sym} must be valid, unique and increasing")
+        cache: dict = {}
+        for cond in entry_conditions + exit_conditions:
+            _condition_series(df, cond, cache)
+            _condition_value(cond)
+        date_to_idx = {ts: idx for idx, ts in enumerate(dates)}
+        per_sym[sym] = {"df": df, "dates": dates, "bars": df.to_dict("records"), "idx": date_to_idx, "cache": cache}
+        all_dates.update(dates.tolist())
+
+    timeline = sorted(all_dates)
+    if start is not None:
+        start_ts = pd.Timestamp(start)
+        eval_dates = [d for d in timeline if d >= start_ts]
+    else:
+        eval_dates = timeline[1:] if len(timeline) > 1 else timeline
+    if not eval_dates:
+        raise ValueError("start must be a valid date within the backtest data")
+
+    cash = capital
+    total_contributed = capital
+    contributions = []
+    holdings: dict[str, dict] = {}  # sym -> {shares, cost, buy_date, buy_price, peak_close}
+    last_close: dict[str, float] = {}
+    trades = []
+    equity_curve = []
+    commission_paid = 0.0
+    stamp_tax_paid = 0.0
+    blocked_orders = 0
+    trade_id = 0
+
+    signal_mode = bool(entry_conditions)
+    last_dca_bucket = None
+    last_rebal_bucket = None
+    initial_deployed = False
+
+    # Time-weighted return (TWR) tracks pure investment return independent of DCA cash inflows
+    twr_factor = 1.0
+    prev_equity = capital
+
+    def is_tradable(row) -> bool:
+        return not ("volume" in row and (not pd.notna(row["volume"]) or row["volume"] <= 0))
+
+    def fill_px(row) -> float:
+        return float(row["close"] if execution == "same_close" else row["open"])
+
+    def sell_shares(sym: str, shares_to_sell: int, row: dict, date_str: str, reason: str):
+        nonlocal cash, commission_paid, stamp_tax_paid, trade_id
+        h = holdings.get(sym)
+        if not h or shares_to_sell <= 0:
+            return
+        qty = min(shares_to_sell, h["shares"])
+        if qty <= 0:
+            return
+        sell_price = fill_px(row) * (1 - slippage)
+        gross = qty * sell_price
+        proceeds = gross * (1 - commission - stamp_tax)
+        commission_paid += gross * commission
+        stamp_tax_paid += gross * stamp_tax
+        cash += proceeds
+        cost_portion = h["cost"] * (qty / h["shares"])
+        pnl = proceeds - cost_portion
+        days = 0
+        with contextlib.suppress(ValueError):
+            days = (datetime.strptime(date_str, "%Y-%m-%d") - datetime.strptime(h["buy_date"], "%Y-%m-%d")).days
+        trade_id += 1
+        trades.append(
+            {
+                "id": trade_id,
+                "symbol": sym,
+                "type": "sell",
+                "date": date_str,
+                "price": round(sell_price, 2),
+                "shares": qty,
+                "amount": round(proceeds, 2),
+                "reason": reason,
+                "pnl": round(pnl, 2),
+                "pnl_pct": round(pnl / cost_portion, 4) if cost_portion > 0 else 0.0,
+                "holding_days": days,
+            }
+        )
+        h["shares"] -= qty
+        h["cost"] -= cost_portion
+        if h["shares"] <= 0:
+            del holdings[sym]
+
+    def buy_amount(sym: str, budget: float, row: dict, date_str: str, reason: str):
+        nonlocal cash, commission_paid, trade_id
+        if budget <= 0 or cash <= 0:
+            return
+        spend = min(budget, cash)
+        buy_price = fill_px(row) * (1 + slippage)
+        shares = int(spend / (buy_price * (1 + commission)) / lot_size) * lot_size
+        if shares <= 0:
+            return
+        cost = shares * buy_price * (1 + commission)
+        commission_paid += shares * buy_price * commission
+        cash -= cost
+        trade_id += 1
+        if sym in holdings:
+            h = holdings[sym]
+            new_shares = h["shares"] + shares
+            h["cost"] += cost
+            h["shares"] = new_shares
+            h["buy_price"] = round(h["cost"] / new_shares, 4)
+            h["peak_close"] = max(h["peak_close"], float(row["close"]))
+        else:
+            holdings[sym] = {
+                "shares": shares,
+                "cost": cost,
+                "buy_date": date_str,
+                "buy_price": round(buy_price, 4),
+                "peak_close": float(row["close"]),
+            }
+        trades.append(
+            {
+                "id": trade_id,
+                "symbol": sym,
+                "type": "buy",
+                "date": date_str,
+                "price": round(buy_price, 2),
+                "shares": shares,
+                "amount": round(cost, 2),
+                "reason": reason,
+            }
+        )
+
+    for ts in eval_dates:
+        date_str = str(ts.date())
+        # Refresh last known closes for symbols that have a bar prior to or on ts
+        for sym in symbols:
+            info = per_sym[sym]
+            idx = info["idx"].get(ts)
+            if idx is not None and idx > 0 and sym not in last_close:
+                last_close[sym] = float(info["bars"][idx - 1]["close"])
+
+        # Step 1: Scheduled DCA contribution (adds fresh cash before orders on schedule boundary)
+        dca_added = 0.0
+        if cfg["dca"] is not None:
+            bucket = _schedule_bucket(ts, cfg["dca"]["frequency"])
+            if last_dca_bucket is None:
+                last_dca_bucket = bucket
+            elif bucket != last_dca_bucket:
+                last_dca_bucket = bucket
+                dca_added = cfg["dca"]["amount"]
+                cash += dca_added
+                total_contributed += dca_added
+                contributions.append({"date": date_str, "amount": round(dca_added, 2)})
+
+        # Step 2: Execute either signal-driven multi-position mode or target-allocation/rebalance mode
+        if signal_mode:
+            # Exits first to free cash and slots
+            for sym in list(holdings.keys()):
+                info = per_sym[sym]
+                idx = info["idx"].get(ts)
+                if idx is None:
+                    continue
+                sig_idx = idx if execution == "same_close" else idx - 1
+                if sig_idx < 0:
+                    continue
+                row = info["bars"][idx]
+                sig_price = float(info["bars"][sig_idx]["close"])
+                h = holdings[sym]
+                h["peak_close"] = max(h["peak_close"], sig_price)
+                pnl_pct = (sig_price - h["buy_price"]) / h["buy_price"]
+                sell, reason = False, ""
+                if stop_loss is not None and pnl_pct <= stop_loss:
+                    sell, reason = True, f"止损触发 ({round(pnl_pct * 100, 1)}% <= {round(stop_loss * 100, 1)}%)"
+                elif trailing_stop is not None and sig_price <= h["peak_close"] * (1 - trailing_stop):
+                    dd = (h["peak_close"] - sig_price) / h["peak_close"]
+                    sell, reason = (
+                        True,
+                        f"移动止损触发 (较高点回撤 {round(dd * 100, 1)}% >= {round(trailing_stop * 100, 1)}%)",
+                    )
+                elif take_profit is not None and pnl_pct >= take_profit:
+                    sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
+                elif exit_conditions:
+                    sell, reason = evaluate_conditions(info["df"], exit_conditions, exit_logic, sig_idx, info["cache"])
+                if sell:
+                    if not is_tradable(row):
+                        blocked_orders += 1
+                    else:
+                        sell_shares(sym, h["shares"], row, date_str, reason)
+
+            # Entries for non-held symbols up to max_positions
+            open_slots = cfg["max_positions"] - len(holdings)
+            if open_slots > 0 and cash > 0:
+                candidates = []
+                for sym in symbols:
+                    if sym in holdings:
+                        continue
+                    info = per_sym[sym]
+                    idx = info["idx"].get(ts)
+                    if idx is None:
+                        continue
+                    sig_idx = idx if execution == "same_close" else idx - 1
+                    if sig_idx < 0:
+                        continue
+                    hit, reason = evaluate_conditions(info["df"], entry_conditions, entry_logic, sig_idx, info["cache"])
+                    if hit:
+                        candidates.append((sym, info["bars"][idx], reason))
+                for sym, row, reason in candidates[:open_slots]:
+                    if not is_tradable(row):
+                        blocked_orders += 1
+                        continue
+                    remaining_slots = max(1, cfg["max_positions"] - len(holdings))
+                    buy_amount(sym, cash / remaining_slots, row, date_str, reason)
+        else:
+            # Allocation / Rebalance / DCA mode
+            rebal_due = False
+            if not initial_deployed:
+                rebal_due = True
+                if cfg["rebalance"] != "none":
+                    last_rebal_bucket = _schedule_bucket(ts, cfg["rebalance"])
+            elif cfg["rebalance"] != "none":
+                bucket = _schedule_bucket(ts, cfg["rebalance"])
+                if bucket != last_rebal_bucket:
+                    last_rebal_bucket = bucket
+                    rebal_due = True
+
+            # Estimate current equity using execution prices where available
+            cur_prices = {}
+            for sym in symbols:
+                info = per_sym[sym]
+                idx = info["idx"].get(ts)
+                if idx is not None:
+                    cur_prices[sym] = fill_px(info["bars"][idx])
+                elif sym in last_close:
+                    cur_prices[sym] = last_close[sym]
+            port_value = cash + sum(h["shares"] * cur_prices.get(s, h["buy_price"]) for s, h in holdings.items())
+
+            if rebal_due and port_value > 0:
+                # Check optional drift threshold after initial deployment
+                do_rebalance = not initial_deployed
+                if not do_rebalance:
+                    if cfg["drift_threshold"] is None:
+                        do_rebalance = True
+                    else:
+                        max_drift = max(
+                            abs(
+                                (holdings.get(s, {}).get("shares", 0) * cur_prices.get(s, 0.0) / port_value)
+                                - cfg["weights"][s]
+                            )
+                            for s in symbols
+                        )
+                        do_rebalance = max_drift >= cfg["drift_threshold"]
+
+                if do_rebalance:
+                    reason = "初始建仓" if not initial_deployed else f"定期再平衡 ({cfg['rebalance']})"
+                    # Sell overweight positions first
+                    for sym in symbols:
+                        info = per_sym[sym]
+                        idx = info["idx"].get(ts)
+                        if idx is None or sym not in holdings:
+                            continue
+                        row = info["bars"][idx]
+                        px = cur_prices[sym]
+                        target_val = port_value * cfg["weights"][sym]
+                        cur_val = holdings[sym]["shares"] * px
+                        if cur_val > target_val:
+                            excess_shares = int((cur_val - target_val) / px / lot_size) * lot_size
+                            if excess_shares > 0:
+                                if not is_tradable(row):
+                                    blocked_orders += 1
+                                else:
+                                    sell_shares(sym, excess_shares, row, date_str, reason)
+                    # Buy underweight positions
+                    for sym in symbols:
+                        info = per_sym[sym]
+                        idx = info["idx"].get(ts)
+                        if idx is None:
+                            continue
+                        row = info["bars"][idx]
+                        px = cur_prices[sym]
+                        target_val = port_value * cfg["weights"][sym]
+                        cur_val = holdings.get(sym, {}).get("shares", 0) * px
+                        deficit = target_val - cur_val
+                        if deficit > 0:
+                            if not is_tradable(row):
+                                blocked_orders += 1
+                            else:
+                                buy_amount(sym, deficit, row, date_str, reason)
+                    initial_deployed = True
+            elif dca_added > 0:
+                # Deploy fresh DCA cash into target weights without selling existing holdings
+                for sym in symbols:
+                    info = per_sym[sym]
+                    idx = info["idx"].get(ts)
+                    if idx is None:
+                        continue
+                    row = info["bars"][idx]
+                    if not is_tradable(row):
+                        blocked_orders += 1
+                        continue
+                    buy_amount(
+                        sym, dca_added * cfg["weights"][sym], row, date_str, f"定期定投 ({cfg['dca']['frequency']})"
+                    )
+
+        # Step 3: Mark-to-market at close
+        for sym in symbols:
+            info = per_sym[sym]
+            idx = info["idx"].get(ts)
+            if idx is not None:
+                last_close[sym] = float(info["bars"][idx]["close"])
+        equity = cash + sum(h["shares"] * last_close.get(s, h["buy_price"]) for s, h in holdings.items())
+        denom = prev_equity + dca_added
+        if denom > 0:
+            twr_factor *= equity / denom
+        prev_equity = equity
+        equity_curve.append({"date": date_str, "equity": round(equity, 2)})
+
+    final_equity = equity_curve[-1]["equity"] if equity_curve else capital
+    final_holdings = []
+    for sym, h in holdings.items():
+        px = last_close.get(sym, h["buy_price"])
+        mv = round(h["shares"] * px, 2)
+        final_holdings.append(
+            {
+                "symbol": sym,
+                "shares": h["shares"],
+                "close": round(px, 4),
+                "market_value": mv,
+                "weight": round(mv / final_equity, 4) if final_equity > 0 else 0.0,
+            }
+        )
+
+    out = {
+        "mode": "portfolio_signal" if signal_mode else "portfolio_allocation",
+        "symbols": symbols,
+        "market": market,
+        "trades": trades,
+        "equity_curve": equity_curve,
+        "final_equity": final_equity,
+        "final_cash": round(cash, 2),
+        "final_holdings": final_holdings,
+        "total_contributed": round(total_contributed, 2),
+        "time_weighted_return": round(twr_factor - 1.0, 4),
+        "contributions": {
+            "count": len(contributions),
+            "total_added": round(total_contributed - capital, 2),
+            "schedule": contributions,
+        }
+        if cfg["dca"] is not None
+        else None,
+        "portfolio": {
+            "rebalance": cfg["rebalance"],
+            "weighting": cfg["weighting"],
+            "weights": {k: round(v, 4) for k, v in cfg["weights"].items()},
+            "max_positions": cfg["max_positions"],
+        },
+        "execution": {
+            "model": execution,
+            "blocked_orders": blocked_orders,
+            "unfilled_order": False,
+            "limitations": [
+                "Stops are close signals, not intraday guaranteed stop prices",
+                "Queue priority, partial fills, market impact and settlement are not simulated",
+                "Adjusted OHLC are synthetic prices; corporate actions and cash dividends are not simulated separately",
+            ],
+        },
+        "costs": {
+            "slippage": slippage,
+            "commission": commission,
+            "stamp_tax": stamp_tax,
+            "commission_paid": round(commission_paid, 2),
+            "stamp_tax_paid": round(stamp_tax_paid, 2),
+        },
+    }
+    return out
+
+
 # --------------- Metrics ---------------
 
 
@@ -925,6 +1440,81 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         end = datetime.now().strftime("%Y-%m-%d")
     if not start:
         start = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    symbols = [s.strip() for s in str(symbol).split(",") if s.strip()]
+    if not symbols:
+        return {"error": "At least one stock symbol is required"}
+    use_portfolio = (
+        len(symbols) > 1
+        or bool(strategy.get("portfolio"))
+        or bool(strategy.get("dca"))
+        or (strategy.get("position") or {}).get("max_positions", 1) != 1
+    )
+    if use_portfolio and len(symbols) == 1 and not strategy.get("portfolio") and not strategy.get("dca"):
+        # Keep single-symbol max_positions != 1 validation error in single-position simulate()
+        use_portfolio = False
+
+    if use_portfolio:
+        from concurrent.futures import ThreadPoolExecutor
+
+        warmup = _strategy_warmup_bars(strategy)
+        datasets: dict[str, pd.DataFrame] = {}
+        actual_starts, actual_ends = [], []
+        with ThreadPoolExecutor(max_workers=min(len(symbols), 4)) as pool:
+            fetched = {sym: pool.submit(fetch_kline, sym, start, end, True, warmup) for sym in symbols}
+            for sym in symbols:
+                df = fetched[sym].result()
+                ev = df[(df["date"] >= start) & (df["date"] <= end)]
+                if len(ev) < 30:
+                    return {"error": f"Insufficient data for {sym}: {len(ev)} rows (need at least 30)"}
+                datasets[sym] = df
+                actual_starts.append(ev["date"].iloc[0].strftime("%Y-%m-%d"))
+                actual_ends.append(ev["date"].iloc[-1].strftime("%Y-%m-%d"))
+        requested_period = f"{start} to {end}"
+        actual_start = min(actual_starts)
+        actual_end = max(actual_ends)
+        warnings = []
+        if actual_start != start or actual_end != end:
+            warnings.append(f"Actual data covers {actual_start} to {actual_end}; requested {requested_period}")
+        execution = (strategy.get("simulation") or {}).get("execution", "next_open")
+        sim = simulate_portfolio(datasets, strategy, capital, start=actual_start)
+        final = sim["final_equity"]
+        total_in = sim["total_contributed"]
+        metrics = compute_metrics(sim["trades"], sim["equity_curve"], total_in, final, actual_start, actual_end)
+        if sim.get("contributions"):
+            metrics["time_weighted_return"] = sim["time_weighted_return"]
+        result = {
+            "strategy": strategy.get("name", "unnamed"),
+            "symbol": symbol,
+            "symbols": symbols,
+            "mode": sim["mode"],
+            "period": f"{actual_start} to {actual_end}",
+            "requested_period": requested_period,
+            "warnings": warnings,
+            "initial_capital": capital,
+            "total_contributed": total_in,
+            "final_capital": final,
+            "final_cash": sim["final_cash"],
+            "final_holdings": sim["final_holdings"],
+            "portfolio": sim["portfolio"],
+            "costs": sim["costs"],
+            "execution": sim["execution"],
+            "metrics": metrics,
+            "trades": sim["trades"],
+            "equity_curve": sample_curve(sim["equity_curve"]),
+            "diagnosis": diagnose(metrics),
+            "diagnostics": diagnose_advanced(metrics, sim["trades"], sim["equity_curve"], strategy),
+        }
+        if sim.get("contributions"):
+            result["contributions"] = sim["contributions"]
+        benchmark_symbol = strategy.get("benchmark")
+        if benchmark_symbol:
+            benchmark_start = sim["equity_curve"][0]["date"] if sim["equity_curve"] else actual_start
+            comp_ret = sim["time_weighted_return"] if sim.get("contributions") else metrics["total_return"]
+            result["benchmark"] = _benchmark_comparison(
+                str(benchmark_symbol), benchmark_start, actual_end, comp_ret, execution
+            )
+        return result
 
     df = fetch_kline(symbol, start, end, True, _strategy_warmup_bars(strategy))
     evaluation = df[(df["date"] >= start) & (df["date"] <= end)]

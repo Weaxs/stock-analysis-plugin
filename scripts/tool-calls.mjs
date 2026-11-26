@@ -32,6 +32,10 @@ export const TOOL_CALLS = {
     script: "credit_data.py",
     argv: (p) => ["cds_index", "--source", p.source ?? "cn", "--days", String(p.days ?? 30), "--index", p.index ?? "", "--tenor", p.tenor ?? ""],
   },
+  get_macro_anchors: {
+    script: "macro_data.py",
+    argv: (p) => ["anchors", "--group", p.group ?? "all", "--days", String(p.days ?? 30)],
+  },
   get_earnings_calendar: {
     script: "value_data.py",
     argv: (p) => ["earnings_calendar", "--report-date", p.report_date ?? "", "--symbol", p.symbol ?? "", "--top", String(p.top ?? 50)],
@@ -341,7 +345,11 @@ export const TOOL_CALLS = {
   },
   diagnose_data_sources: {
     script: "diagnostics.py",
-    argv: (p) => ["check", "--market", p.market ?? "all"],
+    argv: (p) => {
+      const args = ["check", "--market", p.market ?? "all"];
+      if (p.probe) args.push("--probe");
+      return args;
+    },
   },
   get_market_capabilities: {
     script: "capabilities.py",

@@ -385,7 +385,10 @@ def detect_anomaly(args: dict, **kwargs) -> str:
 
 def diagnose_data_sources(args: dict, **kwargs) -> str:
     market = args.get("market", "all")
-    return _run("diagnostics.py", ["check", "--market", market])
+    argv = ["check", "--market", market]
+    if args.get("probe"):
+        argv.append("--probe")
+    return _run("diagnostics.py", argv)
 
 
 def get_market_capabilities(args: dict, **kwargs) -> str:
@@ -510,6 +513,10 @@ def get_cds_index(args: dict, **kwargs) -> str:
             args.get("tenor", ""),
         ],
     )
+
+
+def get_macro_anchors(args: dict, **kwargs) -> str:
+    return _run("macro_data.py", ["anchors", "--group", args.get("group", "all"), "--days", args.get("days", 30)])
 
 
 def get_earnings_calendar(args: dict, **kwargs) -> str:

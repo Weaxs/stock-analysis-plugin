@@ -108,7 +108,21 @@ h1 { font-size: 19px; font-weight: 650; letter-spacing: -.02em; line-height: 1.2
 }
 
 .add { display: grid; grid-template-columns: minmax(0, 420px) auto 1fr; align-items: center; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.add-input-wrap { position: relative; min-width: 0; }
+.add-input-wrap input { width: 100%; }
 .add input { height: 32px; min-width: 0; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); caret-color: var(--accent); transition: border-color .16s ease, box-shadow .16s ease; }
+.search-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); padding: 4px; }
+.search-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 12.5px; }
+.search-item:hover, .search-item:focus-visible { background: var(--surface-subtle); }
+.search-item .sname { font-weight: 600; }
+.search-item .scode { color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
+.row-actions { display: inline-flex; align-items: center; gap: 2px; }
+.row-btn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); opacity: .7; transition: background-color .14s ease, color .14s ease, opacity .14s ease; }
+.row-btn:hover { background: var(--surface-subtle); color: var(--text); opacity: 1; }
+.row-btn.is-set { color: var(--accent); opacity: 1; }
+.tag.group-tag { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+.tag.alert-badge { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); font-weight: 600; }
+tr.is-alert { background: color-mix(in srgb, var(--warn) 8%, transparent); }
 .add input::placeholder { color: var(--muted); opacity: 1; }
 .add input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
 .add-actions { display: flex; align-items: center; gap: 8px; }

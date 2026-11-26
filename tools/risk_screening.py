@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _subproc import run_tool as _run_tool
 from _subproc import utf8_stdio
+from stock_data import detect_market
 from trading_calendar import market_now
 
 
@@ -216,14 +217,33 @@ def _fetch_lockup(symbol: str) -> dict:
 # --------------- Check 4-7: News-based risks ---------------
 
 
-def check_news_risks(symbol: str, name: str = "", *, run=None) -> dict:
-    search_name = name if name else symbol
-    categories = {
-        "insider": f"{search_name} 减持 股东减持",
-        "earnings": f"{search_name} 业绩预告 亏损 下降",
-        "regulatory": f"{search_name} 处罚 违规 监管 立案",
-        "industry": f"{search_name} 行业政策 监管 限制",
+def _news_risk_queries(search_name: str, market: str) -> dict[str, str]:
+    if market == "A":
+        return {
+            "insider": f"{search_name} 减持 股东减持",
+            "earnings": f"{search_name} 业绩预告 亏损 下降",
+            "regulatory": f"{search_name} 处罚 违规 监管 立案",
+            "industry": f"{search_name} 行业政策 监管 限制",
+        }
+    if market == "HK":
+        return {
+            "insider": f"{search_name} insider selling stake reduction 减持",
+            "earnings": f"{search_name} profit warning earnings miss 盈警",
+            "regulatory": f"{search_name} SFC regulatory investigation penalty 监管",
+            "industry": f"{search_name} industry regulation policy headwind",
+        }
+    return {
+        "insider": f"{search_name} insider selling Form 4 sale",
+        "earnings": f"{search_name} earnings miss guidance cut loss",
+        "regulatory": f"{search_name} SEC investigation lawsuit antitrust fine",
+        "industry": f"{search_name} industry regulation tariff headwind",
     }
+
+
+def check_news_risks(symbol: str, name: str = "", *, run=None, market: str | None = None) -> dict:
+    search_name = name if name else symbol
+    resolved_market = market or detect_market(symbol)
+    categories = _news_risk_queries(search_name, resolved_market)
     result = {"flags": [], "available": True}
     # four independent search_intel subprocesses — fan out concurrently (same
     # ThreadPoolExecutor pattern as gather._run_all); iterating `futures` in
@@ -253,6 +273,96 @@ def check_news_risks(symbol: str, name: str = "", *, run=None) -> dict:
                         "source": "news",
                     }
                 )
+    return result
+
+
+_HK_DISCLOSURE_HIGH = ("清盘", "winding up", "停牌", "trading halt", "suspension", "监管调查", "investigation")
+_HK_DISCLOSURE_MEDIUM = (
+    "盈警",
+    "盈利警告",
+    "profit warning",
+    "配售",
+    "placing",
+    "供股",
+    "rights issue",
+    "减持",
+    "disposal",
+)
+
+
+def check_hk_disclosures(symbol: str, *, run=None) -> dict:
+    data = (run or _run_tool)(
+        "value_data.py", ["announcements", symbol, "--category", "all", "--top", "15"], timeout=25
+    )
+    result = {"matches": [], "flags": [], "available": False}
+    if not isinstance(data, dict) or "error" in data or not isinstance(data.get("announcements"), list):
+        return result
+    result["available"] = True
+    for item in data["announcements"]:
+        title = str(item.get("title") or "")
+        low = title.lower()
+        sev = None
+        if any(k in low or k in title for k in _HK_DISCLOSURE_HIGH):
+            sev = "high"
+        elif any(k in low or k in title for k in _HK_DISCLOSURE_MEDIUM):
+            sev = "medium"
+        if sev:
+            result["matches"].append({"date": item.get("date"), "title": title, "severity": sev})
+    if any(m["severity"] == "high" for m in result["matches"]):
+        count = sum(1 for m in result["matches"] if m["severity"] == "high")
+        result["flags"].append(
+            {
+                "category": "disclosure",
+                "severity": "high",
+                "description": f"港交所近期发现{count}条高风险公告（停牌/清盘/调查类）",
+                "source": "data",
+            }
+        )
+    elif result["matches"]:
+        result["flags"].append(
+            {
+                "category": "disclosure",
+                "severity": "medium",
+                "description": f"港交所近期发现{len(result['matches'])}条风险相关公告（盈警/配售/减持类）",
+                "source": "data",
+            }
+        )
+    return result
+
+
+def check_us_insider_trades(symbol: str, *, run=None) -> dict:
+    if not os.environ.get("SEC_USER_AGENT"):
+        return {"sales_90d": None, "flags": [], "available": False, "configured": False}
+    data = (run or _run_tool)("sec_edgar.py", ["insider_trades", symbol, "--days", "90", "--top", "10"], timeout=30)
+    result = {"sales_90d": 0, "flags": [], "available": False, "configured": True}
+    if not isinstance(data, dict) or "error" in data or not isinstance(data.get("transactions"), list):
+        return result
+    result["available"] = True
+    sales = [
+        tx
+        for tx in data["transactions"]
+        if str(tx.get("code") or tx.get("transaction_code") or "").upper() == "S"
+        or str(tx.get("action") or "").lower() == "sell"
+    ]
+    result["sales_90d"] = len(sales)
+    if len(sales) >= 6:
+        result["flags"].append(
+            {
+                "category": "insider",
+                "severity": "high",
+                "description": f"近90日 SEC Form 4 记录到 {len(sales)} 笔内部人卖出",
+                "source": "data",
+            }
+        )
+    elif len(sales) >= 3:
+        result["flags"].append(
+            {
+                "category": "insider",
+                "severity": "medium",
+                "description": f"近90日 SEC Form 4 记录到 {len(sales)} 笔内部人卖出",
+                "source": "data",
+            }
+        )
     return result
 
 
@@ -292,6 +402,14 @@ def compute_risk(flags: list) -> dict:
 
 
 def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
+    market = detect_market(symbol)
+    if market not in ("A", "HK", "US"):
+        return {
+            "symbol": symbol,
+            "name": name,
+            "market": market,
+            "error": f"screen_risk only supports A, HK, and US markets (got {market})",
+        }
     inputs = inputs or {}
 
     def supplied(key):
@@ -307,11 +425,21 @@ def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
                 check_technical(symbol, ta=supplied("technical")) if "technical" in inputs else check_technical(symbol)
             )
         )
-        lockups = pool.submit(check_lockup, symbol, **({"run": run} if run else {}))
-        searches = pool.submit(check_news_risks, symbol, name, **({"run": run} if run else {}))
-        val, tech, lockup, news = (future.result() for future in (valuation, technical, lockups, searches))
+        market_specific = None
+        if market == "A":
+            market_specific = pool.submit(check_lockup, symbol, **({"run": run} if run else {}))
+        elif market == "HK":
+            market_specific = pool.submit(check_hk_disclosures, symbol, **({"run": run} if run else {}))
+        elif market == "US":
+            market_specific = pool.submit(check_us_insider_trades, symbol, **({"run": run} if run else {}))
+        searches = pool.submit(check_news_risks, symbol, name, market=market, **({"run": run} if run else {}))
+        val = valuation.result()
+        tech = technical.result()
+        extra = market_specific.result() if market_specific is not None else None
+        news = searches.result()
     all_flags = []
     checks = {}
+    warnings = []
 
     checks["valuation"] = {k: val[k] for k in ("pe", "pb", "status", "available")}
     all_flags.extend(val["flags"])
@@ -324,23 +452,44 @@ def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
     }
     all_flags.extend(tech["flags"])
 
-    checks["lockup"] = {"upcoming_30d": lockup["upcoming_30d"], "available": lockup["available"]}
-    all_flags.extend(lockup["flags"])
+    if market == "A":
+        checks["lockup"] = {"upcoming_30d": extra["upcoming_30d"], "available": extra["available"]}
+        all_flags.extend(extra["flags"])
+    else:
+        checks["lockup"] = {"applicable": False, "upcoming_30d": [], "available": True}
+        if market == "HK":
+            checks["disclosures"] = {"matches": extra["matches"], "available": extra["available"]}
+            all_flags.extend(extra["flags"])
+        elif market == "US":
+            checks["insider_trades"] = {
+                "sales_90d": extra["sales_90d"],
+                "available": extra["available"],
+                "configured": extra["configured"],
+            }
+            all_flags.extend(extra["flags"])
+            if not extra["configured"]:
+                warnings.append("SEC_USER_AGENT not set; SEC Form 4 insider trade risk check skipped")
 
     checks["news_risks"] = {k: v for k, v in news.items() if k != "flags"}
     all_flags.extend(news["flags"])
 
     risk = compute_risk(all_flags)
-    missing = [key for key, value in checks.items() if not value.get("available")]
+    missing = [
+        key
+        for key, value in checks.items()
+        if not value.get("available") and not (key == "insider_trades" and value.get("configured") is False)
+    ]
     complete = not missing
+    warnings.extend(f"{key} risk data unavailable or incomplete" for key in missing)
     return {
         "symbol": symbol,
         "name": name,
+        "market": market,
         "risk_level": "unknown" if missing and risk["risk_level"] == "low" else risk["risk_level"],
         "risk_score": risk["risk_score"] if all_flags or complete else None,
         "veto_buy": risk["veto_buy"] if risk["veto_buy"] or complete else None,
         "data_complete": complete,
-        "warnings": [f"{key} risk data unavailable or incomplete" for key in missing],
+        "warnings": warnings,
         "flags": all_flags,
         "checks": checks,
     }
@@ -364,6 +513,8 @@ def main():
     if args.command == "screen":
         result = screen_risk(args.symbol, args.name)
         print(json.dumps(result, ensure_ascii=False, default=str))
+        if isinstance(result, dict) and "error" in result:
+            sys.exit(1)
     elif args.command == "lockup":
         print(json.dumps(_fetch_lockup(args.symbol), ensure_ascii=False, default=str))
 
