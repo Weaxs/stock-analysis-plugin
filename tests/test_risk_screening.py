@@ -1142,6 +1142,64 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     res_same_fdate = _screen([orig_f1, orig_f2_same_day, corr_f1_to_20])
     assert res_same_fdate["checks"]["insider_trades"]["count_uncertain"] is True
 
+    # 11. Gift recipient correction that merely mentions a sale must NOT reclassify the same-day sale or drop veto
+    gift_recip_note = dict(
+        corr_sale_priced,
+        price=None,
+        footnotes={"F1": "Corrects the gift recipient. The gift was reported alongside a sale."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    res_gift_recip = _screen(six_sales + [same_day_gift, gift_recip_note])
+    assert res_gift_recip["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_gift_recip["veto_buy"] is True
+    assert res_gift_recip["checks"]["insider_trades"]["count_uncertain"] is False
+
+    # 12. Price correction on active $20 sale to $10 must NOT restore a previously reclassified $10 gift
+    pair_10_20_plus_4 = [
+        dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=10.0),
+        dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=20.0),
+    ] + [dict(orig_rows[0], transaction_date=f"2026-10-1{i}", shares=100, price=150.0) for i in range(3, 7)]
+    reclass_10_g = dict(
+        pair_10_20_plus_4[0],
+        form="4/A",
+        accession="0000320193-26-000330",
+        filing_date="2026-10-18",
+        transaction_code="G",
+        direction="other",
+    )
+    corr_20_to_10 = dict(
+        pair_10_20_plus_4[1],
+        form="4/A",
+        accession="0000320193-26-000331",
+        filing_date="2026-10-19",
+        price=10.0,
+        footnotes={"F1": "Corrects sale price from $20 to $10."},
+        footnote_refs={"transactionAmounts/transactionPricePerShare/value": ["F1"]},
+    )
+    res_no_false_restore = _screen(pair_10_20_plus_4 + [reclass_10_g, corr_20_to_10])
+    assert res_no_false_restore["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_no_false_restore["veto_buy"] is False
+
+    # 13. Linked transaction-date correction from Aug 3 to Jul 31 (before Aug 1 cutoff) excludes corrected sale
+    aug_sales = [
+        dict(orig_rows[0], accession="0000320193-26-000340", filing_date="2026-08-06", transaction_date="2026-08-05"),
+        dict(orig_rows[0], accession="0000320193-26-000340", filing_date="2026-08-06", transaction_date="2026-08-04"),
+        dict(orig_rows[0], accession="0000320193-26-000341", filing_date="2026-08-05", transaction_date="2026-08-03"),
+    ]
+    corr_date_to_jul31 = dict(
+        aug_sales[2],
+        form="4/A",
+        accession="0000320193-26-000342",
+        filing_date="2026-08-07",
+        original_filing_date="2026-08-05",
+        transaction_date="2026-07-31",
+        footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-07-31."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    res_date_corr = _screen(aug_sales + [corr_date_to_jul31], since_filing_date="2026-08-01")
+    assert res_date_corr["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_date_corr["flags"])
+
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
     base_inputs = {
