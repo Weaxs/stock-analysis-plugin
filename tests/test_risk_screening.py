@@ -356,6 +356,45 @@ def test_us_risk_screening_deduplicates_form4a_amendments_before_veto(monkeypatc
     assert res_rev["veto_buy"] is not True
     assert all(f["severity"] != "high" for f in res_rev["flags"])
 
+    # 6 original S rows where Form 4/A confirms 5 as S and reclassifies the 6th to Gift (G) -> 5 sales, no buy veto
+    six_orig = [
+        {
+            "form": "4",
+            "accession": "0001-26-000010",
+            "transaction_date": f"2026-10-0{i}",
+            "owners": [{"cik": "123", "name": "Exec A"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "transaction_code": "S",
+            "shares": 1000,
+            "price": 150.0,
+        }
+        for i in range(1, 7)
+    ]
+    amend_reclass = [dict(row, form="4/A", accession="0001-26-000011") for row in six_orig[:5]] + [
+        dict(six_orig[5], form="4/A", accession="0001-26-000011", transaction_code="G", direction="other")
+    ]
+    res_reclass = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=lambda script, args, **kw: (
+            {
+                "transactions": six_orig + amend_reclass,
+                "truncated": False,
+                "warnings": ["Includes Form 4 amendments; do not double-count original and amended transactions"],
+            }
+            if script == "sec_edgar.py"
+            else []
+        ),
+    )
+    assert res_reclass["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_reclass["veto_buy"] is not True
+    assert all(f["severity"] != "high" for f in res_reclass["flags"])
+
 
 def test_us_risk_screening_truncated_sec_marks_incomplete_and_keeps_flags(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")

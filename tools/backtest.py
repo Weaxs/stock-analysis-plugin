@@ -1220,6 +1220,23 @@ def simulate_portfolio(
 
                 if do_rebalance:
                     reason = f"定期再平衡 ({cfg['rebalance']})"
+                    # Clear pending DCA for any symbol already at/above target using carried valuation,
+                    # even when its bar is missing on the rebalance date.
+                    blocked_underweight_syms: set[str] = set()
+                    for sym in symbols:
+                        if sym in exited_alloc or sym in pending_exits:
+                            continue
+                        px = exec_prices.get(sym, holdings.get(sym, {}).get("buy_price", 0.0))
+                        target_val = port_value * cfg["weights"][sym]
+                        cur_val = holdings.get(sym, {}).get("shares", 0) * px
+                        if cur_val >= target_val:
+                            pending_dca.pop(sym, None)
+                        else:
+                            info = per_sym[sym]
+                            idx = info["idx"].get(ts)
+                            if idx is None or not is_tradable(info["bars"][idx], "buy"):
+                                blocked_underweight_syms.add(sym)
+
                     # Sell overweight positions first
                     for sym in symbols:
                         if sym in exited_alloc or sym in pending_exits:
@@ -1233,14 +1250,17 @@ def simulate_portfolio(
                         target_val = port_value * cfg["weights"][sym]
                         cur_val = holdings[sym]["shares"] * px
                         if cur_val > target_val:
-                            pending_dca.pop(sym, None)
                             excess_shares = int((cur_val - target_val) / px / lot_size) * lot_size
                             if excess_shares > 0:
                                 if not is_tradable(row, "sell"):
                                     blocked_orders += 1
                                 else:
                                     sell_shares(sym, excess_shares, row, date_str, reason)
-                    # Buy underweight positions; only clear pending DCA for symbols actually tradable/satisfied
+
+                    # Reserve cash for blocked underweight symbols' pending DCA so tradable buys don't exhaust it
+                    reserved_blocked_dca = sum(pending_dca.get(s, 0.0) for s in blocked_underweight_syms)
+
+                    # Buy underweight positions; only clear pending DCA when actually filled
                     for sym in symbols:
                         if sym in exited_alloc or sym in pending_exits:
                             continue
@@ -1257,11 +1277,11 @@ def simulate_portfolio(
                             if not is_tradable(row, "buy"):
                                 blocked_orders += 1
                             else:
-                                if buy_amount(sym, deficit, row, date_str, reason):
+                                avail_cash = max(0.0, cash - reserved_blocked_dca)
+                                buy_budget = min(deficit, avail_cash)
+                                if buy_amount(sym, buy_budget, row, date_str, reason):
                                     initially_allocated.add(sym)
-                                pending_dca.pop(sym, None)
-                        else:
-                            pending_dca.pop(sym, None)
+                                    pending_dca.pop(sym, None)
                     rebalanced_today = True
 
             # Deploy fresh & retained blocked DCA budgets whenever rebalance did not run on this bar
@@ -1282,8 +1302,8 @@ def simulate_portfolio(
                     if not is_tradable(row, "buy"):
                         blocked_orders += 1
                         continue
-                    buy_amount(sym, budget, row, date_str, f"定期定投 ({cfg['dca']['frequency']})")
-                    pending_dca.pop(sym, None)
+                    if buy_amount(sym, budget, row, date_str, f"定期定投 ({cfg['dca']['frequency']})"):
+                        pending_dca.pop(sym, None)
 
         # Step 3: Mark-to-market at close & link TWR sub-period
         for sym in symbols:

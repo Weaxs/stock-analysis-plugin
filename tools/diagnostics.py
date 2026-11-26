@@ -161,13 +161,16 @@ def _check_service(name: str) -> dict:
     category, import_name, env_vars, note = SERVICES[name]
     entry = _check_entry(name, import_name, env_vars, {"category": category}, note)
     if name == "sec_edgar" and entry["available"]:
-        from sec_edgar import identity as _sec_identity
-
         try:
+            from sec_edgar import identity as _sec_identity
+
             _sec_identity()
         except ValueError as exc:
             entry["available"] = False
             entry["reason"] = f"invalid SEC_USER_AGENT: {exc}"
+        except Exception as exc:
+            entry["available"] = False
+            entry["reason"] = f"sec_edgar import failed: {error_message(exc, 120)}"
     return entry
 
 

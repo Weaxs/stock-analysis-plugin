@@ -290,3 +290,65 @@ def test_rebalance_plus_dca_retains_blocked_symbol_budget_until_tradable():
     res_end = backtest.simulate_portfolio({"AAPL": df_end}, strategy, capital=1_000, start="2025-01-03")
     assert res_end["execution"]["unfilled_order"] is True
     assert res_end["final_cash"] == 100.0
+
+
+def test_rebalance_clears_overweight_missing_bar_dca_and_reserves_cash_for_suspended_underweight():
+    dates = pd.bdate_range("2025-01-02", periods=30)
+    feb_idx = next(i for i, d in enumerate(dates) if d.month == 2)
+
+    # Case 1: Overweight symbol (rises to 30 before rebalance) with missing bar on rebalance date must NOT keep DCA budget
+    aapl_prices = [10.0] * (feb_idx - 1) + [30.0] * (len(dates) - feb_idx + 1)
+    msft_prices = [10.0] * len(dates)
+    df_aapl_missing = _make_df(dates, aapl_prices).drop(index=feb_idx).reset_index(drop=True)
+    df_msft = _make_df(dates, msft_prices)
+    res_ow = backtest.simulate_portfolio(
+        {"AAPL": df_aapl_missing, "MSFT": df_msft},
+        {
+            "portfolio": {"rebalance": "monthly", "weighting": "custom", "weights": {"AAPL": 0.25, "MSFT": 0.25}},
+            "dca": {"frequency": "monthly", "amount": 200},
+            "simulation": {"execution": "next_open", "slippage": 0.0, "commission": 0.0, "stamp_tax": 0.0},
+        },
+        capital=1_000,
+        start="2025-01-03",
+    )
+    aapl_buys = [t for t in res_ow["trades"] if t["symbol"] == "AAPL" and t["type"] == "buy"]
+    assert len(aapl_buys) == 1, "overweight missing-bar symbol must not DCA-buy on next bar"
+
+    # Case 2: 3 equal-weight symbols (AAPL, MSFT, NVDA), monthly rebalance + monthly DCA 99.
+    # NVDA surges (overweight) and is suspended alongside underweight MSFT on rebalance day.
+    # AAPL must leave MSFT's $33 DCA cash reserved so MSFT executes on resume (and unfilled_order becomes False).
+    df_aapl = _make_df(dates, [10.0] * len(dates))
+    df_msft2 = _make_df(dates, [10.0] * len(dates))
+    df_nvda = _make_df(dates, [10.0] * feb_idx + [20.0] * (len(dates) - feb_idx))
+    df_msft2.loc[feb_idx, "volume"] = 0
+    df_nvda.loc[feb_idx, "volume"] = 0
+    res_3 = backtest.simulate_portfolio(
+        {"AAPL": df_aapl, "MSFT": df_msft2, "NVDA": df_nvda},
+        {
+            "portfolio": {"rebalance": "monthly", "weighting": "equal"},
+            "dca": {"frequency": "monthly", "amount": 99},
+            "simulation": {"execution": "next_open", "slippage": 0.0, "commission": 0.0, "stamp_tax": 0.0},
+        },
+        capital=300,
+        start="2025-01-03",
+    )
+    msft_feb_buys = [
+        t for t in res_3["trades"] if t["symbol"] == "MSFT" and t["date"] == str(dates[feb_idx + 1].date())
+    ]
+    assert len(msft_feb_buys) == 1 and msft_feb_buys[0]["shares"] >= 3
+    assert res_3["execution"]["unfilled_order"] is False
+
+    # Case 3: MSFT is underweight & suspended on feb_idx (price=10), then resumes at price=100 (> $33 budget) -> unfilled_order stays True
+    df_msft_expensive = _make_df(dates, [10.0] * (feb_idx + 1) + [100.0] * (len(dates) - feb_idx - 1))
+    df_msft_expensive.loc[feb_idx, "volume"] = 0
+    res_unfilled = backtest.simulate_portfolio(
+        {"AAPL": df_aapl, "MSFT": df_msft_expensive, "NVDA": df_nvda},
+        {
+            "portfolio": {"rebalance": "monthly", "weighting": "equal"},
+            "dca": {"frequency": "monthly", "amount": 99},
+            "simulation": {"execution": "next_open", "slippage": 0.0, "commission": 0.0, "stamp_tax": 0.0},
+        },
+        capital=300,
+        start="2025-01-03",
+    )
+    assert res_unfilled["execution"]["unfilled_order"] is True

@@ -299,10 +299,15 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
         return False
     if not div_data.get("source"):
         return False
-    # Require fresh, non-cached corporate-action history and verified split coverage.
+    # Require fresh, non-cached corporate-action history and complete verified action coverage.
     if div_data.get("cache_bypassed") is not True:
         return False
-    if not div_data["history"] or div_data.get("splits_checked") is not True:
+    if (
+        not div_data["history"]
+        or div_data.get("splits_checked") is not True
+        or div_data.get("capital_gains_checked") is not True
+        or div_data.get("corporate_actions_complete") is not True
+    ):
         return False
     warnings = [str(w).lower() for w in (div_data.get("warnings") or [])]
     blocked_markers = (
@@ -366,21 +371,22 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
         if not has_price_date and ex_day == anchor_date:
             return False
 
-    splits = div_data.get("splits")
-    if splits is not None:
-        if not isinstance(splits, list):
-            return False
-        for sp in splits:
-            if not isinstance(sp, dict):
+    for action_key in ("splits", "capital_gains"):
+        action_rows = div_data.get(action_key)
+        if action_rows is not None:
+            if not isinstance(action_rows, list):
                 return False
-            ex_date = sp.get("ex_date")
-            if not isinstance(ex_date, str) or len(ex_date) < 10:
-                return False
-            ex_day = ex_date[:10]
-            if anchor_date < ex_day <= last_date:
-                return False
-            if not has_price_date and ex_day == anchor_date:
-                return False
+            for act in action_rows:
+                if not isinstance(act, dict):
+                    return False
+                ex_date = act.get("ex_date")
+                if not isinstance(ex_date, str) or len(ex_date) < 10:
+                    return False
+                ex_day = ex_date[:10]
+                if anchor_date < ex_day <= last_date:
+                    return False
+                if not has_price_date and ex_day == anchor_date:
+                    return False
 
     return has_past_event
 

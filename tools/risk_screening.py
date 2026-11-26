@@ -349,24 +349,23 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     result["truncated"] = truncated
     result["warnings"] = sec_warnings
     result["available"] = not truncated and not sec_warnings
-    raw_sales = [
-        tx
-        for tx in data["transactions"]
-        if str(tx.get("code") or tx.get("transaction_code") or "").upper() == "S"
-        or str(tx.get("action") or "").lower() == "sell"
-    ]
-    has_amendments = any(str(tx.get("form") or "").upper() == "4/A" for tx in data["transactions"]) or any(
-        "amendment" in w.lower() or "double-count" in w.lower() for w in sec_warnings
-    )
+    txs = [tx for tx in data["transactions"] if isinstance(tx, dict)]
 
-    def _sale_sig(tx: dict) -> tuple:
+    def _is_sell(tx: dict) -> bool:
+        return (
+            str(tx.get("code") or tx.get("transaction_code") or "").upper() == "S"
+            or str(tx.get("action") or "").lower() == "sell"
+        )
+
+    def _owner_key(tx: dict) -> tuple:
         owners = tx.get("owners")
         if isinstance(owners, list) and owners:
-            owner_key = tuple(sorted(str(o.get("cik") or o.get("name") or "") for o in owners if isinstance(o, dict)))
-        else:
-            owner_key = (str(tx.get("owner") or tx.get("insider") or ""),)
+            return tuple(sorted(str(o.get("cik") or o.get("name") or "") for o in owners if isinstance(o, dict)))
+        return (str(tx.get("owner") or tx.get("insider") or ""),)
+
+    def _exact_sig(tx: dict) -> tuple:
         return (
-            owner_key,
+            _owner_key(tx),
             str(tx.get("transaction_date") or tx.get("date") or ""),
             str(tx.get("security") or ""),
             bool(tx.get("derivative")),
@@ -374,35 +373,110 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             tx.get("price"),
         )
 
-    # Deduplicate Form 4/A rows that repeat an already-counted transaction from another accession.
-    originals = [tx for tx in raw_sales if str(tx.get("form") or "").upper() != "4/A"]
-    amended = [tx for tx in raw_sales if str(tx.get("form") or "").upper() == "4/A"]
+    def _base_sig(tx: dict) -> tuple:
+        return (
+            _owner_key(tx),
+            str(tx.get("transaction_date") or tx.get("date") or ""),
+            str(tx.get("security") or ""),
+            bool(tx.get("derivative")),
+        )
+
+    all_orig = [tx for tx in txs if str(tx.get("form") or "").upper() != "4/A"]
+    all_amend = [tx for tx in txs if str(tx.get("form") or "").upper() == "4/A"]
+    has_amendments = bool(all_amend) or any(
+        "amendment" in w.lower() or "double-count" in w.lower() for w in sec_warnings
+    )
+
+    # Start with original Form 4 sells, then reconcile Form 4/A amendments before counting.
+    active_orig_sells = [tx for tx in all_orig if _is_sell(tx)]
+    reclassified_indices: set[int] = set()
+    affected_owners: set[tuple] = set()
+    unaligned_global = has_amendments and not all_amend
+
+    # 1. Reconcile non-sell 4/A rows (e.g., an S transaction corrected to Gift G): remove superseded original sells.
+    for tx in all_amend:
+        if _is_sell(tx):
+            continue
+        exact = _exact_sig(tx)
+        base = _base_sig(tx)
+        matched_idx = next(
+            (
+                i
+                for i, orig in enumerate(active_orig_sells)
+                if i not in reclassified_indices and _exact_sig(orig) == exact
+            ),
+            None,
+        )
+        if matched_idx is None:
+            matched_idx = next(
+                (
+                    i
+                    for i, orig in enumerate(active_orig_sells)
+                    if i not in reclassified_indices
+                    and _base_sig(orig) == base
+                    and tx.get("shares") is not None
+                    and orig.get("shares") == tx.get("shares")
+                ),
+                None,
+            )
+        if matched_idx is None and base[1]:
+            matched_idx = next(
+                (
+                    i
+                    for i, orig in enumerate(active_orig_sells)
+                    if i not in reclassified_indices and _base_sig(orig) == base
+                ),
+                None,
+            )
+        if matched_idx is not None:
+            reclassified_indices.add(matched_idx)
+        else:
+            ok = _owner_key(tx)
+            if ok != ("",):
+                affected_owners.add(ok)
+            else:
+                unaligned_global = True
+
+    confirmed_orig_sells = [tx for i, tx in enumerate(active_orig_sells) if i not in reclassified_indices]
+
+    # 2. Deduplicate Form 4/A sell rows against confirmed original sells; flag unaligned 4/A sells.
     seen_counts: dict[tuple, int] = {}
-    for tx in originals:
-        sig = _sale_sig(tx)
+    for tx in confirmed_orig_sells:
+        sig = _exact_sig(tx)
         seen_counts[sig] = seen_counts.get(sig, 0) + 1
-    unique_amended = 0
+    unique_amended_sells = 0
     amended_by_acc: dict[str, list[dict]] = {}
-    for tx in amended:
+    for tx in all_amend:
+        if not _is_sell(tx):
+            continue
         acc = str(tx.get("accession") or f"__amend_{id(tx)}")
         amended_by_acc.setdefault(acc, []).append(tx)
     for acc_rows in amended_by_acc.values():
         acc_sig_counts: dict[tuple, int] = {}
+        acc_sample: dict[tuple, dict] = {}
         for tx in acc_rows:
-            sig = _sale_sig(tx)
+            sig = _exact_sig(tx)
             acc_sig_counts[sig] = acc_sig_counts.get(sig, 0) + 1
+            acc_sample[sig] = tx
         for sig, cnt in acc_sig_counts.items():
             already = seen_counts.get(sig, 0)
             if cnt > already:
-                unique_amended += cnt - already
+                unique_amended_sells += cnt - already
                 seen_counts[sig] = cnt
+                ok = _owner_key(acc_sample[sig])
+                if ok != ("",):
+                    affected_owners.add(ok)
+                else:
+                    unaligned_global = True
 
-    dedup_sales = len(originals) + unique_amended
+    dedup_sales = len(confirmed_orig_sells) + unique_amended_sells
+    unaffected_orig_sells = (
+        0 if unaligned_global else sum(1 for tx in confirmed_orig_sells if _owner_key(tx) not in affected_owners)
+    )
     result["sales_90d"] = dedup_sales
     result["amendments_present"] = has_amendments
-    # Only trigger high-severity buy veto when confirmed non-amended Form 4 sales reach threshold;
-    # when Form 4/A amendments could still revise/duplicate fields, cap at medium severity.
-    if len(originals) >= 6 or (not has_amendments and dedup_sales >= 6):
+    # Only trigger high-severity buy veto when reconciled, unaffected original Form 4 sells reach threshold.
+    if unaffected_orig_sells >= 6:
         result["flags"].append(
             {
                 "category": "insider",
@@ -412,7 +486,11 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             }
         )
     elif dedup_sales >= 3:
-        note = "（含 Form 4/A 修订申报，未因可能重复计数触发一票否决）" if has_amendments and dedup_sales >= 6 else ""
+        note = (
+            "（含 Form 4/A 修订申报，未因未对齐/可能重复记录触发一票否决）"
+            if has_amendments and dedup_sales >= 6
+            else ""
+        )
         result["flags"].append(
             {
                 "category": "insider",

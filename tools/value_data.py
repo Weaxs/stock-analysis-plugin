@@ -957,6 +957,9 @@ def dividends(args):
         "cache_bypassed": no_cache,
         "history_covered_from": None,
         "history_current_through": None,
+        "capital_gains": [],
+        "capital_gains_checked": False,
+        "corporate_actions_complete": False,
         "yield_basis": "cash paid per share in trailing 365 days / latest price, before tax; nominal source cash amounts",
     }
     if market == "A":
@@ -991,6 +994,8 @@ def dividends(args):
             }
         quote = run_tool("stock_data.py", ["quote", symbol]) or {}
         price = number(quote.get("price"))
+        # Eastmoney RPT_SHAREBONUS_DET covers dividends and bonus/transfer shares, not rights issues (配股 /
+        # RPT_IPO_ALLOTMENT), and emits no provider-verified coverage cutoff date -> keep coverage unverified.
         result.update(
             source="eastmoney",
             currency="CNY",
@@ -998,8 +1003,8 @@ def dividends(args):
             price_as_of=quote.get("as_of"),
             splits=splits,
             splits_checked=splits_checked,
-            # Eastmoney stock_fhps_detail_em is a live corporate-action registry query when --no-cache is set.
-            history_current_through=today.isoformat() if (no_cache and rows) else None,
+            history_current_through=None,
+            corporate_actions_complete=False,
         )
     else:
         import yfinance as yf
@@ -1071,9 +1076,13 @@ def dividends(args):
                 raise RuntimeError("yfinance history returned invalid bar dates")
             cash_rows = _series_to_rows(hist["Dividends"], "cash_per_share")
             split_rows = _series_to_rows(hist["Stock Splits"], "ratio")
+            capital_gains_rows = (
+                _series_to_rows(hist["Capital Gains"], "amount") if "Capital Gains" in hist.columns else []
+            )
             return {
                 "cash": cash_rows,
                 "splits": split_rows,
+                "capital_gains": capital_gains_rows,
                 "covered_from": covered_from,
                 "covered_through": covered_through,
             }
@@ -1088,13 +1097,15 @@ def dividends(args):
             return frame.reset_index()
 
         splits_ok = False
+        capital_gains_ok = False
         splits_rows = []
+        capital_gains_rows = []
         covered_from = None
         covered_through = None
         paid = []
         used_actions_bundle = False
         if callable(getattr(ticker, "history", None)):
-            bundle_key = f"{market.lower()}-actions:{symbol}"
+            bundle_key = f"{market.lower()}-actions-v2:{symbol}"
             try:
                 bundle = verified_actions_bundle() if no_cache else cached(bundle_key, DAY, verified_actions_bundle)
             except Exception as exc:
@@ -1105,10 +1116,13 @@ def dividends(args):
                 isinstance(bundle, dict)
                 and isinstance(bundle.get("splits"), list)
                 and isinstance(bundle.get("cash"), list)
+                and isinstance(bundle.get("capital_gains"), list)
             ):
                 paid = bundle["cash"]
                 splits_rows = bundle["splits"]
+                capital_gains_rows = bundle["capital_gains"]
                 splits_ok = True
+                capital_gains_ok = True
                 covered_from = bundle.get("covered_from")
                 covered_through = bundle.get("covered_through") if no_cache else None
                 used_actions_bundle = True
@@ -1135,6 +1149,11 @@ def dividends(args):
             for r in splits_rows
             if number(r.get("ratio")) not in (None, 0)
         ]
+        capital_gains = [
+            {"ex_date": market_date(r.get("Date"), market), "amount": number(r.get("amount"))}
+            for r in capital_gains_rows
+            if number(r.get("amount")) not in (None, 0)
+        ]
         price = number(info.get("currentPrice") or info.get("regularMarketPrice"))
         result.update(
             source="yfinance cash / eastmoney calendar" if market == "HK" else "yfinance",
@@ -1142,6 +1161,9 @@ def dividends(args):
             price=price,
             splits=splits,
             splits_checked=splits_ok,
+            capital_gains=capital_gains,
+            capital_gains_checked=capital_gains_ok,
+            corporate_actions_complete=used_actions_bundle,
             history_covered_from=covered_from,
             history_current_through=covered_through,
         )

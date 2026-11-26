@@ -209,6 +209,25 @@ class TestDiagnose:
         assert sec["available"] is False
         assert "requests" in (sec["reason"] or "")
 
+    def test_sec_lazy_import_failure_returns_unavailable_without_traceback(self, monkeypatch):
+        import builtins
+        import sys
+
+        monkeypatch.setenv("SEC_USER_AGENT", "app user@example.com")
+        monkeypatch.delitem(sys.modules, "sec_edgar", raising=False)
+        real_import = builtins.__import__
+
+        def fail_sec_import(name, *args, **kwargs):
+            if name == "sec_edgar":
+                raise ImportError("missing transitive dependency urllib3")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fail_sec_import)
+        res = diagnostics.diagnose("US")
+        sec = next(s for s in res["services"] if s["name"] == "sec_edgar")
+        assert sec["available"] is False
+        assert "sec_edgar import failed" in (sec["reason"] or "")
+
 
 if __name__ == "__main__":
     import subprocess
