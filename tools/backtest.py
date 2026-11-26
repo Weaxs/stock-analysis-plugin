@@ -8,7 +8,7 @@ import math
 import os
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -659,13 +659,15 @@ def simulate_monthly_market(
     }
 
 
+_BIWEEKLY_ANCHOR = date(1970, 1, 5)  # Monday epoch for continuous 14-day buckets across year boundaries
+
+
 def _schedule_bucket(ts: pd.Timestamp, frequency: str):
     if frequency == "weekly":
         iso = ts.isocalendar()
         return (int(iso.year), int(iso.week))
     if frequency == "biweekly":
-        iso = ts.isocalendar()
-        return (int(iso.year), int(iso.week) // 2)
+        return (ts.date() - _BIWEEKLY_ANCHOR).days // 14
     if frequency == "monthly":
         return (ts.year, ts.month)
     if frequency == "quarterly":
@@ -673,7 +675,54 @@ def _schedule_bucket(ts: pd.Timestamp, frequency: str):
     raise ValueError(f"Unsupported schedule frequency: {frequency}")
 
 
-def _parse_portfolio_config(strategy: dict, symbols: list[str]) -> dict:
+def _canonical_symbol(symbol: str) -> str:
+    raw = str(symbol).strip()
+    upper = raw.upper()
+    # A-share explicit indices keep lowercase prefix (sh000xxx / sz399xxx)
+    if re.fullmatch(r"(?:SH000|SZ399)\d{3}", upper):
+        return upper.lower()
+    # A-share stocks / ETFs: sh600519 and 600519 refer to the same instrument
+    m_cn = re.fullmatch(r"(?:SH|SZ|BJ)(\d{6})", upper)
+    if m_cn:
+        return m_cn.group(1)
+    # HK stocks / ETFs: 700.HK / 0700.HK / 00700.HK refer to the same instrument
+    m_hk = re.fullmatch(r"0*(\d{1,5})\.HK", upper)
+    if m_hk:
+        return f"{int(m_hk.group(1)):05d}.HK"
+    return upper
+
+
+def _infer_currency(symbol: str, market: str, df: pd.DataFrame) -> str | None:
+    if "currency" in df.columns:
+        vals = {str(v).strip().upper() for v in df["currency"].dropna().tolist() if str(v).strip()}
+        if len(vals) > 1:
+            raise ValueError(f"Mixed currencies within dataset for {symbol}: {sorted(vals)}")
+        if len(vals) == 1:
+            return next(iter(vals))
+    if market == "A":
+        return "CNY"
+    if market == "US":
+        return "USD"
+    if market == "JP":
+        return "JPY"
+    if market == "KR":
+        return "KRW"
+    if market == "TW":
+        return "TWD"
+    if market == "HK":
+        # HKEX multi-counter conventions: 8xxxx.HK = RMB counter, 09xxx.HK (9000-9999) = USD ETF counter
+        m = re.fullmatch(r"0*(\d{1,5})\.HK", _canonical_symbol(symbol))
+        if m:
+            code = int(m.group(1))
+            if 80000 <= code <= 89999:
+                return "CNY"
+            if 9000 <= code <= 9999:
+                return "USD"
+            return "HKD"
+    return None
+
+
+def _parse_portfolio_config(strategy: dict, symbols: list[str], *, signal_mode: bool = False) -> dict:
     portfolio_cfg = strategy.get("portfolio") or {}
     pos_cfg = strategy.get("position") or {}
     dca_cfg = strategy.get("dca") or {}
@@ -681,6 +730,10 @@ def _parse_portfolio_config(strategy: dict, symbols: list[str]) -> dict:
     rebalance = str(portfolio_cfg.get("rebalance", "none")).lower()
     if rebalance not in ("none", "weekly", "monthly", "quarterly"):
         raise ValueError("portfolio.rebalance must be one of none, weekly, monthly, quarterly")
+    if signal_mode and rebalance != "none":
+        raise ValueError(
+            "portfolio.rebalance is only supported in allocation mode (omit entry.conditions or set rebalance: none)"
+        )
 
     weighting = str(portfolio_cfg.get("weighting", "equal")).lower()
     if weighting not in ("equal", "custom"):
@@ -690,12 +743,16 @@ def _parse_portfolio_config(strategy: dict, symbols: list[str]) -> dict:
         raw_weights = portfolio_cfg.get("weights")
         if not isinstance(raw_weights, dict) or not raw_weights:
             raise ValueError("portfolio.weights must be a non-empty mapping when weighting=custom")
-        weights = {}
-        for sym in symbols:
-            w = float(raw_weights.get(sym, 0.0))
+        norm_weights: dict[str, float] = {}
+        for raw_k, raw_v in raw_weights.items():
+            key = _canonical_symbol(str(raw_k))
+            if key in norm_weights:
+                raise ValueError(f"Duplicate weight entry after symbol normalization: {raw_k!r}")
+            w = float(raw_v)
             if not math.isfinite(w) or w < 0:
-                raise ValueError(f"portfolio.weights[{sym}] must be a non-negative finite number")
-            weights[sym] = w
+                raise ValueError(f"portfolio.weights[{raw_k}] must be a non-negative finite number")
+            norm_weights[key] = w
+        weights = {sym: norm_weights.get(_canonical_symbol(sym), 0.0) for sym in symbols}
         total_w = sum(weights.values())
         if not (0 < total_w <= 1.0001):
             raise ValueError(f"portfolio.weights sum must be in (0, 1], got {round(total_w, 4)}")
@@ -708,6 +765,10 @@ def _parse_portfolio_config(strategy: dict, symbols: list[str]) -> dict:
         drift = float(drift)
         if not math.isfinite(drift) or not 0 < drift < 1:
             raise ValueError("portfolio.drift_threshold must be in (0, 1)")
+
+    size_frac = float(pos_cfg.get("size", 1.0))
+    if not math.isfinite(size_frac) or not 0 <= size_frac <= 1:
+        raise ValueError("position.size must be a fraction in [0, 1]")
 
     max_positions = portfolio_cfg.get("max_positions", pos_cfg.get("max_positions", len(symbols)))
     if isinstance(max_positions, bool) or not isinstance(max_positions, int) or max_positions <= 0:
@@ -728,6 +789,7 @@ def _parse_portfolio_config(strategy: dict, symbols: list[str]) -> dict:
         "weighting": weighting,
         "weights": weights,
         "drift_threshold": drift,
+        "size": size_frac,
         "max_positions": max_positions,
         "dca": dca,
     }
@@ -747,10 +809,23 @@ def simulate_portfolio(
         raise ValueError("capital must be finite and positive")
 
     symbols = list(datasets.keys())
+    seen_canon: dict[str, str] = {}
+    for sym in symbols:
+        canon = _canonical_symbol(sym)
+        if canon in seen_canon:
+            raise ValueError(f"Duplicate instrument in portfolio: {seen_canon[canon]!r} and {sym!r}")
+        seen_canon[canon] = sym
+
     markets = {detect_market(sym) for sym in symbols}
     if len(markets) > 1:
         raise ValueError(f"Portfolio symbols must belong to a single market/currency, got {sorted(markets)}")
     market = next(iter(markets))
+    currencies = {_infer_currency(sym, market, datasets[sym]) for sym in symbols}
+    if len(currencies) > 1 or None in currencies:
+        raise ValueError(
+            f"Portfolio symbols must share a single verified quote currency, got {sorted(map(str, currencies))}"
+        )
+    currency = next(iter(currencies))
     lot_size = 100 if market == "A" else 1
 
     sim_cfg = strategy.get("simulation") or {}
@@ -767,7 +842,6 @@ def simulate_portfolio(
     if commission + stamp_tax >= 1:
         raise ValueError(f"simulation commission + stamp_tax must be < 1, got {commission + stamp_tax}")
 
-    cfg = _parse_portfolio_config(strategy, symbols)
     entry_cfg = strategy.get("entry") or {}
     exit_cfg = strategy.get("exit") or {}
     entry_conditions = entry_cfg.get("conditions") or []
@@ -778,8 +852,22 @@ def simulate_portfolio(
         if logic not in ("all", "any"):
             raise ValueError(f"{side}.logic must be all or any")
 
-    stop_loss = float(exit_cfg.get("stop_loss", -1.0)) if "stop_loss" in exit_cfg else None
-    take_profit = float(exit_cfg.get("take_profit", 1e9)) if "take_profit" in exit_cfg else None
+    signal_mode = bool(entry_conditions)
+    cfg = _parse_portfolio_config(strategy, symbols, signal_mode=signal_mode)
+
+    # Preserve single-symbol signal defaults (-0.10 / +0.50) in signal mode; disabled in pure allocation mode unless explicit
+    if signal_mode:
+        stop_loss = float(exit_cfg.get("stop_loss", -0.10))
+        take_profit = float(exit_cfg.get("take_profit", 0.50))
+    else:
+        stop_loss = (
+            float(exit_cfg["stop_loss"]) if "stop_loss" in exit_cfg and exit_cfg["stop_loss"] is not None else None
+        )
+        take_profit = (
+            float(exit_cfg["take_profit"])
+            if "take_profit" in exit_cfg and exit_cfg["take_profit"] is not None
+            else None
+        )
     ts_val = exit_cfg.get("trailing_stop")
     trailing_stop = float(ts_val) if ts_val is not None else None
     if stop_loss is not None and (not math.isfinite(stop_loss) or stop_loss >= 0):
@@ -826,26 +914,36 @@ def simulate_portfolio(
     contributions = []
     holdings: dict[str, dict] = {}  # sym -> {shares, cost, buy_date, buy_price, peak_close}
     last_close: dict[str, float] = {}
+    pending_exits: dict[str, tuple[str, str]] = {}  # sym -> (reason, signal_date)
     trades = []
     equity_curve = []
+    twr_curve = []
     commission_paid = 0.0
     stamp_tax_paid = 0.0
     blocked_orders = 0
     trade_id = 0
 
-    signal_mode = bool(entry_conditions)
     last_dca_bucket = None
     last_rebal_bucket = None
-    initial_deployed = False
+    target_symbols = [sym for sym in symbols if cfg["weights"].get(sym, 0.0) > 0]
+    initially_allocated: set[str] = set()
 
-    # Time-weighted return (TWR) tracks pure investment return independent of DCA cash inflows
+    # Time-weighted return (TWR) tracks pure investment return strictly excluding external cash inflows
     twr_factor = 1.0
     prev_equity = capital
 
-    def is_tradable(row) -> bool:
-        return not ("volume" in row and (not pd.notna(row["volume"]) or row["volume"] <= 0))
+    def is_tradable(row: dict, side: str) -> bool:
+        if "volume" in row and (not pd.notna(row["volume"]) or row["volume"] <= 0):
+            return False
+        limit = row.get("limit_up" if side == "buy" else "limit_down")
+        return not (
+            limit is not None
+            and pd.notna(limit)
+            and row.get("high") == row.get("low")
+            and abs(float(row["high"]) - float(limit)) < 0.005
+        )
 
-    def fill_px(row) -> float:
+    def fill_px(row: dict) -> float:
         return float(row["close"] if execution == "same_close" else row["open"])
 
     def sell_shares(sym: str, shares_to_sell: int, row: dict, date_str: str, reason: str):
@@ -888,15 +986,15 @@ def simulate_portfolio(
         if h["shares"] <= 0:
             del holdings[sym]
 
-    def buy_amount(sym: str, budget: float, row: dict, date_str: str, reason: str):
+    def buy_amount(sym: str, budget: float, row: dict, date_str: str, reason: str) -> bool:
         nonlocal cash, commission_paid, trade_id
         if budget <= 0 or cash <= 0:
-            return
+            return False
         spend = min(budget, cash)
         buy_price = fill_px(row) * (1 + slippage)
         shares = int(spend / (buy_price * (1 + commission)) / lot_size) * lot_size
         if shares <= 0:
-            return
+            return False
         cost = shares * buy_price * (1 + commission)
         commission_paid += shares * buy_price * commission
         cash -= cost
@@ -928,17 +1026,28 @@ def simulate_portfolio(
                 "reason": reason,
             }
         )
+        return True
 
     for ts in eval_dates:
         date_str = str(ts.date())
-        # Refresh last known closes for symbols that have a bar prior to or on ts
+        # Refresh last known closes for symbols that have a bar prior to ts
         for sym in symbols:
             info = per_sym[sym]
             idx = info["idx"].get(ts)
             if idx is not None and idx > 0 and sym not in last_close:
                 last_close[sym] = float(info["bars"][idx - 1]["close"])
 
-        # Step 1: Scheduled DCA contribution (adds fresh cash before orders on schedule boundary)
+        # Determine valuation prices at contribution/execution time for exact TWR sub-period linking
+        exec_prices: dict[str, float] = {}
+        for sym in symbols:
+            info = per_sym[sym]
+            idx = info["idx"].get(ts)
+            if idx is not None:
+                exec_prices[sym] = fill_px(info["bars"][idx])
+            elif sym in last_close:
+                exec_prices[sym] = last_close[sym]
+
+        # Step 1: Scheduled DCA contribution (links pre-deposit return before adding fresh cash)
         dca_added = 0.0
         if cfg["dca"] is not None:
             bucket = _schedule_bucket(ts, cfg["dca"]["frequency"])
@@ -947,13 +1056,22 @@ def simulate_portfolio(
             elif bucket != last_dca_bucket:
                 last_dca_bucket = bucket
                 dca_added = cfg["dca"]["amount"]
-                cash += dca_added
-                total_contributed += dca_added
-                contributions.append({"date": date_str, "amount": round(dca_added, 2)})
+
+        pre_deposit_equity = None
+        if dca_added > 0:
+            pre_deposit_equity = cash + sum(
+                h["shares"] * exec_prices.get(s, h["buy_price"]) for s, h in holdings.items()
+            )
+            if prev_equity > 0:
+                twr_factor *= pre_deposit_equity / prev_equity
+            cash += dca_added
+            total_contributed += dca_added
+            contributions.append({"date": date_str, "amount": round(dca_added, 2)})
 
         # Step 2: Execute either signal-driven multi-position mode or target-allocation/rebalance mode
         if signal_mode:
-            # Exits first to free cash and slots
+            sold_today: set[str] = set()
+            # Exits first to free cash and slots; keep blocked risk exits pending across bars
             for sym in list(holdings.keys()):
                 info = per_sym[sym]
                 idx = info["idx"].get(ts)
@@ -964,6 +1082,7 @@ def simulate_portfolio(
                     continue
                 row = info["bars"][idx]
                 sig_price = float(info["bars"][sig_idx]["close"])
+                sig_date = str(info["dates"].iloc[sig_idx].date())
                 h = holdings[sym]
                 h["peak_close"] = max(h["peak_close"], sig_price)
                 pnl_pct = (sig_price - h["buy_price"]) / h["buy_price"]
@@ -980,18 +1099,25 @@ def simulate_portfolio(
                     sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
                 elif exit_conditions:
                     sell, reason = evaluate_conditions(info["df"], exit_conditions, exit_logic, sig_idx, info["cache"])
+
+                if sym in pending_exits:
+                    sell, reason, sig_date = True, pending_exits[sym][0], pending_exits[sym][1]
+
                 if sell:
-                    if not is_tradable(row):
+                    if not is_tradable(row, "sell"):
+                        pending_exits[sym] = (reason, sig_date)
                         blocked_orders += 1
                     else:
+                        pending_exits.pop(sym, None)
                         sell_shares(sym, h["shares"], row, date_str, reason)
+                        sold_today.add(sym)
 
-            # Entries for non-held symbols up to max_positions
+            # Entries for non-held symbols (excluding symbols sold on this same bar) up to max_positions
             open_slots = cfg["max_positions"] - len(holdings)
             if open_slots > 0 and cash > 0:
                 candidates = []
                 for sym in symbols:
-                    if sym in holdings:
+                    if sym in holdings or sym in sold_today:
                         continue
                     info = per_sym[sym]
                     idx = info["idx"].get(ts)
@@ -1004,53 +1130,63 @@ def simulate_portfolio(
                     if hit:
                         candidates.append((sym, info["bars"][idx], reason))
                 for sym, row, reason in candidates[:open_slots]:
-                    if not is_tradable(row):
+                    if not is_tradable(row, "buy"):
                         blocked_orders += 1
                         continue
                     remaining_slots = max(1, cfg["max_positions"] - len(holdings))
-                    buy_amount(sym, cash / remaining_slots, row, date_str, reason)
+                    buy_amount(sym, cash * cfg["size"] / remaining_slots, row, date_str, reason)
         else:
             # Allocation / Rebalance / DCA mode
             rebal_due = False
-            if not initial_deployed:
-                rebal_due = True
-                if cfg["rebalance"] != "none":
-                    last_rebal_bucket = _schedule_bucket(ts, cfg["rebalance"])
-            elif cfg["rebalance"] != "none":
+            if cfg["rebalance"] != "none":
                 bucket = _schedule_bucket(ts, cfg["rebalance"])
-                if bucket != last_rebal_bucket:
+                if last_rebal_bucket is None:
+                    last_rebal_bucket = bucket
+                elif bucket != last_rebal_bucket:
                     last_rebal_bucket = bucket
                     rebal_due = True
 
-            # Estimate current equity using execution prices where available
-            cur_prices = {}
-            for sym in symbols:
-                info = per_sym[sym]
-                idx = info["idx"].get(ts)
-                if idx is not None:
-                    cur_prices[sym] = fill_px(info["bars"][idx])
-                elif sym in last_close:
-                    cur_prices[sym] = last_close[sym]
-            port_value = cash + sum(h["shares"] * cur_prices.get(s, h["buy_price"]) for s, h in holdings.items())
+            port_value = cash + sum(h["shares"] * exec_prices.get(s, h["buy_price"]) for s, h in holdings.items())
+            rebalanced_today = False
+
+            # First: complete initial allocation for any target-weight symbol not yet deployed (handles staggered start dates)
+            pending_initial = [sym for sym in target_symbols if sym not in initially_allocated]
+            if pending_initial and not rebal_due:
+                unalloc_weight = sum(cfg["weights"][s] for s in pending_initial)
+                avail_cash_for_init = cash - dca_added if dca_added > 0 else cash
+                for sym in pending_initial:
+                    info = per_sym[sym]
+                    idx = info["idx"].get(ts)
+                    if idx is None:
+                        continue
+                    row = info["bars"][idx]
+                    if not is_tradable(row, "buy"):
+                        blocked_orders += 1
+                        continue
+                    share_of_unalloc = cfg["weights"][sym] / unalloc_weight if unalloc_weight > 0 else 0.0
+                    budget = min(avail_cash_for_init * share_of_unalloc, port_value * cfg["weights"][sym])
+                    if buy_amount(sym, budget, row, date_str, "初始建仓"):
+                        initially_allocated.add(sym)
+                        avail_cash_for_init = max(0.0, avail_cash_for_init - budget)
+                        unalloc_weight = max(0.0, unalloc_weight - cfg["weights"][sym])
+                # Recompute port_value after initial buys
+                port_value = cash + sum(h["shares"] * exec_prices.get(s, h["buy_price"]) for s, h in holdings.items())
 
             if rebal_due and port_value > 0:
-                # Check optional drift threshold after initial deployment
-                do_rebalance = not initial_deployed
-                if not do_rebalance:
-                    if cfg["drift_threshold"] is None:
-                        do_rebalance = True
-                    else:
-                        max_drift = max(
-                            abs(
-                                (holdings.get(s, {}).get("shares", 0) * cur_prices.get(s, 0.0) / port_value)
-                                - cfg["weights"][s]
-                            )
-                            for s in symbols
+                if cfg["drift_threshold"] is None:
+                    do_rebalance = True
+                else:
+                    max_drift = max(
+                        abs(
+                            (holdings.get(s, {}).get("shares", 0) * exec_prices.get(s, 0.0) / port_value)
+                            - cfg["weights"][s]
                         )
-                        do_rebalance = max_drift >= cfg["drift_threshold"]
+                        for s in symbols
+                    )
+                    do_rebalance = max_drift >= cfg["drift_threshold"]
 
                 if do_rebalance:
-                    reason = "初始建仓" if not initial_deployed else f"定期再平衡 ({cfg['rebalance']})"
+                    reason = f"定期再平衡 ({cfg['rebalance']})"
                     # Sell overweight positions first
                     for sym in symbols:
                         info = per_sym[sym]
@@ -1058,13 +1194,13 @@ def simulate_portfolio(
                         if idx is None or sym not in holdings:
                             continue
                         row = info["bars"][idx]
-                        px = cur_prices[sym]
+                        px = exec_prices[sym]
                         target_val = port_value * cfg["weights"][sym]
                         cur_val = holdings[sym]["shares"] * px
                         if cur_val > target_val:
                             excess_shares = int((cur_val - target_val) / px / lot_size) * lot_size
                             if excess_shares > 0:
-                                if not is_tradable(row):
+                                if not is_tradable(row, "sell"):
                                     blocked_orders += 1
                                 else:
                                     sell_shares(sym, excess_shares, row, date_str, reason)
@@ -1075,43 +1211,48 @@ def simulate_portfolio(
                         if idx is None:
                             continue
                         row = info["bars"][idx]
-                        px = cur_prices[sym]
+                        px = exec_prices[sym]
                         target_val = port_value * cfg["weights"][sym]
                         cur_val = holdings.get(sym, {}).get("shares", 0) * px
                         deficit = target_val - cur_val
                         if deficit > 0:
-                            if not is_tradable(row):
+                            if not is_tradable(row, "buy"):
                                 blocked_orders += 1
-                            else:
-                                buy_amount(sym, deficit, row, date_str, reason)
-                    initial_deployed = True
-            elif dca_added > 0:
-                # Deploy fresh DCA cash into target weights without selling existing holdings
-                for sym in symbols:
+                            elif buy_amount(sym, deficit, row, date_str, reason):
+                                initially_allocated.add(sym)
+                    rebalanced_today = True
+
+            # Deploy fresh DCA cash whenever rebalance did not already deploy it
+            if dca_added > 0 and not rebalanced_today:
+                for sym in target_symbols:
                     info = per_sym[sym]
                     idx = info["idx"].get(ts)
                     if idx is None:
                         continue
                     row = info["bars"][idx]
-                    if not is_tradable(row):
+                    if not is_tradable(row, "buy"):
                         blocked_orders += 1
                         continue
                     buy_amount(
                         sym, dca_added * cfg["weights"][sym], row, date_str, f"定期定投 ({cfg['dca']['frequency']})"
                     )
 
-        # Step 3: Mark-to-market at close
+        # Step 3: Mark-to-market at close & link TWR sub-period
         for sym in symbols:
             info = per_sym[sym]
             idx = info["idx"].get(ts)
             if idx is not None:
                 last_close[sym] = float(info["bars"][idx]["close"])
         equity = cash + sum(h["shares"] * last_close.get(s, h["buy_price"]) for s, h in holdings.items())
-        denom = prev_equity + dca_added
-        if denom > 0:
-            twr_factor *= equity / denom
+        if dca_added > 0 and pre_deposit_equity is not None:
+            post_deposit_base = pre_deposit_equity + dca_added
+            if post_deposit_base > 0:
+                twr_factor *= equity / post_deposit_base
+        elif prev_equity > 0:
+            twr_factor *= equity / prev_equity
         prev_equity = equity
         equity_curve.append({"date": date_str, "equity": round(equity, 2)})
+        twr_curve.append({"date": date_str, "equity": round(capital * twr_factor, 2)})
 
     final_equity = equity_curve[-1]["equity"] if equity_curve else capital
     final_holdings = []
@@ -1132,8 +1273,10 @@ def simulate_portfolio(
         "mode": "portfolio_signal" if signal_mode else "portfolio_allocation",
         "symbols": symbols,
         "market": market,
+        "currency": currency,
         "trades": trades,
         "equity_curve": equity_curve,
+        "twr_curve": twr_curve,
         "final_equity": final_equity,
         "final_cash": round(cash, 2),
         "final_holdings": final_holdings,
@@ -1155,9 +1298,10 @@ def simulate_portfolio(
         "execution": {
             "model": execution,
             "blocked_orders": blocked_orders,
-            "unfilled_order": False,
+            "unfilled_order": bool(pending_exits),
             "limitations": [
                 "Stops are close signals, not intraday guaranteed stop prices",
+                "Historical price limits are enforced only when limit_up/limit_down are supplied",
                 "Queue priority, partial fills, market impact and settlement are not simulated",
                 "Adjusted OHLC are synthetic prices; corporate actions and cash dividends are not simulated separately",
             ],
@@ -1176,7 +1320,18 @@ def simulate_portfolio(
 # --------------- Metrics ---------------
 
 
-def compute_metrics(trades: list, equity_curve: list, initial: float, final: float, start: str, end: str) -> dict:
+def compute_metrics(
+    trades: list,
+    equity_curve: list,
+    initial: float,
+    final: float,
+    start: str,
+    end: str,
+    *,
+    risk_curve: list | None = None,
+    risk_initial: float | None = None,
+    annual_return_basis: float | None = None,
+) -> dict:
     sell_trades = [t for t in trades if t["type"] == "sell"]
     total_trades = len(sell_trades)
     winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
@@ -1189,9 +1344,12 @@ def compute_metrics(trades: list, equity_curve: list, initial: float, final: flo
         years = (d1 - d0).days / 365.25
     except (ValueError, TypeError):
         years = 1
-    annual_return = (1 + total_return) ** (1 / max(years, 0.01)) - 1 if total_return > -1 else total_return
+    ann_source = annual_return_basis if annual_return_basis is not None else total_return
+    annual_return = (1 + ann_source) ** (1 / max(years, 0.01)) - 1 if ann_source > -1 else ann_source
 
-    equities = pd.Series([initial, *[e["equity"] for e in equity_curve]], dtype=float)
+    curve_for_risk = risk_curve if risk_curve is not None else equity_curve
+    base_for_risk = risk_initial if risk_initial is not None else initial
+    equities = pd.Series([base_for_risk, *[e["equity"] for e in curve_for_risk]], dtype=float)
     peak = equities.cummax()
     dd = (equities - peak) / peak
     max_drawdown = float(dd.min()) if len(dd) > 0 else 0
@@ -1457,6 +1615,14 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
     if use_portfolio:
         from concurrent.futures import ThreadPoolExecutor
 
+        # Validate canonical symbol uniqueness before issuing any fetches
+        seen_canon: dict[str, str] = {}
+        for sym in symbols:
+            canon = _canonical_symbol(sym)
+            if canon in seen_canon:
+                return {"error": f"Duplicate instrument in portfolio: {seen_canon[canon]!r} and {sym!r}"}
+            seen_canon[canon] = sym
+
         warmup = _strategy_warmup_bars(strategy)
         datasets: dict[str, pd.DataFrame] = {}
         actual_starts, actual_ends = [], []
@@ -1480,14 +1646,27 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
         sim = simulate_portfolio(datasets, strategy, capital, start=actual_start)
         final = sim["final_equity"]
         total_in = sim["total_contributed"]
-        metrics = compute_metrics(sim["trades"], sim["equity_curve"], total_in, final, actual_start, actual_end)
-        if sim.get("contributions"):
+        has_dca = bool(sim.get("contributions"))
+        risk_curve = sim["twr_curve"] if has_dca else sim["equity_curve"]
+        metrics = compute_metrics(
+            sim["trades"],
+            sim["equity_curve"],
+            total_in,
+            final,
+            actual_start,
+            actual_end,
+            risk_curve=risk_curve,
+            risk_initial=capital,
+            annual_return_basis=sim["time_weighted_return"] if has_dca else None,
+        )
+        if has_dca:
             metrics["time_weighted_return"] = sim["time_weighted_return"]
         result = {
             "strategy": strategy.get("name", "unnamed"),
             "symbol": symbol,
             "symbols": symbols,
             "mode": sim["mode"],
+            "currency": sim["currency"],
             "period": f"{actual_start} to {actual_end}",
             "requested_period": requested_period,
             "warnings": warnings,
@@ -1503,7 +1682,7 @@ def run_backtest(strategy_path: str, symbol: str, start: str | None, end: str | 
             "trades": sim["trades"],
             "equity_curve": sample_curve(sim["equity_curve"]),
             "diagnosis": diagnose(metrics),
-            "diagnostics": diagnose_advanced(metrics, sim["trades"], sim["equity_curve"], strategy),
+            "diagnostics": diagnose_advanced(metrics, sim["trades"], risk_curve, strategy),
         }
         if sim.get("contributions"):
             result["contributions"] = sim["contributions"]

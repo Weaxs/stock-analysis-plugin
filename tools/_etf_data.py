@@ -107,8 +107,10 @@ def fund_size_history(symbol, *, fetch_js=None, cache_fn=None):
     return (cache_fn or cached)(f"etf-size:{symbol}", DAY, fetch)
 
 
-def etf_basket(symbol, *, cache_fn=None):
+def etf_basket(symbol, *, cache_fn=None, now_fn=None):
     import requests
+
+    clock = now_fn or _cn_now
 
     def fetch():
         if symbol.startswith("5"):
@@ -126,15 +128,15 @@ def etf_basket(symbol, *, cache_fn=None):
                     "SHOWTYPE": "JSON",
                     "CATALOGID": "sgshqd",
                     "txtJCorDH": symbol,
-                    "txtStart": (_cn_now().date() - timedelta(days=30)).isoformat(),
-                    "txtEnd": _cn_now().date().isoformat(),
+                    "txtStart": (clock().date() - timedelta(days=30)).isoformat(),
+                    "txtEnd": clock().date().isoformat(),
                 },
                 headers={"Referer": "https://www.szse.cn/"},
                 timeout=20,
             )
             response.raise_for_status()
             dates = re.findall(rf"pcf_{re.escape(symbol)}_(\d{{8}})", json.dumps(response.json()))
-            dates = [d for d in dates if _iso(d) and _iso(d) <= _cn_now().date().isoformat()]
+            dates = [d for d in dates if _iso(d) and _iso(d) <= clock().date().isoformat()]
             if not dates:
                 raise ValueError("no published SZSE PCF found")
             response = requests.get(
@@ -157,7 +159,7 @@ def etf_basket(symbol, *, cache_fn=None):
         if (
             fund_code != symbol
             or not stamp
-            or stamp > _cn_now().date().isoformat()
+            or stamp > clock().date().isoformat()
             or not unit
             or unit <= 0
             or count != len(components)
@@ -218,8 +220,10 @@ def etf_basket(symbol, *, cache_fn=None):
     return (cache_fn or cached)(f"etf-basket:{symbol}", DAY, fetch)
 
 
-def fund_disclosed_equities(symbol, *, cache_fn=None):
+def fund_disclosed_equities(symbol, *, cache_fn=None, now_fn=None):
     import requests
+
+    clock = now_fn or _cn_now
 
     try:
         from akshare.utils.jsonish import loads as decode
@@ -282,7 +286,7 @@ def fund_disclosed_equities(symbol, *, cache_fn=None):
             }
         raise ValueError("requested semiannual/annual equity report not available")
 
-    end = date(_cn_now().date().year, ((_cn_now().date().month - 1) // 6) * 6 + 1, 1) - timedelta(days=1)
+    end = date(clock().date().year, ((clock().date().month - 1) // 6) * 6 + 1, 1) - timedelta(days=1)
     requested = end.isoformat()
     for _ in range(2):
         stamp = end.isoformat()

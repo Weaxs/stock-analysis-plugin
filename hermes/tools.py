@@ -516,7 +516,10 @@ def get_cds_index(args: dict, **kwargs) -> str:
 
 
 def get_macro_anchors(args: dict, **kwargs) -> str:
-    return _run("macro_data.py", ["anchors", "--group", args.get("group", "all"), "--days", args.get("days", 30)])
+    days = args.get("days", 30)
+    if isinstance(days, float) and days.is_integer():
+        days = int(days)
+    return _run("macro_data.py", ["anchors", "--group", args.get("group", "all"), "--days", days])
 
 
 def get_earnings_calendar(args: dict, **kwargs) -> str:

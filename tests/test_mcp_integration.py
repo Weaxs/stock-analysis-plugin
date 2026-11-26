@@ -98,39 +98,88 @@ def test_prompts_and_resources_expose_bundled_skills():
             "params": {"uri": "stock-skill://stock-analysis/SKILL.md"},
         },
         {"jsonrpc": "2.0", "id": 6, "method": "resources/read", "params": {"uri": "stock-skill://../../etc/passwd"}},
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/read",
+            "params": {"uri": "stock-schema://report_schema.json"},
+        },
     )
     prompts = got[2]["result"]["prompts"]
     assert len(prompts) == 21
     assert any(p["name"] == "stock-analysis" for p in prompts)
     msg_text = got[3]["result"]["messages"][0]["content"]["text"]
+    assert "[MCP 执行说明]" in msg_text
+    assert "stock-schema://report_schema.json" in msg_text
     assert "用户请求：600519" in msg_text
     assert not msg_text.startswith("---")
     resources = got[4]["result"]["resources"]
     assert any(r["uri"] == "stock-skill://stock-analysis/SKILL.md" for r in resources)
+    assert any(r["uri"] == "stock-schema://report_schema.json" for r in resources)
     assert "SKILL" in got[5]["result"]["contents"][0]["uri"]
     assert got[6]["error"]["code"] == -32602
+    schema_content = got[7]["result"]["contents"][0]
+    assert schema_content["mimeType"] == "application/json"
+    assert isinstance(json.loads(schema_content["text"]), dict)
 
 
 def test_discovery_and_core_profile_modes():
-    got = _by_id(
-        INIT,
-        INITIALIZED,
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "stock_tool_search", "arguments": {"query": "DCF 宏观", "limit": 5}},
-        },
-        {"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
-        extra_args=("--discovery",),
-    )
-    assert got[1]["result"]["capabilities"]["tools"]["listChanged"] is True
-    assert [t["name"] for t in got[2]["result"]["tools"]] == ["stock_tool_search"]
-    search_payload = json.loads(got[3]["result"]["content"][0]["text"])
-    assert search_payload["matched"] >= 1
-    expanded = [t["name"] for t in got[4]["result"]["tools"]]
-    assert "stock_tool_search" in expanded and len(expanded) > 1
+    with subprocess.Popen(
+        [sys.executable, str(SERVER), "--discovery"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    ) as proc:
+        try:
+
+            def send(msg):
+                proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                proc.stdin.flush()
+
+            def read_until(target_id):
+                notifications = []
+                while True:
+                    line = proc.stdout.readline()
+                    assert line, f"EOF waiting for response id={target_id}"
+                    msg = json.loads(line)
+                    if msg.get("id") == target_id:
+                        return msg, notifications
+                    notifications.append(msg)
+
+            send(INIT)
+            init_resp, _ = read_until(1)
+            assert init_resp["result"]["capabilities"]["tools"]["listChanged"] is True
+
+            send(INITIALIZED)
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            list1, _ = read_until(2)
+            assert [t["name"] for t in list1["result"]["tools"]] == ["stock_tool_search"]
+
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "stock_tool_search", "arguments": {"query": "DCF 宏观", "limit": 5}},
+                }
+            )
+            search_resp, notes = read_until(3)
+            search_payload = json.loads(search_resp["result"]["content"][0]["text"])
+            assert search_payload["matched"] >= 1
+            assert any(n.get("method") == "notifications/tools/list_changed" for n in notes)
+
+            # Request tools/list strictly after stock_tool_search has finished and replied.
+            send({"jsonrpc": "2.0", "id": 4, "method": "tools/list"})
+            list2, _ = read_until(4)
+            expanded = [t["name"] for t in list2["result"]["tools"]]
+            assert "stock_tool_search" in expanded and len(expanded) > 1
+
+            proc.stdin.close()
+            assert proc.stdout.read() == ""
+            assert proc.wait(30) == 0
+        finally:
+            proc.kill()
 
     core = _by_id(INIT, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, extra_args=("--profile", "core"))
     core_names = {t["name"] for t in core[2]["result"]["tools"]}

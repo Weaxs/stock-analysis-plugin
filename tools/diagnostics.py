@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _subproc import error_message, json_safe, utf8_stdio  # noqa: E402
 from capabilities import ALL_MARKETS  # noqa: E402
+from sec_edgar import identity as _sec_identity  # noqa: E402
 
 # provider -> (import_name, required_env_vars, markets, note)
 PROVIDERS = {
@@ -159,7 +160,14 @@ def _check_provider(name: str) -> dict:
 
 def _check_service(name: str) -> dict:
     category, import_name, env_vars, note = SERVICES[name]
-    return _check_entry(name, import_name, env_vars, {"category": category}, note)
+    entry = _check_entry(name, import_name, env_vars, {"category": category}, note)
+    if name == "sec_edgar" and entry["available"]:
+        try:
+            _sec_identity()
+        except ValueError as exc:
+            entry["available"] = False
+            entry["reason"] = f"invalid SEC_USER_AGENT: {exc}"
+    return entry
 
 
 def _apply_probes(entries: list[dict]) -> None:

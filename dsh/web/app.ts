@@ -113,6 +113,7 @@ const INDEX_NAMES: Record<string, string> = {
 };
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SORT_KEYS = new Set<SortKey>(["order", "price", "change_pct", "change", "turnover", "trend"]);
+const EXACT_CODE_RE = /^(?:(?:sh|sz|bj)?\d{6}|\d{4,5}\.HK|\d{4}\.(?:T|TW|TWO)|\d{6}\.(?:KS|KQ)|TIAA\d{6})$/i;
 
 interface SearchHit {
   symbol: string;
@@ -797,8 +798,8 @@ function renderRows(flash: Map<string, Direction>) {
     analyze.type = "button";
     analyze.dataset.analyze = item.symbol;
     analyze.dataset.label = quote?.name || item.symbol;
-    analyze.title = "让 Agent 分析（发送并复制提示词）";
-    analyze.setAttribute("aria-label", `分析 ${quote?.name || item.symbol}`);
+    analyze.title = "复制 Agent 分析提示词";
+    analyze.setAttribute("aria-label", `复制 ${quote?.name || item.symbol} 分析提示词`);
     analyze.append(icon(["M4 15l4-4 3 3 5-7", "M13 7h3v3"], 13));
 
     const hasAlert = Boolean(state.alerts[item.symbol]?.above || state.alerts[item.symbol]?.below);
@@ -1107,6 +1108,7 @@ function post<T>(path: string, body?: unknown): Promise<T> {
 // ---------- interactions ----------
 
 function hideSearchResults() {
+  state.searchSeq++;
   clearTimeout(state.searchTimer);
   const box = document.getElementById("search-results");
   if (box) {
@@ -1129,7 +1131,7 @@ async function runNameSearch(raw: string) {
   const q = raw.trim();
   const box = document.getElementById("search-results");
   if (!box) return;
-  if (!q || /[\s,，、;；]/.test(q) || /^[A-Za-z0-9.-]{6,}$/.test(q)) {
+  if (!q || /[\s,，、;；]/.test(q) || EXACT_CODE_RE.test(q)) {
     hideSearchResults();
     return;
   }
@@ -1249,7 +1251,13 @@ $("add-form").addEventListener("submit", event => {
 });
 $("symbol-input").addEventListener("input", () => {
   clearTimeout(state.searchTimer);
+  state.searchSeq++;
   const value = $<HTMLInputElement>("symbol-input").value;
+  const q = value.trim();
+  if (!q || /[\s,，、;；]/.test(q) || EXACT_CODE_RE.test(q)) {
+    hideSearchResults();
+    return;
+  }
   state.searchTimer = setTimeout(() => { void runNameSearch(value); }, 250);
 });
 document.getElementById("search-results")?.addEventListener("click", event => {
@@ -1290,11 +1298,14 @@ $("rows").addEventListener("click", event => {
     const pct = item?.quote?.change_pct;
     const pricePart = px !== null ? `，当前参考价 ${px}${num(pct) !== null ? `（${fmtPct(pct)}）` : ""}` : "";
     const prompt = `请用 stock-analysis 全面分析 ${label}（${sym}）${pricePart}。`;
-    try { window.parent?.postMessage?.({ type: "stock-analysis:ask-agent", symbol: sym, name: label, prompt }, location.origin); } catch { /* ignore */ }
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(prompt).catch(() => {});
+    if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
+      void navigator.clipboard.writeText(prompt).then(
+        () => showToast(`已复制 ${label} 分析提示词`),
+        () => showToast(`剪贴板不可用，请手动复制：${prompt}`),
+      );
+    } else {
+      showToast(`剪贴板不可用，请手动复制：${prompt}`);
     }
-    showToast(`已生成 ${label} 分析提示词并复制到剪贴板`);
     return;
   }
   const alertBtn = closest<HTMLButtonElement>(event, "button[data-alert]");
@@ -1304,17 +1315,38 @@ $("rows").addEventListener("click", event => {
     const curStr = [cur.above !== undefined ? `>=${cur.above}` : "", cur.below !== undefined ? `<=${cur.below}` : ""].filter(Boolean).join(", ");
     const input = window.prompt(`设置 ${alertBtn.dataset.label || sym} 价格提醒（格式：>=1800 或 <=1500，可逗号同填，留空清除）`, curStr);
     if (input !== null) {
-      const next: PriceAlert = {};
-      for (const part of input.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)) {
-        const up = /^>=?\s*(\d+(?:\.\d+)?)$/.exec(part);
-        const dn = /^<=?\s*(\d+(?:\.\d+)?)$/.exec(part);
-        if (up) next.above = Number(up[1]);
-        else if (dn) next.below = Number(dn[1]);
+      const trimmed = input.trim();
+      if (!trimmed) {
+        delete state.alerts[sym];
+        savePrefs();
+        renderRows(new Map());
+      } else {
+        const next: PriceAlert = {};
+        let invalid = false;
+        const parts = trimmed.split(/[,，;；]+/).map(s => s.trim()).filter(Boolean);
+        for (const part of parts) {
+          const up = /^>=?\s*(\d+(?:\.\d+)?)$/.exec(part);
+          const dn = /^<=?\s*(\d+(?:\.\d+)?)$/.exec(part);
+          if (up) {
+            const val = Number(up[1]);
+            if (!Number.isFinite(val) || val <= 0) invalid = true;
+            else next.above = val;
+          } else if (dn) {
+            const val = Number(dn[1]);
+            if (!Number.isFinite(val) || val <= 0) invalid = true;
+            else next.below = val;
+          } else {
+            invalid = true;
+          }
+        }
+        if (invalid || (next.above === undefined && next.below === undefined)) {
+          showToast("提醒格式无效，示例：>= 1800, <= 1500（已保留原设置）");
+        } else {
+          state.alerts[sym] = next;
+          savePrefs();
+          renderRows(new Map());
+        }
       }
-      if (next.above !== undefined || next.below !== undefined) state.alerts[sym] = next;
-      else delete state.alerts[sym];
-      savePrefs();
-      renderRows(new Map());
     }
     return;
   }

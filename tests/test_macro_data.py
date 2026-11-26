@@ -21,7 +21,7 @@ def isolated_cache(tmp_path, monkeypatch):
 def test_macro_anchors_all_groups_and_derived_spreads(monkeypatch):
     idx = pd.to_datetime(["2026-11-20", "2026-11-21", "2026-11-24"])
     series_map = {
-        "^TNX": [42.0, 42.5, 43.0],  # scaled by 0.1 -> 4.30%
+        "^TNX": [4.20, 4.25, 4.30],  # Yahoo ^TNX already returns percent-scale yields (e.g. 4.30 -> 4.30%)
         "DX-Y.NYB": [104.0, 104.5, 105.0],
         "CNH=X": [7.20, 7.22, 7.25],
         "HKD=X": [7.78, 7.78, 7.80],
@@ -89,11 +89,14 @@ def test_all_failed_returns_error_and_invalid_inputs_rejected(monkeypatch):
 
     assert "error" in macro_data.get_macro_anchors("invalid_group")
     assert "error" in macro_data.get_macro_anchors("all", days=1)
+    assert "error" in macro_data.get_macro_anchors("all", days=30.5)
 
 
-def test_cli_invalid_days_exits_nonzero():
+def test_cli_whole_float_days_accepted_and_invalid_days_exits_nonzero():
     script = Path(__file__).resolve().parents[1] / "tools" / "macro_data.py"
     proc = subprocess.run([sys.executable, str(script), "anchors", "--days", "1"], capture_output=True, text=True)
     assert proc.returncode == 1
     payload = json.loads(proc.stdout)
     assert "error" in payload
+    assert macro_data._parse_int_days(30.0) == 30
+    assert macro_data._parse_int_days("30.0") == 30

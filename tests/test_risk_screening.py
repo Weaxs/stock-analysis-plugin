@@ -293,6 +293,34 @@ def test_us_risk_screening_without_sec_env_stays_complete(monkeypatch):
     assert any("SEC_USER_AGENT" in w for w in result["warnings"])
 
 
+def test_us_risk_screening_truncated_sec_marks_incomplete_and_keeps_flags(monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "test-app test@example.com")
+
+    def fake_run(script, args, **kwargs):
+        if script == "sec_edgar.py" and args[0] == "insider_trades":
+            return {
+                "transactions": [{"code": "S"}, {"code": "S"}, {"code": "S"}],
+                "truncated": True,
+                "warnings": ["1 filing failed"],
+            }
+        return []
+
+    result = risk_screening.screen_risk(
+        "AAPL",
+        "Apple",
+        inputs={
+            "quote": {"pe": 25, "pb": 5},
+            "technical": {"signal_score": 60, "buy_signal": "HOLD", "trend": {"overall": "neutral"}},
+        },
+        run=fake_run,
+    )
+    assert result["data_complete"] is False
+    assert result["checks"]["insider_trades"]["available"] is False
+    assert result["checks"]["insider_trades"]["truncated"] is True
+    assert any(f["category"] == "insider" and f["source"] == "data" for f in result["flags"])
+    assert any("truncated" in w for w in result["warnings"])
+
+
 def test_unsupported_market_returns_error():
     result = risk_screening.screen_risk("7203.T")
     assert "error" in result

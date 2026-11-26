@@ -1,6 +1,6 @@
 # MCP 接入指南（WorkBuddy / Claude Desktop / Cursor）
 
-`mcp_host/server.py` 是本插件的 MCP stdio 服务器：一行一条 JSON-RPC 2.0 消息，只用 Python 标准库。它复用所有宿主共用的 JSON Schema（`tools/tool_schemas.json`，经 `hermes/schemas.py` 读取）和参数映射（`hermes/tools.py`），所以 76 个工具的名称、参数和输出与其他宿主一致。同时自动将 21 个 `skills/*/SKILL.md` 暴露为 MCP Prompts、将 `SKILL.md` 与 `references/` 暴露为 MCP Resources。
+`mcp_host/server.py` 是本插件的 MCP stdio 服务器：一行一条 JSON-RPC 2.0 消息，只用 Python 标准库。它复用所有宿主共用的 JSON Schema（`tools/tool_schemas.json`，经 `hermes/schemas.py` 读取）和参数映射（`hermes/tools.py`），所以 76 个工具的名称、参数和输出与其他宿主一致。同时自动将 21 个 `skills/*/SKILL.md` 暴露为 MCP Prompts、将 `SKILL.md`、`references/` 与 `schemas/*.json` 暴露为只读 MCP Resources。
 
 ## 前置条件
 
@@ -42,6 +42,7 @@
 
 - **按需发现模式**：在 `args` 追加 `"--discovery"`（或设置 `STOCK_MCP_DISCOVERY=1`），初始只暴露 `stock_tool_search`，按中英文关键词搜索命中后返回完整 schema 并在支持动态刷新的客户端中触发 `notifications/tools/list_changed`。
 - **核心子集模式**：在 `args` 追加 `"--profile", "core"`（或设置 `STOCK_MCP_PROFILE=core`），静态暴露 18 个高频核心工具。
+- **边界说明**：`--discovery` 与 `--profile core` 仅用于收敛 `tools/list` 的上下文体积，不作为安全授权边界；工具调用权限仍由宿主客户端控制。
 
 ## 行为说明
 
@@ -50,7 +51,7 @@
 - **错误**：未知工具、参数不是对象、未知方法、无法解析的 JSON 作为 JSON-RPC 错误返回（`-32602` / `-32601` / `-32700` / `-32600`）。缺少必填参数、数据源失败、Python CLI 超时则作为工具结果返回：`isError: true`，正文为 `{"error": "..."}`。
 - **并发与取消**：每次 `tools/call` 在独立线程里运行。收到 `notifications/cancelled` 后，服务器会结束对应的 Python 子进程，并且不再回复该请求。客户端关闭 stdin 时，服务器结束所有进行中的调用后退出。
 - **超时**：沿用 `tools/cli_budgets.json` 的命令预算，与其他宿主一致。
-- **Skills**：21 个 `skills/*/SKILL.md` 已自动暴露为 MCP Prompts（带可选 `request` 参数），`SKILL.md` 与 `references/` 也作为只读 `stock-skill://...` Resources 暴露，无需手动导入即可在支持 Prompts/Resources 的客户端中使用。
+- **Skills 与 Schemas**：21 个 `skills/*/SKILL.md` 已自动暴露为 MCP Prompts（带可选 `request` 参数，并在 `prompts/get` 头部附带 MCP 工具与资源调用引导，适配无本地 shell 环境的客户端）；`SKILL.md` 与 `references/` 暴露为只读 `stock-skill://...` Resources，`schemas/*.json`（如 `stock-schema://report_schema.json`）暴露为只读 `stock-schema://...` Resources。
 
 ## 本地验证
 

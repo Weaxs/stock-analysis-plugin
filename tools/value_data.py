@@ -960,10 +960,17 @@ def dividends(args):
                 "cash_per_share": number(r.get("现金分红-现金分红比例")) / 10
                 if number(r.get("现金分红-现金分红比例")) is not None
                 else None,
+                "bonus_ratio": number(r.get("送转股份-送转总比例")),
                 "status": r.get("方案进度"),
             }
             for r in rows
         ]
+        splits = [
+            {"ex_date": ev["ex_date"], "bonus_ratio": ev["bonus_ratio"], "status": ev["status"]}
+            for ev in events
+            if ev.get("bonus_ratio") and ev["bonus_ratio"] > 0
+        ]
+        splits_checked = True
         if args.mode == "calendar":
             return {
                 "symbol": args.symbol,
@@ -974,7 +981,14 @@ def dividends(args):
             }
         quote = run_tool("stock_data.py", ["quote", symbol]) or {}
         price = number(quote.get("price"))
-        result.update(source="eastmoney", currency="CNY", price=price, price_as_of=quote.get("as_of"))
+        result.update(
+            source="eastmoney",
+            currency="CNY",
+            price=price,
+            price_as_of=quote.get("as_of"),
+            splits=splits,
+            splits_checked=splits_checked,
+        )
     else:
         import yfinance as yf
 
@@ -1030,7 +1044,23 @@ def dividends(args):
             )
             return frame.reset_index()
 
+        def split_history():
+            raw = ticker.splits
+            if raw is None:
+                return pd.DataFrame(columns=["Date", "ratio"])
+            frame = (
+                raw.to_frame("ratio") if isinstance(raw, pd.Series) else raw.rename(columns={"Stock Splits": "ratio"})
+            )
+            return frame.reset_index()
+
         capture(sources, "cash", lambda: dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
+        splits_ok = False
+        splits_rows = []
+        try:
+            splits_rows = dataset(f"{market.lower()}-splits:{symbol}", split_history)
+            splits_ok = isinstance(splits_rows, list)
+        except Exception:
+            splits_ok = False
         capture(sources, "quote", lambda: ticker.info)
         paid = sources.get("cash", [])
         info = sources.get("quote") or {}
@@ -1047,11 +1077,18 @@ def dividends(args):
             }
             for r in paid
         ]
+        splits = [
+            {"ex_date": market_date(r.get("Date"), market), "ratio": number(r.get("ratio"))}
+            for r in splits_rows
+            if number(r.get("ratio")) not in (None, 0)
+        ]
         price = number(info.get("currentPrice") or info.get("regularMarketPrice"))
         result.update(
             source="yfinance cash / eastmoney calendar" if market == "HK" else "yfinance",
             currency=info.get("currency"),
             price=price,
+            splits=splits,
+            splits_checked=splits_ok,
         )
         result["calendar"] = [r for r in calendar if r["ex_date"] and r["ex_date"] > today.isoformat()]
     cutoff = (today - timedelta(days=365.25 * args.years)).isoformat()
@@ -1127,11 +1164,11 @@ def fund_size_history(symbol):
 
 
 def etf_basket(symbol):
-    return _etf_basket_impl(symbol, cache_fn=cached)
+    return _etf_basket_impl(symbol, cache_fn=cached, now_fn=_cn_now)
 
 
 def fund_disclosed_equities(symbol):
-    return _fund_disclosed_equities_impl(symbol, cache_fn=cached)
+    return _fund_disclosed_equities_impl(symbol, cache_fn=cached, now_fn=_cn_now)
 
 
 def etf_details(args):

@@ -32,7 +32,7 @@ GROUPS = {
 ALL_KEYS = GROUPS["rates"] + GROUPS["fx"] + GROUPS["risk"]
 
 YF_SPECS = {
-    "us_10y": ("^TNX", "US 10Y Treasury Yield", "percent", 0.1),
+    "us_10y": ("^TNX", "US 10Y Treasury Yield", "percent", 1.0),
     "dxy": ("DX-Y.NYB", "US Dollar Index (DXY)", "index", 1.0),
     "usdcnh": ("CNH=X", "USD/CNH Exchange Rate", "rate", 1.0),
     "usdhkd": ("HKD=X", "USD/HKD Exchange Rate", "rate", 1.0),
@@ -221,11 +221,35 @@ def _fetch_anchor_uncached(key: str, days: int, bond_cache: dict | None = None) 
     raise ValueError(f"unknown macro anchor: {key}")
 
 
+def _parse_int_days(value) -> int:
+    if isinstance(value, bool):
+        raise ValueError("days must be an integer between 2 and 365")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        raise ValueError("days must be an integer between 2 and 365")
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            f = float(text)
+        except ValueError as exc:
+            raise ValueError("days must be an integer between 2 and 365") from exc
+        if math.isfinite(f) and f.is_integer():
+            return int(f)
+    raise ValueError("days must be an integer between 2 and 365")
+
+
 def get_macro_anchors(group: str = "all", days: int = 30) -> dict:
     group = (group or "all").lower()
     if group != "all" and group not in GROUPS:
         return {"error": f"Unknown macro group: {group}. Expected one of all, rates, fx, risk"}
-    if isinstance(days, bool) or not isinstance(days, int) or days < 2 or days > 365:
+    try:
+        days = _parse_int_days(days)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if days < 2 or days > 365:
         return {"error": "days must be an integer between 2 and 365"}
 
     keys = list(ALL_KEYS if group == "all" else GROUPS[group])
@@ -314,7 +338,7 @@ def main():
     sub = parser.add_subparsers(dest="command")
     p = sub.add_parser("anchors")
     p.add_argument("--group", default="all", choices=["all", "rates", "fx", "risk"])
-    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--days", default="30")
     args = parser.parse_args()
     if not args.command:
         parser.print_help()

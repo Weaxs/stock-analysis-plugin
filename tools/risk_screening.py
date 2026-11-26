@@ -332,12 +332,23 @@ def check_hk_disclosures(symbol: str, *, run=None) -> dict:
 
 def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     if not os.environ.get("SEC_USER_AGENT"):
-        return {"sales_90d": None, "flags": [], "available": False, "configured": False}
+        return {
+            "sales_90d": None,
+            "flags": [],
+            "available": False,
+            "configured": False,
+            "truncated": False,
+            "warnings": [],
+        }
     data = (run or _run_tool)("sec_edgar.py", ["insider_trades", symbol, "--days", "90", "--top", "10"], timeout=30)
-    result = {"sales_90d": 0, "flags": [], "available": False, "configured": True}
+    result = {"sales_90d": 0, "flags": [], "available": False, "configured": True, "truncated": False, "warnings": []}
     if not isinstance(data, dict) or "error" in data or not isinstance(data.get("transactions"), list):
         return result
-    result["available"] = True
+    truncated = bool(data.get("truncated"))
+    sec_warnings = [str(w) for w in (data.get("warnings") or []) if w]
+    result["truncated"] = truncated
+    result["warnings"] = sec_warnings
+    result["available"] = not truncated and not sec_warnings
     sales = [
         tx
         for tx in data["transactions"]
@@ -465,10 +476,15 @@ def screen_risk(symbol: str, name: str = "", *, inputs=None, run=None) -> dict:
                 "sales_90d": extra["sales_90d"],
                 "available": extra["available"],
                 "configured": extra["configured"],
+                "truncated": extra.get("truncated", False),
             }
             all_flags.extend(extra["flags"])
             if not extra["configured"]:
                 warnings.append("SEC_USER_AGENT not set; SEC Form 4 insider trade risk check skipped")
+            else:
+                if extra.get("truncated"):
+                    warnings.append("SEC Form 4 filings were truncated at top 10; insider sales coverage is incomplete")
+                warnings.extend(extra.get("warnings") or [])
 
     checks["news_risks"] = {k: v for k, v in news.items() if k != "flags"}
     all_flags.extend(news["flags"])

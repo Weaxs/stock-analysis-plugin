@@ -419,8 +419,8 @@
           "description": "基准分组：all=全部（默认），rates=中美无风险利率，fx=汇率与美元指数，risk=VIX/黄金/原油"
         },
         "days": {
-          "type": "number",
-          "description": "历史统计窗口天数（2..365，默认 30）"
+          "type": "integer",
+          "description": "历史统计窗口天数（2..365 整数，默认 30）"
         }
       },
       "required": []

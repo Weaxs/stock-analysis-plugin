@@ -30,7 +30,7 @@ function element() {
     },
     append(...nodes: unknown[]) { this.children.push(...nodes); },
     appendChild(node: unknown) { this.children.push(node); },
-    replaceChildren() { this.children.length = 0; },
+    replaceChildren(...nodes: unknown[]) { this.children.length = 0; this.children.push(...nodes); },
     remove() {},
     setAttribute() {}, focus() {}, scrollBy() {}, scrollIntoView() {},
     querySelector() { return element(); },
@@ -74,6 +74,19 @@ let resolveFirst!: (value: unknown) => void;
 const firstSnapshot = new Promise(resolve => { resolveFirst = resolve; });
 const snapshotCalls: string[] = [];
 const writeCalls: unknown[] = [];
+const searchCalls: string[] = [];
+const pendingSearch: { resolve?: (value: unknown) => void } = {};
+let holdNextSearch = false;
+const copiedTexts: string[] = [];
+let clipboardShouldReject = false;
+const navigatorMock = {
+  clipboard: {
+    writeText: async (text: string) => {
+      if (clipboardShouldReject) throw new Error("clipboard denied");
+      copiedTexts.push(text);
+    },
+  },
+};
 const fundAndAdvisor = [
   {
     symbol: "018147", region: "fund",
@@ -106,10 +119,18 @@ async function fetch(path: string, options: { method?: string; body?: string } =
     return { ok: true, status: 200, json: async () => ({ symbols: ["AAPL"] }) };
   }
   if (path.startsWith("./api/search")) {
+    searchCalls.push(path);
+    const body = { query: path, results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] };
+    if (holdNextSearch) {
+      holdNextSearch = false;
+      const deferred = new Promise(resolve => { pendingSearch.resolve = resolve; });
+      const value = await deferred;
+      return { ok: true, status: 200, json: async () => value };
+    }
     return {
       ok: true,
       status: 200,
-      json: async () => ({ query: "茅台", results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] }),
+      json: async () => body,
     };
   }
   throw new Error("unexpected fetch: " + path);
@@ -120,6 +141,7 @@ let nextTimer = 1;
 const sandbox = {
   document,
   window,
+  navigator: navigatorMock,
   location: { search: "", origin: "http://dashboard.local" },
   localStorage: {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -190,36 +212,82 @@ for (const listener of windowListeners.get("message") ?? []) {
 }
 assert.equal(document.documentElement.style.props.has("--bg"), false, "omitted theme token is removed");
 
-// Quick analyze posts ask-agent message to parent shell and shows confirmation toast.
+// Quick analyze copies prompt to clipboard and reports honest result (no unhandled ask-agent postMessage).
 const analyzeBtn = { dataset: { analyze: "018147", label: "建信新兴市场混合(QDII)C" } };
 for (const listener of byId("rows").listeners.get("click") ?? []) {
   listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
 }
-assert(postedMessages.some(m => (m as { type?: string; symbol?: string }).type === "stock-analysis:ask-agent" && (m as { symbol?: string }).symbol === "018147"));
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.equal(postedMessages.some(m => (m as { type?: string }).type === "stock-analysis:ask-agent"), false);
+assert.equal(copiedTexts.length, 1);
+assert(copiedTexts[0].includes("018147"));
+assert(JSON.stringify(byId("watch-undo").children).includes("已复制"));
 
-// Group & price alert thresholds render badges and highlight rows when triggered.
+clipboardShouldReject = true;
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert(JSON.stringify(byId("watch-undo").children).includes("剪贴板不可用"));
+clipboardShouldReject = false;
+
+// Group & price alert thresholds: whitespace like '>= 1.5' parses cleanly, invalid non-empty input preserves existing alert.
 window.prompt = () => "核心";
 const groupBtn = { dataset: { group: "018147", label: "建信新兴市场混合(QDII)C" } };
 for (const listener of byId("rows").listeners.get("click") ?? []) {
   listener({ target: { closest: (sel: string) => (sel === "button[data-group]" ? groupBtn : null) } });
 }
-window.prompt = () => ">=1.5";
+window.prompt = () => ">= 1.5";
 const alertBtn = { dataset: { alert: "018147", label: "建信新兴市场混合(QDII)C" } };
 for (const listener of byId("rows").listeners.get("click") ?? []) {
   listener({ target: { closest: (sel: string) => (sel === "button[data-alert]" ? alertBtn : null) } });
 }
 const updatedRows = JSON.stringify(byId("rows").children);
 assert(updatedRows.includes("#核心"), "custom group badge rendered");
-assert(updatedRows.includes("触达 ≥ 1.5"), "triggered price alert badge rendered");
+assert(updatedRows.includes("触达 ≥ 1.5"), "triggered price alert badge rendered with whitespace in input");
 
-// Name search dropdown picks symbol into watchlist.
+window.prompt = () => "not-a-valid-alert";
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-alert]" ? alertBtn : null) } });
+}
+assert(JSON.stringify(byId("watch-undo").children).includes("提醒格式无效"), "invalid alert format notifies user");
+assert(JSON.stringify(byId("rows").children).includes("触达 ≥ 1.5"), "existing alert preserved after invalid input");
+
+// Full pinyin search reaches /api/search, exact code skips search, and cleared input invalidates in-flight response.
+byId("symbol-input").value = "guizhoumaotai";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+const pinyinTimer = [...timers.values()].at(-1) as (() => void) | undefined;
+if (typeof pinyinTimer === "function") pinyinTimer();
+await new Promise(resolve => setTimeout(resolve, 10));
+assert(searchCalls.some(p => p.includes("guizhoumaotai")), "full pinyin reaches /api/search");
+assert(JSON.stringify(byId("search-results").children).includes("贵州茅台"));
+
+const beforeCodeCount = searchCalls.length;
+byId("symbol-input").value = "600519";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+assert.equal(byId("search-results").hidden, true, "exact code hides search results immediately");
+assert.equal(searchCalls.length, beforeCodeCount, "exact code does not trigger /api/search");
+
+holdNextSearch = true;
 byId("symbol-input").value = "茅台";
 for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
   listener({});
 }
-const lastTimerFn = [...timers.values()].at(-1) as (() => void) | undefined;
-if (typeof lastTimerFn === "function") lastTimerFn();
+const delayedTimer = [...timers.values()].at(-1) as (() => void) | undefined;
+if (typeof delayedTimer === "function") delayedTimer();
+await new Promise(resolve => setTimeout(resolve, 5));
+// Clear input before the in-flight search finishes.
+byId("symbol-input").value = "";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+assert.equal(byId("search-results").hidden, true);
+pendingSearch.resolve?.({ query: "茅台", results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] });
 await new Promise(resolve => setTimeout(resolve, 10));
-assert(JSON.stringify(byId("search-results").children).includes("贵州茅台"));
+assert.equal(byId("search-results").hidden, true, "stale search response must not reopen cleared dropdown");
 
 console.log("dsh web: watchlist polling, fund NAV, advisor rows, search, groups, alerts, analyze, undo and theme cleanup passed");

@@ -145,6 +145,8 @@ class TestDiagnose:
         assert "baostock" in providers
 
     def test_services_and_summary_cover_search_sec_sentiment_and_tradingview(self, monkeypatch):
+        for env_key in ("TAVILY_API_KEY", "BRAVE_API_KEY", "SERPAPI_KEY", "BOCHA_API_KEY", "SEARXNG_BASE_URLS"):
+            monkeypatch.delenv(env_key, raising=False)
         monkeypatch.setenv("TAVILY_API_KEY", "fake-key")
         monkeypatch.setenv("SEC_USER_AGENT", "app user@example.com")
         monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
@@ -161,6 +163,14 @@ class TestDiagnose:
         assert res["summary"]["sec_edgar_ready"] is True
         assert res["summary"]["sentiment_api_ready"] is False
         assert res["meta"]["probed"] is False
+
+    def test_sec_user_agent_without_email_is_reported_invalid(self, monkeypatch):
+        monkeypatch.setenv("SEC_USER_AGENT", "stock-analysis-plugin")
+        res = diagnostics.diagnose("US")
+        sec = next(s for s in res["services"] if s["name"] == "sec_edgar")
+        assert sec["available"] is False
+        assert "invalid SEC_USER_AGENT" in (sec["reason"] or "")
+        assert res["summary"]["sec_edgar_ready"] is False
 
     def test_probe_flag_populates_reachability_without_hitting_live_network(self, monkeypatch):
         probed = []

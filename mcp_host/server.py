@@ -68,10 +68,23 @@ _current = threading.local()
 # Each call is a Python process that loads pandas; parallel model calls must not fan out unbounded.
 _SLOTS = threading.BoundedSemaphore(4)
 _FRONTMATTER_RE = re.compile(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n?")
+_MCP_SKILL_PREAMBLE = (
+    "[MCP 执行说明]\n"
+    "你当前通过 MCP 协议接入 stock-analysis 工具集，无需也不要依赖本地 shell 脚本（如 `python3 scripts/gather.py`）或本地文件路径：\n"
+    "1. 请直接调用已注册的 MCP 工具完成数据采集与分析（如 `get_quote`、`get_kline`、`get_technical_analysis`、`get_financials`、"
+    "`get_fundamental_context`、`get_valuation_history`、`get_macro_anchors`、`screen_risk`、`detect_market_regime`、"
+    "`search_stock_news`、`render_stock_report` 等；若开启了 `--discovery`，先调用 `stock_tool_search` 加载所需工具）。\n"
+    "2. 若正文引用了 `references/...` 或 `schemas/...` 文件，请通过 MCP `resources/read` 读取对应的 "
+    "`stock-skill://<skill>/references/<file>` 或 `stock-schema://<file>` 资源（例如 `stock-schema://report_schema.json`）。\n\n"
+)
 
 
 def _skills_dir() -> Path:
     return tools.TOOLS_DIR.parent / "skills"
+
+
+def _schemas_dir() -> Path:
+    return tools.TOOLS_DIR.parent / "schemas"
 
 
 def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
@@ -87,53 +100,70 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
 
 
 def _discover_skills() -> tuple[dict[str, dict], dict[str, dict]]:
-    """Return (prompts_by_name, resources_by_uri) from skills/*/SKILL.md and references/."""
+    """Return (prompts_by_name, resources_by_uri) from skills/*/SKILL.md, references/, and schemas/."""
     sdir = _skills_dir()
     prompts: dict[str, dict] = {}
     resources: dict[str, dict] = {}
-    if not sdir.is_dir():
-        return prompts, resources
-    for child in sorted(sdir.iterdir(), key=lambda p: p.name):
-        if not child.is_dir():
-            continue
-        skill_md = child / "SKILL.md"
-        if not skill_md.is_file():
-            continue
-        raw = skill_md.read_text(encoding="utf-8")
-        meta, body = _parse_frontmatter(raw)
-        desc = meta.get("description") or child.name
-        prompts[child.name] = {
-            "name": child.name,
-            "description": desc,
-            "body": body,
-            "arguments": [
-                {
-                    "name": "request",
-                    "description": "可选：股票代码、市场或具体分析问题",
-                    "required": False,
-                }
-            ],
-        }
-        uri = f"stock-skill://{child.name}/SKILL.md"
-        resources[uri] = {
-            "uri": uri,
-            "name": f"{child.name}/SKILL.md",
-            "description": desc,
-            "mimeType": "text/markdown",
-            "path": skill_md,
-        }
-        refs_dir = child / "references"
-        if refs_dir.is_dir():
-            for ref in sorted(refs_dir.iterdir(), key=lambda p: p.name):
-                if ref.is_file() and ref.suffix.lower() in (".md", ".txt", ".yaml", ".yml", ".json"):
-                    ref_uri = f"stock-skill://{child.name}/references/{ref.name}"
-                    resources[ref_uri] = {
-                        "uri": ref_uri,
-                        "name": f"{child.name}/references/{ref.name}",
-                        "description": f"Reference material for {child.name}",
-                        "mimeType": "text/markdown" if ref.suffix.lower() == ".md" else "text/plain",
-                        "path": ref,
+    if sdir.is_dir():
+        for child in sorted(sdir.iterdir(), key=lambda p: p.name):
+            if not child.is_dir():
+                continue
+            skill_md = child / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            raw = skill_md.read_text(encoding="utf-8")
+            meta, body = _parse_frontmatter(raw)
+            desc = meta.get("description") or child.name
+            prompts[child.name] = {
+                "name": child.name,
+                "description": desc,
+                "body": body,
+                "arguments": [
+                    {
+                        "name": "request",
+                        "description": "可选：股票代码、市场或具体分析问题",
+                        "required": False,
                     }
+                ],
+            }
+            uri = f"stock-skill://{child.name}/SKILL.md"
+            resources[uri] = {
+                "uri": uri,
+                "name": f"{child.name}/SKILL.md",
+                "description": desc,
+                "mimeType": "text/markdown",
+                "path": skill_md,
+            }
+            refs_dir = child / "references"
+            if refs_dir.is_dir():
+                for ref in sorted(refs_dir.iterdir(), key=lambda p: p.name):
+                    if ref.is_file() and ref.suffix.lower() in (".md", ".txt", ".yaml", ".yml", ".json"):
+                        ref_uri = f"stock-skill://{child.name}/references/{ref.name}"
+                        suffix = ref.suffix.lower()
+                        mime = (
+                            "text/markdown"
+                            if suffix == ".md"
+                            else ("application/json" if suffix == ".json" else "text/plain")
+                        )
+                        resources[ref_uri] = {
+                            "uri": ref_uri,
+                            "name": f"{child.name}/references/{ref.name}",
+                            "description": f"Reference material for {child.name}",
+                            "mimeType": mime,
+                            "path": ref,
+                        }
+    schemas_dir = _schemas_dir()
+    if schemas_dir.is_dir():
+        for schema_file in sorted(schemas_dir.iterdir(), key=lambda p: p.name):
+            if schema_file.is_file() and schema_file.suffix.lower() == ".json":
+                schema_uri = f"stock-schema://{schema_file.name}"
+                resources[schema_uri] = {
+                    "uri": schema_uri,
+                    "name": f"schemas/{schema_file.name}",
+                    "description": f"Shared JSON schema: {schema_file.name}",
+                    "mimeType": "application/json",
+                    "path": schema_file,
+                }
     return prompts, resources
 
 
@@ -318,7 +348,7 @@ def handle(method: str, params: dict, *, session_state: dict | None = None) -> d
         if not isinstance(arguments, dict):
             raise RpcError(-32602, "Prompt arguments must be an object")
         req = arguments.get("request")
-        text = prompt["body"]
+        text = f"{_MCP_SKILL_PREAMBLE}{prompt['body']}"
         if isinstance(req, str) and req.strip():
             text = f"{text}\n\n---\n用户请求：{req.strip()}"
         return {

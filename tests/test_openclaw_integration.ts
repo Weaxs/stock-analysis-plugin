@@ -58,6 +58,7 @@ const fakeTypebox = {
     }),
     String: (opts?: unknown) => ({ __typebox: "string", opts }),
     Number: (opts?: unknown) => ({ __typebox: "number", opts }),
+    Integer: (opts?: unknown) => ({ __typebox: "integer", opts }),
     Null: () => ({ __typebox: "null" }),
     Boolean: (opts?: unknown) => ({ __typebox: "boolean", opts }),
     Optional: (schema: unknown) => ({ __typebox: "optional", schema }),

@@ -262,8 +262,8 @@ def _valid_bar(bar, require_open=True) -> bool:
 
 
 def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_price_date: bool, remaining: float) -> bool:
-    """Verify via dividend history + anchor-bar price consistency that no ex-dividend/split
-    invalidated the 1:1 price correspondence between entry_price and adjusted bars."""
+    """Verify via complete dividend+split history and exact anchor-bar price match that no
+    ex-dividend or split invalidated the 1:1 price correspondence between entry_price and adjusted bars."""
     anchor = bars[anchor_idx]
     entry = rec.get("entry_price")
     low = anchor.get("low")
@@ -272,27 +272,71 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
         isinstance(entry, (int, float))
         and isinstance(low, (int, float))
         and isinstance(high, (int, float))
-        and low * 0.9 <= entry <= high * 1.1
+        and low - 1e-6 <= entry <= high + 1e-6
     ):
         return False
 
-    market = rec.get("market") or detect_market(rec["symbol"])
     anchor_date = anchor["date"]
     last_date = max(bar["date"] for bar in bars)
+    try:
+        anchor_dt = datetime.strptime(anchor_date, "%Y-%m-%d").date()
+        last_dt = datetime.strptime(last_date, "%Y-%m-%d").date()
+        ref_today = max(datetime.now().date(), last_dt)
+    except ValueError:
+        return False
+
+    years_needed = max(2, math.ceil((ref_today - anchor_dt).days / 365.25) + 1)
+    if years_needed > 20:
+        return False
+
+    # Omit --market (only supported for ranking A/HK); history resolves market from symbol across A/HK/US/JP/KR/TW.
     div_data = run_tool(
         "value_data.py",
-        ["dividends", "--market", market, "--symbol", rec["symbol"], "--mode", "history", "--years", "2"],
+        ["dividends", "--symbol", rec["symbol"], "--mode", "history", "--years", str(years_needed)],
         timeout=min(30, max(remaining, 1)),
     )
     if not isinstance(div_data, dict) or "error" in div_data or not isinstance(div_data.get("history"), list):
         return False
     if not div_data.get("source"):
         return False
-    warnings = div_data.get("warnings") or []
-    if any("missing/invalid" in str(w) or "unavailable" in str(w).lower() for w in warnings):
+    # Require explicit corporate-action history and split coverage; empty history is never treated as confirmed zero.
+    if not div_data["history"] or div_data.get("splits_checked") is not True:
+        return False
+    warnings = [str(w).lower() for w in (div_data.get("warnings") or [])]
+    blocked_markers = (
+        "missing/invalid",
+        "unavailable",
+        "no dividend history",
+        "absence is not interpreted as zero",
+    )
+    if any(any(marker in w for marker in blocked_markers) for w in warnings):
         return False
 
+    # Verify the returned history window actually covers anchor_date..last_date without silent truncation.
+    years_returned = div_data.get("history_years_requested")
+    as_of_raw = div_data.get("as_of")
+    if (
+        isinstance(years_returned, bool)
+        or not isinstance(years_returned, (int, float))
+        or years_returned < years_needed
+    ):
+        return False
+    if isinstance(as_of_raw, str) and len(as_of_raw) >= 10:
+        try:
+            as_of_dt = datetime.strptime(as_of_raw[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        if as_of_dt < last_dt:
+            return False
+        # Verify anchor_date is strictly after the producer's cutoff (as_of - 365.25 * years_returned).
+        if (as_of_dt - anchor_dt).days >= int(365.25 * years_returned):
+            return False
+    else:
+        return False
+
+    # Require at least one past/paid event (not only future calendar rows) so history confirms actual coverage.
     events = list(div_data.get("history") or []) + list(div_data.get("calendar") or [])
+    has_past_event = False
     for ev in events:
         if not isinstance(ev, dict):
             return False
@@ -303,11 +347,30 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
         if not isinstance(ex_date, str) or len(ex_date) < 10:
             continue
         ex_day = ex_date[:10]
+        if ex_day <= last_date:
+            has_past_event = True
         if anchor_date < ex_day <= last_date:
             return False
         if not has_price_date and ex_day == anchor_date:
             return False
-    return True
+
+    splits = div_data.get("splits")
+    if splits is not None:
+        if not isinstance(splits, list):
+            return False
+        for sp in splits:
+            if not isinstance(sp, dict):
+                return False
+            ex_date = sp.get("ex_date")
+            if not isinstance(ex_date, str) or len(ex_date) < 10:
+                return False
+            ex_day = ex_date[:10]
+            if anchor_date < ex_day <= last_date:
+                return False
+            if not has_price_date and ex_day == anchor_date:
+                return False
+
+    return has_past_event
 
 
 def _price_factor(rec, bars, *, remaining: float | None = None):

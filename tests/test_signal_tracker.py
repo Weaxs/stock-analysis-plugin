@@ -595,13 +595,19 @@ def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store
         {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
         {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
     ]
+    div_calls = []
 
     def fake_run(script, args, **kwargs):
         if script == "stock_data.py":
             return bars
         if script == "value_data.py" and args[0] == "dividends":
+            div_calls.append(args)
             return {
                 "source": "eastmoney",
+                "as_of": "2026-09-18",
+                "history_years_requested": 2,
+                "splits_checked": True,
+                "splits": [],
                 "history": [{"ex_date": "2026-06-15", "cash_per_share": 1.2, "status": "实施分配"}],
                 "calendar": [],
                 "warnings": [],
@@ -613,6 +619,7 @@ def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store
     assert result["closed"] == 1
     assert result["results"][0]["outcome"] == "target_hit"
     assert result["results"][0]["return_pct"] == 20.0
+    assert "--market" not in div_calls[0]
     saved = st._load_records(store)[0]
     assert saved["evaluation_price_basis"] == {
         "adjusted": "qfq",
@@ -621,29 +628,84 @@ def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store
     }
 
 
-def test_keyless_qfq_skips_when_ex_dividend_occurred_in_window(store, mock_run_tool):
+def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_outside_anchor(store, mock_run_tool):
+    # Case 1: ex-dividend inside window
     st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
     bars = [
         {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
         {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
     ]
+    base_div = {
+        "source": "eastmoney",
+        "as_of": "2026-09-18",
+        "history_years_requested": 2,
+        "splits_checked": True,
+        "splits": [],
+        "history": [{"ex_date": "2026-06-15", "cash_per_share": 1.2, "status": "实施分配"}],
+        "calendar": [],
+        "warnings": [],
+    }
+    cases = [
+        {**base_div, "history": [{"ex_date": "2026-09-02", "cash_per_share": 2.0, "status": "实施分配"}]},
+        {**base_div, "history": [], "warnings": ["no dividend history returned; absence is not interpreted as zero"]},
+        {**base_div, "splits": [{"ex_date": "2026-09-02", "ratio": 2.0}]},
+        {**base_div, "splits_checked": False},
+        {**base_div, "history_years_requested": 1},
+    ]
+    for payload in cases:
+        mock_run_tool.side_effect = lambda script, args, p=payload, **kw: bars if script == "stock_data.py" else p
+        res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert res["closed"] == 0
+        assert res["results"][0]["outcome"] == "skipped_price_basis"
+
+    # Case 2: entry price outside anchor bar [low, high] (e.g. entry=105 vs high=100) must skip
+    store2 = store.with_name("signals2.jsonl")
+    st.cmd_record(
+        _rec_args(store2, date="2026-09-01", entry_price=105, stop_price=90, target_price=120, horizon_days=2)
+    )
+    tight_bars = [
+        {"date": "2026-09-01", "open": 99, "high": 100, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+    mock_run_tool.side_effect = lambda script, args, **kw: tight_bars if script == "stock_data.py" else base_div
+    res2 = st.cmd_evaluate(Namespace(symbol=None, store=str(store2)))
+    assert res2["closed"] == 0
+    assert res2["results"][0]["outcome"] == "skipped_price_basis"
+
+
+def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_tool):
+    st.cmd_record(
+        _rec_args(
+            store, symbol="AAPL", date="2026-09-01", entry_price=200, stop_price=180, target_price=220, horizon_days=2
+        )
+    )
+    bars = [
+        {"date": "2026-09-01", "open": 199, "high": 202, "low": 198, "close": 200, "adjusted": "total_return"},
+        {"date": "2026-09-02", "open": 201, "high": 225, "low": 200, "close": 222, "adjusted": "total_return"},
+    ]
+    seen_div_args = []
 
     def fake_run(script, args, **kwargs):
         if script == "stock_data.py":
             return bars
         if script == "value_data.py" and args[0] == "dividends":
+            seen_div_args.append(args)
             return {
-                "source": "eastmoney",
-                "history": [{"ex_date": "2026-09-02", "cash_per_share": 2.0, "status": "实施分配"}],
+                "source": "yfinance",
+                "as_of": "2026-09-18",
+                "history_years_requested": 2,
+                "splits_checked": True,
+                "splits": [],
+                "history": [{"ex_date": "2026-08-10", "cash_per_share": 0.25, "status": "paid"}],
                 "calendar": [],
                 "warnings": [],
             }
         return None
 
     mock_run_tool.side_effect = fake_run
-    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
-    assert result["closed"] == 0
-    assert result["results"][0]["outcome"] == "skipped_price_basis"
+    res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res["closed"] == 1
+    assert seen_div_args == [["dividends", "--symbol", "AAPL", "--mode", "history", "--years", "2"]]
 
 
 def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_tool):
