@@ -943,14 +943,23 @@ def dividends(args):
     from _subproc import run_tool
 
     today = market_now(market).date()
+    no_cache = bool(getattr(args, "no_cache", False))
+
+    def load_dataset(key, fetch):
+        if no_cache:
+            return records(fetch())
+        return dataset(key, fetch)
+
     result = {
         "symbol": args.symbol,
         "market": market,
         "as_of": today.isoformat(),
+        "cache_bypassed": no_cache,
+        "history_current_through": today.isoformat() if no_cache else None,
         "yield_basis": "cash paid per share in trailing 365 days / latest price, before tax; nominal source cash amounts",
     }
     if market == "A":
-        rows = dataset(f"dividends:{symbol}", lambda: ak.stock_fhps_detail_em(symbol=symbol))
+        rows = load_dataset(f"dividends:{symbol}", lambda: ak.stock_fhps_detail_em(symbol=symbol))
         events = [
             {
                 "report_date": iso(r.get("报告期")),
@@ -997,7 +1006,7 @@ def dividends(args):
             capture(
                 sources,
                 "calendar",
-                lambda: dataset(
+                lambda: load_dataset(
                     f"hk-dividend-calendar:{symbol}", lambda: ak.stock_hk_dividend_payout_em(symbol=symbol)
                 ),
             )
@@ -1044,20 +1053,26 @@ def dividends(args):
             )
             return frame.reset_index()
 
-        def split_history():
-            raw = ticker.splits
-            if raw is None:
-                return pd.DataFrame(columns=["Date", "ratio"])
-            frame = (
-                raw.to_frame("ratio") if isinstance(raw, pd.Series) else raw.rename(columns={"Stock Splits": "ratio"})
-            )
-            return frame.reset_index()
+        def split_history_verified():
+            # Fetch action-bearing price history with raise_errors=True so failed yfinance requests
+            # (which ticker.splits can silently turn into an empty Series) never set splits_checked=True.
+            if not callable(getattr(ticker, "history", None)):
+                raise RuntimeError("split history requires ticker.history")
+            hist = ticker.history(period="max", actions=True, raise_errors=True)
+            if not isinstance(hist, pd.DataFrame) or hist.empty or "Stock Splits" not in hist.columns:
+                raise RuntimeError("yfinance history returned no action-bearing price frame")
+            splits_series = hist["Stock Splits"]
+            nonzero = splits_series[splits_series.notna() & (splits_series != 0)]
+            frame = nonzero.to_frame("ratio").reset_index()
+            if len(frame.columns) >= 1 and frame.columns[0] != "Date":
+                frame = frame.rename(columns={frame.columns[0]: "Date"})
+            return frame
 
-        capture(sources, "cash", lambda: dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
+        capture(sources, "cash", lambda: load_dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
         splits_ok = False
         splits_rows = []
         try:
-            splits_rows = dataset(f"{market.lower()}-splits:{symbol}", split_history)
+            splits_rows = load_dataset(f"{market.lower()}-splits:{symbol}", split_history_verified)
             splits_ok = isinstance(splits_rows, list)
         except Exception:
             splits_ok = False
@@ -1584,6 +1599,11 @@ def main():
     p.add_argument("--report-date", default="")
     p.add_argument("--years", type=int, default=10)
     p.add_argument("--top", type=int, default=20)
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the 24-hour dataset cache so corporate-action history is fetched fresh",
+    )
     try:
         args = parser.parse_args()
         handlers = {

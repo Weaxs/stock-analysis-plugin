@@ -710,13 +710,15 @@ def _infer_currency(symbol: str, market: str, df: pd.DataFrame) -> str | None:
     if market == "TW":
         return "TWD"
     if market == "HK":
-        # HKEX multi-counter conventions: 8xxxx.HK = RMB counter, 09xxx.HK (9000-9999) = USD ETF counter
+        # HKEX Stock Code Allocation Plan:
+        # 80000-89999 = RMB counters; USD ETF / L&I counters = 9000-9599, 9700-9849, 41500-41599.
+        # Main-board equities in 9600-9699 (e.g. 9618.HK) and 9850-9999 (e.g. 9988.HK) trade in HKD.
         m = re.fullmatch(r"0*(\d{1,5})\.HK", _canonical_symbol(symbol))
         if m:
             code = int(m.group(1))
             if 80000 <= code <= 89999:
                 return "CNY"
-            if 9000 <= code <= 9999:
+            if (9000 <= code <= 9599) or (9700 <= code <= 9849) or (41500 <= code <= 41599):
                 return "USD"
             return "HKD"
     return None
@@ -927,6 +929,11 @@ def simulate_portfolio(
     last_rebal_bucket = None
     target_symbols = [sym for sym in symbols if cfg["weights"].get(sym, 0.0) > 0]
     initially_allocated: set[str] = set()
+    has_explicit_exits = bool(
+        stop_loss is not None or take_profit is not None or trailing_stop is not None or exit_conditions
+    )
+    exited_alloc: set[str] = set()
+    pending_dca: dict[str, float] = {}
 
     # Time-weighted return (TWR) tracks pure investment return strictly excluding external cash inflows
     twr_factor = 1.0
@@ -1028,6 +1035,50 @@ def simulate_portfolio(
         )
         return True
 
+    def process_exits(ts, date_str: str) -> set[str]:
+        nonlocal blocked_orders
+        sold: set[str] = set()
+        for sym in list(holdings.keys()):
+            info = per_sym[sym]
+            idx = info["idx"].get(ts)
+            if idx is None:
+                continue
+            sig_idx = idx if execution == "same_close" else idx - 1
+            if sig_idx < 0:
+                continue
+            row = info["bars"][idx]
+            sig_price = float(info["bars"][sig_idx]["close"])
+            sig_date = str(info["dates"].iloc[sig_idx].date())
+            h = holdings[sym]
+            h["peak_close"] = max(h["peak_close"], sig_price)
+            pnl_pct = (sig_price - h["buy_price"]) / h["buy_price"]
+            sell, reason = False, ""
+            if stop_loss is not None and pnl_pct <= stop_loss:
+                sell, reason = True, f"止损触发 ({round(pnl_pct * 100, 1)}% <= {round(stop_loss * 100, 1)}%)"
+            elif trailing_stop is not None and sig_price <= h["peak_close"] * (1 - trailing_stop):
+                dd = (h["peak_close"] - sig_price) / h["peak_close"]
+                sell, reason = (
+                    True,
+                    f"移动止损触发 (较高点回撤 {round(dd * 100, 1)}% >= {round(trailing_stop * 100, 1)}%)",
+                )
+            elif take_profit is not None and pnl_pct >= take_profit:
+                sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
+            elif exit_conditions:
+                sell, reason = evaluate_conditions(info["df"], exit_conditions, exit_logic, sig_idx, info["cache"])
+
+            if sym in pending_exits:
+                sell, reason, sig_date = True, pending_exits[sym][0], pending_exits[sym][1]
+
+            if sell:
+                if not is_tradable(row, "sell"):
+                    pending_exits[sym] = (reason, sig_date)
+                    blocked_orders += 1
+                else:
+                    pending_exits.pop(sym, None)
+                    sell_shares(sym, h["shares"], row, date_str, reason)
+                    sold.add(sym)
+        return sold
+
     for ts in eval_dates:
         date_str = str(ts.date())
         # Refresh last known closes for symbols that have a bar prior to ts
@@ -1070,47 +1121,7 @@ def simulate_portfolio(
 
         # Step 2: Execute either signal-driven multi-position mode or target-allocation/rebalance mode
         if signal_mode:
-            sold_today: set[str] = set()
-            # Exits first to free cash and slots; keep blocked risk exits pending across bars
-            for sym in list(holdings.keys()):
-                info = per_sym[sym]
-                idx = info["idx"].get(ts)
-                if idx is None:
-                    continue
-                sig_idx = idx if execution == "same_close" else idx - 1
-                if sig_idx < 0:
-                    continue
-                row = info["bars"][idx]
-                sig_price = float(info["bars"][sig_idx]["close"])
-                sig_date = str(info["dates"].iloc[sig_idx].date())
-                h = holdings[sym]
-                h["peak_close"] = max(h["peak_close"], sig_price)
-                pnl_pct = (sig_price - h["buy_price"]) / h["buy_price"]
-                sell, reason = False, ""
-                if stop_loss is not None and pnl_pct <= stop_loss:
-                    sell, reason = True, f"止损触发 ({round(pnl_pct * 100, 1)}% <= {round(stop_loss * 100, 1)}%)"
-                elif trailing_stop is not None and sig_price <= h["peak_close"] * (1 - trailing_stop):
-                    dd = (h["peak_close"] - sig_price) / h["peak_close"]
-                    sell, reason = (
-                        True,
-                        f"移动止损触发 (较高点回撤 {round(dd * 100, 1)}% >= {round(trailing_stop * 100, 1)}%)",
-                    )
-                elif take_profit is not None and pnl_pct >= take_profit:
-                    sell, reason = True, f"止盈触发 ({round(pnl_pct * 100, 1)}% >= {round(take_profit * 100, 1)}%)"
-                elif exit_conditions:
-                    sell, reason = evaluate_conditions(info["df"], exit_conditions, exit_logic, sig_idx, info["cache"])
-
-                if sym in pending_exits:
-                    sell, reason, sig_date = True, pending_exits[sym][0], pending_exits[sym][1]
-
-                if sell:
-                    if not is_tradable(row, "sell"):
-                        pending_exits[sym] = (reason, sig_date)
-                        blocked_orders += 1
-                    else:
-                        pending_exits.pop(sym, None)
-                        sell_shares(sym, h["shares"], row, date_str, reason)
-                        sold_today.add(sym)
+            sold_today = process_exits(ts, date_str)
 
             # Entries for non-held symbols (excluding symbols sold on this same bar) up to max_positions
             open_slots = cfg["max_positions"] - len(holdings)
@@ -1137,6 +1148,13 @@ def simulate_portfolio(
                     buy_amount(sym, cash * cfg["size"] / remaining_slots, row, date_str, reason)
         else:
             # Allocation / Rebalance / DCA mode
+            if has_explicit_exits or pending_exits:
+                sold_today = process_exits(ts, date_str)
+                for sym in sold_today | set(pending_exits.keys()):
+                    exited_alloc.add(sym)
+                    initially_allocated.add(sym)
+                    pending_dca.pop(sym, None)
+
             rebal_due = False
             if cfg["rebalance"] != "none":
                 bucket = _schedule_bucket(ts, cfg["rebalance"])
@@ -1150,10 +1168,13 @@ def simulate_portfolio(
             rebalanced_today = False
 
             # First: complete initial allocation for any target-weight symbol not yet deployed (handles staggered start dates)
-            pending_initial = [sym for sym in target_symbols if sym not in initially_allocated]
+            pending_initial = [
+                sym for sym in target_symbols if sym not in initially_allocated and sym not in exited_alloc
+            ]
             if pending_initial and not rebal_due:
                 unalloc_weight = sum(cfg["weights"][s] for s in pending_initial)
-                avail_cash_for_init = cash - dca_added if dca_added > 0 else cash
+                reserved_dca = sum(pending_dca.values()) + (dca_added if dca_added > 0 else 0.0)
+                avail_cash_for_init = max(0.0, cash - reserved_dca)
                 for sym in pending_initial:
                     info = per_sym[sym]
                     idx = info["idx"].get(ts)
@@ -1176,12 +1197,17 @@ def simulate_portfolio(
                 if cfg["drift_threshold"] is None:
                     do_rebalance = True
                 else:
-                    max_drift = max(
-                        abs(
-                            (holdings.get(s, {}).get("shares", 0) * exec_prices.get(s, 0.0) / port_value)
-                            - cfg["weights"][s]
+                    max_drift = (
+                        max(
+                            abs(
+                                (holdings.get(s, {}).get("shares", 0) * exec_prices.get(s, 0.0) / port_value)
+                                - cfg["weights"][s]
+                            )
+                            for s in symbols
+                            if s not in exited_alloc
                         )
-                        for s in symbols
+                        if any(s not in exited_alloc for s in symbols)
+                        else 0.0
                     )
                     do_rebalance = max_drift >= cfg["drift_threshold"]
 
@@ -1189,6 +1215,8 @@ def simulate_portfolio(
                     reason = f"定期再平衡 ({cfg['rebalance']})"
                     # Sell overweight positions first
                     for sym in symbols:
+                        if sym in exited_alloc or sym in pending_exits:
+                            continue
                         info = per_sym[sym]
                         idx = info["idx"].get(ts)
                         if idx is None or sym not in holdings:
@@ -1206,6 +1234,8 @@ def simulate_portfolio(
                                     sell_shares(sym, excess_shares, row, date_str, reason)
                     # Buy underweight positions
                     for sym in symbols:
+                        if sym in exited_alloc or sym in pending_exits:
+                            continue
                         info = per_sym[sym]
                         idx = info["idx"].get(ts)
                         if idx is None:
@@ -1221,10 +1251,23 @@ def simulate_portfolio(
                             elif buy_amount(sym, deficit, row, date_str, reason):
                                 initially_allocated.add(sym)
                     rebalanced_today = True
+                    pending_dca.clear()
 
-            # Deploy fresh DCA cash whenever rebalance did not already deploy it
-            if dca_added > 0 and not rebalanced_today:
-                for sym in target_symbols:
+            # Deploy fresh & retained blocked DCA budgets whenever rebalance did not already deploy them
+            if not rebalanced_today:
+                if dca_added > 0:
+                    for sym in target_symbols:
+                        if sym in exited_alloc or sym in pending_exits:
+                            continue
+                        pending_dca[sym] = pending_dca.get(sym, 0.0) + dca_added * cfg["weights"][sym]
+                for sym in list(pending_dca.keys()):
+                    if sym in exited_alloc or sym in pending_exits:
+                        pending_dca.pop(sym, None)
+                        continue
+                    budget = pending_dca[sym]
+                    if budget <= 0:
+                        pending_dca.pop(sym, None)
+                        continue
                     info = per_sym[sym]
                     idx = info["idx"].get(ts)
                     if idx is None:
@@ -1233,9 +1276,8 @@ def simulate_portfolio(
                     if not is_tradable(row, "buy"):
                         blocked_orders += 1
                         continue
-                    buy_amount(
-                        sym, dca_added * cfg["weights"][sym], row, date_str, f"定期定投 ({cfg['dca']['frequency']})"
-                    )
+                    buy_amount(sym, budget, row, date_str, f"定期定投 ({cfg['dca']['frequency']})")
+                    pending_dca.pop(sym, None)
 
         # Step 3: Mark-to-market at close & link TWR sub-period
         for sym in symbols:
@@ -1298,7 +1340,7 @@ def simulate_portfolio(
         "execution": {
             "model": execution,
             "blocked_orders": blocked_orders,
-            "unfilled_order": bool(pending_exits),
+            "unfilled_order": bool(pending_exits or pending_dca),
             "limitations": [
                 "Stops are close signals, not intraday guaranteed stop prices",
                 "Historical price limits are enforced only when limit_up/limit_down are supplied",

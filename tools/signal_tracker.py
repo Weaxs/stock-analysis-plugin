@@ -289,17 +289,19 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
     if years_needed > 20:
         return False
 
-    # Omit --market (only supported for ranking A/HK); history resolves market from symbol across A/HK/US/JP/KR/TW.
+    # Omit --market (only supported for ranking A/HK) and pass --no-cache so cached histories cannot miss a new ex-date.
     div_data = run_tool(
         "value_data.py",
-        ["dividends", "--symbol", rec["symbol"], "--mode", "history", "--years", str(years_needed)],
+        ["dividends", "--symbol", rec["symbol"], "--mode", "history", "--years", str(years_needed), "--no-cache"],
         timeout=min(30, max(remaining, 1)),
     )
     if not isinstance(div_data, dict) or "error" in div_data or not isinstance(div_data.get("history"), list):
         return False
     if not div_data.get("source"):
         return False
-    # Require explicit corporate-action history and split coverage; empty history is never treated as confirmed zero.
+    # Require fresh, non-cached corporate-action history and verified split coverage.
+    if div_data.get("cache_bypassed") is not True:
+        return False
     if not div_data["history"] or div_data.get("splits_checked") is not True:
         return False
     warnings = [str(w).lower() for w in (div_data.get("warnings") or [])]
@@ -312,24 +314,24 @@ def _verify_no_corporate_action(rec: dict, bars: list, anchor_idx: int, has_pric
     if any(any(marker in w for marker in blocked_markers) for w in warnings):
         return False
 
-    # Verify the returned history window actually covers anchor_date..last_date without silent truncation.
+    # Verify fresh history coverage through at least last_date (do not trust request-time `as_of`).
     years_returned = div_data.get("history_years_requested")
-    as_of_raw = div_data.get("as_of")
+    current_through_raw = div_data.get("history_current_through")
     if (
         isinstance(years_returned, bool)
         or not isinstance(years_returned, (int, float))
         or years_returned < years_needed
     ):
         return False
-    if isinstance(as_of_raw, str) and len(as_of_raw) >= 10:
+    if isinstance(current_through_raw, str) and len(current_through_raw) >= 10:
         try:
-            as_of_dt = datetime.strptime(as_of_raw[:10], "%Y-%m-%d").date()
+            current_through_dt = datetime.strptime(current_through_raw[:10], "%Y-%m-%d").date()
         except ValueError:
             return False
-        if as_of_dt < last_dt:
+        if current_through_dt < last_dt:
             return False
-        # Verify anchor_date is strictly after the producer's cutoff (as_of - 365.25 * years_returned).
-        if (as_of_dt - anchor_dt).days >= int(365.25 * years_returned):
+        # Verify anchor_date is strictly after the producer's cutoff (current_through - 365.25 * years_returned).
+        if (current_through_dt - anchor_dt).days >= int(365.25 * years_returned):
             return False
     else:
         return False

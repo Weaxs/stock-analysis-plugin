@@ -218,3 +218,51 @@ def test_duplicate_canonical_symbols_and_mixed_hk_counters_rejected():
             {"portfolio": {"rebalance": "monthly"}},
             capital=100_000,
         )
+    # 9988.HK (Alibaba) and 9618.HK (JD) are HKD main-board equities, not USD ETF counters
+    ok_hk = backtest.simulate_portfolio(
+        {"00700.HK": _make_df(dates, np.full(40, 300.0)), "9988.HK": _make_df(dates, np.full(40, 80.0))},
+        {"portfolio": {"rebalance": "monthly"}},
+        capital=100_000,
+    )
+    assert ok_hk["currency"] == "HKD"
+
+
+def test_allocation_mode_enforces_explicit_exits_without_reentry():
+    dates = pd.bdate_range("2025-01-02", periods=50)
+    # Symbol A drops -20% on day 4; Symbol B stays flat
+    prices_a = [10.0, 10.0, 10.0, 8.0] + [8.0] * 46
+    prices_b = [10.0] * 50
+    datasets = {"AAA": _make_df(dates, prices_a), "BBB": _make_df(dates, prices_b)}
+    strategy = {
+        "portfolio": {"rebalance": "monthly", "weighting": "equal"},
+        "dca": {"frequency": "monthly", "amount": 2_000},
+        "exit": {"stop_loss": -0.10},
+        "simulation": {"execution": "next_open", "slippage": 0.0, "commission": 0.0, "stamp_tax": 0.0},
+    }
+    res = backtest.simulate_portfolio(datasets, strategy, capital=10_000, start="2025-01-03")
+    a_trades = [t for t in res["trades"] if t["symbol"] == "AAA"]
+    assert len(a_trades) == 2
+    assert a_trades[0]["type"] == "buy"
+    assert a_trades[1]["type"] == "sell" and "止损" in a_trades[1]["reason"]
+    assert all(h["symbol"] != "AAA" for h in res["final_holdings"])
+
+
+def test_blocked_dca_contribution_retries_on_next_tradable_bar():
+    dates = pd.bdate_range("2025-01-02", periods=30)
+    # 2025-02-03 is the first business day of February (index 22) -> block trading via volume=0 on that bar only
+    feb_idx = next(i for i, d in enumerate(dates) if d.month == 2)
+    df = _make_df(dates, np.full(len(dates), 10.0))
+    df.loc[feb_idx, "volume"] = 0
+    strategy = {
+        "portfolio": {"rebalance": "none", "weighting": "equal"},
+        "dca": {"frequency": "monthly", "amount": 5_000},
+        "simulation": {"execution": "next_open", "slippage": 0.0, "commission": 0.0, "stamp_tax": 0.0},
+    }
+    res = backtest.simulate_portfolio({"AAPL": df}, strategy, capital=10_000, start="2025-01-03")
+    assert res["execution"]["blocked_orders"] == 1
+    assert res["execution"]["unfilled_order"] is False
+    # Initial 1000 shares + retried 500 shares deployed on next tradable bar (and never doubled)
+    assert res["final_holdings"][0]["shares"] == 1500
+    assert res["final_cash"] == 0.0
+    dca_buys = [t for t in res["trades"] if t["type"] == "buy" and "定期定投" in t["reason"]]
+    assert len(dca_buys) == 1 and dca_buys[0]["date"] == str(dates[feb_idx + 1].date())

@@ -131,17 +131,22 @@ class TestRecord:
         assert not store.exists()
 
 
+@pytest.fixture
+def freeze_now(monkeypatch):
+    """Pin datetime.now so elapsed-days and dividend lookback computations are deterministic."""
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 18)
+
+    monkeypatch.setattr(st, "datetime", _FrozenDateTime)
+
+
 class TestEvaluate:
     @pytest.fixture(autouse=True)
-    def _freeze_now(self, monkeypatch):
-        """Pin datetime.now so _kline_count's elapsed-days computation is deterministic."""
-
-        class _FrozenDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return cls(2026, 9, 18)
-
-        monkeypatch.setattr(st, "datetime", _FrozenDateTime)
+    def _freeze_now(self, freeze_now):
+        pass
 
     def _record(self, store, mock_run_tool, **over):
         return st.cmd_record(_rec_args(store, **over))
@@ -589,7 +594,7 @@ def test_unverified_price_basis_never_closes_original_price_signal(store, mock_r
     )
 
 
-def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store, mock_run_tool):
+def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store, mock_run_tool, freeze_now):
     st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
     bars = [
         {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
@@ -605,6 +610,8 @@ def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store
             return {
                 "source": "eastmoney",
                 "as_of": "2026-09-18",
+                "cache_bypassed": True,
+                "history_current_through": "2026-09-18",
                 "history_years_requested": 2,
                 "splits_checked": True,
                 "splits": [],
@@ -620,6 +627,7 @@ def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store
     assert result["results"][0]["outcome"] == "target_hit"
     assert result["results"][0]["return_pct"] == 20.0
     assert "--market" not in div_calls[0]
+    assert "--no-cache" in div_calls[0]
     saved = st._load_records(store)[0]
     assert saved["evaluation_price_basis"] == {
         "adjusted": "qfq",
@@ -628,8 +636,10 @@ def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store
     }
 
 
-def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_outside_anchor(store, mock_run_tool):
-    # Case 1: ex-dividend inside window
+def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_outside_anchor(
+    store, mock_run_tool, freeze_now
+):
+    # Case 1: ex-dividend inside window, empty history, split, unchecked splits, short window, or cached/stale history
     st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
     bars = [
         {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
@@ -638,6 +648,8 @@ def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_o
     base_div = {
         "source": "eastmoney",
         "as_of": "2026-09-18",
+        "cache_bypassed": True,
+        "history_current_through": "2026-09-18",
         "history_years_requested": 2,
         "splits_checked": True,
         "splits": [],
@@ -651,6 +663,9 @@ def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_o
         {**base_div, "splits": [{"ex_date": "2026-09-02", "ratio": 2.0}]},
         {**base_div, "splits_checked": False},
         {**base_div, "history_years_requested": 1},
+        {**base_div, "cache_bypassed": False},
+        {**base_div, "history_current_through": None},
+        {**base_div, "history_current_through": "2026-09-01"},
     ]
     for payload in cases:
         mock_run_tool.side_effect = lambda script, args, p=payload, **kw: bars if script == "stock_data.py" else p
@@ -673,7 +688,7 @@ def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_o
     assert res2["results"][0]["outcome"] == "skipped_price_basis"
 
 
-def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_tool):
+def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_tool, freeze_now):
     st.cmd_record(
         _rec_args(
             store, symbol="AAPL", date="2026-09-01", entry_price=200, stop_price=180, target_price=220, horizon_days=2
@@ -693,6 +708,8 @@ def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_to
             return {
                 "source": "yfinance",
                 "as_of": "2026-09-18",
+                "cache_bypassed": True,
+                "history_current_through": "2026-09-18",
                 "history_years_requested": 2,
                 "splits_checked": True,
                 "splits": [],
@@ -705,7 +722,7 @@ def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_to
     mock_run_tool.side_effect = fake_run
     res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
     assert res["closed"] == 1
-    assert seen_div_args == [["dividends", "--symbol", "AAPL", "--mode", "history", "--years", "2"]]
+    assert seen_div_args == [["dividends", "--symbol", "AAPL", "--mode", "history", "--years", "2", "--no-cache"]]
 
 
 def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_tool):

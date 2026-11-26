@@ -272,6 +272,7 @@ for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
 assert.equal(byId("search-results").hidden, true, "exact code hides search results immediately");
 assert.equal(searchCalls.length, beforeCodeCount, "exact code does not trigger /api/search");
 
+const beforeDelayedCount = searchCalls.length;
 holdNextSearch = true;
 byId("symbol-input").value = "茅台";
 for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
@@ -280,13 +281,15 @@ for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
 const delayedTimer = [...timers.values()].at(-1) as (() => void) | undefined;
 if (typeof delayedTimer === "function") delayedTimer();
 await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(searchCalls.length, beforeDelayedCount + 1, "delayed search request must start before clearing input");
+assert.equal(typeof pendingSearch.resolve, "function", "delayed search promise resolver must be registered");
 // Clear input before the in-flight search finishes.
 byId("symbol-input").value = "";
 for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
   listener({});
 }
 assert.equal(byId("search-results").hidden, true);
-pendingSearch.resolve?.({ query: "茅台", results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] });
+pendingSearch.resolve!({ query: "茅台", results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] });
 await new Promise(resolve => setTimeout(resolve, 10));
 assert.equal(byId("search-results").hidden, true, "stale search response must not reopen cleared dropdown");
 
