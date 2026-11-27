@@ -1550,10 +1550,21 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-07-31."},
         footnote_refs={"transactionDate/value": ["F1"]},
     )
+    prio_reclass_200 = dict(
+        prio_orig[1],
+        form="4/A",
+        accession="0000320193-26-000413",
+        filing_date="2026-08-08",
+        transaction_code="G",
+        direction="other",
+    )
     for ordered in ([prio_unannot, prio_date_corr], [prio_date_corr, prio_unannot]):
         res_prio = _screen(prio_orig + ordered, since_filing_date="2026-08-01")
         assert res_prio["checks"]["insider_trades"]["sales_90d"] == 2
         assert res_prio["checks"]["insider_trades"]["count_uncertain"] is True
+        # Follow-up reclassification of the 200-share sale to G drops count to 1, proving the 100-share sale moved.
+        res_prio_after_g = _screen(prio_orig + ordered + [prio_reclass_200], since_filing_date="2026-08-01")
+        assert res_prio_after_g["checks"]["insider_trades"]["sales_90d"] == 1
 
     # 24. Match stated prior shares and price against the SAME transaction revision (never mix rev 1 shares + rev 2 price)
     six_rev = [
@@ -1609,6 +1620,64 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_same_rev["checks"]["insider_trades"]["sales_90d"] == 6
     assert res_same_rev["checks"]["insider_trades"]["count_uncertain"] is False
     assert res_same_rev["veto_buy"] is True
+
+    # 25. Fractional prior prices ("from $20.50 to $21.75") must NOT be split at decimal points
+    six_frac_px = [
+        dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=20.50),
+        dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=1250.50),
+    ] + [dict(orig_rows[0], transaction_date=f"2026-10-1{i}", shares=100, price=150.0) for i in range(3, 7)]
+    corr_frac_px = dict(
+        six_frac_px[0],
+        form="4/A",
+        accession="0000320193-26-000430",
+        filing_date="2026-10-18",
+        price=21.75,
+        footnotes={
+            "F1": "Corrects sale price from $20.50 to $21.75. A separate sale executed at $1,250.50 is unchanged."
+        },
+        footnote_refs={"transactionAmounts/transactionPricePerShare/value": ["F1"]},
+    )
+    res_frac_px = _screen(six_frac_px + [corr_frac_px])
+    assert res_frac_px["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_frac_px["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_frac_px["veto_buy"] is True
+
+    # 26. Unannotated historical restatement of Aug 3 after linked date correction to Jul 31 must NOT revert to Aug 3
+    hist_restate_aug3 = dict(
+        aug_sales[2],
+        form="4/A",
+        accession="0000320193-26-000431",
+        filing_date="2026-08-09",
+    )
+    res_hist_no_revert = _screen(aug_sales + [corr_date_to_jul31, hist_restate_aug3], since_filing_date="2026-08-01")
+    assert res_hist_no_revert["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_hist_no_revert["flags"])
+
+    # 27. Overlapping symmetric exact-match groups (A, B in filing 1 + C in filing 2; 2 scoped + 1 unscoped in any order)
+    overlap_orig = [
+        dict(orig_rows[0], accession="0000320193-26-000440", filing_date="2026-10-02", shares=100, price=10.0),
+        dict(orig_rows[0], accession="0000320193-26-000440", filing_date="2026-10-02", shares=100, price=10.0),
+        dict(orig_rows[0], accession="0000320193-26-000441", filing_date="2026-10-03", shares=100, price=10.0),
+    ]
+    scoped_r1 = dict(
+        overlap_orig[0],
+        form="4/A",
+        accession="0000320193-26-000442",
+        filing_date="2026-10-05",
+        original_filing_date="2026-10-02",
+    )
+    scoped_r2 = dict(scoped_r1)
+    unscoped_r3 = dict(
+        overlap_orig[2],
+        form="4/A",
+        accession="0000320193-26-000442",
+        filing_date="2026-10-05",
+        original_filing_date=None,
+    )
+    for ordered in ([unscoped_r3, scoped_r1, scoped_r2], [scoped_r1, scoped_r2, unscoped_r3]):
+        res_overlap = _screen(overlap_orig + ordered)
+        assert res_overlap["checks"]["insider_trades"]["sales_90d"] == 3
+        assert res_overlap["checks"]["insider_trades"]["count_uncertain"] is False
 
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():

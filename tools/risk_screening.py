@@ -471,7 +471,8 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     )
 
     def _correction_sentences(rtext: str) -> str:
-        sents = [s for s in re.split(r"[.!?;。！？；]+", rtext) if s.strip()]
+        # Split on sentence boundaries without splitting decimal numbers such as "$20.50" or "1,250.50".
+        sents = [s for s in re.split(r"(?:(?<!\d)\.(?!\d)(?=\s|$)|[!?;。！？；])+", rtext) if s.strip()]
         corr_sents = [s for s in sents if _CORRECTION_RE.search(s)]
         return ". ".join(corr_sents) if corr_sents else rtext
 
@@ -1003,8 +1004,9 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             matched: set[int] = acc_matched_sell,
             resolved: set[int] = resolved_exact,
             uncertain: set[int] = uncertain_exact,
+            p_len: int = prior_len,
         ) -> None:
-            single_claims: dict[int, list[tuple[int, dict, bool, bool]]] = {}
+            single_claims: dict[int, list[tuple[int, dict, bool, bool, bool]]] = {}
             sym_restatements: dict[tuple[int, ...], list[tuple[int, dict]]] = {}
             for idx_s, tx, is_corr, rtext, pool in batch:
                 if idx_s in resolved or idx_s in uncertain:
@@ -1020,17 +1022,20 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 if is_restore_intent:
                     reclass_cands = [i for i in cands if ledger[i]["reclassified"]]
                     if len(reclass_cands) == 1:
-                        single_claims.setdefault(reclass_cands[0], []).append((idx_s, tx, True, False))
+                        single_claims.setdefault(reclass_cands[0], []).append((idx_s, tx, True, False, True))
                     elif len(reclass_cands) > 1:
                         _mark_uncertain(tx)
                         uncertain.add(idx_s)
                 else:
                     active_cands = [i for i in cands if not ledger[i]["reclassified"]]
                     if len(active_cands) == 1:
-                        single_claims.setdefault(active_cands[0], []).append((idx_s, tx, False, False))
+                        # Unannotated historical match only reserves the entry without reverting its current tx.
+                        do_update = (not use_history) or is_corr
+                        single_claims.setdefault(active_cands[0], []).append((idx_s, tx, False, False, do_update))
                     elif len(active_cands) > 1 and not use_history:
-                        # Multiple active entries currently share the exact same signature: reserve slots cleanly
-                        # without mutating ledger values so identical restatements never inflate counts.
+                        # Multiple active entries currently share the exact same signature: resolve slots across
+                        # all overlapping groups together below (narrowest/filing-scoped first) so traversal order
+                        # never displaces a scoped restatement.
                         sym_restatements.setdefault(tuple(sorted(active_cands)), []).append((idx_s, tx))
                     elif len(active_cands) > 1:
                         _mark_uncertain(tx)
@@ -1038,7 +1043,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                     elif not is_corr:
                         # Unannotated restatement of a previously reclassified sale: keep gift state & mark uncertain.
                         if len(cands) == 1:
-                            single_claims.setdefault(cands[0], []).append((idx_s, tx, False, True))
+                            single_claims.setdefault(cands[0], []).append((idx_s, tx, False, True, False))
                         else:
                             _mark_uncertain(tx)
                             uncertain.add(idx_s)
@@ -1046,23 +1051,62 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             claimed_targets: set[int] = set()
             for target, claimants in single_claims.items():
                 if len(claimants) == 1:
-                    idx_s, tx, do_restore, mark_unc = claimants[0]
+                    idx_s, tx, do_restore, mark_unc, do_update = claimants[0]
                     matched.add(target)
                     claimed_targets.add(target)
-                    if not mark_unc:
-                        _update_entry(target, tx, restore_if_reclassified=do_restore)
-                    else:
+                    if mark_unc:
                         _mark_uncertain(tx)
+                    elif do_update:
+                        _update_entry(target, tx, restore_if_reclassified=do_restore)
                     resolved.add(idx_s)
                 else:
-                    for idx_s, tx, _do_restore, _mark_unc in claimants:
+                    for idx_s, tx, _do_restore, _mark_unc, _do_update in claimants:
                         _mark_uncertain(tx)
                         uncertain.add(idx_s)
-            for slots, claimants in sym_restatements.items():
-                avail = [s for s in slots if s not in claimed_targets and s not in matched]
-                for slot, (idx_s, _tx) in zip(avail, claimants):
+
+            if sym_restatements:
+                # Maximum bipartite matching across all overlapping symmetric exact-match groups, ordered
+                # deterministically from narrowest (filing-scoped) to broadest (unscoped) so scoped rows reserve
+                # their filing's slots first and unscoped rows take remaining slots regardless of input order.
+                sym_items: list[tuple[int, dict, tuple[int, ...]]] = []
+                for slots, claimants in sorted(sym_restatements.items(), key=lambda kv: (len(kv[0]), kv[0])):
+                    avail = tuple(s for s in slots if s not in claimed_targets and s not in matched)
+                    for idx_s, tx in claimants:
+                        sym_items.append((idx_s, tx, avail))
+
+                slot_owner: dict[int, int] = {}
+
+                def _augment(item_pos: int, visited: set[int], *, items=sym_items, owners=slot_owner) -> bool:
+                    for slot in items[item_pos][2]:
+                        if slot in visited:
+                            continue
+                        visited.add(slot)
+                        prev = owners.get(slot)
+                        if prev is None or _augment(prev, visited):
+                            owners[slot] = item_pos
+                            return True
+                    return False
+
+                for pos in range(len(sym_items)):
+                    _augment(pos, set())
+
+                assigned_positions = set(slot_owner.values())
+                for slot, pos in slot_owner.items():
+                    idx_s, _tx, _avail = sym_items[pos]
                     matched.add(slot)
                     resolved.add(idx_s)
+                for pos, (idx_s, tx, avail) in enumerate(sym_items):
+                    if pos in assigned_positions:
+                        continue
+                    # Do not let a displaced restatement from an overlapping conflict inflate the confirmed count.
+                    exact = _exact_sig(tx)
+                    other_unmatched = any(
+                        i not in matched and not ledger[i]["reclassified"] and _exact_sig(ledger[i]["tx"]) == exact
+                        for i in range(p_len)
+                    )
+                    if other_unmatched or not avail:
+                        _mark_uncertain(tx)
+                        uncertain.add(idx_s)
 
         _exact_phase(use_history=False)
         _exact_phase(use_history=True)
