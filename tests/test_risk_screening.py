@@ -976,8 +976,10 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_scoped["checks"]["insider_trades"]["count_uncertain"] is False
 
     res_mixed = _screen(orig_rows + mixed_rows)
-    assert res_mixed["checks"]["insider_trades"]["sales_90d"] == 3
+    # Without row-level footnotes or pigeonhole proof, mixed filing-level remarks stay conservative (no speculative +1).
+    assert res_mixed["checks"]["insider_trades"]["sales_90d"] == 2
     assert res_mixed["checks"]["insider_trades"]["count_uncertain"] is True
+    assert not any(f["category"] == "insider" for f in res_mixed["flags"])
 
     res_chain = _screen(orig_rows + add101_rows + reclass101_rows)
     assert res_chain["checks"]["insider_trades"]["sales_90d"] == 2
@@ -1037,7 +1039,8 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_unlinked["checks"]["insider_trades"]["count_uncertain"] is True
     assert not any(f["category"] == "insider" for f in res_unlinked["flags"])
 
-    # 6. Plural/counted remarks ("two omitted sales") with only 1 row footnote must NOT treat all additions as claimed
+    # 6. Multi-row filing-level remarks never override missing row footnotes: row-scoped F1 confirms +1 addition,
+    #    exact unannotated restatements match existing sales, and unlinked rows stay conservative + uncertain.
     two_omit_r1 = dict(
         orig_rows[0],
         form="4/A",
@@ -1056,12 +1059,28 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         footnote_refs={},
         remarks="Amending to report two omitted sales.",
     )
-    # 2 rows total -> single remaining unattributed row absorbs the 2nd remarked addition -> 4 sales
-    assert _screen(orig_rows + [two_omit_r1, two_omit_r2])["checks"]["insider_trades"]["sales_90d"] == 4
-    # 3 rows (2 unattributed rows for 1 remaining addition) -> cannot identify which is added -> count_uncertain=True
-    two_omit_r3 = dict(two_omit_r2, shares=100, price=150.0)
+    assert _screen(orig_rows + [two_omit_r1, two_omit_r2])["checks"]["insider_trades"]["sales_90d"] == 3
+    two_omit_r3 = dict(two_omit_r2, shares=275, price=175.0)
     res_two_omit_ambig = _screen(orig_rows + [two_omit_r1, two_omit_r2, two_omit_r3])
+    assert res_two_omit_ambig["checks"]["insider_trades"]["sales_90d"] == 3
     assert res_two_omit_ambig["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # Single-row 4/A with pure non-sell remarks ("omitted gift") must NOT promote a sell row into a new sale
+    gift_only_remark_sell = dict(
+        orig_rows[0],
+        form="4/A",
+        accession="0000320193-26-000319",
+        filing_date="2026-10-03",
+        shares=275,
+        price=175.0,
+        footnotes={},
+        footnote_refs={},
+        remarks="Amending to report an omitted gift.",
+    )
+    res_gift_remark = _screen(orig_rows + [gift_only_remark_sell])
+    assert res_gift_remark["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_gift_remark["checks"]["insider_trades"]["count_uncertain"] is True
+    assert not any(f["category"] == "insider" for f in res_gift_remark["flags"])
 
     # 7. Unrelated same-day original gift must NOT hide a linked correction of a sale to a gift
     six_sales = [dict(orig_rows[0], transaction_date=f"2026-10-0{i}") for i in range(1, 7)]
@@ -1808,8 +1827,8 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_ambig_ab["veto_buy"] is False
     assert res_ambig_ba["veto_buy"] is False
 
-    # 30. Remarks declaring one correction and one omitted addition must cap unlinked remarks-backed additions at 1
-    #     even when both 4/A rows changed shares and price (so net sales = 2, not 3, and no medium-risk flag).
+    # 30. Unattributable filing-level remarks (plural nouns, prior-filing counts, omitted-gift remarks, or
+    #     cross-cutoff candidates) must NEVER fabricate speculative sale additions or trigger medium-risk flags.
     cap_orig = {
         "form": "4",
         "accession": "0001-26-000501",
@@ -1823,44 +1842,116 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         "shares": 100.0,
         "price": 100.0,
     }
-    cap_row1 = {
-        "form": "4/A",
-        "accession": "0001-26-000502",
-        "filing_date": "2026-10-06",
-        "original_filing_date": "2026-10-05",
-        "transaction_date": "2026-10-04",
-        "transaction_code": "S",
-        "owner": "Cap Owner",
-        "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
-        "security": "Common Stock",
-        "derivative": False,
-        "shares": 120.0,
-        "price": 105.0,
-        "remarks": "Amending to correct one transaction and add an omitted transaction.",
-    }
-    cap_row2 = {
-        "form": "4/A",
-        "accession": "0001-26-000502",
-        "filing_date": "2026-10-06",
-        "original_filing_date": "2026-10-05",
-        "transaction_date": "2026-10-04",
-        "transaction_code": "S",
-        "owner": "Cap Owner",
-        "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
-        "security": "Common Stock",
-        "derivative": False,
-        "shares": 250.0,
-        "price": None,
-        "remarks": "Amending to correct one transaction and add an omitted transaction.",
-    }
-    res_cap_12 = _screen([cap_orig, cap_row1, cap_row2], since_filing_date="2026-10-01")
-    res_cap_21 = _screen([cap_orig, cap_row2, cap_row1], since_filing_date="2026-10-01")
-    assert res_cap_12["checks"]["insider_trades"]["sales_90d"] == 2
-    assert res_cap_21["checks"]["insider_trades"]["sales_90d"] == 2
-    assert res_cap_12["checks"]["insider_trades"]["count_uncertain"] is True
-    assert res_cap_21["checks"]["insider_trades"]["count_uncertain"] is True
-    assert not any(f["category"] == "insider" for f in res_cap_12["flags"])
-    assert not any(f["category"] == "insider" for f in res_cap_21["flags"])
+    for rem_text in (
+        "Amending to correct one transaction and add an omitted transaction.",
+        "Amending to correct one transaction and add one of the omitted sales.",
+        "Amending to correct one transaction and report one omitted sale. The original filing reported six transactions.",
+    ):
+        cap_in = {
+            "form": "4/A",
+            "accession": "0001-26-000502",
+            "filing_date": "2026-10-06",
+            "original_filing_date": "2026-10-05",
+            "transaction_date": "2026-10-04",
+            "transaction_code": "S",
+            "owner": "Cap Owner",
+            "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "shares": 120.0,
+            "price": 105.0,
+            "remarks": rem_text,
+        }
+        cap_out = {
+            "form": "4/A",
+            "accession": "0001-26-000502",
+            "filing_date": "2026-10-06",
+            "original_filing_date": "2026-10-05",
+            "transaction_date": "2026-09-20",
+            "transaction_code": "S",
+            "owner": "Cap Owner",
+            "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "shares": 250.0,
+            "price": None,
+            "remarks": rem_text,
+        }
+        res_cap_12 = _screen([cap_orig, cap_in, cap_out], since_filing_date="2026-10-01")
+        res_cap_21 = _screen([cap_orig, cap_out, cap_in], since_filing_date="2026-10-01")
+        assert res_cap_12["checks"]["insider_trades"]["sales_90d"] == 1
+        assert res_cap_21["checks"]["insider_trades"]["sales_90d"] == 1
+        assert res_cap_12["checks"]["insider_trades"]["count_uncertain"] is True
+        assert res_cap_21["checks"]["insider_trades"]["count_uncertain"] is True
+        assert not any(f["category"] == "insider" for f in res_cap_12["flags"])
+        assert not any(f["category"] == "insider" for f in res_cap_21["flags"])
+
+    # 30b. Omitted gift + corrected sale remarks must NOT inflate 2 original sales into 3
+    two_cap_orig = [
+        cap_orig,
+        dict(cap_orig, transaction_date="2026-10-05", shares=150.0, price=110.0),
+    ]
+    corr_unlinked_sale = dict(
+        cap_orig,
+        form="4/A",
+        accession="0001-26-000503",
+        filing_date="2026-10-06",
+        original_filing_date="2026-10-05",
+        shares=125.0,
+        price=108.0,
+        remarks="Corrects one sale and reports one omitted gift.",
+    )
+    omitted_gift_row = dict(
+        cap_orig,
+        form="4/A",
+        accession="0001-26-000503",
+        filing_date="2026-10-06",
+        original_filing_date="2026-10-05",
+        transaction_date="2026-10-06",
+        transaction_code="G",
+        direction="other",
+        shares=50.0,
+        price=0.0,
+        remarks="Corrects one sale and reports one omitted gift.",
+    )
+    res_omit_gift = _screen(two_cap_orig + [corr_unlinked_sale, omitted_gift_row], since_filing_date="2026-10-01")
+    assert res_omit_gift["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_omit_gift["checks"]["insider_trades"]["count_uncertain"] is True
+    assert not any(f["category"] == "insider" for f in res_omit_gift["flags"])
+
+    # 30c. Cross-cutoff unlinked candidates (one outside 2026-08-28 cutoff, one inside) must NOT bias toward in-window
+    cut_orig = [
+        dict(cap_orig, filing_date="2026-11-21", transaction_date="2026-11-18", shares=100.0, price=100.0),
+        dict(cap_orig, filing_date="2026-11-21", transaction_date="2026-11-20", shares=200.0, price=110.0),
+    ]
+    cut_rem = "Amending to report an omitted 2026-08-10 sale and correct the 2026-11-20 sale."
+    cut_out_row = dict(
+        cut_orig[0],
+        form="4/A",
+        accession="0001-26-000504",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        transaction_date="2026-08-10",
+        shares=90.0,
+        price=95.0,
+        remarks=cut_rem,
+    )
+    cut_in_row = dict(
+        cut_orig[1],
+        form="4/A",
+        accession="0001-26-000504",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        transaction_date="2026-11-20",
+        shares=220.0,
+        price=115.0,
+        remarks=cut_rem,
+    )
+    for ordered in ([cut_out_row, cut_in_row], [cut_in_row, cut_out_row]):
+        res_cut = _screen(cut_orig + ordered, since_filing_date="2026-08-28")
+        assert res_cut["checks"]["insider_trades"]["sales_90d"] == 2
+        assert res_cut["checks"]["insider_trades"]["count_uncertain"] is True
+        assert not any(f["category"] == "insider" for f in res_cut["flags"])
 
     # 31. Consecutive date corrections where the second 4/A references the original transaction date (10-06 -> 09-29)
     #     after an intermediate 4/A moved it to 10-07 must still match the prior revision and exclude the sale.
@@ -1980,6 +2071,82 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         same_day_orig + [same_day_add_no_ts, same_day_gift_no_ts], since_filing_date="2026-10-01"
     )
     assert res_same_day_no_ts["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 33. Apply row-level evidence (shares/price) BEFORE checking multi-accession ambiguity:
+    #     33a (Weaxs): 2 orig same-day sales (100sh, 150sh) + 4/A #1 adds same-day 200sh + 4/A #2 reclassifies 200sh
+    #         to Gift G sharing original_filing_date -> 2 sales, no insider flag, count_uncertain=False.
+    chain_orig_2 = [
+        {
+            "form": "4",
+            "accession": "0000555555-26-000101",
+            "filing_date": "2026-10-03",
+            "transaction_date": "2026-10-03",
+            "transaction_code": "S",
+            "owner": "Chain Owner",
+            "owners": [{"cik": "0000000033", "name": "Chain Owner"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "shares": shares,
+            "price": 50.0,
+        }
+        for shares in (100.0, 150.0)
+    ]
+    chain_add_200 = {
+        "form": "4/A",
+        "accession": "0000555555-26-000102",
+        "filing_date": "2026-10-04",
+        "original_filing_date": "2026-10-03",
+        "transaction_date": "2026-10-03",
+        "transaction_code": "S",
+        "owner": "Chain Owner",
+        "owners": [{"cik": "0000000033", "name": "Chain Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 200.0,
+        "price": 60.0,
+        "footnotes": {"F1": "Reports an inadvertently omitted sale."},
+        "footnote_refs": {"transactionCode": ["F1"]},
+    }
+    chain_gift_200 = {
+        "form": "4/A",
+        "accession": "0000555555-26-000103",
+        "filing_date": "2026-10-05",
+        "original_filing_date": "2026-10-03",
+        "transaction_date": "2026-10-03",
+        "transaction_code": "G",
+        "direction": "other",
+        "owner": "Chain Owner",
+        "owners": [{"cik": "0000000033", "name": "Chain Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 200.0,
+        "price": 60.0,
+        "footnotes": {"F1": "Corrects previously misreported 200-share sale to a bona fide gift."},
+        "footnote_refs": {"transactionCode": ["F1"]},
+    }
+    res_chain_200 = _screen(chain_orig_2 + [chain_add_200, chain_gift_200], since_filing_date="2026-10-01")
+    assert res_chain_200["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_chain_200["checks"]["insider_trades"]["count_uncertain"] is False
+    assert not any(f["category"] == "insider" for f in res_chain_200["flags"])
+
+    #     33b (CodeRabbit Major): 6 orig sales (incl. same-day 100@$50) + 4/A #1 adds 7th same-day 200@$60 +
+    #         4/A #2 reclassifies 200@$60 to Gift G -> 6 confirmed orig sales remain, buy veto preserved!
+    chain_orig_6 = [chain_orig_2[0]] + [
+        dict(chain_orig_2[0], transaction_date=f"2026-10-0{i}", shares=110.0 + i) for i in range(4, 9)
+    ]
+    res_chain_veto = _screen(chain_orig_6 + [chain_add_200, chain_gift_200], since_filing_date="2026-10-01")
+    assert res_chain_veto["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_chain_veto["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_chain_veto["veto_buy"] is True
+
+    #     33c: Multi-accession ambiguity IS still enforced when 2 distinct filings both match exact shares & price
+    dup_acc_orig = [
+        dict(chain_orig_2[0], accession="0000555555-26-000201", shares=200.0, price=60.0),
+        dict(chain_orig_2[0], accession="0000555555-26-000202", shares=200.0, price=60.0),
+    ]
+    res_dup_acc = _screen(dup_acc_orig + [chain_gift_200], since_filing_date="2026-10-01")
+    assert res_dup_acc["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_dup_acc["checks"]["insider_trades"]["count_uncertain"] is True
 
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
