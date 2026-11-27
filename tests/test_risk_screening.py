@@ -1739,6 +1739,75 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_hist_prov["checks"]["insider_trades"]["sales_90d"] == 3
     assert res_hist_prov["checks"]["insider_trades"]["count_uncertain"] is False
 
+    # 29. Single unscoped restatement matching two identical sales across different filings must NOT attach provenance
+    #     to an arbitrary single slot: both slot orderings [A, B] and [B, A] produce identical count and uncertainty.
+    ambig_a = dict(
+        orig_rows[0],
+        accession="0000320193-26-000460",
+        filing_date="2026-08-04",
+        transaction_date="2026-08-03",
+        shares=100,
+        price=10.0,
+    )
+    ambig_b = dict(
+        orig_rows[0],
+        accession="0000320193-26-000461",
+        filing_date="2026-08-05",
+        transaction_date="2026-08-03",
+        shares=100,
+        price=10.0,
+    )
+    ambig_others = [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000462",
+            filing_date="2026-08-06",
+            transaction_date=f"2026-08-0{i}",
+            shares=50,
+            price=15.0,
+        )
+        for i in range(4, 9)
+    ]
+    ambig_unscoped_restate = dict(
+        ambig_a,
+        form="4/A",
+        accession="0000320193-26-000463",
+        filing_date="2026-08-09",
+        original_filing_date=None,
+    )
+    ambig_gift_a = dict(
+        ambig_a,
+        form="4/A",
+        accession="0000320193-26-000464",
+        filing_date="2026-08-10",
+        original_filing_date="2026-08-04",
+        transaction_code="G",
+        direction="other",
+    )
+    ambig_gift_restate = dict(
+        ambig_a,
+        form="4/A",
+        accession="0000320193-26-000465",
+        filing_date="2026-08-11",
+        original_filing_date="2026-08-09",
+        transaction_code="G",
+        direction="other",
+    )
+    res_ambig_ab = _screen(
+        [ambig_a, ambig_b] + ambig_others + [ambig_unscoped_restate, ambig_gift_a, ambig_gift_restate],
+        since_filing_date="2026-08-01",
+    )
+    res_ambig_ba = _screen(
+        [ambig_b, ambig_a] + ambig_others + [ambig_unscoped_restate, ambig_gift_a, ambig_gift_restate],
+        since_filing_date="2026-08-01",
+    )
+    assert res_ambig_ab["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_ambig_ba["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_ambig_ab["checks"]["insider_trades"]["count_uncertain"] is True
+    assert res_ambig_ba["checks"]["insider_trades"]["count_uncertain"] is True
+    assert res_ambig_ab["veto_buy"] is False
+    assert res_ambig_ba["veto_buy"] is False
+
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
     base_inputs = {

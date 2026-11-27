@@ -1070,11 +1070,13 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 # Maximum bipartite matching across all overlapping symmetric exact-match groups, ordered
                 # deterministically from narrowest (filing-scoped) to broadest (unscoped) so scoped rows reserve
                 # their filing's slots first and unscoped rows take remaining slots regardless of input order.
-                sym_items: list[tuple[int, dict, tuple[int, ...]]] = []
+                sym_items: list[tuple[int, dict, tuple[int, ...], tuple[int, ...]]] = []
+                grp_avail: dict[tuple[int, ...], tuple[int, ...]] = {}
                 for slots, claimants in sorted(sym_restatements.items(), key=lambda kv: (len(kv[0]), kv[0])):
                     avail = tuple(s for s in slots if s not in claimed_targets and s not in matched)
+                    grp_avail[slots] = avail
                     for idx_s, tx in claimants:
-                        sym_items.append((idx_s, tx, avail))
+                        sym_items.append((idx_s, tx, avail, slots))
 
                 slot_owner: dict[int, int] = {}
 
@@ -1093,12 +1095,28 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                     _augment(pos, set())
 
                 assigned_positions = set(slot_owner.values())
+                grp_assigned: dict[tuple[int, ...], list[tuple[int, int, dict]]] = {}
                 for slot, pos in slot_owner.items():
-                    idx_s, tx, _avail = sym_items[pos]
+                    idx_s, tx, _avail, grp_key = sym_items[pos]
                     matched.add(slot)
-                    _record_filing_provenance(slot, tx)
                     resolved.add(idx_s)
-                for pos, (idx_s, tx, avail) in enumerate(sym_items):
+                    grp_assigned.setdefault(grp_key, []).append((slot, idx_s, tx))
+
+                # Record filing_date provenance symmetrically: when a group saturates all of its remaining
+                # available slots (unique or full-group restatement), provenance is exact; when fewer rows than
+                # identical slots match, attach provenance to the full candidate set (never an arbitrary single
+                # slot) and mark uncertainty.
+                for grp_key, assigned_rows in grp_assigned.items():
+                    taken_elsewhere = {slot for slot, p in slot_owner.items() if sym_items[p][3] != grp_key}
+                    effective_avail = [s for s in grp_avail[grp_key] if s not in taken_elsewhere]
+                    sample_tx = assigned_rows[0][2]
+                    for s in effective_avail:
+                        _record_filing_provenance(s, sample_tx)
+                    if len(assigned_rows) < len(effective_avail):
+                        for _slot, _idx_s, tx in assigned_rows:
+                            _mark_uncertain(tx)
+
+                for pos, (idx_s, tx, avail, _grp_key) in enumerate(sym_items):
                     if pos in assigned_positions:
                         continue
                     # Do not let a displaced restatement from an overlapping conflict inflate the confirmed count.
