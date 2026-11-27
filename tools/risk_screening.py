@@ -378,6 +378,7 @@ _F4_SALE_COUNT = rf"(?:[1-9]\d{{0,3}}|an?|the|{'|'.join(_F4_COUNT_WORDS[1:])})"
 _F4_OMITTED = r"(?:(?:previously|inadvertently)\s+)?(?:omitted|unreported)"
 _F4_REMARKS_DATE = r"[a-z]+ \d{1,2},? \d{4}"
 _F4_DECLARED_NUMBER = r"(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
+_F4_PER_SHARE = r"(?:\s+per\s+share)?"
 _F4_COUNTED_SALE_ADDITION_RE = re.compile(
     r"(?:(?:this )?(?:form 4(?:/a)?(?: amendment)?|amendment)\s+"
     r"(?:(?:is (?:being )?filed|was filed|filed)\s+to\s+)?|amending to\s+)?"
@@ -387,7 +388,7 @@ _F4_COUNTED_SALE_ADDITION_RE = re.compile(
     r"(?P<object>sale(?: transactions?|s)?|transactions?)"
     rf"(?:\s+of (?(share_prefix)|(?:(?P<shares>{_F4_DECLARED_NUMBER})\s+)?)"
     r"(?:(?P<share_class>common|ordinary|class [a-z])\s+)?shares?)?"
-    rf"(?:\s+at\s+\$?\s*(?P<price>{_F4_DECLARED_NUMBER}))?"
+    rf"(?:\s+at\s+\$?\s*(?P<price>{_F4_DECLARED_NUMBER}){_F4_PER_SHARE})?"
     rf"(?:\s+(?P<clause>(?:(?:that\s+)?(?:was|were)\s+)?{_F4_OMITTED})"
     rf"(?:\s+from the (?:original )?(?:form 4|filing)(?: filed on (?P<original_date>{_F4_REMARKS_DATE}))?)?)?"
     r"(?:\s+by the reporting (?:person|owner))?",
@@ -396,9 +397,9 @@ _F4_COUNTED_SALE_ADDITION_RE = re.compile(
 _F4_ROW_SALE = r"(?:sale(?: transaction)?|transaction(?: line)?|trade)"
 _F4_ROW_SALE_SUBJECT = rf"(?:(?:this|the)\s+)?{_F4_ROW_SALE}(?:\s+reported on this line)?"
 _F4_ROW_REPORT_VERB = r"(?:report|include|disclose)"
-_F4_SALE_ORDINAL = r"(?:first|second|third|fourth|fifth)"
-_F4_ROW_SALE_DESCRIPTION = rf"(?:(?:{_F4_SALE_ORDINAL}|private|open-market)\s+)?{_F4_ROW_SALE}"
-_F4_ROW_ADDITION_ORDINAL_RE = re.compile(rf"\b({_F4_SALE_ORDINAL})\s+{_F4_ROW_SALE}\b", re.IGNORECASE)
+_F4_SALE_QUALIFIER = r"(?:first|second|third|fourth|fifth|private|open-market)"
+_F4_ROW_SALE_DESCRIPTION = rf"(?:{_F4_SALE_QUALIFIER}\s+)?{_F4_ROW_SALE}"
+_F4_ROW_ADDITION_QUALIFIER_RE = re.compile(rf"\b({_F4_SALE_QUALIFIER})\s+{_F4_ROW_SALE}\b", re.IGNORECASE)
 _F4_ROW_ADDITION_FILING_DATE_RE = re.compile(rf"\bfiled on ({_F4_REMARKS_DATE})", re.IGNORECASE)
 _F4_ROW_SECURITY = r"(?:\s+of\s+(?:the (?:company|issuer)'s\s+)?(?:common (?:stock|shares)|securities))?"
 _F4_ROW_SALE_OBJECT = rf"{_F4_ROW_SALE_DESCRIPTION}{_F4_ROW_SECURITY}"
@@ -465,7 +466,7 @@ _F4_SALE_REFERENCE = (
     r"(?:(?:the|a)\s+)?(?:(?:previously (?:misreported|reported(?: in error)?)|original)\s+)?"
     rf"(?:(?P<source_prefix_shares>{_F4_DECLARED_NUMBER})-share\s+)?sale"
     rf"(?:\s+of\s+(?P<source_shares>{_F4_DECLARED_NUMBER})\s+shares?(?:\s+of\s+common\s+stock)?)?"
-    rf"(?:\s+at\s+\$?\s*(?P<source_price>{_F4_DECLARED_NUMBER})(?:\s+per\s+share)?)?"
+    rf"(?:\s+at\s+\$?\s*(?P<source_price>{_F4_DECLARED_NUMBER}){_F4_PER_SHARE})?"
 )
 _F4_CURRENT_CHANGE = (
     r"(?:(?:this amendment\s+)?(?:corrects?|reclassif(?:ies|y)|changes?)|"
@@ -474,7 +475,7 @@ _F4_CURRENT_CHANGE = (
 _F4_EXPLICIT_SALE_RECLASS_RE = re.compile(
     rf"^(?:(?P<active_change>{_F4_CURRENT_CHANGE})\s+)?{_F4_SALE_REFERENCE}"
     # Without the active verb before the sale, require a passive reclassification verb.
-    r"(?(active_change)|\s+(?:was previously reported in error and\s+)?"
+    r"(?(active_change)|\s+(?:was (?:previously reported in error|incorrectly reported) and\s+)?"
     r"(?:(?:is|should be)\s+reclassified|should have been reported))"
     rf"\s+(?:to|as)\s+(?:a\s+)?(?:(?:bona fide|(?P<target_shares>{_F4_DECLARED_NUMBER})-share)\s+)?"
     r"(?P<target>gift|non-sale|transfer|disposition)\b"
@@ -775,57 +776,58 @@ def _f4_uncounted_row_addition(text: str) -> tuple[_F4AdditionDeclaration, str |
         return None
     date_match = _F4_ROW_ADDITION_FILING_DATE_RE.search(text)
     original_date = _f4_declared_filing_date(date_match[1]) if date_match else None
-    ordinal = _F4_ROW_ADDITION_ORDINAL_RE.search(text)
-    return _F4AdditionDeclaration(1, True, None, None, None, original_date), ordinal[1].casefold() if ordinal else None
+    qualifier = _F4_ROW_ADDITION_QUALIFIER_RE.search(text)
+    return _F4AdditionDeclaration(1, True, None, None, None, original_date), qualifier[
+        1
+    ].casefold() if qualifier else None
 
 
 class _F4AdditionClaim(NamedTuple):
     declaration: _F4AdditionDeclaration
     refs: set[int]
     counted: bool = True
-    ordinal: str | None = None
+    qualifier: str | None = None
 
 
 def _f4_merge_addition_claims(
-    shared: list[_F4AdditionClaim], remarks: list[_F4AdditionDeclaration], rows: list[dict]
+    shared: list[_F4AdditionClaim], remarks: list[_F4AdditionClaim], rows: list[dict], additions: set[int]
 ) -> list[_F4AdditionClaim]:
     claims: list[_F4AdditionClaim] = []
     unpaired: list[_F4AdditionClaim] = []
     remaining_remarks = list(remarks)
+    all_rows = set(range(len(rows)))
     for claim in shared:
-        if claim.counted and claim.declaration in remaining_remarks:
-            remaining_remarks.remove(claim.declaration)
+        copy_in_remarks = claim._replace(refs=all_rows)
+        if copy_in_remarks in remaining_remarks:
+            remaining_remarks.remove(copy_in_remarks)
             claims.append(claim)
         else:
             unpaired.append(claim)
-    # Pair overlapping cross-source claims only if their combined details can describe the linked rows.
+    # A restated row cannot corroborate a merge. A count that covers the whole accession can establish additions alone.
     options: list[dict[int, _F4AdditionDeclaration]] = []
-    for declaration in remaining_remarks:
+    for remark in remaining_remarks:
         candidates: dict[int, _F4AdditionDeclaration] = {}
         for i, claim in enumerate(unpaired):
-            if (
-                claim.counted
-                and (merged := claim.declaration.merged_with(declaration)) is not None
-                and merged.count
-                and sum(merged.matches(rows[j]) for j in claim.refs) >= merged.count
-            ):
+            if not (remark.counted and claim.counted and (merged := claim.declaration.merged_with(remark.declaration))):
+                continue
+            eligible = all_rows if merged.count == len(rows) and claim.refs == all_rows else claim.refs & additions
+            if merged.count and sum(merged.matches(rows[j]) for j in eligible) >= merged.count:
                 candidates[i] = merged
         options.append(candidates)
     paired: set[int] = set()
-    all_rows = set(range(len(rows)))
-    for declaration, candidates in zip(remaining_remarks, options):
+    for remark, candidates in zip(remaining_remarks, options):
         if len(candidates) == 1:
             i, merged = next(iter(candidates.items()))
             if sum(i in others for others in options) == 1:
                 claims.append(_F4AdditionClaim(merged, unpaired[i].refs))
                 paired.add(i)
                 continue
-        claims.append(_F4AdditionClaim(declaration, all_rows))
+        claims.append(remark)
     return claims + [claim for i, claim in enumerate(unpaired) if i not in paired]
 
 
 def _f4_filing_additions_covered(
-    claims: list[_F4AdditionClaim], rows: list[dict], additions: set[int], ordinals_by_row: list[set[str]]
+    claims: list[_F4AdditionClaim], rows: list[dict], additions: set[int], qualifiers_by_row: list[set[str]]
 ) -> bool:
     if not claims:
         return bool(additions)
@@ -835,7 +837,8 @@ def _f4_filing_additions_covered(
         eligible = {
             i
             for i in claim.refs & additions
-            if claim.declaration.matches(rows[i]) and (claim.ordinal is None or claim.ordinal in ordinals_by_row[i])
+            if claim.declaration.matches(rows[i])
+            and (claim.qualifier is None or claim.qualifier in qualifiers_by_row[i])
         }
         if not count or len(eligible) < count or len(options) + count > len(additions):
             return False
@@ -864,7 +867,7 @@ def _f4_filing_additions_covered(
     return True
 
 
-def _f4_shared_conversion_targets(
+def _f4_conversion_targets(
     acc_rows: list[dict],
     refs: set[int],
     conversion: re.Match[str],
@@ -951,25 +954,24 @@ def _f4_accession_note_texts(
     shared_additions: list[_F4AdditionClaim] = []
     unresolved_conversions: set[int] = set()
     for sentence, refs in note_rows.values():
-        if len(refs) > 1:
-            if conversion := _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence):
-                targets = _f4_shared_conversion_targets(
-                    acc_rows, refs, conversion, ledger, non_sell_histories, local_gift_corrections
-                )
-                if len(targets) == 1:
-                    texts_by_row[targets[0]].append(sentence)
-                else:
-                    unresolved_conversions.update(targets or refs)
+        if conversion := _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence):
+            targets = _f4_conversion_targets(
+                acc_rows, refs, conversion, ledger, non_sell_histories, local_gift_corrections
+            )
+            if len(targets) == 1:
+                texts_by_row[targets[0]].append(sentence)
+            else:
+                unresolved_conversions.update(targets or refs)
+            continue
+        if len(refs) > 1 and any(_f4_is_sell(acc_rows[i]) for i in refs):
+            declaration = _f4_sale_addition_declaration(sentence)
+            if declaration is not None:
+                shared_additions.append(_F4AdditionClaim(declaration, refs))
                 continue
-            if any(_f4_is_sell(acc_rows[i]) for i in refs):
-                declaration = _f4_sale_addition_declaration(sentence)
-                if declaration is not None:
-                    shared_additions.append(_F4AdditionClaim(declaration, refs))
-                    continue
-                if row_addition := _f4_uncounted_row_addition(sentence):
-                    declaration, ordinal = row_addition
-                    shared_additions.append(_F4AdditionClaim(declaration, refs, counted=False, ordinal=ordinal))
-                    continue
+            if row_addition := _f4_uncounted_row_addition(sentence):
+                declaration, qualifier = row_addition
+                shared_additions.append(_F4AdditionClaim(declaration, refs, counted=False, qualifier=qualifier))
+                continue
         for i in refs:
             texts_by_row[i].append(sentence)
     for row_parts, tx in zip(texts_by_row, acc_rows):
@@ -984,7 +986,7 @@ def _f4_resolve_accession_intents(
     acc_rows: list[dict],
     ledger: list[dict],
     non_sell_histories: list[list[dict]],
-) -> tuple[list[tuple[bool, bool]], list[bool], list[str]]:
+) -> tuple[list[tuple[bool, bool]], list[bool], list[str], set[int]]:
     """Resolve per-row (is_add, is_corr) strictly from row-scoped evidence.
 
     Use filing evidence for a single unambiguous row or an explicit sale addition count
@@ -996,7 +998,7 @@ def _f4_resolve_accession_intents(
     ]
     row_intents = []
     ambiguous = [i in unresolved_conversions for i in range(len(acc_rows))]
-    ordinals_by_row: list[set[str]] = [set() for _ in acc_rows]
+    qualifiers_by_row: list[set[str]] = [set() for _ in acc_rows]
     row_denies_addition = False
     for i, (tx, rt, prior) in enumerate(zip(acc_rows, row_texts, prior_disclosures)):
         if _f4_is_sell(tx):
@@ -1009,10 +1011,10 @@ def _f4_resolve_accession_intents(
                 if declaration is not None and declaration.count == 1:
                     singular_declarations.append(declaration)
                 elif row_addition := _f4_uncounted_row_addition(sentence):
-                    declaration, ordinal = row_addition
+                    declaration, qualifier = row_addition
                     singular_declarations.append(declaration)
-                    if ordinal is not None:
-                        ordinals_by_row[i].add(ordinal)
+                    if qualifier is not None:
+                        qualifiers_by_row[i].add(qualifier)
             contradictory = any(not declaration.matches(tx) for declaration in singular_declarations)
             if contradictory:
                 ambiguous[i] = True
@@ -1028,26 +1030,30 @@ def _f4_resolve_accession_intents(
             seen_remarks.add(rem)
             remarks_parts.append(rem)
     if not (remarks_parts or shared_additions):
-        return row_intents, ambiguous, row_texts
+        return row_intents, ambiguous, row_texts, unresolved_conversions
     rem_text = " ".join(remarks_parts)
     # shortcut: promote explicit English declarations, and expand for verified filing wording.
-    remarks_declarations = []
+    all_rows = set(range(len(acc_rows)))
+    remarks_claims = []
     mixed_filing_evidence = False
     for sentence in _f4_statements(rem_text):
         declaration = _f4_sale_addition_declaration(sentence)
         if declaration is not None:
-            remarks_declarations.append(declaration)
+            remarks_claims.append(_F4AdditionClaim(declaration, all_rows))
+        elif row_addition := _f4_uncounted_row_addition(sentence):
+            declaration, qualifier = row_addition
+            remarks_claims.append(_F4AdditionClaim(declaration, all_rows, counted=False, qualifier=qualifier))
         elif not _F4_REMARKS_METADATA_RE.fullmatch(sentence) or _F4_OTHER_CHANGE_RE.search(sentence):
             mixed_filing_evidence = True
-    all_rows = set(range(len(acc_rows)))
-    claims = _f4_merge_addition_claims(shared_additions, remarks_declarations, acc_rows)
+    claimed_additions = {i for i, (addition, correction) in enumerate(row_intents) if addition and not correction}
+    claims = _f4_merge_addition_claims(shared_additions, remarks_claims, acc_rows, claimed_additions)
     covering_declaration = (
         claims[0].declaration if len(claims) == 1 and claims[0].counted and claims[0].refs == all_rows else None
     )
     filing_add = bool(claims) or bool(_F4_ADDITION_RE.search(rem_text))
     rem_corr = bool(_F4_CORRECTION_RE.search(rem_text))
     if not (filing_add or rem_corr):
-        return row_intents, ambiguous, row_texts
+        return row_intents, ambiguous, row_texts, unresolved_conversions
     if (
         len(remarks_parts) <= 1
         and covering_declaration is not None
@@ -1074,25 +1080,24 @@ def _f4_resolve_accession_intents(
             if any(sig in ledger[i]["sigs"] for i in pool):
                 break
         else:
-            return [(True, False)] * len(acc_rows), ambiguous, row_texts
-    claimed_additions = {i for i, (addition, correction) in enumerate(row_intents) if addition and not correction}
+            return [(True, False)] * len(acc_rows), ambiguous, row_texts, unresolved_conversions
     unclaimed_add = filing_add and not _f4_filing_additions_covered(
-        claims, acc_rows, claimed_additions, ordinals_by_row
+        claims, acc_rows, claimed_additions, qualifiers_by_row
     )
     unclaimed_corr = rem_corr and not any(rc for _, rc in row_intents)
     if not (unclaimed_add or unclaimed_corr):
-        return row_intents, ambiguous, row_texts
+        return row_intents, ambiguous, row_texts, unresolved_conversions
     unattributed = [i for i, (ra, rc) in enumerate(row_intents) if not (ra or rc)]
     if len(acc_rows) == 1 and len(unattributed) == 1 and (unclaimed_add != unclaimed_corr):
         if unclaimed_add and _f4_is_sell(acc_rows[0]):
             ambiguous[0] = True
-            return row_intents, ambiguous, row_texts
+            return row_intents, ambiguous, row_texts, unresolved_conversions
         row_intents[0] = (unclaimed_add, unclaimed_corr)
         row_texts[0] = ". ".join(filter(None, (row_texts[0], rem_text)))
-        return row_intents, ambiguous, row_texts
+        return row_intents, ambiguous, row_texts, unresolved_conversions
     for i in unattributed or range(len(acc_rows)):
         ambiguous[i] = True
-    return row_intents, ambiguous, row_texts
+    return row_intents, ambiguous, row_texts, unresolved_conversions
 
 
 def _f4_make_ledger_entry(tx: dict, *, from_orig: bool) -> dict:
@@ -1350,7 +1355,7 @@ def _f4_prior_reclassified_gifts(
 def _f4_reconcile_non_sells(
     ledger: list[dict],
     non_sell_histories: list[list[dict]],
-    acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str]],
+    acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str, bool]],
     prior_len: int,
     mark_uncertain,
 ) -> tuple[set[int], list[tuple[int, dict]]]:
@@ -1378,7 +1383,7 @@ def _f4_reconcile_non_sells(
 
     acc_added_non_sells: list[dict] = []
     ns_candidates: list[tuple[dict, bool, bool, str]] = []
-    for tx, (is_add, is_corr), is_ambig, rtext in acc_non_sells:
+    for tx, (is_add, is_corr), is_ambig, rtext, unresolved_conversion in acc_non_sells:
         base = _f4_base_sig(tx)
         code = _f4_tx_code(tx)
         shares = tx.get("shares")
@@ -1408,6 +1413,9 @@ def _f4_reconcile_non_sells(
                 reserve_target(gift_candidates[0], tx)
             else:
                 mark_uncertain(tx)
+            continue
+        if unresolved_conversion and not (explicit_sale_conversion or is_explicit_add):
+            # A quantity match cannot stand in for the unresolved footnote.
             continue
         is_sale_conversion = explicit_sale_conversion or (is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext)))
         if code == "G" and has_identity and not (is_explicit_add or is_ambig or is_sale_conversion):
@@ -2146,16 +2154,18 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         _mark_uncertain(tx)
 
     for _acc, acc_rows in sorted_acc_items:
-        intents, ambig_flags, row_texts = _f4_resolve_accession_intents(acc_rows, ledger, non_sell_histories)
+        intents, ambig_flags, row_texts, unresolved_conversions = _f4_resolve_accession_intents(
+            acc_rows, ledger, non_sell_histories
+        )
         acc_sells: list[tuple[dict, tuple[bool, bool], bool, str]] = []
-        acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str]] = []
-        for tx, intent, is_ambig, rtext in zip(acc_rows, intents, ambig_flags, row_texts):
+        acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str, bool]] = []
+        for i, (tx, intent, is_ambig, rtext) in enumerate(zip(acc_rows, intents, ambig_flags, row_texts)):
             if is_ambig:
                 _mark_uncertain(tx)
             if _f4_is_sell(tx):
                 acc_sells.append((tx, intent, is_ambig, rtext))
             else:
-                acc_non_sells.append((tx, intent, is_ambig, rtext))
+                acc_non_sells.append((tx, intent, is_ambig, rtext, i in unresolved_conversions))
 
         prior_len = len(ledger)
         acc_matched_ns, pending_reclassifications = _f4_reconcile_non_sells(

@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 from tools import risk_screening
 from tools.risk_screening import _safe_float, check_news_risks, compute_risk
 
@@ -2853,6 +2855,12 @@ def test_form4_shared_conversion_note_is_scoped_to_the_gift(monkeypatch):
         (200, "The 200-share sale should be reclassified to a gift.", {}, None),
         (200, "This amendment is filed to correct the sale of 200 shares at $20 to a gift.", {}, None),
         (200, "The sale of 200 shares at $20 should have been reported as a gift.", {}, None),
+        (
+            200,
+            "The sale of 200 shares at $20 was incorrectly reported and should have been reported as a gift.",
+            {},
+            None,
+        ),
         (200, "Corrects the sale of 200 shares at 20 to a gift.", {"shares": 200}, 25),
         (
             200,
@@ -2920,10 +2928,34 @@ def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypa
         for ordered in permutations((gift, sell, revised)):
             result = _screen_form4_cli(monkeypatch, [converted, restated, *other_sales, *prior_gifts, *ordered])
             check = result["checks"]["insider_trades"]
-            if certain:
-                assert check["sales_90d"] == 6
+            assert check["sales_90d"] == (6 if certain else 7)
             assert check["count_uncertain"] is not certain
             assert result["veto_buy"] is certain
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Corrects the sale of 200 shares at $20 to a 300-share gift.",
+        "Corrects the transaction code from S to F.",
+    ],
+)
+def test_form4_conversion_note_must_match_the_linked_non_sell(monkeypatch, note):
+    sale = _form4_sale(200)
+    amendment = dict(
+        sale,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        transaction_code="G",
+        price=None,
+        footnotes={"F1": note},
+        footnote_refs={"transactionCoding": ["F1"]},
+    )
+    check = _screen_form4_cli(monkeypatch, [sale, amendment])["checks"]["insider_trades"]
+    assert check["sales_90d"] == 1
+    assert check["count_uncertain"] is True
 
 
 def test_form4_addition_declarations_keep_transaction_quantity(monkeypatch):
@@ -2981,6 +3013,8 @@ def test_form4_addition_declarations_respect_filing_evidence(monkeypatch):
         ("100 Class A shares", "100 Class B shares", "Class B Common Stock", False),
         ("100 Class A shares", "100 shares", None, False),
         ("100 shares", "100 shares at $30", None, True),
+        ("100 shares", "100 shares at $30 per share", None, True),
+        ("100 shares", "100 shares at $20 per share", None, False),
         (
             "100 shares omitted from the form 4 filed on November 21, 2026",
             "100 shares omitted from the form 4 filed on Nov 21 2026",
@@ -3060,7 +3094,7 @@ def test_form4_addition_declarations_respect_filing_evidence(monkeypatch):
 
 
 def test_form4_additions_match_compatible_statements_and_independent_row_details(monkeypatch):
-    original = _form4_sale(400, price=30)
+    original = _form4_sale(200, price=30)
     amendment = {
         "form": "4/A",
         "accession": "0000000123-26-000002",
@@ -3072,6 +3106,8 @@ def test_form4_additions_match_compatible_statements_and_independent_row_details
         ("one omitted sale", "one omitted sale of 200 shares", "the omitted first sale", 200, 3, False),
         ("the omitted second sale", "", "the omitted first sale", None, 2, True),
         ("the omitted second sale", "", "the omitted second sale", None, 2, False),
+        ("", "the omitted second sale", "the omitted first sale", None, 2, True),
+        ("the omitted private sale", "", "the omitted open-market sale", None, 2, True),
         (
             "one omitted sale of 100 shares",
             "",
@@ -3083,7 +3119,7 @@ def test_form4_additions_match_compatible_statements_and_independent_row_details
         ("one omitted sale", "", "one omitted 200-share sale of 100 shares", None, 1, True),
     ):
         footnotes = {
-            "F1": f"This amendment reports {shared}.",
+            "F1": f"This amendment reports {shared}." if shared else "",
             "F2": f"This amendment reports {row_note}.",
             "F3": "This sale was omitted from the original Form 4.",
         }
@@ -3503,7 +3539,11 @@ def test_form4_conflicting_gift_revisions_do_not_create_a_restorable_state(monke
         assert check["sales_90d"] == 1
         assert check["count_uncertain"] is False
 
-    same_size_gift = dict(gift, shares=100)
+    same_size_gift = dict(
+        gift,
+        shares=100,
+        footnotes={"F1": "Corrects the previously reported sale of 100 shares at $20 to a 100-share gift."},
+    )
     repeated_gift = dict(new_gift, footnotes={"F1": "This amendment corrects the 100-share sale to a gift."})
     check = _screen_form4(monkeypatch, [original, other_sale, same_size_gift, repeated_gift])["checks"][
         "insider_trades"
