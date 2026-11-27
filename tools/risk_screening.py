@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
@@ -411,12 +412,19 @@ _F4_ROW_SALE_ADDITION_RE = re.compile(
     rf"{_F4_OMITTED}\s+{_F4_ROW_SALE_OBJECT}){_F4_ROW_REPORT_CONTEXT}",
     re.IGNORECASE,
 )
+_F4_ROW_SALE_DENIAL_CONTEXT = rf"{_F4_ROW_REPORT_CONTEXT}(?:\s+in\s+(?:this|the)\s+(?:amendment|form 4(?:/a)?|report))?"
+_F4_CLAUSE_ADVERBS = r"(?:(?:[a-z]+ly|also|still|just|then|instead)\s+)*"
 _F4_ROW_SALE_DENIAL_RE = re.compile(
-    rf"(?:{_F4_ROW_SALE_SUBJECT}\s+(?:was|is)\s+(?:not|never)\s+(?:{_F4_OMITTED}|newly reported)|"
+    rf"{_F4_ROW_SALE_SUBJECT}\s+(?:was|is)\s+(?:not|never)\s+(?:{_F4_OMITTED}|newly reported)"
+    rf"{_F4_ROW_SALE_DENIAL_CONTEXT}(?=$|(?:\s*,\s*|\s+)(?:and|but)\s+)|"
     rf"(?:this (?:amendment|report)\s+)?(?:does|did)\s+not\s+(?:add|{_F4_ROW_REPORT_VERB})\s+"
     rf"(?:(?:{_F4_SALE_COUNT}|any)\s+)?(?:(?:new|additional|{_F4_OMITTED})\s+)?"
-    rf"{_F4_ROW_SALE_DESCRIPTION}s?{_F4_ROW_SECURITY}){_F4_ROW_REPORT_CONTEXT}"
-    r"(?:\s+in\s+(?:this|the)\s+(?:amendment|form 4(?:/a)?|report))?",
+    rf"{_F4_ROW_SALE_DESCRIPTION}s?{_F4_ROW_SECURITY}{_F4_ROW_SALE_DENIAL_CONTEXT}"
+    # An unpunctuated conjunction must start a predicate, not a second object such as "purchase prices".
+    rf"(?=$|\s*,\s*(?:and|but)\s+|\s+(?:and|but)\s+{_F4_CLAUSE_ADVERBS}"
+    rf"(?:(?:it|they|(?:this|the)\s+(?:amendment|report|sale|transaction|filing|row))\s+{_F4_CLAUSE_ADVERBS})?"
+    rf"(?:is|are|was|were|does|do|did|has|have|had|will|would|can|could|may|"
+    rf"(?:{_F4_ROW_REPORT_VERB}|add|correct|provide|leave|remain)s?)\b)",
     re.IGNORECASE,
 )
 _F4_SENTENCE_BOUNDARY_RE = re.compile(r"(?:\.(?=\s|$)|[!?;。！？；])+")
@@ -659,18 +667,6 @@ def _f4_extract_ref_ids(refs) -> list[str]:
     return out
 
 
-def _f4_row_scoped_text(tx: dict) -> str:
-    footnotes = tx.get("footnotes")
-    ref_ids = _f4_extract_ref_ids(tx.get("footnote_refs"))
-    row_parts: list[str] = []
-    if isinstance(footnotes, dict) and footnotes and ref_ids:
-        row_parts.extend(str(footnotes[fid]) for fid in ref_ids if footnotes.get(fid))
-    elif isinstance(footnotes, str) and footnotes:
-        row_parts.append(footnotes)
-    row_parts.extend(str(tx[k]) for k in ("amendment_reason", "note") if tx.get(k))
-    return ". ".join(part.strip().rstrip(".") for part in row_parts if part.strip())
-
-
 def _f4_statements(text: str) -> list[str]:
     return [part.strip() for part in _F4_SENTENCE_BOUNDARY_RE.split(text) if part.strip()]
 
@@ -690,16 +686,48 @@ def _f4_sale_addition_declaration(text: str) -> tuple[int, bool] | None:
     return declared, subject.startswith("sale")
 
 
+def _f4_accession_note_texts(acc_rows: list[dict]) -> tuple[list[str], list[str]]:
+    row_refs = [_f4_extract_ref_ids(tx.get("footnote_refs")) for tx in acc_rows]
+    ref_counts = Counter(ref_id for refs in row_refs for ref_id in refs)
+    shared_additions: dict[tuple[str, str], str] = {}
+    row_texts = []
+    for tx, refs in zip(acc_rows, row_refs):
+        row_parts = []
+        footnotes = tx.get("footnotes")
+        if isinstance(footnotes, dict):
+            for ref_id in refs:
+                if not footnotes.get(ref_id):
+                    continue
+                note = str(footnotes[ref_id])
+                if ref_counts[ref_id] == 1 or not _f4_is_sell(tx):
+                    row_parts.append(note)
+                    continue
+                # A shared note's addition statements cannot identify which row was added.
+                for sentence in _f4_statements(note):
+                    if (
+                        _F4_ROW_SALE_ADDITION_RE.fullmatch(sentence)
+                        or _f4_sale_addition_declaration(sentence) is not None
+                    ):
+                        shared_additions[ref_id, sentence.casefold()] = sentence
+                    else:
+                        row_parts.append(sentence)
+        elif isinstance(footnotes, str) and footnotes:
+            row_parts.append(footnotes)
+        row_parts.extend(str(tx[key]) for key in ("amendment_reason", "note") if tx.get(key))
+        row_texts.append(". ".join(part.strip().rstrip(".") for part in row_parts if part.strip()))
+    return row_texts, list(shared_additions.values())
+
+
 def _f4_resolve_accession_intents(
     acc_rows: list[dict],
     ledger: list[dict],
 ) -> tuple[list[tuple[bool, bool]], list[bool], list[str]]:
     """Resolve per-row (is_add, is_corr) strictly from row-scoped evidence.
 
-    Use filing remarks for a single unambiguous row or an explicit sale addition count
+    Use filing evidence for a single unambiguous row or an explicit sale addition count
     covering every row. Leave unattributed rows in mixed filings uncertain.
     """
-    row_texts = [_f4_row_scoped_text(tx) for tx in acc_rows]
+    row_texts, shared_additions = _f4_accession_note_texts(acc_rows)
     prior_disclosures = [
         any(not match["negated"] for match in _F4_PRIOR_DISCLOSURE_RE.finditer(text)) for text in row_texts
     ]
@@ -708,7 +736,7 @@ def _f4_resolve_accession_intents(
     for tx, rt, prior in zip(acc_rows, row_texts, prior_disclosures):
         if _f4_is_sell(tx):
             sentences = _f4_statements(rt)
-            denial = any(_F4_ROW_SALE_DENIAL_RE.fullmatch(sentence) for sentence in sentences)
+            denial = any(_F4_ROW_SALE_DENIAL_RE.match(sentence) for sentence in sentences)
             row_denies_addition |= denial
             addition = (
                 not prior
@@ -730,28 +758,35 @@ def _f4_resolve_accession_intents(
         if rem and rem not in seen_remarks:
             seen_remarks.add(rem)
             remarks_parts.append(rem)
-    if not remarks_parts:
+    if not (remarks_parts or shared_additions):
         return row_intents, ambiguous, row_texts
     rem_text = " ".join(remarks_parts)
     # shortcut: promote explicit English declarations, and expand for verified filing wording.
-    statements = []
-    mixed_remarks = False
+    shared_counts = Counter(
+        declaration
+        for sentence in shared_additions
+        if (declaration := _f4_sale_addition_declaration(sentence)) is not None
+    )
+    remarks_counts = Counter()
+    mixed_filing_evidence = len(shared_additions) > shared_counts.total()
     for sentence in _f4_statements(rem_text):
         declaration = _f4_sale_addition_declaration(sentence)
         if declaration is not None:
-            statements.append(declaration)
+            remarks_counts[declaration] += 1
         elif not _F4_REMARKS_METADATA_RE.fullmatch(sentence) or _F4_OTHER_CHANGE_RE.search(sentence):
-            mixed_remarks = True
-    declared_additions, sales_declared = statements[0] if len(statements) == 1 else (0, False)
-    rem_add = bool(statements) or bool(_F4_ADDITION_RE.search(rem_text))
+            mixed_filing_evidence = True
+    # Merge equivalent counts across sources while retaining separate declarations within either source.
+    declarations = shared_counts | remarks_counts
+    declared_additions, sales_declared = next(iter(declarations)) if declarations.total() == 1 else (0, False)
+    filing_add = bool(shared_additions or declarations) or bool(_F4_ADDITION_RE.search(rem_text))
     rem_corr = bool(_F4_CORRECTION_RE.search(rem_text))
-    if not (rem_add or rem_corr):
+    if not (filing_add or rem_corr):
         return row_intents, ambiguous, row_texts
     if (
-        len(remarks_parts) == 1
+        len(remarks_parts) <= 1
         and declared_additions == len(acc_rows)
         and (len(acc_rows) == 1 or sales_declared)
-        and not mixed_remarks
+        and not mixed_filing_evidence
         and not rem_corr
         and not row_denies_addition
         and not any(prior_disclosures)
@@ -771,8 +806,10 @@ def _f4_resolve_accession_intents(
                 break
         else:
             return [(True, False)] * len(acc_rows), ambiguous, row_texts
-    claimed_additions = sum(addition for addition, _ in row_intents)
-    unclaimed_add = rem_add and claimed_additions < (declared_additions or 1)
+    claimed_additions = sum(
+        addition for tx, (addition, _) in zip(acc_rows, row_intents) if not shared_additions or _f4_is_sell(tx)
+    )
+    unclaimed_add = filing_add and claimed_additions < (declared_additions or 1)
     unclaimed_corr = rem_corr and not any(rc for _, rc in row_intents)
     if not (unclaimed_add or unclaimed_corr):
         return row_intents, ambiguous, row_texts
@@ -803,9 +840,7 @@ def _f4_make_ledger_entry(tx: dict, *, from_orig: bool) -> dict:
         "gift_revisions": [],
         "shares_set": {shares} if shares is not None else set(),
         "filing_dates": filing_dates,
-        "orig_acceptance_ts": _f4_normalize_acceptance_ts(
-            tx.get("acceptance_datetime") or tx.get("acceptanceDateTime")
-        ),
+        "orig_acceptance_ts": _f4_acceptance_ts(tx),
         "orig_accession": str(tx.get("accession") or "").strip() or None,
         "from_orig": from_orig,
         "reclassified": False,
@@ -874,6 +909,18 @@ def _f4_update_entry(ledger: list[dict], idx: int, tx: dict, *, restore_if_recla
         entry["reclassified"] = False
 
 
+def _f4_acceptance_ts(tx: dict) -> str:
+    return _f4_normalize_acceptance_ts(tx.get("acceptance_datetime") or tx.get("acceptanceDateTime"))
+
+
+def _f4_filed_on_or_before(filing_date: str, acceptance_ts: str, amend_date: str, amend_ts: str) -> bool:
+    if not amend_date or not filing_date:
+        return True
+    if filing_date == amend_date and amend_ts and acceptance_ts:
+        return acceptance_ts <= amend_ts
+    return filing_date <= amend_date
+
+
 def _f4_scoped_pool(
     ledger: list[dict],
     tx: dict,
@@ -891,17 +938,11 @@ def _f4_scoped_pool(
     revision history) so distinct transactions sharing a filing-date chain remain linkable.
     """
     amend_fdate = str(tx.get("filing_date") or "").strip()
-    amend_ts = _f4_normalize_acceptance_ts(tx.get("acceptance_datetime") or tx.get("acceptanceDateTime"))
+    amend_ts = _f4_acceptance_ts(tx)
 
     def _filed_on_or_before(entry: dict) -> bool:
-        if not amend_fdate or not entry["filing_dates"]:
-            return True
-        earliest = min(entry["filing_dates"])
-        if earliest > amend_fdate:
-            return False
-        if earliest == amend_fdate and amend_ts and entry["orig_acceptance_ts"]:
-            return entry["orig_acceptance_ts"] <= amend_ts
-        return True
+        earliest = min(entry["filing_dates"], default="")
+        return _f4_filed_on_or_before(earliest, entry["orig_acceptance_ts"], amend_fdate, amend_ts)
 
     orig_date = str(tx.get("original_filing_date") or "").strip()
     if not orig_date or not any(ledger[i]["filing_dates"] for i in range(prior_len)):
@@ -948,14 +989,7 @@ def _f4_sort_amendment_accessions(all_amend: list[dict]) -> tuple[list[tuple[str
     same_day_groups: dict[tuple[tuple, str], list[str]] = {}
     for acc, rows in amend_by_acc.items():
         fdate = min(str(r.get("filing_date") or "") for r in rows)
-        acc_ts = min(
-            (
-                ts
-                for r in rows
-                if (ts := _f4_normalize_acceptance_ts(r.get("acceptance_datetime") or r.get("acceptanceDateTime")))
-            ),
-            default="",
-        )
+        acc_ts = min((ts for r in rows if (ts := _f4_acceptance_ts(r))), default="")
         acc_meta[acc] = (fdate, acc_ts)
         for ok in {_f4_owner_key(r) for r in rows}:
             same_day_groups.setdefault((ok, fdate), []).append(acc)
@@ -984,9 +1018,39 @@ def _f4_sort_amendment_accessions(all_amend: list[dict]) -> tuple[list[tuple[str
     return sorted_items, uncertain_txs
 
 
+def _f4_non_sell_revisions(history: list[dict], linked_date: str) -> list[dict]:
+    """An original filing link identifies the chain, while a revision link identifies its filed rows."""
+    original_date = str(history[0].get("filing_date") or "").strip()
+    if not linked_date or not original_date or linked_date == original_date:
+        return history
+    return [row for row in history if str(row.get("filing_date") or "").strip() == linked_date]
+
+
+def _f4_prior_native_gifts(
+    non_sell_histories: list[list[dict]], tx: dict, linked_date: str
+) -> list[tuple[int, list[dict]]]:
+    base = _f4_base_sig(tx)
+    filing_date = str(tx.get("filing_date") or "").strip()
+    acceptance_ts = _f4_acceptance_ts(tx)
+    gifts = []
+    for i, history in enumerate(non_sell_histories):
+        if _f4_tx_code(history[0]) != "G" or _f4_base_sig(history[0]) != base:
+            continue
+        revisions = [
+            rev
+            for rev in _f4_non_sell_revisions(history, linked_date)
+            if _f4_filed_on_or_before(
+                str(rev.get("filing_date") or "").strip(), _f4_acceptance_ts(rev), filing_date, acceptance_ts
+            )
+        ]
+        if revisions:
+            gifts.append((i, revisions))
+    return gifts
+
+
 def _f4_reconcile_non_sells(
     ledger: list[dict],
-    known_non_sells: list[dict],
+    non_sell_histories: list[list[dict]],
     acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str]],
     prior_len: int,
     mark_uncertain,
@@ -994,7 +1058,7 @@ def _f4_reconcile_non_sells(
     acc_orig_ns_matched: set[int] = set()
     acc_matched_ns: set[int] = set()
     pending_reclassifications: list[tuple[int, dict]] = []
-    original_gift_claims: dict[int, list[dict]] = {}
+    native_gift_claims: dict[int, list[dict]] = {}
     revision_claims: dict[int, list[dict]] = {}
     prior_gift_claims: set[int] = set()
 
@@ -1015,13 +1079,13 @@ def _f4_reconcile_non_sells(
 
     acc_added_non_sells: list[dict] = []
     ns_candidates: list[tuple[dict, bool, bool, str]] = []
-    for tx, (is_add, is_corr), _is_ambig, rtext in acc_non_sells:
+    for tx, (is_add, is_corr), is_ambig, rtext in acc_non_sells:
         base = _f4_base_sig(tx)
         code = _f4_tx_code(tx)
         shares = tx.get("shares")
         orig_date = str(tx.get("original_filing_date") or "").strip()
-        filing_date = str(tx.get("filing_date") or "").strip()
         has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
+        is_explicit_add = is_add and not is_corr
         pool, pool_unlinked = _f4_scoped_pool(ledger, tx, prior_len)
         sentences = _f4_statements(rtext)
         gift_corrections = [sentence for sentence in sentences if _F4_GIFT_CORRECTION_RE.search(sentence)]
@@ -1030,16 +1094,15 @@ def _f4_reconcile_non_sells(
             correction_text = ". ".join(gift_corrections)
             prior_shares = _f4_stated_prior_shares(correction_text, shares)
             prior_prices = _f4_stated_prior_prices(correction_text, tx.get("price"))
-            original_gifts = [
+            prior_native_gifts = _f4_prior_native_gifts(non_sell_histories, tx, orig_date) if has_identity else []
+            native_gifts = [
                 i
-                for i, orig_ns in enumerate(known_non_sells)
-                if has_identity
-                and _f4_base_sig(orig_ns) == base
-                and _f4_tx_code(orig_ns) == "G"
-                and (not orig_date or not orig_ns.get("filing_date") or orig_ns.get("filing_date") == orig_date)
-                and (not filing_date or str(orig_ns.get("filing_date") or "") <= filing_date)
-                and (not prior_shares or _f4_matches_num_set(orig_ns.get("shares"), prior_shares))
-                and (not prior_prices or _f4_matches_num_set(orig_ns.get("price"), prior_prices))
+                for i, revisions in prior_native_gifts
+                if any(
+                    (not prior_shares or _f4_matches_num_set(rev.get("shares"), prior_shares))
+                    and (not prior_prices or _f4_matches_num_set(rev.get("price"), prior_prices))
+                    for rev in revisions
+                )
             ]
             gift_candidates = [
                 i
@@ -1055,42 +1118,69 @@ def _f4_reconcile_non_sells(
                     gift_only=True,
                 )
             ]
-            if len(original_gifts) == 1 and not gift_candidates:
-                original_gift_claims.setdefault(original_gifts[0], []).append(tx)
-            elif not original_gifts and len(gift_candidates) == 1:
+            if len(native_gifts) == 1 and not gift_candidates:
+                native_gift_claims.setdefault(native_gifts[0], []).append(tx)
+            elif not native_gifts and len(gift_candidates) == 1:
                 reserve_target(gift_candidates[0], tx)
             else:
                 mark_uncertain(tx)
             continue
-        ns_idx = next(
-            (
+        is_sale_conversion = is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext))
+        if code == "G" and has_identity and not (is_explicit_add or is_ambig or is_sale_conversion):
+            exact = _f4_exact_sig(tx)
+            exact_native_gifts = [
                 i
-                for i, orig_ns in enumerate(known_non_sells)
-                if i not in acc_orig_ns_matched
-                and _f4_base_sig(orig_ns) == base
-                and _f4_tx_code(orig_ns) == code
-                and (shares is None or orig_ns.get("shares") == shares)
-                and (not orig_date or not orig_ns.get("filing_date") or orig_ns.get("filing_date") == orig_date)
-            ),
-            None,
-        )
+                for i, revisions in _f4_prior_native_gifts(non_sell_histories, tx, orig_date)
+                if any(_f4_tx_code(rev) == code and _f4_exact_sig(rev) == exact for rev in revisions)
+            ]
+            if len(exact_native_gifts) == 1 and not any(
+                ledger[i]["reclassified"]
+                and _f4_base_sig(ledger[i]["tx"]) == base
+                and _f4_entry_has_revision(
+                    ledger[i],
+                    dates={_f4_rev_tuple(tx)[0]},
+                    exact_shares=shares,
+                    exact_price=tx.get("price"),
+                    gift_filing_date=orig_date,
+                    gift_only=True,
+                )
+                for i in pool
+            ):
+                target = exact_native_gifts[0]
+                native_gift_claims.setdefault(target, []).append(tx)
+                acc_orig_ns_matched.add(target)
+                continue
+        ns_idx = None
+        matching_revisions = []
+        for i, history in enumerate(non_sell_histories):
+            if i in acc_orig_ns_matched or _f4_base_sig(history[0]) != base:
+                continue
+            eligible = history[:1] if is_explicit_add else history
+            matching_revisions = [
+                rev
+                for rev in _f4_non_sell_revisions(eligible, orig_date)
+                if _f4_tx_code(rev) == code and (shares is None or rev.get("shares") == shares)
+            ]
+            if matching_revisions:
+                ns_idx = i
+                break
         if ns_idx is not None:
             priced_sell_match = (
                 not pool_unlinked
                 and has_identity
                 and tx.get("price") is not None
-                and known_non_sells[ns_idx].get("price") != tx.get("price")
+                and all(rev.get("price") != tx.get("price") for rev in matching_revisions)
                 and any(i not in acc_matched_ns and _f4_exact_sig(tx) in ledger[i]["sigs"] for i in pool)
             )
             has_ledger_sell = not pool_unlinked and any(
                 i not in acc_matched_ns and _f4_base_sig(ledger[i]["tx"]) == base for i in pool
             )
-            if priced_sell_match or (is_corr and has_ledger_sell and bool(_F4_SALE_TO_NONSELL_RE.search(rtext))):
+            if priced_sell_match or (has_ledger_sell and is_sale_conversion):
                 ns_candidates.append((tx, is_add, is_corr, rtext))
                 continue
             acc_orig_ns_matched.add(ns_idx)
             continue
-        if is_add and not is_corr:
+        if is_explicit_add:
             acc_added_non_sells.append(tx)
             continue
         if pool_unlinked:
@@ -1271,8 +1361,10 @@ def _f4_reconcile_non_sells(
             mark_uncertain(tx)
 
     # An existing gift can attract claims at different match strengths within the same filing.
-    for claimants in original_gift_claims.values():
-        if len(claimants) > 1:
+    for target, claimants in native_gift_claims.items():
+        if len(claimants) == 1:
+            non_sell_histories[target].append(claimants[0])
+        else:
             for tx in claimants:
                 mark_uncertain(tx)
     for target, claimants in revision_claims.items():
@@ -1282,7 +1374,7 @@ def _f4_reconcile_non_sells(
         else:
             for tx in claimants:
                 mark_uncertain(tx)
-    known_non_sells.extend(acc_added_non_sells)
+    non_sell_histories.extend([tx] for tx in acc_added_non_sells)
     return acc_matched_ns, pending_reclassifications
 
 
@@ -1751,7 +1843,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     )
 
     ledger: list[dict] = [_f4_make_ledger_entry(tx, from_orig=True) for tx in all_orig if _f4_is_sell(tx)]
-    known_non_sells: list[dict] = [tx for tx in all_orig if not _f4_is_sell(tx)]
+    non_sell_histories: list[list[dict]] = [[tx] for tx in all_orig if not _f4_is_sell(tx)]
     affected_owners: set[tuple] = set()
     unaligned_global = has_amendments and not all_amend
 
@@ -1781,7 +1873,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
 
         prior_len = len(ledger)
         acc_matched_ns, pending_reclassifications = _f4_reconcile_non_sells(
-            ledger, known_non_sells, acc_non_sells, prior_len, _mark_uncertain
+            ledger, non_sell_histories, acc_non_sells, prior_len, _mark_uncertain
         )
         _f4_reconcile_sells(ledger, acc_sells, prior_len, _mark_uncertain, excluded_entries=acc_matched_ns)
         for target, gtx in pending_reclassifications:
