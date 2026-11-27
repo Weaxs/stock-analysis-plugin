@@ -932,9 +932,9 @@ def _f4_conversion_targets(
 
 
 def _f4_accession_note_texts(
-    acc_rows: list[dict], ledger: list[dict], non_sell_histories: list[list[dict]]
+    acc_rows: list[dict], ledger: list[dict], non_sell_histories: list[list[dict]], remark_conversions: list[str]
 ) -> tuple[list[str], list[_F4AdditionClaim], set[int]]:
-    note_rows: dict[tuple[str, str], tuple[str, set[int]]] = {}
+    note_rows: dict[tuple[str | None, str], tuple[str, set[int]]] = {}
     texts_by_row: list[list[str]] = [[] for _ in acc_rows]
     for i, tx in enumerate(acc_rows):
         footnotes = tx.get("footnotes")
@@ -945,6 +945,14 @@ def _f4_accession_note_texts(
                     note_rows.setdefault(key, (sentence, set()))[1].add(i)
         elif isinstance(footnotes, str) and footnotes:
             texts_by_row[i].append(footnotes)
+
+    # An identical filing remark must not widen the references supplied by a linked footnote.
+    linked_statements = {statement for _, statement in note_rows}
+    all_rows = set(range(len(acc_rows)))
+    for sentence in remark_conversions:
+        statement = sentence.casefold()
+        if statement not in linked_statements:
+            note_rows[None, statement] = sentence, all_rows
 
     local_gift_corrections: dict[int, list[str]] = {}
     for sentence, refs in note_rows.values():
@@ -992,7 +1000,18 @@ def _f4_resolve_accession_intents(
     Use filing evidence for a single unambiguous row or an explicit sale addition count
     covering every row. Leave unattributed rows in mixed filings uncertain.
     """
-    row_texts, shared_additions, unresolved_conversions = _f4_accession_note_texts(acc_rows, ledger, non_sell_histories)
+    remarks_parts = list(dict.fromkeys(rem for tx in acc_rows if (rem := str(tx.get("remarks") or "").strip())))
+    remarks_sentences = [sentence for text in remarks_parts for sentence in _f4_statements(text)]
+    remark_conversions = []
+    other_remarks = []
+    for sentence in remarks_sentences:
+        if _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence):
+            remark_conversions.append(sentence)
+        else:
+            other_remarks.append(sentence)
+    row_texts, shared_additions, unresolved_conversions = _f4_accession_note_texts(
+        acc_rows, ledger, non_sell_histories, remark_conversions
+    )
     prior_disclosures = [
         any(not match["negated"] for match in _F4_PRIOR_DISCLOSURE_RE.finditer(text)) for text in row_texts
     ]
@@ -1022,21 +1041,14 @@ def _f4_resolve_accession_intents(
         else:
             addition = bool(_F4_ADDITION_RE.search(rt))
         row_intents.append((addition, bool(_F4_CORRECTION_RE.search(rt))))
-    seen_remarks: set[str] = set()
-    remarks_parts: list[str] = []
-    for tx in acc_rows:
-        rem = str(tx.get("remarks") or "").strip()
-        if rem and rem not in seen_remarks:
-            seen_remarks.add(rem)
-            remarks_parts.append(rem)
-    if not (remarks_parts or shared_additions):
+    if not (other_remarks or shared_additions):
         return row_intents, ambiguous, row_texts, unresolved_conversions
-    rem_text = " ".join(remarks_parts)
+    rem_text = ". ".join(other_remarks)
     # shortcut: promote explicit English declarations, and expand for verified filing wording.
     all_rows = set(range(len(acc_rows)))
     remarks_claims = []
     mixed_filing_evidence = False
-    for sentence in _f4_statements(rem_text):
+    for sentence in other_remarks:
         declaration = _f4_sale_addition_declaration(sentence)
         if declaration is not None:
             remarks_claims.append(_F4AdditionClaim(declaration, all_rows))

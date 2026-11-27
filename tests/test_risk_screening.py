@@ -2932,15 +2932,35 @@ def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypa
             assert check["count_uncertain"] is not certain
             assert result["veto_buy"] is certain
 
+    native_restatement = dict(native, shares=100)
+    unrelated_gift = dict(native_restatement, **amendment)
+    unrelated_gift["footnote_refs"] = {}
+    duplicate_remark = amendment["footnotes"]["F1"]
+    result = _screen_form4_cli(
+        monkeypatch,
+        [
+            converted,
+            restated,
+            *other_sales,
+            native_restatement,
+            *(dict(row, remarks=duplicate_remark) for row in (gift, sell, unrelated_gift)),
+        ],
+    )
+    assert result["checks"]["insider_trades"]["sales_90d"] == 6
+    assert result["checks"]["insider_trades"]["count_uncertain"] is False
+    assert result["veto_buy"] is True
+
 
 @pytest.mark.parametrize(
-    "note",
+    "note, expected_sales",
     [
-        "Corrects the sale of 200 shares at $20 to a 300-share gift.",
-        "Corrects the transaction code from S to F.",
+        ("Corrects the sale of 200 shares at $20 to a 300-share gift.", 1),
+        ("Corrects the transaction code from S to F.", 1),
+        ("Corrects the sale of 200 shares at $20 to a 200-share gift.", 0),
     ],
 )
-def test_form4_conversion_note_must_match_the_linked_non_sell(monkeypatch, note):
+@pytest.mark.parametrize("source", ["footnote", "remarks", "both"])
+def test_form4_conversion_note_must_match_the_amended_non_sell(monkeypatch, note, expected_sales, source):
     sale = _form4_sale(200)
     amendment = dict(
         sale,
@@ -2950,12 +2970,13 @@ def test_form4_conversion_note_must_match_the_linked_non_sell(monkeypatch, note)
         original_filing_date="2026-11-21",
         transaction_code="G",
         price=None,
-        footnotes={"F1": note},
+        footnotes={"F1": note} if source != "remarks" else {},
         footnote_refs={"transactionCoding": ["F1"]},
+        remarks=note if source != "footnote" else "",
     )
     check = _screen_form4_cli(monkeypatch, [sale, amendment])["checks"]["insider_trades"]
-    assert check["sales_90d"] == 1
-    assert check["count_uncertain"] is True
+    assert check["sales_90d"] == expected_sales
+    assert check["count_uncertain"] is bool(expected_sales)
 
 
 def test_form4_addition_declarations_keep_transaction_quantity(monkeypatch):
