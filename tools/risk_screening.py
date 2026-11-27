@@ -8,7 +8,7 @@ import os
 import re
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -549,26 +549,35 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         re.IGNORECASE,
     )
 
-    def _remarks_intent_count(text: str, *, kind: str) -> int:
+    _UNBOUNDED_COUNT_WORDS = {"several", "multiple", "多", "若干"}
+
+    def _remarks_intent_count(text: str, *, kind: str) -> tuple[int, bool]:
         if kind == "add":
             if not _ADDITION_RE.search(text):
-                return 0
+                return 0, False
             count = 1
+            has_explicit_bound = False
+            unbounded = False
             for m in _ADD_COUNT_RE.finditer(text):
                 tok = next((g for g in m.groups() if g), "").lower()
                 n = int(tok) if tok.isdigit() else _COUNT_WORDS.get(tok, 1)
                 count = max(count, n)
-            if count == 1 and _ADD_PLURAL_RE.search(text):
-                count = 2
-            return count
+                if tok in _UNBOUNDED_COUNT_WORDS:
+                    unbounded = True
+                else:
+                    has_explicit_bound = True
+            if not has_explicit_bound and _ADD_PLURAL_RE.search(text):
+                count = max(count, 2)
+                unbounded = True
+            return count, (unbounded and not has_explicit_bound)
         if not _CORRECTION_RE.search(text):
-            return 0
+            return 0, False
         count = 1
         for m in _CORR_COUNT_RE.finditer(text):
             tok = next((g for g in m.groups() if g), "").lower()
             n = int(tok) if tok.isdigit() else _COUNT_WORDS.get(tok, 1)
             count = max(count, n)
-        return count
+        return count, False
 
     def _extract_ref_ids(refs) -> list[str]:
         seen: set[str] = set()
@@ -603,7 +612,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
 
     def _resolve_accession_intents(
         acc_rows: list[dict],
-    ) -> tuple[list[tuple[bool, bool]], list[bool], list[str], bool]:
+    ) -> tuple[list[tuple[bool, bool]], list[bool], list[str], int | None]:
         row_texts = [_row_scoped_text(tx) for tx in acc_rows]
         row_intents = [
             (bool(_ADDITION_RE.search(rt)), bool(_CORRECTION_RE.search(rt))) if rt else (False, False)
@@ -618,33 +627,35 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 seen_remarks.add(rem)
                 remarks_parts.append(rem)
         if not remarks_parts:
-            return row_intents, ambiguous, row_texts, False
+            return row_intents, ambiguous, row_texts, 0
         rem_text = " ".join(remarks_parts)
-        rem_add_count = _remarks_intent_count(rem_text, kind="add")
-        rem_corr_count = _remarks_intent_count(rem_text, kind="corr")
+        rem_add_count, rem_add_unbounded = _remarks_intent_count(rem_text, kind="add")
+        rem_corr_count, _ = _remarks_intent_count(rem_text, kind="corr")
         if not (rem_add_count or rem_corr_count):
-            return row_intents, ambiguous, row_texts, False
+            return row_intents, ambiguous, row_texts, 0
         claimed_add_count = sum(1 for ra, _ in row_intents if ra)
         claimed_corr_count = sum(1 for _, rc in row_intents if rc)
-        unclaimed_add = rem_add_count > claimed_add_count
+        unclaimed_add_count = max(0, rem_add_count - claimed_add_count)
+        unclaimed_add = unclaimed_add_count > 0
         unclaimed_corr = rem_corr_count > claimed_corr_count
         if not (unclaimed_add or unclaimed_corr):
-            return row_intents, ambiguous, row_texts, False
+            return row_intents, ambiguous, row_texts, 0
         unattributed = [i for i, (ra, rc) in enumerate(row_intents) if not (ra or rc)]
         if len(unattributed) == 1 and (unclaimed_add != unclaimed_corr):
             row_intents[unattributed[0]] = (unclaimed_add, unclaimed_corr)
             row_texts[unattributed[0]] = f"{row_texts[unattributed[0]]} {rem_text}".strip()
-            return row_intents, ambiguous, row_texts, False
+            return row_intents, ambiguous, row_texts, 0
         # Filing-level remarks cannot be uniquely attributed (multiple unattributed rows, mixed intent, or
         # remarks declaring more additions/corrections than attributed rows); surface uncertainty instead of
-        # broadcasting to every row.
+        # broadcasting to every row, and preserve the bounded remarks-backed addition count.
         for i in unattributed:
             ambiguous[i] = True
             row_texts[i] = f"{row_texts[i]} {rem_text}".strip()
         if not unattributed:
             for i in range(len(acc_rows)):
                 ambiguous[i] = True
-        return row_intents, ambiguous, row_texts, unclaimed_add
+        add_budget: int | None = None if (rem_add_unbounded and not unclaimed_corr) else unclaimed_add_count
+        return row_intents, ambiguous, row_texts, add_budget
 
     raw_cutoff = str(data.get("since_filing_date") or "").strip()[:10]
     try:
@@ -667,13 +678,15 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     def _make_ledger_entry(tx: dict, *, from_orig: bool) -> dict:
         shares = tx.get("shares")
         fdate = str(tx.get("filing_date") or "").strip()
+        orig_fdate = str(tx.get("original_filing_date") or "").strip() if not from_orig else ""
+        filing_dates = {d for d in (fdate, orig_fdate) if d}
         return {
             "tx": tx,
             "orig_tx": tx,
             "sigs": {_exact_sig(tx)},
             "revisions": [_rev_tuple(tx)],
             "shares_set": {shares} if shares is not None else set(),
-            "filing_dates": {fdate} if fdate else set(),
+            "filing_dates": filing_dates,
             "orig_accession": str(tx.get("accession") or "").strip() or None,
             "from_orig": from_orig,
             "reclassified": False,
@@ -743,12 +756,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             osig = _owner_sec_sig(tx)
             eligible = [i for i in pool if _owner_sec_sig(ledger[i]["tx"]) == osig]
             if prior_dates:
-                eligible = [
-                    i
-                    for i in eligible
-                    if str(ledger[i]["tx"].get("transaction_date") or ledger[i]["tx"].get("date") or "")[:10]
-                    in prior_dates
-                ]
+                eligible = [i for i in eligible if _entry_has_revision(ledger[i], dates=prior_dates)]
                 if not eligible:
                     return [], True
             if check_multi_acc:
@@ -758,10 +766,19 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             return eligible if prior_dates else pool, False
         if check_multi_acc:
             b = _base_sig(tx)
+            osig = (b[0], b[2], b[3])
             same_accs = {
                 ledger[i]["orig_accession"]
                 for i in pool
-                if _base_sig(ledger[i]["tx"]) == b and ledger[i]["orig_accession"]
+                if ledger[i]["orig_accession"]
+                and (
+                    _base_sig(ledger[i]["tx"]) == b
+                    or (
+                        bool(b[1])
+                        and _owner_sec_sig(ledger[i]["tx"]) == osig
+                        and _entry_has_revision(ledger[i], dates={b[1][:10]})
+                    )
+                )
             }
             if len(same_accs) > 1:
                 return [], True
@@ -789,20 +806,80 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         if restore_if_reclassified and entry["reclassified"]:
             entry["reclassified"] = False
 
-    # Group ALL Form 4/A rows (sells and non-sells together) by accession and process chronologically so later
-    # amendments can correct, reclassify, or restore sales from original Form 4 or earlier Form 4/A filings.
+    def _tx_date_iso(tx: dict) -> str | None:
+        raw = str(tx.get("transaction_date") or tx.get("date") or "").strip()[:10]
+        if not raw:
+            return None
+        try:
+            return date.fromisoformat(raw).isoformat()
+        except ValueError:
+            return None
+
+    def _normalize_acceptance_ts(raw) -> str:
+        s = str(raw or "").strip()
+        if not s:
+            return ""
+        try:
+            if re.fullmatch(r"\d{14}", s):
+                dt = datetime.strptime(s, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            else:
+                if s.endswith(("Z", "z")):
+                    s = s[:-1] + "+00:00"
+                dt = datetime.fromisoformat(s)
+                dt = dt.astimezone(timezone.utc) if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return ""
+        return dt.isoformat(timespec="microseconds")
+
+    # Group ALL Form 4/A rows (sells and non-sells together) by accession and process chronologically by
+    # (filing_date, EDGAR acceptanceDateTime, accession) so same-day amendments from different submitting agents
+    # execute in actual acceptance order. When same-day filings lack comparable acceptance timestamps across
+    # submitting agents (or mix present and missing timestamps), flag uncertainty for the affected owner.
     amend_by_acc: dict[str, list[dict]] = {}
     for tx in all_amend:
         acc = str(tx.get("accession") or f"__amend_{id(tx)}")
         amend_by_acc.setdefault(acc, []).append(tx)
 
+    acc_meta: dict[str, tuple[str, str]] = {}
+    same_day_groups: dict[tuple[tuple, str], list[str]] = {}
+    for acc, rows in amend_by_acc.items():
+        fdate = min(str(r.get("filing_date") or "") for r in rows)
+        acc_ts = min(
+            (
+                ts
+                for r in rows
+                if (ts := _normalize_acceptance_ts(r.get("acceptance_datetime") or r.get("acceptanceDateTime")))
+            ),
+            default="",
+        )
+        acc_meta[acc] = (fdate, acc_ts)
+        for ok in {_owner_key(r) for r in rows}:
+            same_day_groups.setdefault((ok, fdate), []).append(acc)
+
+    def _same_submitter_prefix(acc_a: str, acc_b: str) -> bool:
+        return "-" in acc_a and "-" in acc_b and acc_a.split("-", 1)[0] == acc_b.split("-", 1)[0]
+
+    for (_ok, _fdate), accs in same_day_groups.items():
+        if len(accs) < 2:
+            continue
+        ambig_accs: set[str] = set()
+        for i in range(len(accs)):
+            for j in range(i + 1, len(accs)):
+                a, b = accs[i], accs[j]
+                ts_a, ts_b = acc_meta[a][1], acc_meta[b][1]
+                if bool(ts_a) != bool(ts_b) or (ts_a == ts_b and not _same_submitter_prefix(a, b)):
+                    ambig_accs.update((a, b))
+        for a in ambig_accs:
+            for tx in amend_by_acc[a]:
+                _mark_uncertain(tx)
+
     sorted_acc_items = sorted(
         amend_by_acc.items(),
-        key=lambda item: (min(str(r.get("filing_date") or "") for r in item[1]), item[0]),
+        key=lambda item: (acc_meta[item[0]][0], acc_meta[item[0]][1], item[0]),
     )
 
     for _acc, acc_rows in sorted_acc_items:
-        intents, ambig_flags, row_texts, acc_has_unclaimed_add = _resolve_accession_intents(acc_rows)
+        intents, ambig_flags, row_texts, acc_unclaimed_add_count = _resolve_accession_intents(acc_rows)
         acc_sells: list[tuple[dict, tuple[bool, bool], bool, str]] = []
         acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str]] = []
         for tx, intent, is_ambig, rtext in zip(acc_rows, intents, ambig_flags, row_texts):
@@ -1353,8 +1430,11 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 break
 
         # Sub-pass 4: remaining unlinked unannotated sell rows — confirm as new sale ONLY when filing evidence
-        # supports an addition (unclaimed remarks addition, or all prior entries on that base signature were already
-        # reserved in this same accession). Otherwise report uncertainty without inflating the confirmed sale count.
+        # supports an addition (pigeonhole proof when all prior entries on that base signature were reserved in
+        # this accession, or bounded by the integer number of unclaimed additions stated in remarks). Excess
+        # unattributable rows stay uncertain without inflating the confirmed sale count.
+        remarks_add_cands: list[dict] = []
+        pigeonhole_adds = 0
         for ridx, tx, _rtext in unannotated_rows:
             if ridx in resolved_heur:
                 continue
@@ -1367,10 +1447,42 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             all_prior_same_base_reserved = has_prior_same_base and all(
                 i in acc_matched_sell for i in pool if _base_sig(ledger[i]["tx"]) == b
             )
-            if acc_has_unclaimed_add or all_prior_same_base_reserved:
+            if all_prior_same_base_reserved:
                 acc_new_sales.append(tx)
+                pigeonhole_adds += 1
+            elif acc_unclaimed_add_count is None or acc_unclaimed_add_count > 0:
+                remarks_add_cands.append(tx)
             else:
                 _mark_uncertain(tx)
+
+        if remarks_add_cands:
+            rem_add_budget = (
+                None if acc_unclaimed_add_count is None else max(0, acc_unclaimed_add_count - pigeonhole_adds)
+            )
+            if rem_add_budget is None or len(remarks_add_cands) <= rem_add_budget:
+                acc_new_sales.extend(remarks_add_cands)
+            else:
+                # More unlinked rows than remarks-backed additions: cap added rows at rem_add_budget in
+                # deterministic, None-safe order and keep all affected rows marked uncertain.
+                def _cand_sort_key(tx: dict) -> tuple:
+                    td = _tx_date_iso(tx)
+                    shares_v = _safe_float(tx.get("shares"))
+                    price_v = _safe_float(tx.get("price"))
+                    return (
+                        0 if (td is None or td >= tx_cutoff) else 1,
+                        _owner_key(tx),
+                        str(tx.get("transaction_date") or tx.get("date") or ""),
+                        str(tx.get("security") or ""),
+                        bool(tx.get("derivative")),
+                        (0, shares_v) if shares_v is not None else (1, 0.0),
+                        (0, price_v) if price_v is not None else (1, 0.0),
+                    )
+
+                ordered_cands = sorted(remarks_add_cands, key=_cand_sort_key)
+                if rem_add_budget > 0:
+                    acc_new_sales.extend(ordered_cands[:rem_add_budget])
+                for tx in ordered_cands:
+                    _mark_uncertain(tx)
 
         # Merge newly disclosed sales from this accession idempotently against existing 4/A-added ledger entries.
         acc_new_counts: dict[tuple, list[dict]] = {}
@@ -1385,15 +1497,6 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             need = len(rows) - existing_counts.get(e, 0)
             if need > 0:
                 ledger.extend(_make_ledger_entry(tx, from_orig=False) for tx in rows[:need])
-
-    def _tx_date_iso(tx: dict) -> str | None:
-        raw = str(tx.get("transaction_date") or tx.get("date") or "").strip()[:10]
-        if not raw:
-            return None
-        try:
-            return date.fromisoformat(raw).isoformat()
-        except ValueError:
-            return None
 
     active_sales = [entry for entry in ledger if not entry["reclassified"]]
     recent_active_sales: list[tuple[dict, bool]] = []

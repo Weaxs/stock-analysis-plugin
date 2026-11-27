@@ -1808,6 +1808,179 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     assert res_ambig_ab["veto_buy"] is False
     assert res_ambig_ba["veto_buy"] is False
 
+    # 30. Remarks declaring one correction and one omitted addition must cap unlinked remarks-backed additions at 1
+    #     even when both 4/A rows changed shares and price (so net sales = 2, not 3, and no medium-risk flag).
+    cap_orig = {
+        "form": "4",
+        "accession": "0001-26-000501",
+        "filing_date": "2026-10-05",
+        "transaction_date": "2026-10-04",
+        "transaction_code": "S",
+        "owner": "Cap Owner",
+        "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 100.0,
+        "price": 100.0,
+    }
+    cap_row1 = {
+        "form": "4/A",
+        "accession": "0001-26-000502",
+        "filing_date": "2026-10-06",
+        "original_filing_date": "2026-10-05",
+        "transaction_date": "2026-10-04",
+        "transaction_code": "S",
+        "owner": "Cap Owner",
+        "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 120.0,
+        "price": 105.0,
+        "remarks": "Amending to correct one transaction and add an omitted transaction.",
+    }
+    cap_row2 = {
+        "form": "4/A",
+        "accession": "0001-26-000502",
+        "filing_date": "2026-10-06",
+        "original_filing_date": "2026-10-05",
+        "transaction_date": "2026-10-04",
+        "transaction_code": "S",
+        "owner": "Cap Owner",
+        "owners": [{"cik": "0000000030", "name": "Cap Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 250.0,
+        "price": None,
+        "remarks": "Amending to correct one transaction and add an omitted transaction.",
+    }
+    res_cap_12 = _screen([cap_orig, cap_row1, cap_row2], since_filing_date="2026-10-01")
+    res_cap_21 = _screen([cap_orig, cap_row2, cap_row1], since_filing_date="2026-10-01")
+    assert res_cap_12["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_cap_21["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_cap_12["checks"]["insider_trades"]["count_uncertain"] is True
+    assert res_cap_21["checks"]["insider_trades"]["count_uncertain"] is True
+    assert not any(f["category"] == "insider" for f in res_cap_12["flags"])
+    assert not any(f["category"] == "insider" for f in res_cap_21["flags"])
+
+    # 31. Consecutive date corrections where the second 4/A references the original transaction date (10-06 -> 09-29)
+    #     after an intermediate 4/A moved it to 10-07 must still match the prior revision and exclude the sale.
+    seq_orig = {
+        "form": "4",
+        "accession": "0001-26-000511",
+        "filing_date": "2026-10-06",
+        "transaction_date": "2026-10-06",
+        "transaction_code": "S",
+        "owner": "Seq Date Owner",
+        "owners": [{"cik": "0000000031", "name": "Seq Date Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 100.0,
+        "price": 50.0,
+    }
+    seq_amend_1 = {
+        "form": "4/A",
+        "accession": "0001-26-000512",
+        "filing_date": "2026-10-07",
+        "original_filing_date": "2026-10-06",
+        "transaction_date": "2026-10-07",
+        "transaction_code": "S",
+        "owner": "Seq Date Owner",
+        "owners": [{"cik": "0000000031", "name": "Seq Date Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 100.0,
+        "price": 50.0,
+        "footnotes": {"F1": "Corrects transaction date from 2026-10-06 to 2026-10-07."},
+        "footnote_refs": {"transactionDate": ["F1"]},
+    }
+    seq_amend_2 = {
+        "form": "4/A",
+        "accession": "0001-26-000513",
+        "filing_date": "2026-10-08",
+        "original_filing_date": "2026-10-06",
+        "transaction_date": "2026-09-29",
+        "transaction_code": "S",
+        "owner": "Seq Date Owner",
+        "owners": [{"cik": "0000000031", "name": "Seq Date Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 100.0,
+        "price": 50.0,
+        "footnotes": {"F1": "Corrects transaction date originally reported as 2026-10-06 to 2026-09-29."},
+        "footnote_refs": {"transactionDate": ["F1"]},
+    }
+    res_seq_only2 = _screen([seq_orig, seq_amend_2], since_filing_date="2026-10-01")
+    res_seq_both = _screen([seq_orig, seq_amend_1, seq_amend_2], since_filing_date="2026-10-01")
+    assert res_seq_only2["checks"]["insider_trades"]["sales_90d"] == 0
+    assert res_seq_both["checks"]["insider_trades"]["sales_90d"] == 0
+    assert res_seq_both["checks"]["insider_trades"]["count_uncertain"] is False
+    assert not any(f["category"] == "insider" for f in res_seq_both["flags"])
+
+    # 32. Same-day amendments from different submitting agents must execute in EDGAR acceptanceDateTime order
+    #     (14:00Z prefix 999 addition before 16:00Z prefix 111 gift reclassification), and flag uncertainty when
+    #     acceptance_datetime is missing so cross-submitter order cannot be determined.
+    same_day_orig = [
+        {
+            "form": "4",
+            "accession": "0000555555-26-000001",
+            "filing_date": "2026-10-03",
+            "transaction_date": f"2026-10-0{i}",
+            "transaction_code": "S",
+            "owner": "Same Day Owner",
+            "owners": [{"cik": "0000000032", "name": "Same Day Owner"}],
+            "security": "Common Stock",
+            "derivative": False,
+            "shares": 100.0 + i,
+            "price": 50.0,
+        }
+        for i in (1, 2)
+    ]
+    same_day_add = {
+        "form": "4/A",
+        "accession": "0000999999-26-000001",
+        "filing_date": "2026-10-05",
+        "acceptance_datetime": "2026-10-05T14:00:00.000Z",
+        "original_filing_date": "2026-10-03",
+        "transaction_date": "2026-10-03",
+        "transaction_code": "S",
+        "owner": "Same Day Owner",
+        "owners": [{"cik": "0000000032", "name": "Same Day Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 101.0,
+        "price": 51.0,
+        "footnotes": {"F1": "Reports an inadvertently omitted sale."},
+        "footnote_refs": {"transactionCode": ["F1"]},
+    }
+    same_day_gift = {
+        "form": "4/A",
+        "accession": "0000111111-26-000002",
+        "filing_date": "2026-10-05",
+        "acceptance_datetime": "2026-10-05T16:00:00.000Z",
+        "original_filing_date": "2026-10-03",
+        "transaction_date": "2026-10-03",
+        "transaction_code": "G",
+        "owner": "Same Day Owner",
+        "owners": [{"cik": "0000000032", "name": "Same Day Owner"}],
+        "security": "Common Stock",
+        "derivative": False,
+        "shares": 101.0,
+        "price": 0.0,
+        "footnotes": {"F1": "Corrects previously reported sale as a bona fide gift."},
+        "footnote_refs": {"transactionCode": ["F1"]},
+    }
+    res_same_day_ts = _screen(same_day_orig + [same_day_gift, same_day_add], since_filing_date="2026-10-01")
+    assert res_same_day_ts["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_same_day_ts["checks"]["insider_trades"]["count_uncertain"] is False
+    assert not any(f["category"] == "insider" for f in res_same_day_ts["flags"])
+
+    same_day_add_no_ts = {k: v for k, v in same_day_add.items() if k != "acceptance_datetime"}
+    same_day_gift_no_ts = {k: v for k, v in same_day_gift.items() if k != "acceptance_datetime"}
+    res_same_day_no_ts = _screen(
+        same_day_orig + [same_day_add_no_ts, same_day_gift_no_ts], since_filing_date="2026-10-01"
+    )
+    assert res_same_day_no_ts["checks"]["insider_trades"]["count_uncertain"] is True
+
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
     base_inputs = {

@@ -577,13 +577,17 @@ def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch
     recent_filing = (date.today() - timedelta(days=7)).isoformat()
     orig_filing = (date.today() - timedelta(days=9)).isoformat()
     tx_date = (date.today() - timedelta(days=10)).isoformat()
-    # Pre-seed legacy cache entries missing `remarks` / `original_filing_date`.
-    for prefix in ("sec-form4", "sec-form4-v2"):
+    # Pre-seed legacy cache entries missing `remarks` / `original_filing_date` / `acceptance_datetime`.
+    for prefix in ("sec-form4", "sec-form4-v2", "sec-form4-v3"):
         sec_edgar.cached(
             f"{prefix}:0000320193:{accn}",
             sec_edgar.WEEK,
             lambda: [{"form": "4/A", "transaction_code": "S", "shares": 10}],
         )
+
+    accept_ts_early = f"{recent_filing}T14:00:00.000Z"
+    accept_ts_late = f"{recent_filing}T16:00:00.000Z"
+    accn_late_small_prefix = "0000111111-26-000202"
 
     def get(url, **kwargs):
         if url.endswith("company_tickers.json"):
@@ -593,11 +597,12 @@ def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch
                 {
                     "filings": {
                         "recent": {
-                            "form": ["4/A"],
-                            "accessionNumber": [accn],
-                            "filingDate": [recent_filing],
-                            "reportDate": [tx_date],
-                            "primaryDocument": ["form4a.xml"],
+                            "form": ["4/A", "4/A"],
+                            "accessionNumber": [accn, accn_late_small_prefix],
+                            "filingDate": [recent_filing, recent_filing],
+                            "acceptanceDateTime": [accept_ts_early, accept_ts_late],
+                            "reportDate": [tx_date, tx_date],
+                            "primaryDocument": ["form4a.xml", "form4a2.xml"],
                         },
                         "files": [],
                     }
@@ -609,12 +614,17 @@ def test_form4_cache_key_version_re_parses_remarks_over_legacy_cache(monkeypatch
 
     monkeypatch.setattr("requests.get", get)
     result = sec_edgar.insider_trades(Namespace(symbol="AAPL", days=90, top=10))
-    assert result["transactions"][0]["remarks"] == "Amending to report an inadvertently omitted sale."
-    assert result["transactions"][0]["original_filing_date"] == orig_filing
-    v3_rows = sec_edgar.cached(
-        f"sec-form4-v3:0000320193:{accn}",
+    # Same-day cross-submitter filings are sorted by acceptanceDateTime descending (16:00Z before 14:00Z).
+    assert [tx["accession"] for tx in result["transactions"]] == [accn_late_small_prefix, accn]
+    assert result["transactions"][0]["acceptance_datetime"] == accept_ts_late
+    assert result["transactions"][1]["acceptance_datetime"] == accept_ts_early
+    assert result["transactions"][1]["remarks"] == "Amending to report an inadvertently omitted sale."
+    assert result["transactions"][1]["original_filing_date"] == orig_filing
+    v4_rows = sec_edgar.cached(
+        f"sec-form4-v4:0000320193:{accn}",
         sec_edgar.WEEK,
-        lambda: pytest.fail("expected v3 Form 4 cache entry to be populated"),
+        lambda: pytest.fail("expected v4 Form 4 cache entry to be populated"),
     )
-    assert v3_rows[0]["remarks"] == "Amending to report an inadvertently omitted sale."
-    assert v3_rows[0]["original_filing_date"] == orig_filing
+    assert v4_rows[0]["remarks"] == "Amending to report an inadvertently omitted sale."
+    assert v4_rows[0]["original_filing_date"] == orig_filing
+    assert v4_rows[0]["acceptance_datetime"] == accept_ts_early
