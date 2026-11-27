@@ -2979,6 +2979,7 @@ def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypa
         ("This gift was previously unreported.", False, "2026-11-20", "note", 7),
         ("This gift was previously unreported.", False, "2026-11-20", "amendment_reason", 7),
         ("This gift was previously unreported.", False, "2026-11-17", None, 7),
+        ("This gift was previously unreported.", False, "2026-11-17", "remarks", 7),
     ],
 )
 def test_form4_shared_conversion_preserves_independently_added_gift(
@@ -3023,6 +3024,39 @@ def test_form4_shared_conversion_preserves_independently_added_gift(
         assert result["veto_buy"] is (expected_sales == 6)
 
 
+@pytest.mark.parametrize(
+    "remark, expected_sales",
+    [
+        ("The 100-share gift was already reported in the original Form 4.", 7),
+        ("The 200-share gift was already reported in the original Form 4.", 6),
+        ("The 100-share gift was previously disclosed in the prior Form 4/A filed on November 21, 2026.", 7),
+        ("The 100-share gift was not already reported in the original Form 4.", 6),
+        ("The 100-share gift was already reported in the original Form 4 holdings totals only.", 6),
+    ],
+)
+def test_form4_prior_gift_disclosure_with_filing_reference(monkeypatch, remark, expected_sales):
+    sale = _form4_sale(200)
+    originals = [sale, _form4_sale(100), *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 406))]
+    amendment = {
+        "form": "4/A",
+        "accession": "0000000123-26-000002",
+        "filing_date": "2026-11-22",
+        "original_filing_date": "2026-11-21",
+        "transaction_code": "G",
+        "price": None,
+        "remarks": remark,
+        "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift.", "F2": "This gift was unreported."},
+    }
+    converted = _form4_sale(200, **amendment, footnote_refs={"transactionCoding": ["F1"]})
+    added = _form4_sale(100, **amendment, footnote_refs={"transactionCoding": ["F1", "F2"]})
+    for amended_rows in ((converted, added), (added, converted)):
+        result = _screen_form4_cli(monkeypatch, [*originals, *amended_rows])
+        check = result["checks"]["insider_trades"]
+        assert check["sales_90d"] == expected_sales
+        assert check["count_uncertain"] is (expected_sales == 7)
+        assert result["veto_buy"] is (expected_sales == 6)
+
+
 @pytest.mark.parametrize("conversion_date, expected_sales", [("2026-11-20", 6), ("2026-11-17", 7)])
 def test_form4_shared_conversion_respects_independent_gift_addition_and_correction(
     monkeypatch, conversion_date, expected_sales
@@ -3056,6 +3090,23 @@ def test_form4_shared_conversion_respects_independent_gift_addition_and_correcti
         assert check["sales_90d"] == expected_sales
         assert check["count_uncertain"] is (expected_sales == 7)
         assert result["veto_buy"] is (expected_sales == 6)
+    if expected_sales == 6:
+        for gift in (added, corrected):
+            shares = gift["shares"]
+            follow_up = dict(
+                gift,
+                accession="0000000123-26-000003",
+                filing_date="2026-11-23",
+                original_filing_date=gift["filing_date"],
+                shares=shares + 5,
+                footnotes={"F1": f"Corrects this gift from {shares} shares to {shares + 5} shares."},
+                footnote_refs={"transactionCoding": ["F1"]},
+            )
+            result = _screen_form4_cli(monkeypatch, [*originals, native, converted, added, corrected, follow_up])
+            check = result["checks"]["insider_trades"]
+            assert check["sales_90d"] == 6
+            assert check["count_uncertain"] is False, shares
+            assert result["veto_buy"] is True
 
 
 def test_form4_conflicting_gift_addition_does_not_remove_a_matching_sale(monkeypatch):
@@ -3570,6 +3621,34 @@ def test_form4_native_gift_corrections_preserve_revision_history(monkeypatch):
         assert result["checks"]["insider_trades"]["sales_90d"] == 6
         assert result["checks"]["insider_trades"]["count_uncertain"] is False
         assert result["veto_buy"] is True
+
+
+def test_form4_explicit_gift_addition_preserves_identical_original(monkeypatch):
+    sales = [_form4_sale(shares) for shares in range(401, 407)]
+    original = _form4_sale(100, transaction_code="G", price=None)
+    added = dict(
+        original,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        footnotes={"F1": "This gift was unreported."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1"]},
+    )
+    for linked_filing, uncertain in (("2026-11-22", False), ("2026-11-21", False), (None, True)):
+        follow_up = dict(
+            added,
+            accession="0000000123-26-000003",
+            filing_date="2026-11-23",
+            original_filing_date=linked_filing,
+            shares=120,
+            footnotes={"F1": "Corrects this gift from 100 shares to 120 shares."},
+        )
+        result = _screen_form4_cli(monkeypatch, [*sales, original, follow_up, added])
+        check = result["checks"]["insider_trades"]
+        assert check["sales_90d"] == 6
+        assert check["count_uncertain"] is uncertain, linked_filing
+        assert result["veto_buy"] is (not uncertain), linked_filing
 
 
 def test_form4_undated_sale_does_not_change_dated_sales_veto(monkeypatch):

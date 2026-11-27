@@ -409,10 +409,13 @@ _F4_ROW_ADDITION_QUALIFIER_RE = re.compile(rf"\b({_F4_SALE_QUALIFIER})\s+{_F4_RO
 _F4_ROW_ADDITION_FILING_DATE_RE = re.compile(rf"\bfiled on ({_F4_REMARKS_DATE})", re.IGNORECASE)
 _F4_ROW_SECURITY = r"(?:\s+of\s+(?:the (?:company|issuer)'s\s+)?(?:common (?:stock|shares)|securities))?"
 _F4_ROW_SALE_OBJECT = rf"{_F4_ROW_SALE_DESCRIPTION}{_F4_ROW_SECURITY}"
-_F4_ROW_REPORT_CONTEXT = (
-    r"(?:\s+from\s+(?:the\s+)?(?:report(?:ing)? person's\s+)?"
+_F4_ROW_FILING_REFERENCE = (
+    r"(?:the\s+)?(?:report(?:ing)? person's\s+)?"
     r"(?:(?:original|prior|(?:previously|originally) filed)\s+)?(?:form 4(?:/a)?(?: filing)?|filing|report)"
-    rf"(?: (?:originally )?filed on {_F4_REMARKS_DATE})?)?"
+    rf"(?: (?:originally )?filed on {_F4_REMARKS_DATE})?"
+)
+_F4_ROW_REPORT_CONTEXT = (
+    rf"(?:\s+from\s+{_F4_ROW_FILING_REFERENCE})?"
     r"(?:\s+that was not previously reported)?(?:\s+on\s+\d{4}-\d{2}-\d{2})?"
 )
 _F4_ROW_SALE_ADDITION_RE = re.compile(
@@ -515,7 +518,8 @@ _F4_ROW_GIFT_ADDITION_DENIAL_RE = re.compile(
     re.IGNORECASE,
 )
 _F4_PREVIOUSLY_REPORTED_GIFT_RE = re.compile(
-    rf"(?:the )?({_F4_DECLARED_NUMBER})-share gift (?:was|is) (?:previously|originally|already) (?:reported|disclosed)",
+    rf"(?:the )?({_F4_DECLARED_NUMBER})-share gift (?:was|is) (?:previously|originally|already) (?:reported|disclosed)"
+    rf"(?:\s+in\s+{_F4_ROW_FILING_REFERENCE})?",
     re.IGNORECASE,
 )
 _F4_RESTORE_SELL_RE = re.compile(
@@ -1061,6 +1065,9 @@ def _f4_accession_note_texts(
             targets = _f4_conversion_targets(
                 acc_rows, refs, conversion, ledger, non_sell_histories, local_gift_corrections, local_gift_additions
             )
+            if len(refs) > 1 and len(targets) == 1 and local_gift_additions.get(targets[0]) is False:
+                # A shared note cannot resolve the target's contradictory addition evidence.
+                targets = []
             if len(targets) == 1:
                 texts_by_row[targets[0]].append(sentence)
             else:
@@ -1089,7 +1096,7 @@ def _f4_resolve_accession_intents(
     acc_rows: list[dict],
     ledger: list[dict],
     non_sell_histories: list[list[dict]],
-) -> tuple[list[tuple[bool, bool]], list[bool], list[str], set[int]]:
+) -> tuple[list[tuple[bool, bool]], list[bool], list[str], set[int], set[int]]:
     """Resolve per-row (is_add, is_corr) strictly from row-scoped evidence.
 
     Use filing evidence for a single unambiguous row or an explicit sale addition count
@@ -1111,6 +1118,7 @@ def _f4_resolve_accession_intents(
         remark_conversions,
         other_remarks,
     )
+    independent_gift_additions = {i for i, added in local_gift_additions.items() if added}
     prior_disclosures = [
         any(not match["negated"] for match in _F4_PRIOR_DISCLOSURE_RE.finditer(text)) for text in row_texts
     ]
@@ -1147,7 +1155,7 @@ def _f4_resolve_accession_intents(
             addition = bool(_F4_ADDITION_RE.search(rt))
         row_intents.append((addition, bool(_F4_CORRECTION_RE.search(rt))))
     if not (other_remarks or shared_additions):
-        return row_intents, ambiguous, row_texts, unresolved_conversions
+        return row_intents, ambiguous, row_texts, unresolved_conversions, independent_gift_additions
     rem_text = ". ".join(other_remarks)
     # shortcut: promote explicit English declarations, and expand for verified filing wording.
     all_rows = set(range(len(acc_rows)))
@@ -1170,7 +1178,7 @@ def _f4_resolve_accession_intents(
     filing_add = bool(claims) or bool(_F4_ADDITION_RE.search(rem_text))
     rem_corr = bool(_F4_CORRECTION_RE.search(rem_text))
     if not (filing_add or rem_corr):
-        return row_intents, ambiguous, row_texts, unresolved_conversions
+        return row_intents, ambiguous, row_texts, unresolved_conversions, independent_gift_additions
     if (
         len(remarks_parts) <= 1
         and covering_declaration is not None
@@ -1197,24 +1205,30 @@ def _f4_resolve_accession_intents(
             if any(sig in ledger[i]["sigs"] for i in pool):
                 break
         else:
-            return [(True, False)] * len(acc_rows), ambiguous, row_texts, unresolved_conversions
+            return (
+                [(True, False)] * len(acc_rows),
+                ambiguous,
+                row_texts,
+                unresolved_conversions,
+                independent_gift_additions,
+            )
     unclaimed_add = filing_add and not _f4_filing_additions_covered(
         claims, acc_rows, claimed_additions, qualifiers_by_row
     )
     unclaimed_corr = rem_corr and not any(rc for _, rc in row_intents)
     if not (unclaimed_add or unclaimed_corr):
-        return row_intents, ambiguous, row_texts, unresolved_conversions
+        return row_intents, ambiguous, row_texts, unresolved_conversions, independent_gift_additions
     unattributed = [i for i, (ra, rc) in enumerate(row_intents) if not (ra or rc)]
     if len(acc_rows) == 1 and len(unattributed) == 1 and (unclaimed_add != unclaimed_corr):
         if unclaimed_add and _f4_is_sell(acc_rows[0]):
             ambiguous[0] = True
-            return row_intents, ambiguous, row_texts, unresolved_conversions
+            return row_intents, ambiguous, row_texts, unresolved_conversions, independent_gift_additions
         row_intents[0] = (unclaimed_add, unclaimed_corr)
         row_texts[0] = ". ".join(filter(None, (row_texts[0], rem_text)))
-        return row_intents, ambiguous, row_texts, unresolved_conversions
+        return row_intents, ambiguous, row_texts, unresolved_conversions, independent_gift_additions
     for i in unattributed or range(len(acc_rows)):
         ambiguous[i] = True
-    return row_intents, ambiguous, row_texts, unresolved_conversions
+    return row_intents, ambiguous, row_texts, unresolved_conversions, independent_gift_additions
 
 
 def _f4_make_ledger_entry(tx: dict, *, from_orig: bool) -> dict:
@@ -1472,7 +1486,7 @@ def _f4_prior_reclassified_gifts(
 def _f4_reconcile_non_sells(
     ledger: list[dict],
     non_sell_histories: list[list[dict]],
-    acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str, bool]],
+    acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str, bool, bool]],
     prior_len: int,
     mark_uncertain,
 ) -> tuple[set[int], list[tuple[int, dict]]]:
@@ -1500,7 +1514,7 @@ def _f4_reconcile_non_sells(
 
     acc_added_non_sells: list[dict] = []
     ns_candidates: list[tuple[dict, bool, bool, str]] = []
-    for tx, (is_add, is_corr), is_ambig, rtext, unresolved_conversion in acc_non_sells:
+    for tx, (is_add, is_corr), is_ambig, rtext, unresolved_conversion, independent_gift_addition in acc_non_sells:
         base = _f4_base_sig(tx)
         code = _f4_tx_code(tx)
         shares = tx.get("shares")
@@ -1533,6 +1547,10 @@ def _f4_reconcile_non_sells(
             continue
         if unresolved_conversion and not (explicit_sale_conversion or is_explicit_add):
             # A quantity match cannot stand in for the unresolved footnote.
+            continue
+        if independent_gift_addition and is_explicit_add:
+            # Row-local addition evidence takes precedence over an identical earlier gift.
+            acc_added_non_sells.append(tx)
             continue
         is_sale_conversion = explicit_sale_conversion or (is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext)))
         if code == "G" and has_identity and not (is_explicit_add or is_ambig or is_sale_conversion):
@@ -2271,18 +2289,20 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
         _mark_uncertain(tx)
 
     for _acc, acc_rows in sorted_acc_items:
-        intents, ambig_flags, row_texts, unresolved_conversions = _f4_resolve_accession_intents(
-            acc_rows, ledger, non_sell_histories
+        intents, ambig_flags, row_texts, unresolved_conversions, independent_gift_additions = (
+            _f4_resolve_accession_intents(acc_rows, ledger, non_sell_histories)
         )
         acc_sells: list[tuple[dict, tuple[bool, bool], bool, str]] = []
-        acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str, bool]] = []
+        acc_non_sells: list[tuple[dict, tuple[bool, bool], bool, str, bool, bool]] = []
         for i, (tx, intent, is_ambig, rtext) in enumerate(zip(acc_rows, intents, ambig_flags, row_texts)):
             if is_ambig:
                 _mark_uncertain(tx)
             if _f4_is_sell(tx):
                 acc_sells.append((tx, intent, is_ambig, rtext))
             else:
-                acc_non_sells.append((tx, intent, is_ambig, rtext, i in unresolved_conversions))
+                acc_non_sells.append(
+                    (tx, intent, is_ambig, rtext, i in unresolved_conversions, i in independent_gift_additions)
+                )
 
         prior_len = len(ledger)
         acc_matched_ns, pending_reclassifications = _f4_reconcile_non_sells(
