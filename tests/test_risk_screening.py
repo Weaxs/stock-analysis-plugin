@@ -3028,6 +3028,7 @@ def test_form4_shared_conversion_preserves_independently_added_gift(
     "remark, expected_sales",
     [
         ("The 100-share gift was already reported in the original Form 4.", 7),
+        ("The 100-share gift was already reported on the original Form 4.", 7),
         ("The 200-share gift was already reported in the original Form 4.", 6),
         ("The 100-share gift was previously disclosed in the prior Form 4/A filed on November 21, 2026.", 7),
         ("The 100-share gift was not already reported in the original Form 4.", 6),
@@ -3055,6 +3056,41 @@ def test_form4_prior_gift_disclosure_with_filing_reference(monkeypatch, remark, 
         assert check["sales_90d"] == expected_sales
         assert check["count_uncertain"] is (expected_sales == 7)
         assert result["veto_buy"] is (expected_sales == 6)
+
+
+@pytest.mark.parametrize("restate_prior_gift", [False, True])
+def test_form4_dated_disclosure_identifies_the_reported_gift(monkeypatch, restate_prior_gift):
+    from itertools import permutations
+
+    sale = _form4_sale(200)
+    originals = [sale, *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 407))]
+    prior = _form4_sale(
+        100,
+        accession="0000000123-26-000004",
+        filing_date="2026-11-19",
+        transaction_date="2026-11-18",
+        transaction_code="G",
+        price=None,
+    )
+    amendment = {
+        "form": "4/A",
+        "accession": "0000000123-26-000002",
+        "filing_date": "2026-11-22",
+        "original_filing_date": "2026-11-21",
+        "remarks": "The 100-share gift was previously disclosed in the prior Form 4 filed on November 19, 2026.",
+        "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift.", "F2": "This gift was unreported."},
+    }
+    converted = dict(sale, **amendment, transaction_code="G", price=None, footnote_refs={"transactionCoding": ["F1"]})
+    added = dict(converted, shares=100, footnote_refs={"transactionCoding": ["F1", "F2"]})
+    rows = [converted, added]
+    if restate_prior_gift:
+        rows.append(dict(prior, **amendment))
+    for ordered in permutations(rows):
+        result = _screen_form4_cli(monkeypatch, [*originals, prior, *ordered])
+        check = result["checks"]["insider_trades"]
+        assert check["sales_90d"] == 6
+        assert check["count_uncertain"] is False
+        assert result["veto_buy"] is True
 
 
 @pytest.mark.parametrize("conversion_date, expected_sales", [("2026-11-20", 6), ("2026-11-17", 7)])
@@ -3649,6 +3685,52 @@ def test_form4_explicit_gift_addition_preserves_identical_original(monkeypatch):
         assert check["sales_90d"] == 6
         assert check["count_uncertain"] is uncertain, linked_filing
         assert result["veto_buy"] is (not uncertain), linked_filing
+
+
+@pytest.mark.parametrize("repeat_filing", ["2026-11-22", "2026-11-23"])
+def test_form4_repeated_dated_gift_omission_preserves_one_history(monkeypatch, repeat_filing):
+    sales = [_form4_sale(shares) for shares in range(401, 407)]
+    added = _form4_sale(
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        acceptance_datetime="2026-11-22T13:00:00Z",
+        original_filing_date="2026-11-21",
+        transaction_code="G",
+        price=None,
+        footnotes={"F1": "This gift was omitted from the original Form 4 filed on November 21, 2026."},
+        footnote_refs={"transactionCoding": ["F1"]},
+    )
+    repeated = dict(
+        added,
+        accession="0000000123-26-000003",
+        filing_date=repeat_filing,
+        acceptance_datetime=f"{repeat_filing}T15:00:00Z",
+        original_filing_date=added["filing_date"],
+    )
+    corrected = dict(
+        added,
+        accession="0000000123-26-000004",
+        filing_date="2026-11-24",
+        acceptance_datetime="2026-11-24T13:00:00Z",
+        original_filing_date=repeat_filing,
+        shares=120,
+        footnotes={"F1": "Corrects this gift from 100 shares to 120 shares."},
+    )
+    corrected_again = dict(
+        corrected,
+        accession="0000000123-26-000005",
+        filing_date="2026-11-25",
+        acceptance_datetime="2026-11-25T13:00:00Z",
+        original_filing_date=added["filing_date"],
+        shares=130,
+        footnotes={"F1": "Corrects this gift from 120 shares to 130 shares."},
+    )
+    result = _screen_form4_cli(monkeypatch, [*sales, corrected_again, corrected, repeated, added])
+    check = result["checks"]["insider_trades"]
+    assert check["sales_90d"] == 6
+    assert check["count_uncertain"] is False
+    assert result["veto_buy"] is True
 
 
 def test_form4_undated_sale_does_not_change_dated_sales_veto(monkeypatch):

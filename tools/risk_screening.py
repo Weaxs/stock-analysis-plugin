@@ -519,7 +519,7 @@ _F4_ROW_GIFT_ADDITION_DENIAL_RE = re.compile(
 )
 _F4_PREVIOUSLY_REPORTED_GIFT_RE = re.compile(
     rf"(?:the )?({_F4_DECLARED_NUMBER})-share gift (?:was|is) (?:previously|originally|already) (?:reported|disclosed)"
-    rf"(?:\s+in\s+{_F4_ROW_FILING_REFERENCE})?",
+    rf"(?:\s+(?:in|on)\s+{_F4_ROW_FILING_REFERENCE})?",
     re.IGNORECASE,
 )
 _F4_RESTORE_SELL_RE = re.compile(
@@ -992,6 +992,27 @@ def _f4_conversion_targets(
     return unclaimed if removed_addition else unclaimed or remaining
 
 
+def _f4_disclosed_gift_matches(
+    tx: dict, shares: float, reported_filing: str | None, non_sell_histories: list[list[dict]]
+) -> bool:
+    if not _f4_matches_num_set(tx.get("shares"), {shares}):
+        return False
+    if not reported_filing:
+        return True
+    owner_security = _f4_owner_sec_sig(tx)
+    amend_date = str(tx.get("filing_date") or "").strip()
+    amend_ts = _f4_acceptance_ts(tx)
+    reported_gifts = {
+        _f4_base_sig(rev)
+        for history in non_sell_histories
+        if _f4_tx_code(history[0]) == "G" and _f4_owner_sec_sig(history[0]) == owner_security
+        for rev in _f4_non_sell_revisions(history, reported_filing, amend_date, amend_ts)
+        if rev.get("filing_date") == reported_filing and _f4_matches_num_set(rev.get("shares"), {shares})
+    }
+    # Only narrow a dated disclosure when the cited filing identifies a known gift.
+    return not reported_gifts or _f4_base_sig(tx) in reported_gifts
+
+
 def _f4_accession_note_texts(
     acc_rows: list[dict],
     ledger: list[dict],
@@ -1032,7 +1053,14 @@ def _f4_accession_note_texts(
         elif prior_gift := _F4_PREVIOUSLY_REPORTED_GIFT_RE.fullmatch(sentence):
             shares = _safe_float(prior_gift[1].replace(",", ""))
             if shares is not None:
-                linked_gift_denials.update(i for i in refs if _f4_matches_num_set(acc_rows[i].get("shares"), {shares}))
+                stated_date = _F4_ROW_ADDITION_FILING_DATE_RE.search(sentence)
+                reported_filing = _f4_declared_filing_date(stated_date[1]) if stated_date else None
+                linked_gift_denials.update(
+                    i
+                    for i in refs
+                    if i in local_gift_notes
+                    and _f4_disclosed_gift_matches(acc_rows[i], shares, reported_filing, non_sell_histories)
+                )
     for sentence, refs in note_rows.values():
         if len(refs) == 1:
             i = next(iter(refs))
@@ -1549,7 +1577,32 @@ def _f4_reconcile_non_sells(
             # A quantity match cannot stand in for the unresolved footnote.
             continue
         if independent_gift_addition and is_explicit_add:
-            # Row-local addition evidence takes precedence over an identical earlier gift.
+            addition_notes = {sentence for sentence in sentences if _F4_ROW_GIFT_ADDITION_RE.fullmatch(sentence)}
+            # An unchanged omission claim can refer to an older filing than the linked amendment.
+            if has_identity and len(addition_notes) == 1 and orig_date:
+                date_ref = _F4_ROW_ADDITION_FILING_DATE_RE.search(next(iter(addition_notes)))
+                omitted_from = _f4_declared_filing_date(date_ref[1]) if date_ref else None
+                if omitted_from and omitted_from < orig_date:
+                    exact = _f4_exact_sig(tx)
+                    linked_gifts = [
+                        i
+                        for i, revisions in _f4_prior_native_gifts(non_sell_histories, tx, orig_date)
+                        if any(
+                            str(rev.get("form") or "").upper() == "4/A"
+                            and rev.get("filing_date") == orig_date
+                            and _f4_exact_sig(rev) == exact
+                            for rev in revisions
+                        )
+                    ]
+                    if len(linked_gifts) == 1:
+                        target = linked_gifts[0]
+                        native_gift_claims.setdefault(target, []).append(tx)
+                        acc_orig_ns_matched.add(target)
+                        continue
+                    if linked_gifts:
+                        mark_uncertain(tx)
+                        continue
+            # Row-local addition evidence takes precedence over an identical original gift.
             acc_added_non_sells.append(tx)
             continue
         is_sale_conversion = explicit_sale_conversion or (is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext)))
