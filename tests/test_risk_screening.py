@@ -2973,6 +2973,8 @@ def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypa
         ("This gift was previously unreported.", True, "2026-11-20", None, 7),
         ("This gift was previously unreported. This gift was not omitted.", False, "2026-11-20", None, 7),
         ("This gift was previously unreported.", False, "2026-11-20", "remarks", 7),
+        ("This gift was previously unreported.", False, "2026-11-20", "remarks_prior_gift", 7),
+        ("This gift was previously unreported.", False, "2026-11-20", "remarks_other_gift", 6),
         ("This gift was previously unreported.", False, "2026-11-20", "shared_ref", 7),
         ("This gift was previously unreported.", False, "2026-11-20", "note", 7),
         ("This gift was previously unreported.", False, "2026-11-20", "amendment_reason", 7),
@@ -2992,8 +2994,13 @@ def test_form4_shared_conversion_preserves_independently_added_gift(
         "original_filing_date": "2026-11-21",
         "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift.", "F2": gift_note, "F3": denial},
     }
-    if denial_source == "remarks":
-        amendment["remarks"] = denial
+    remarks_by_source = {
+        "remarks": denial,
+        "remarks_prior_gift": "The 100-share gift was already reported.",
+        "remarks_other_gift": "The 200-share gift was already reported.",
+    }
+    if denial_source in remarks_by_source:
+        amendment["remarks"] = remarks_by_source[denial_source]
     references = ["F1", "F3"] if denial_source == "shared_ref" else ["F1"]
     converted = _form4_sale(
         200,

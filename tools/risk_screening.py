@@ -9,6 +9,7 @@ import re
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
+from itertools import chain
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -513,6 +514,10 @@ _F4_ROW_GIFT_ADDITION_DENIAL_RE = re.compile(
     rf"{_F4_ROW_SALE_DENIAL_CONTEXT}(?=$|(?:\s*,\s*|\s+)(?:and|but)\s+)",
     re.IGNORECASE,
 )
+_F4_PREVIOUSLY_REPORTED_GIFT_RE = re.compile(
+    rf"(?:the )?({_F4_DECLARED_NUMBER})-share gift (?:was|is) (?:previously|originally|already) (?:reported|disclosed)",
+    re.IGNORECASE,
+)
 _F4_RESTORE_SELL_RE = re.compile(
     r"(\breclassif(?:ied|y|ying)|\btransaction\s+code|\bcode\s+s\b|"
     r"\b(?:was|is|should\s+have\s+been)\s+(?:actually\s+)?(?:a\s+)?(?:[\w-]+\s+){0,2}sale\b|"
@@ -955,11 +960,14 @@ def _f4_conversion_targets(
     if not matched:
         return candidates
     # Reject separately reported gifts without promoting an unmatched row by elimination.
-    matched = [i for i in matched if not local_gift_additions.get(i)]
+    remaining = [i for i in matched if not local_gift_additions.get(i)]
+    removed_addition = len(remaining) != len(matched)
+    if not removed_addition and len(remaining) == 1:
+        return remaining
 
     # A row-specific correction with its own prior native gift accounts for a separate transaction.
     independent_gifts = set()
-    for i in matched:
+    for i in remaining:
         tx = acc_rows[i]
         if _f4_tx_code(tx) != "G" or i not in local_gift_corrections:
             continue
@@ -976,7 +984,8 @@ def _f4_conversion_targets(
             pool, _ = _f4_scoped_pool(ledger, tx, len(ledger))
             if not _f4_prior_reclassified_gifts(ledger, tx, pool, gift_shares, gift_prices):
                 independent_gifts.add(i)
-    return [i for i in matched if i not in independent_gifts]
+    unclaimed = [i for i in remaining if i not in independent_gifts]
+    return unclaimed if removed_addition else unclaimed or remaining
 
 
 def _f4_accession_note_texts(
@@ -984,7 +993,7 @@ def _f4_accession_note_texts(
     ledger: list[dict],
     non_sell_histories: list[list[dict]],
     remark_conversions: list[str],
-    filing_denies_gift_additions: bool,
+    other_remarks: list[str],
 ) -> tuple[list[str], list[_F4AdditionClaim], set[int], dict[int, bool]]:
     note_rows: dict[tuple[str | None, str], tuple[str, set[int]]] = {}
     texts_by_row: list[list[str]] = [[] for _ in acc_rows]
@@ -1013,9 +1022,14 @@ def _f4_accession_note_texts(
         if _f4_tx_code(tx) == "G"
     }
     linked_gift_denials: set[int] = set()
-    for sentence, refs in note_rows.values():
+    for sentence, refs in chain(note_rows.values(), ((sentence, all_rows) for sentence in other_remarks)):
         if _F4_ROW_GIFT_ADDITION_DENIAL_RE.match(sentence):
             linked_gift_denials.update(refs)
+        elif prior_gift := _F4_PREVIOUSLY_REPORTED_GIFT_RE.fullmatch(sentence):
+            shares = _safe_float(prior_gift[1].replace(",", ""))
+            if shares is not None:
+                linked_gift_denials.update(i for i in refs if _f4_matches_num_set(acc_rows[i].get("shares"), {shares}))
+    for sentence, refs in note_rows.values():
         if len(refs) == 1:
             i = next(iter(refs))
             if i in local_gift_notes:
@@ -1029,7 +1043,6 @@ def _f4_accession_note_texts(
         if any(_F4_ROW_GIFT_ADDITION_RE.fullmatch(sentence) for sentence in sentences):
             local_gift_additions[i] = not (
                 corrections
-                or filing_denies_gift_additions
                 or i in linked_gift_denials
                 or any(
                     _F4_ROW_GIFT_ADDITION_DENIAL_RE.match(sentence)
@@ -1096,7 +1109,7 @@ def _f4_resolve_accession_intents(
         ledger,
         non_sell_histories,
         remark_conversions,
-        filing_denies_gift_additions=any(_F4_ROW_GIFT_ADDITION_DENIAL_RE.match(sentence) for sentence in other_remarks),
+        other_remarks,
     )
     prior_disclosures = [
         any(not match["negated"] for match in _F4_PRIOR_DISCLOSURE_RE.finditer(text)) for text in row_texts
