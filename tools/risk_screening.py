@@ -382,9 +382,9 @@ _F4_SALE_TO_NONSELL_RE = re.compile(
 )
 _F4_RESTORE_SELL_RE = re.compile(
     r"(reclassif(?:ied|y|ying)|transaction\s+code|\bcode\s+s\b|"
-    r"(?:was|is|should\s+have\s+been)\s+(?:actually\s+)?(?:a\s+)?(?:open[- ]market\s+)?sale\b|"
+    r"(?:was|is|should\s+have\s+been)\s+(?:actually\s+)?(?:a\s+)?(?:[\w-]+\s+){0,2}sale\b|"
     r"(?:instead\s+of|not)\s+(?:a\s+)?(?:[\w-]+\s+){0,2}(?:gift|non-sale|transfer)\b|"
-    r"(?:from|misreported|erroneously\s+reported|incorrectly\s+reported)\s+(?:as\s+)?(?:a\s+)?(?:[\w-]+\s+){0,3}(?:gift|non-sale)\b|"
+    r"(?:from|misreported|(?:erroneously|incorrectly|previously)\s+reported)\s+(?:as\s+)?(?:a\s+)?(?:[\w-]+\s+){0,3}(?:gift|non-sale)\b|"
     r"重分类|改为卖出|恢复为卖出|并非赠与)",
     re.IGNORECASE,
 )
@@ -502,8 +502,8 @@ def _f4_matches_num_set(val, target_set: set[float]) -> bool:
 
 
 def _f4_correction_sentences(rtext: str) -> str:
-    # Split on sentence boundaries without splitting decimal numbers such as "$20.50" or "1,250.50".
-    sents = [s for s in re.split(r"(?:(?<!\d)\.(?!\d)(?=\s|$)|[!?;。！？；])+", rtext) if s.strip()]
+    # Split on sentence boundaries (including periods after trailing numbers like "$30.") while keeping decimals intact.
+    sents = [s for s in re.split(r"(?:\.(?=\s|$)|[!?;。！？；])+", rtext) if s.strip()]
     corr_sents = [s for s in sents if _F4_CORRECTION_RE.search(s)]
     return ". ".join(corr_sents) if corr_sents else rtext
 
@@ -650,8 +650,13 @@ def _f4_make_ledger_entry(tx: dict, *, from_orig: bool) -> dict:
         "orig_tx": tx,
         "sigs": {_f4_exact_sig(tx)},
         "revisions": [_f4_rev_tuple(tx)],
+        "gift_sigs": set(),
+        "gift_revisions": [],
         "shares_set": {shares} if shares is not None else set(),
         "filing_dates": filing_dates,
+        "orig_acceptance_ts": _f4_normalize_acceptance_ts(
+            tx.get("acceptance_datetime") or tx.get("acceptanceDateTime")
+        ),
         "orig_accession": str(tx.get("accession") or "").strip() or None,
         "from_orig": from_orig,
         "reclassified": False,
@@ -666,8 +671,10 @@ def _f4_entry_has_revision(
     price_target: set[float] | None = None,
     exact_shares: object = _UNSET,
     exact_price: object = _UNSET,
+    include_gift_revisions: bool = False,
 ) -> bool:
-    for rev_date, rev_shares, rev_price in entry["revisions"]:
+    revs = entry["revisions"] + (entry["gift_revisions"] if include_gift_revisions else [])
+    for rev_date, rev_shares, rev_price in revs:
         if dates is not None and rev_date not in dates:
             continue
         if shares_target is not None and not _f4_matches_num_set(rev_shares, shares_target):
@@ -689,7 +696,12 @@ def _f4_record_filing_provenance(ledger: list[dict], idx: int, tx: dict) -> None
 
 
 def _f4_mark_reclassified(ledger: list[dict], idx: int, tx: dict) -> None:
-    ledger[idx]["reclassified"] = True
+    entry = ledger[idx]
+    entry["reclassified"] = True
+    entry["gift_sigs"].add(_f4_exact_sig(tx))
+    rev = _f4_rev_tuple(tx)
+    if rev not in entry["gift_revisions"]:
+        entry["gift_revisions"].append(rev)
     _f4_record_filing_provenance(ledger, idx, tx)
 
 
@@ -714,18 +726,35 @@ def _f4_scoped_pool(
     *,
     ignore_tx_date: bool = False,
     prior_dates: set[str] | None = None,
+    include_gift_revisions: bool = False,
 ) -> tuple[list[int], bool]:
-    """Filter ledger indices by filing-date provenance (and optional prior transaction dates).
+    """Filter ledger indices by filing chronology and filing-date provenance.
 
-    Multi-accession ambiguity is intentionally NOT checked here; callers check
+    Originals filed strictly after the amendment are excluded even when `original_filing_date`
+    is absent. Multi-accession ambiguity is intentionally NOT checked here; callers check
     `_f4_has_multi_accession_ambiguity` AFTER applying row-level evidence (shares, price,
     revision history) so distinct transactions sharing a filing-date chain remain linkable.
     """
+    amend_fdate = str(tx.get("filing_date") or "").strip()
+    amend_ts = _f4_normalize_acceptance_ts(tx.get("acceptance_datetime") or tx.get("acceptanceDateTime"))
+
+    def _filed_on_or_before(entry: dict) -> bool:
+        if not amend_fdate or not entry["filing_dates"]:
+            return True
+        earliest = min(entry["filing_dates"])
+        if earliest > amend_fdate:
+            return False
+        if earliest == amend_fdate and amend_ts and entry["orig_acceptance_ts"]:
+            return entry["orig_acceptance_ts"] <= amend_ts
+        return True
+
     orig_date = str(tx.get("original_filing_date") or "").strip()
     if not orig_date or not any(ledger[i]["filing_dates"] for i in range(prior_len)):
-        pool = list(range(prior_len))
+        pool = [i for i in range(prior_len) if _filed_on_or_before(ledger[i])]
     else:
-        pool = [i for i in range(prior_len) if orig_date in ledger[i]["filing_dates"]]
+        pool = [
+            i for i in range(prior_len) if orig_date in ledger[i]["filing_dates"] and _filed_on_or_before(ledger[i])
+        ]
         if not pool:
             return [], True
     if ignore_tx_date and prior_dates:
@@ -733,7 +762,8 @@ def _f4_scoped_pool(
         eligible = [
             i
             for i in pool
-            if _f4_owner_sec_sig(ledger[i]["tx"]) == osig and _f4_entry_has_revision(ledger[i], dates=prior_dates)
+            if _f4_owner_sec_sig(ledger[i]["tx"]) == osig
+            and _f4_entry_has_revision(ledger[i], dates=prior_dates, include_gift_revisions=include_gift_revisions)
         ]
         if not eligible:
             return [], True
@@ -848,9 +878,48 @@ def _f4_reconcile_non_sells(
             continue
         ns_candidates.append((tx, is_add, is_corr, rtext))
 
+    # Pass A0: explicit corrections stating prior shares/price resolve FIRST against prior revisions
+    # so new values (e.g., 200-sh sale -> 100-sh gift at $0) never hijack an unrelated 100-sh sale in Pass A1/A2.
+    after_ns_a0: list[tuple[dict, bool, bool, str]] = []
+    for tx, is_add, is_corr, rtext in ns_candidates:
+        base = _f4_base_sig(tx)
+        shares = tx.get("shares")
+        prior_shares = _f4_stated_prior_shares(rtext, shares) if is_corr else set()
+        prior_prices = _f4_stated_prior_prices(rtext, tx.get("price")) if is_corr else set()
+        if is_corr and (prior_shares or prior_prices) and base[0] != ("",) and bool(base[1]):
+            pool, pool_unlinked = _f4_scoped_pool(ledger, tx, prior_len)
+            if pool_unlinked:
+                mark_uncertain(tx)
+                continue
+            base_cands = [
+                i
+                for i in pool
+                if i not in acc_matched_ns
+                and _f4_base_sig(ledger[i]["tx"]) == base
+                and _f4_entry_has_revision(
+                    ledger[i],
+                    shares_target=prior_shares or None,
+                    price_target=prior_prices or None,
+                )
+            ]
+            if base_cands and _f4_has_multi_accession_ambiguity(ledger, tx, base_cands):
+                mark_uncertain(tx)
+                continue
+            if len(base_cands) == 1:
+                acc_matched_ns.add(base_cands[0])
+                _f4_mark_reclassified(ledger, base_cands[0], tx)
+                continue
+            already_reclass = [i for i in base_cands if ledger[i]["reclassified"]]
+            if len(already_reclass) == 1:
+                acc_matched_ns.add(already_reclass[0])
+                continue
+            mark_uncertain(tx)
+            continue
+        after_ns_a0.append((tx, is_add, is_corr, rtext))
+
     # Pass A1: exact (base, shares, price) matches first (independent of row order within accession).
     after_ns_a1: list[tuple[dict, bool, bool, str]] = []
-    for tx, is_add, is_corr, rtext in ns_candidates:
+    for tx, is_add, is_corr, rtext in after_ns_a0:
         base = _f4_base_sig(tx)
         shares = tx.get("shares")
         has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
@@ -1015,13 +1084,26 @@ def _f4_reconcile_sells(
             if idx_s in resolved_exact or idx_s in uncertain_exact:
                 continue
             exact = _f4_exact_sig(tx)
+            is_restore_intent = is_corr and bool(_F4_RESTORE_SELL_RE.search(rtext))
             if use_history:
-                cands = [i for i in pool if i not in acc_matched_sell and exact in ledger[i]["sigs"]]
+                cands = [
+                    i
+                    for i in pool
+                    if i not in acc_matched_sell
+                    and (exact in ledger[i]["sigs"] or (is_restore_intent and exact in ledger[i]["gift_sigs"]))
+                ]
             else:
-                cands = [i for i in pool if i not in acc_matched_sell and _f4_exact_sig(ledger[i]["tx"]) == exact]
+                cands = [
+                    i
+                    for i in pool
+                    if i not in acc_matched_sell
+                    and (
+                        _f4_exact_sig(ledger[i]["tx"]) == exact
+                        or (is_restore_intent and exact in ledger[i]["gift_sigs"])
+                    )
+                ]
             if not cands:
                 continue
-            is_restore_intent = is_corr and bool(_F4_RESTORE_SELL_RE.search(rtext))
             if is_restore_intent:
                 reclass_cands = [i for i in cands if ledger[i]["reclassified"]]
                 if reclass_cands and _f4_has_multi_accession_ambiguity(ledger, tx, reclass_cands):
@@ -1178,13 +1260,19 @@ def _f4_reconcile_sells(
                             shares_target=prior_shares or None,
                             price_target=prior_prices or None,
                             exact_shares=unchanged_shares,
+                            include_gift_revisions=is_restore_intent,
                         )
                     ]
                     if _f4_has_multi_accession_ambiguity(ledger, tx, cands):
                         return [], is_restore_intent, False, False
                     return cands, is_restore_intent, True, False
                 if shares is not None:
-                    share_matched = [i for i in same_base if shares in ledger[i]["shares_set"]]
+                    share_matched = [
+                        i
+                        for i in same_base
+                        if shares in ledger[i]["shares_set"]
+                        or (is_restore_intent and any(rev[1] == shares for rev in ledger[i]["gift_revisions"]))
+                    ]
                     if share_matched:
                         same_base = share_matched
                 if _f4_has_multi_accession_ambiguity(ledger, tx, same_base):
@@ -1194,7 +1282,12 @@ def _f4_reconcile_sells(
 
         if has_date_corr:
             dpool, dpool_unlinked = _f4_scoped_pool(
-                ledger, tx, prior_len, ignore_tx_date=True, prior_dates=prior_dates or None
+                ledger,
+                tx,
+                prior_len,
+                ignore_tx_date=True,
+                prior_dates=prior_dates or None,
+                include_gift_revisions=is_restore_intent,
             )
             if dpool_unlinked:
                 return [], is_restore_intent, False, True
@@ -1215,6 +1308,7 @@ def _f4_reconcile_sells(
                         dates=prior_dates or None,
                         shares_target=prior_shares or None,
                         price_target=prior_prices or None,
+                        include_gift_revisions=is_restore_intent,
                     )
                 ]
             if len(date_cands) > 1 and shares is not None and price is not None and not (prior_shares or prior_prices):
@@ -1222,7 +1316,11 @@ def _f4_reconcile_sells(
                     i
                     for i in date_cands
                     if _f4_entry_has_revision(
-                        ledger[i], dates=prior_dates or None, exact_shares=shares, exact_price=price
+                        ledger[i],
+                        dates=prior_dates or None,
+                        exact_shares=shares,
+                        exact_price=price,
+                        include_gift_revisions=is_restore_intent,
                     )
                 ]
                 if by_sp:
@@ -1231,7 +1329,12 @@ def _f4_reconcile_sells(
                 by_s = [
                     i
                     for i in date_cands
-                    if _f4_entry_has_revision(ledger[i], dates=prior_dates or None, exact_shares=shares)
+                    if _f4_entry_has_revision(
+                        ledger[i],
+                        dates=prior_dates or None,
+                        exact_shares=shares,
+                        include_gift_revisions=is_restore_intent,
+                    )
                 ]
                 if by_s:
                     date_cands = by_s
@@ -1426,6 +1529,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
     for entry in active_sales:
         td = _f4_tx_date_iso(entry["tx"])
         if td is None:
+            _mark_uncertain(entry["tx"])
             recent_active_sales.append((entry, False))
         elif td >= tx_cutoff:
             recent_active_sales.append((entry, True))

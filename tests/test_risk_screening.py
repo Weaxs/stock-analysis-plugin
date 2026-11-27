@@ -1250,9 +1250,12 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
 
     # 15. Unmatched stated prior date (Aug 3 already reclassified to G) must NOT substitute Aug 4 sale!
     aug3_aug4_plus_5 = [
-        dict(orig_rows[0], transaction_date="2026-08-03", shares=100, price=10.0),
-        dict(orig_rows[0], transaction_date="2026-08-04", shares=100, price=10.0),
-    ] + [dict(orig_rows[0], transaction_date=f"2026-08-0{i}", shares=100, price=10.0) for i in range(5, 10)]
+        dict(orig_rows[0], filing_date="2026-08-10", transaction_date="2026-08-03", shares=100, price=10.0),
+        dict(orig_rows[0], filing_date="2026-08-10", transaction_date="2026-08-04", shares=100, price=10.0),
+    ] + [
+        dict(orig_rows[0], filing_date="2026-08-10", transaction_date=f"2026-08-0{i}", shares=100, price=10.0)
+        for i in range(5, 10)
+    ]
     aug3_to_gift = dict(
         aug3_aug4_plus_5[0],
         form="4/A",
@@ -2124,6 +2127,8 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         "footnotes": {"F1": "Corrects previously misreported 200-share sale to a bona fide gift."},
         "footnote_refs": {"transactionCode": ["F1"]},
     }
+    res_chain_200_before = _screen(chain_orig_2 + [chain_add_200], since_filing_date="2026-10-01")
+    assert res_chain_200_before["checks"]["insider_trades"]["sales_90d"] == 3
     res_chain_200 = _screen(chain_orig_2 + [chain_add_200, chain_gift_200], since_filing_date="2026-10-01")
     assert res_chain_200["checks"]["insider_trades"]["sales_90d"] == 2
     assert res_chain_200["checks"]["insider_trades"]["count_uncertain"] is False
@@ -2134,6 +2139,8 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     chain_orig_6 = [chain_orig_2[0]] + [
         dict(chain_orig_2[0], transaction_date=f"2026-10-0{i}", shares=110.0 + i) for i in range(4, 9)
     ]
+    res_chain_veto_before = _screen(chain_orig_6 + [chain_add_200], since_filing_date="2026-10-01")
+    assert res_chain_veto_before["checks"]["insider_trades"]["sales_90d"] == 7
     res_chain_veto = _screen(chain_orig_6 + [chain_add_200, chain_gift_200], since_filing_date="2026-10-01")
     assert res_chain_veto["checks"]["insider_trades"]["sales_90d"] == 6
     assert res_chain_veto["checks"]["insider_trades"]["count_uncertain"] is False
@@ -2147,6 +2154,135 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
     res_dup_acc = _screen(dup_acc_orig + [chain_gift_200], since_filing_date="2026-10-01")
     assert res_dup_acc["checks"]["insider_trades"]["sales_90d"] == 2
     assert res_dup_acc["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 34. Sentence-ending period after numbers ("at $30. A separate sale was 500 shares") must split cleanly so
+    #     unrelated share counts in the next sentence do not make a confirmed six-sale correction ambiguous.
+    sent_orig = [
+        dict(chain_orig_2[0], transaction_date="2026-10-03", shares=200.0, price=20.0),
+        dict(chain_orig_2[0], transaction_date="2026-10-03", shares=500.0, price=20.0),
+    ] + [dict(chain_orig_2[0], transaction_date=f"2026-10-0{i}", shares=110.0 + i) for i in range(4, 8)]
+    sent_corr = dict(
+        sent_orig[0],
+        form="4/A",
+        accession="0000555555-26-000210",
+        filing_date="2026-10-09",
+        original_filing_date="2026-10-03",
+        shares=300.0,
+        price=30.0,
+        footnotes={"F1": "Corrects 200 shares at $20 to 300 shares at $30. A separate sale was 500 shares."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1"]},
+    )
+    res_sent = _screen(sent_orig + [sent_corr], since_filing_date="2026-10-01")
+    assert res_sent["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_sent["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_sent["veto_buy"] is True
+
+    # 35. Restoring a sale after a share-changing gift (200-sh S -> 120-sh G -> linked restore citing 120 shares)
+    #     must match the stored gift revision and preserve the 6-sale buy veto.
+    gift_rev_orig = [
+        dict(chain_orig_2[0], transaction_date="2026-10-03", shares=200.0, price=20.0),
+    ] + [dict(chain_orig_2[0], transaction_date=f"2026-10-0{i}", shares=110.0 + i) for i in range(4, 9)]
+    gift_rev_120 = dict(
+        gift_rev_orig[0],
+        form="4/A",
+        accession="0000555555-26-000220",
+        filing_date="2026-10-09",
+        original_filing_date="2026-10-03",
+        transaction_code="G",
+        direction="other",
+        shares=120.0,
+        price=0.0,
+        footnotes={"F1": "Corrects previously misreported 200-share sale to a 120-share gift."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    restore_from_120 = dict(
+        gift_rev_orig[0],
+        form="4/A",
+        accession="0000555555-26-000221",
+        filing_date="2026-10-10",
+        original_filing_date="2026-10-09",
+        shares=200.0,
+        price=20.0,
+        footnotes={"F1": "Restores sale: previously reported as 120 shares gift, should have been a 200-share sale."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    res_gift_rev = _screen(gift_rev_orig + [gift_rev_120, restore_from_120], since_filing_date="2026-10-01")
+    assert res_gift_rev["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_gift_rev["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_gift_rev["veto_buy"] is True
+
+    # 36. An unscoped amendment filed on Oct 5 must NOT match an identical original filed LATER on Oct 8.
+    chron_oct4 = dict(
+        chain_orig_2[0], accession="0000555555-26-000230", filing_date="2026-10-04", shares=100.0, price=50.0
+    )
+    chron_oct8 = dict(
+        chain_orig_2[0], accession="0000555555-26-000231", filing_date="2026-10-08", shares=100.0, price=50.0
+    )
+    chron_others = [dict(chain_orig_2[0], transaction_date=f"2026-10-0{i}", shares=110.0 + i) for i in range(4, 9)]
+    chron_g_oct5 = dict(
+        chron_oct4,
+        form="4/A",
+        accession="0000555555-26-000232",
+        filing_date="2026-10-05",
+        original_filing_date=None,
+        transaction_code="G",
+        direction="other",
+    )
+    chron_g_oct9 = dict(
+        chron_oct8,
+        form="4/A",
+        accession="0000555555-26-000233",
+        filing_date="2026-10-09",
+        original_filing_date="2026-10-08",
+        transaction_code="G",
+        direction="other",
+    )
+    res_chron = _screen(
+        [chron_oct8, chron_oct4] + chron_others + [chron_g_oct5, chron_g_oct9], since_filing_date="2026-10-01"
+    )
+    assert res_chron["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_chron["veto_buy"] is False
+
+    # 37. Gift correction stating prior shares (200-sh -> 100-sh G) must NOT hijack an unrelated same-day 100-sh sale.
+    prior_g_orig = [
+        dict(chain_orig_2[0], transaction_date="2026-10-03", shares=200.0, price=20.0),
+        dict(chain_orig_2[0], transaction_date="2026-10-03", shares=100.0, price=10.0),
+    ] + [dict(chain_orig_2[0], transaction_date=f"2026-10-0{i}", shares=110.0 + i) for i in range(4, 9)]
+    prior_g_200_to_100 = dict(
+        prior_g_orig[0],
+        form="4/A",
+        accession="0000555555-26-000240",
+        filing_date="2026-10-09",
+        original_filing_date="2026-10-03",
+        transaction_code="G",
+        direction="other",
+        shares=100.0,
+        price=0.0,
+        footnotes={"F1": "Corrects previously misreported 200-share sale to a 100-share gift."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    prior_g_100 = dict(
+        prior_g_orig[1],
+        form="4/A",
+        accession="0000555555-26-000241",
+        filing_date="2026-10-10",
+        original_filing_date="2026-10-03",
+        transaction_code="G",
+        direction="other",
+    )
+    res_prior_g = _screen(prior_g_orig + [prior_g_200_to_100, prior_g_100], since_filing_date="2026-10-01")
+    assert res_prior_g["checks"]["insider_trades"]["sales_90d"] == 5
+    assert res_prior_g["veto_buy"] is False
+
+    # 38. Active sale with missing/invalid transaction_date must mark count_uncertain=True consistently.
+    undated_orig = [
+        dict(chain_orig_2[0], transaction_date="2026-10-03"),
+        dict(chain_orig_2[0], transaction_date="2026-10-04"),
+        dict(chain_orig_2[0], transaction_date=None),
+    ]
+    res_undated = _screen(undated_orig, since_filing_date="2026-10-01")
+    assert res_undated["checks"]["insider_trades"]["sales_90d"] == 3
+    assert res_undated["checks"]["insider_trades"]["count_uncertain"] is True
 
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
