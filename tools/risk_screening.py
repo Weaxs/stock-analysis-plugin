@@ -373,19 +373,51 @@ _F4_CORRECTION_RE = re.compile(
     re.IGNORECASE,
 )
 _F4_COUNT_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+_F4_SALE_COUNT = rf"(?:[1-9]\d{{0,3}}|an?|the|{'|'.join(_F4_COUNT_WORDS[1:])})"
 _F4_OMITTED = r"(?:(?:previously|inadvertently)\s+)?(?:omitted|unreported)"
 _F4_REMARKS_DATE = r"[a-z]+ \d{1,2},? \d{4}"
 _F4_COUNTED_SALE_ADDITION_RE = re.compile(
     r"(?:(?:this )?(?:form 4(?:/a)?(?: amendment)?|amendment)\s+"
     r"(?:(?:is (?:being )?filed|was filed|filed)\s+to\s+)?|amending to\s+)?"
     r"(?P<verb>add(?:s|ed|ing)?|report(?:s|ed|ing)?|includ(?:e[sd]?|ing))\s+"
-    rf"(?P<count>[1-9]\d{{0,3}}|an?|the|{'|'.join(_F4_COUNT_WORDS[1:])})\s+"
+    rf"(?P<count>{_F4_SALE_COUNT})\s+"
     rf"(?:(?P<modifier>{_F4_OMITTED}|additional)\s+)?(?P<object>sale(?: transactions?|s)?|transactions?)"
     r"(?:\s+of (?:[\d,.]+\s+)?(?:(?:common|ordinary|class [a-z])\s+)?shares?)?"
     rf"(?:\s+(?P<clause>(?:(?:that\s+)?(?:was|were)\s+)?{_F4_OMITTED})"
     rf"(?:\s+from the (?:original )?(?:form 4|filing)(?: filed on {_F4_REMARKS_DATE})?)?)?"
     r"(?:\s+by the reporting (?:person|owner))?",
     re.IGNORECASE | re.ASCII,
+)
+_F4_ROW_SALE = r"(?:sale(?: transaction)?|transaction(?: line)?|trade)"
+_F4_ROW_SALE_SUBJECT = rf"(?:(?:this|the)\s+)?{_F4_ROW_SALE}(?:\s+reported on this line)?"
+_F4_ROW_REPORT_VERB = r"(?:report|include|disclose)"
+_F4_ROW_SALE_DESCRIPTION = rf"(?:(?:first|second|third|fourth|fifth|private|open-market)\s+)?{_F4_ROW_SALE}"
+_F4_ROW_SECURITY = r"(?:\s+of\s+(?:the (?:company|issuer)'s\s+)?(?:common (?:stock|shares)|securities))?"
+_F4_ROW_SALE_OBJECT = rf"{_F4_ROW_SALE_DESCRIPTION}{_F4_ROW_SECURITY}"
+_F4_ROW_REPORT_CONTEXT = (
+    r"(?:\s+from\s+(?:the\s+)?(?:report(?:ing)? person's\s+)?"
+    r"(?:(?:original|prior|(?:previously|originally) filed)\s+)?(?:form 4(?:/a)?(?: filing)?|filing|report)"
+    rf"(?: (?:originally )?filed on {_F4_REMARKS_DATE})?)?"
+    r"(?:\s+that was not previously reported)?(?:\s+on\s+\d{4}-\d{2}-\d{2})?"
+)
+_F4_ROW_SALE_ADDITION_RE = re.compile(
+    rf"(?:{_F4_ROW_SALE_SUBJECT}\s+(?:was|is)\s+(?:{_F4_OMITTED}|newly reported)|"
+    r"(?:this (?:amendment|report)\s+|(?:amends (?:the )?original form 4|amending)\s+to\s+|"
+    r"(?:this|the) transaction line (?:was|has been) added to (?:this|the) form 4 to\s+)?"
+    rf"(?:{_F4_ROW_REPORT_VERB}s?\s+(?:(?:an?|the)\s+)?"
+    rf"(?:(?:{_F4_OMITTED}|additional)\s+{_F4_ROW_SALE_OBJECT}|"
+    rf"{_F4_ROW_SALE_OBJECT}\s+(?:(?:that|which) was\s+)?{_F4_OMITTED})|"
+    rf"adds?\s+(?:(?:an?|the)\s+)?(?:{_F4_OMITTED}\s+)?{_F4_ROW_SALE_OBJECT}(?:\s+{_F4_OMITTED})?)|"
+    rf"{_F4_OMITTED}\s+{_F4_ROW_SALE_OBJECT}){_F4_ROW_REPORT_CONTEXT}",
+    re.IGNORECASE,
+)
+_F4_ROW_SALE_DENIAL_RE = re.compile(
+    rf"(?:{_F4_ROW_SALE_SUBJECT}\s+(?:was|is)\s+(?:not|never)\s+(?:{_F4_OMITTED}|newly reported)|"
+    rf"(?:this (?:amendment|report)\s+)?(?:does|did)\s+not\s+(?:add|{_F4_ROW_REPORT_VERB})\s+"
+    rf"(?:(?:{_F4_SALE_COUNT}|any)\s+)?(?:(?:new|additional|{_F4_OMITTED})\s+)?"
+    rf"{_F4_ROW_SALE_DESCRIPTION}s?{_F4_ROW_SECURITY}){_F4_ROW_REPORT_CONTEXT}"
+    r"(?:\s+in\s+(?:this|the)\s+(?:amendment|form 4(?:/a)?|report))?",
+    re.IGNORECASE,
 )
 _F4_SENTENCE_BOUNDARY_RE = re.compile(r"(?:\.(?=\s|$)|[!?;。！？；])+")
 _F4_REMARKS_METADATA_RE = re.compile(
@@ -415,7 +447,7 @@ _F4_SALE_TO_NONSELL_RE = re.compile(
     re.IGNORECASE,
 )
 _F4_SALE_REFERENCE = (
-    r"(?:(?:the|a)\s+)?(?:(?:previously reported|original)\s+)?(?:[\d,.]+-share\s+)?sale"
+    r"(?:(?:the|a)\s+)?(?:(?:previously (?:misreported|reported(?: in error)?)|original)\s+)?(?:[\d,.]+-share\s+)?sale"
     r"(?:\s+of\s+[\d,.]+\s+shares?)?(?:\s+at\s+\$?\s*[\d,.]+)?"
 )
 _F4_CURRENT_CHANGE = r"(?:this amendment\s+)?(?:corrects?|reclassif(?:ies|y)|changes?)"
@@ -424,7 +456,20 @@ _F4_EXPLICIT_SALE_RECLASS_RE = re.compile(
     rf"{_F4_SALE_REFERENCE}|{_F4_SALE_REFERENCE}\s+"
     r"(?:was previously reported in error and\s+)?(?:is|should be)\s+reclassified)"
     r"\s+(?:to|as)\s+(?:a\s+)?(?:(?:bona fide|[\d,.]+-share)\s+)?(?:gift|non-sale|transfer|disposition)\b"
-    rf"|^{_F4_CURRENT_CHANGE}\s+(?:the\s+)?(?:transaction\s+)?code\s+(?:from\s+)?s\s+to\s+(?!s\b)[a-z]\b",
+    rf"|^{_F4_CURRENT_CHANGE}\s+(?:the\s+)?(?:gift\s+)?(?:transaction\s+)?code\s+(?:from\s+)?"
+    r"[\"']?s[\"']?(?:\s*\(sale\))?\s+to\s+[\"']?(?!s\b)[a-z]\b",
+    re.IGNORECASE,
+)
+_F4_GIFT_REFERENCE = (
+    r"(?:(?:the|this|a)\s+)?(?:(?:previously reported|original)\s+)?"
+    r"(?:gift(?:\s+(?:shares|price|quantity))?|number of (?:gift shares|shares gifted)|"
+    r"(?:transaction code|price|quantity|(?:number of )?shares)\s+of\s+(?:the|this) gift)\b"
+)
+_F4_GIFT_CORRECTION_RE = re.compile(
+    r"(?:^(?:this amendment\s+)?|\bis\s+(?:being\s+)?(?:filed|amended)\s+(?:solely\s+)?to\s+)"
+    r"(?:corrects?|revises?|updates?|restates?|changes?)\s+(?:an error in\s+)?"
+    rf"(?:{_F4_GIFT_REFERENCE}|previously reported as\s+[\d,.]+\s+shares?\s+gift\b)|"
+    rf"^{_F4_GIFT_REFERENCE}\s+(?:was|were|is|are)\s+(?:corrected|revised|updated|changed)\b",
     re.IGNORECASE,
 )
 _F4_RESTORE_SELL_RE = re.compile(
@@ -623,7 +668,26 @@ def _f4_row_scoped_text(tx: dict) -> str:
     elif isinstance(footnotes, str) and footnotes:
         row_parts.append(footnotes)
     row_parts.extend(str(tx[k]) for k in ("amendment_reason", "note") if tx.get(k))
-    return " ".join(row_parts)
+    return ". ".join(part.strip().rstrip(".") for part in row_parts if part.strip())
+
+
+def _f4_statements(text: str) -> list[str]:
+    return [part.strip() for part in _F4_SENTENCE_BOUNDARY_RE.split(text) if part.strip()]
+
+
+def _f4_sale_addition_declaration(text: str) -> tuple[int, bool] | None:
+    match = _F4_COUNTED_SALE_ADDITION_RE.fullmatch(text)
+    if not match or not (match["modifier"] or match["clause"] or match["verb"].lower().startswith("add")):
+        return None
+    count = match["count"].lower()
+    subject = match["object"].lower()
+    if count.isdigit():
+        declared = int(count)
+    elif count in {"a", "an", "the"}:
+        declared = int(not subject.endswith("s"))
+    else:
+        declared = _F4_COUNT_WORDS.index(count)
+    return declared, subject.startswith("sale")
 
 
 def _f4_resolve_accession_intents(
@@ -639,13 +703,25 @@ def _f4_resolve_accession_intents(
     prior_disclosures = [
         any(not match["negated"] for match in _F4_PRIOR_DISCLOSURE_RE.finditer(text)) for text in row_texts
     ]
-    row_intents = [
-        (
-            bool(_F4_ADDITION_RE.search(rt)) and not (_f4_is_sell(tx) and prior),
-            bool(_F4_CORRECTION_RE.search(rt)),
-        )
-        for tx, rt, prior in zip(acc_rows, row_texts, prior_disclosures)
-    ]
+    row_intents = []
+    row_denies_addition = False
+    for tx, rt, prior in zip(acc_rows, row_texts, prior_disclosures):
+        if _f4_is_sell(tx):
+            sentences = _f4_statements(rt)
+            denial = any(_F4_ROW_SALE_DENIAL_RE.fullmatch(sentence) for sentence in sentences)
+            row_denies_addition |= denial
+            addition = (
+                not prior
+                and not denial
+                and any(
+                    _F4_ROW_SALE_ADDITION_RE.fullmatch(sentence)
+                    or ((declaration := _f4_sale_addition_declaration(sentence)) is not None and declaration[0] == 1)
+                    for sentence in sentences
+                )
+            )
+        else:
+            addition = bool(_F4_ADDITION_RE.search(rt))
+        row_intents.append((addition, bool(_F4_CORRECTION_RE.search(rt))))
     ambiguous = [False] * len(acc_rows)
     seen_remarks: set[str] = set()
     remarks_parts: list[str] = []
@@ -660,37 +736,30 @@ def _f4_resolve_accession_intents(
     # shortcut: promote explicit English declarations, and expand for verified filing wording.
     statements = []
     mixed_remarks = False
-    for part in _F4_SENTENCE_BOUNDARY_RE.split(rem_text):
-        sentence = part.strip()
-        match = _F4_COUNTED_SALE_ADDITION_RE.fullmatch(sentence)
-        if match and (match["modifier"] or match["clause"] or match["verb"].lower().startswith("add")):
-            statements.append(match)
-        elif sentence and (not _F4_REMARKS_METADATA_RE.fullmatch(sentence) or _F4_OTHER_CHANGE_RE.search(sentence)):
+    for sentence in _f4_statements(rem_text):
+        declaration = _f4_sale_addition_declaration(sentence)
+        if declaration is not None:
+            statements.append(declaration)
+        elif not _F4_REMARKS_METADATA_RE.fullmatch(sentence) or _F4_OTHER_CHANGE_RE.search(sentence):
             mixed_remarks = True
-    counted = statements[0] if len(statements) == 1 else None
-    declared_additions = 0
-    if counted:
-        count = counted["count"].lower()
-        if count.isdigit():
-            declared_additions = int(count)
-        elif count in {"a", "an", "the"}:
-            declared_additions = int(not counted["object"].lower().endswith("s"))
-        else:
-            declared_additions = _F4_COUNT_WORDS.index(count)
+    declared_additions, sales_declared = statements[0] if len(statements) == 1 else (0, False)
     rem_add = bool(statements) or bool(_F4_ADDITION_RE.search(rem_text))
     rem_corr = bool(_F4_CORRECTION_RE.search(rem_text))
     if not (rem_add or rem_corr):
         return row_intents, ambiguous, row_texts
     if (
-        counted
-        and len(remarks_parts) == 1
+        len(remarks_parts) == 1
         and declared_additions == len(acc_rows)
-        and (len(acc_rows) == 1 or counted["object"].lower().startswith("sale"))
+        and (len(acc_rows) == 1 or sales_declared)
         and not mixed_remarks
         and not rem_corr
+        and not row_denies_addition
         and not any(prior_disclosures)
         and not any(correction for _, correction in row_intents)
         and not any(_F4_OTHER_CHANGE_RE.search(text) for text in row_texts)
+        and not any(
+            not addition and _F4_ADDITION_RE.search(text) for text, (addition, _) in zip(row_texts, row_intents)
+        )
         and all(_f4_is_sell(tx) for tx in acc_rows)
     ):
         for tx, (addition, _) in zip(acc_rows, row_intents):
@@ -713,7 +782,7 @@ def _f4_resolve_accession_intents(
             ambiguous[0] = True
             return row_intents, ambiguous, row_texts
         row_intents[0] = (unclaimed_add, unclaimed_corr)
-        row_texts[0] = f"{row_texts[0]} {rem_text}".strip()
+        row_texts[0] = ". ".join(filter(None, (row_texts[0], rem_text)))
         return row_intents, ambiguous, row_texts
     for i in unattributed or range(len(acc_rows)):
         ambiguous[i] = True
@@ -753,15 +822,12 @@ def _f4_entry_has_revision(
     exact_price: object = _UNSET,
     include_gift_revisions: bool = False,
     gift_filing_date: str | None = None,
+    gift_only: bool = False,
 ) -> bool:
-    if include_gift_revisions:
-        if gift_filing_date:
-            matching_gf = [rev[1:] for rev in entry["gift_revisions"] if rev[0] == gift_filing_date]
-            revs = matching_gf if matching_gf else entry["revisions"] + [rev[1:] for rev in entry["gift_revisions"]]
-        else:
-            revs = entry["revisions"] + [rev[1:] for rev in entry["gift_revisions"]]
-    else:
-        revs = entry["revisions"]
+    revs = [] if gift_only else entry["revisions"]
+    if include_gift_revisions or gift_only:
+        matching_gf = [rev[1:] for rev in entry["gift_revisions"] if gift_filing_date and rev[0] == gift_filing_date]
+        revs = matching_gf or revs + [rev[1:] for rev in entry["gift_revisions"]]
     for rev_date, rev_shares, rev_price in revs:
         if dates is not None and rev_date not in dates:
             continue
@@ -928,6 +994,7 @@ def _f4_reconcile_non_sells(
     acc_orig_ns_matched: set[int] = set()
     acc_matched_ns: set[int] = set()
     pending_reclassifications: list[tuple[int, dict]] = []
+    original_gift_claims: dict[int, list[dict]] = {}
     revision_claims: dict[int, list[dict]] = {}
     prior_gift_claims: set[int] = set()
 
@@ -940,7 +1007,9 @@ def _f4_reconcile_non_sells(
 
     def prefer_active_sales(candidates: list[int], text: str) -> list[int]:
         # Prefer an active sale only when an earlier matching pass identified the existing gift separately.
-        if prior_gift_claims.intersection(candidates) and _F4_EXPLICIT_SALE_RECLASS_RE.match(text.strip()):
+        if prior_gift_claims.intersection(candidates) and any(
+            _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence) for sentence in _f4_statements(text)
+        ):
             return [i for i in candidates if not ledger[i]["reclassified"]] or candidates
         return candidates
 
@@ -951,8 +1020,48 @@ def _f4_reconcile_non_sells(
         code = _f4_tx_code(tx)
         shares = tx.get("shares")
         orig_date = str(tx.get("original_filing_date") or "").strip()
+        filing_date = str(tx.get("filing_date") or "").strip()
         has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
         pool, pool_unlinked = _f4_scoped_pool(ledger, tx, prior_len)
+        sentences = _f4_statements(rtext)
+        gift_corrections = [sentence for sentence in sentences if _F4_GIFT_CORRECTION_RE.search(sentence)]
+        if gift_corrections and not any(_F4_EXPLICIT_SALE_RECLASS_RE.match(sentence) for sentence in sentences):
+            # The new quantity or price identifies the revision, not the transaction being corrected.
+            correction_text = ". ".join(gift_corrections)
+            prior_shares = _f4_stated_prior_shares(correction_text, shares)
+            prior_prices = _f4_stated_prior_prices(correction_text, tx.get("price"))
+            original_gifts = [
+                i
+                for i, orig_ns in enumerate(known_non_sells)
+                if has_identity
+                and _f4_base_sig(orig_ns) == base
+                and _f4_tx_code(orig_ns) == "G"
+                and (not orig_date or not orig_ns.get("filing_date") or orig_ns.get("filing_date") == orig_date)
+                and (not filing_date or str(orig_ns.get("filing_date") or "") <= filing_date)
+                and (not prior_shares or _f4_matches_num_set(orig_ns.get("shares"), prior_shares))
+                and (not prior_prices or _f4_matches_num_set(orig_ns.get("price"), prior_prices))
+            ]
+            gift_candidates = [
+                i
+                for i in pool
+                if has_identity
+                and ledger[i]["reclassified"]
+                and _f4_base_sig(ledger[i]["tx"]) == base
+                and _f4_entry_has_revision(
+                    ledger[i],
+                    shares_target=prior_shares or None,
+                    price_target=prior_prices or None,
+                    gift_filing_date=orig_date or None,
+                    gift_only=True,
+                )
+            ]
+            if len(original_gifts) == 1 and not gift_candidates:
+                original_gift_claims.setdefault(original_gifts[0], []).append(tx)
+            elif not original_gifts and len(gift_candidates) == 1:
+                reserve_target(gift_candidates[0], tx)
+            else:
+                mark_uncertain(tx)
+            continue
         ns_idx = next(
             (
                 i
@@ -988,6 +1097,7 @@ def _f4_reconcile_non_sells(
             mark_uncertain(tx)
             continue
         ns_candidates.append((tx, is_add, is_corr, rtext))
+    prior_gift_claims.update(revision_claims)
 
     # Pass A0: explicit corrections stating prior shares/price resolve FIRST in order-independent batch waves
     # so specific claims reserve their target before broader claims retry, and new values never hijack unrelated sales.
@@ -1161,6 +1271,10 @@ def _f4_reconcile_non_sells(
             mark_uncertain(tx)
 
     # An existing gift can attract claims at different match strengths within the same filing.
+    for claimants in original_gift_claims.values():
+        if len(claimants) > 1:
+            for tx in claimants:
+                mark_uncertain(tx)
     for target, claimants in revision_claims.items():
         acc_matched_ns.add(target)
         if len(claimants) == 1:

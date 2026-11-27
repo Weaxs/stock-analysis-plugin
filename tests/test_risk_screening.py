@@ -2681,6 +2681,181 @@ def test_form4_unlinked_date_correction_does_not_create_a_sale(monkeypatch):
     assert not result["flags"]
 
 
+def test_form4_linked_footnote_requires_affirmative_sale_addition(monkeypatch):
+    original = _form4_sale()
+    originals = [original, _form4_sale(200)]
+    amendment = dict(
+        original,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    for note in (
+        "This sale was not omitted.",
+        "The sale price omitted commissions.",
+        "This sale was omitted from the calculation of 10b5-1 shares.",
+        "This sale was omitted in this amendment.",
+        "Reports an omitted gift.",
+    ):
+        result = _screen_form4(monkeypatch, [*originals, dict(amendment, footnotes={"F1": note})])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 2, note
+        assert not result["flags"]
+
+    contradictory = dict(
+        amendment,
+        shares=300,
+        footnotes={"F1": "This sale was not omitted."},
+        remarks="This amendment reports one omitted sale.",
+    )
+    result = _screen_form4(monkeypatch, [*originals, contradictory])
+    assert result["checks"]["insider_trades"]["sales_90d"] == 2
+    assert result["checks"]["insider_trades"]["count_uncertain"] is True
+
+    for note in (
+        "This sale was omitted from the original Form 4.",
+        "This sale was omitted from the original Form 4 filed on November 21, 2026.",
+        "This sale was omitted from the Form 4 originally filed on November 21, 2026.",
+        "The sale reported on this line was inadvertently omitted from the original Form 4.",
+        "This sale is newly reported.",
+        "This Form 4 Amendment is filed to include an additional sale of common shares that was omitted from the Form 4 filed on November 21, 2026.",
+        "This transaction line was added to this Form 4 to report a previously omitted private sale of the company's common stock.",
+        "This transaction line has been added to this Form 4 to disclose a private sale of securities omitted from the original report.",
+    ):
+        result = _screen_form4(monkeypatch, [*originals, dict(amendment, footnotes={"F1": note})])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 3, note
+        assert result["checks"]["insider_trades"]["count_uncertain"] is False
+        assert any(flag["severity"] == "medium" for flag in result["flags"])
+
+    for first_note, expected in (
+        ("Weighted-average price", 3),
+        ("This sale was not omitted.", 2),
+        ("The sale reported on this line was not omitted from the original Form 4.", 2),
+        ("This amendment does not disclose a new sale.", 2),
+        ("This amendment does not report a private sale.", 2),
+        ("This amendment does not report one omitted sale.", 2),
+        ("This amendment does not report any additional sales of common stock.", 2),
+        ("This sale was not newly reported in this amendment.", 2),
+        ("This amendment does not disclose the amount of fees.", 3),
+        ("This amendment does not disclose the sale price.", 3),
+        ("This amendment does not disclose the transaction fees.", 3),
+    ):
+        linked = dict(
+            amendment,
+            footnotes={"F1": first_note, "F2": "This sale was omitted from the original Form 4"},
+            footnote_refs={"transactionDate/value": ["F1", "F2"]},
+        )
+        result = _screen_form4(monkeypatch, [*originals, linked])
+        assert result["checks"]["insider_trades"]["sales_90d"] == expected
+
+
+def test_form4_gift_quantity_correction_preserves_unrelated_sale_and_veto(monkeypatch):
+    original = _form4_sale()
+    active_sales = [_form4_sale(150), *(_form4_sale(shares) for shares in range(201, 206))]
+    gift = dict(
+        original,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        transaction_code="G",
+        shares=120,
+        price=None,
+        footnotes={"F1": "Corrects previously misreported 100-share sale to a 120-share gift."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1"]},
+    )
+    correction = dict(
+        gift,
+        accession="0000000123-26-000003",
+        filing_date="2026-11-23",
+        shares=150,
+        footnotes={"F1": "Corrects the number of gift shares to 150."},
+    )
+    for price in (None, 20):
+        result = _screen_form4(monkeypatch, [original, *active_sales, gift, dict(correction, price=price)])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 6
+        assert result["checks"]["insider_trades"]["count_uncertain"] is False
+        assert result["veto_buy"] is True
+
+    linked = dict(
+        correction,
+        price=20,
+        footnotes={"F1": "Shares are held directly", "F2": "Corrects the number of gift shares to 150."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1", "F2"]},
+    )
+    result = _screen_form4(monkeypatch, [original, *active_sales, gift, linked])
+    assert result["checks"]["insider_trades"]["sales_90d"] == 6
+    assert result["veto_buy"] is True
+
+    for row in (
+        dict(correction, footnotes={"F1": "Shares are held directly."}, remarks=correction["footnotes"]["F1"]),
+        dict(
+            linked,
+            footnotes={"F1": "The sale had 20 shares at $20.", "F2": "Updates the number of gift shares to 150."},
+        ),
+        dict(
+            correction,
+            footnotes={
+                "F1": "This amendment is filed solely to correct the number of shares gifted. The line does not reflect a new transaction."
+            },
+        ),
+    ):
+        result = _screen_form4(monkeypatch, [original, *active_sales, gift, row])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 6
+        assert result["checks"]["insider_trades"]["count_uncertain"] is False
+        assert result["veto_buy"] is True
+
+    native_gift = _form4_sale(150, transaction_code="G", price=None)
+    stated = dict(correction, footnotes={"F1": "Corrects this gift from 120 shares to 150 shares."})
+    result = _screen_form4(monkeypatch, [original, *active_sales, native_gift, gift, stated])
+    assert result["checks"]["insider_trades"]["count_uncertain"] is False
+    assert result["veto_buy"] is True
+
+    for transition in ("S to G", '"S" to "G"', "S (sale) to G (gift)"):
+        first_conversion = dict(
+            gift, shares=100, footnotes={"F1": f"Corrects the gift transaction code from {transition}."}
+        )
+        result = _screen_form4(monkeypatch, [original, *active_sales, first_conversion])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 6
+        assert result["veto_buy"] is True
+    converted = dict(
+        gift,
+        footnotes={**gift["footnotes"], "F2": "Corrects the number of gift shares to 120."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1", "F2"]},
+    )
+    result = _screen_form4(monkeypatch, [original, *active_sales, converted])
+    assert result["checks"]["insider_trades"]["sales_90d"] == 6
+    assert result["veto_buy"] is True
+
+    result = _screen_form4(monkeypatch, [*active_sales, correction])
+    assert result["checks"]["insider_trades"]["sales_90d"] == 6
+    assert result["checks"]["insider_trades"]["count_uncertain"] is True
+
+    second_gift = dict(
+        gift, shares=150, footnotes={"F1": "Corrects previously misreported 250-share sale to a 150-share gift."}
+    )
+    history = [original, _form4_sale(250), *active_sales, gift, second_gift]
+    for note, uncertain in (
+        ("Corrects the number of gift shares to 150.", True),
+        ("Corrects this gift from 100 shares to 150 shares.", True),
+        ("Corrects this gift from 120 shares to 150 shares.", False),
+        ("The gift shares were corrected from 120 shares to 150 shares.", False),
+    ):
+        result = _screen_form4(monkeypatch, [*history, dict(correction, footnotes={"F1": note})])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 6
+        assert result["checks"]["insider_trades"]["count_uncertain"] is uncertain
+        assert result["veto_buy"] is (not uncertain)
+
+    original_gifts = [native_gift, dict(native_gift, shares=120)]
+    broad = dict(correction, shares=180)
+    specific = dict(correction, shares=190, footnotes={"F1": "Corrects this gift from 120 shares to 190 shares."})
+    for ordered in ([broad, specific], [specific, broad]):
+        result = _screen_form4(monkeypatch, [*active_sales, *original_gifts, *ordered])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 6
+        assert result["checks"]["insider_trades"]["count_uncertain"] is True
+
+
 def test_form4_undated_sale_does_not_change_dated_sales_veto(monkeypatch):
     originals = [_form4_sale(shares) for shares in range(100, 106)]
     undated = _form4_sale(300, accession="0000000123-26-000002", transaction_date=None)
