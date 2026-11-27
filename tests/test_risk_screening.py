@@ -2844,28 +2844,45 @@ def test_form4_shared_conversion_note_is_scoped_to_the_gift(monkeypatch):
     from itertools import permutations
 
     converted = _form4_sale(200, transaction_date="2026-11-18")
-    restated = _form4_sale(100, price=30)
-    sales = [converted, restated, *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 406))]
-    amendment = {
-        "form": "4/A",
-        "accession": "0000000123-26-000002",
-        "filing_date": "2026-11-22",
-        "original_filing_date": "2026-11-21",
-        "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift."},
-        "footnote_refs": {"transactionCoding": ["F1"]},
-    }
-    gift = dict(converted, **amendment, transaction_code="G", price=None)
-    sell = dict(restated, **amendment)
-    native_gift = dict(restated, transaction_code="G", price=None)
-    for originals, amendments in (
-        (sales, (gift, sell)),
-        ([*sales, native_gift], (gift, sell, dict(native_gift, **amendment))),
+    other_sales = [_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 406)]
+    for note, restated_fields, competing_price in (
+        ("Corrects the sale of 200 shares at $20 to a gift.", {}, None),
+        ("Corrects the sale of 200 shares to a gift.", {}, None),
+        ("The 200-share sale should be reclassified to a gift.", {}, None),
+        ("This amendment is filed to correct the sale of 200 shares at $20 to a gift.", {}, None),
+        ("The sale of 200 shares at $20 should have been reported as a gift.", {}, None),
+        ("Corrects the sale of 200 shares at 20 to a gift.", {"shares": 200}, 25),
+        (
+            "Corrects the sale of 200 shares at $20 to a 200-share gift.",
+            {"transaction_date": converted["transaction_date"]},
+            None,
+        ),
     ):
-        for ordered in permutations(amendments):
-            result = _screen_form4_cli(monkeypatch, [*originals, *ordered])
-            assert result["checks"]["insider_trades"]["sales_90d"] == 6
-            assert result["checks"]["insider_trades"]["count_uncertain"] is False
-            assert result["veto_buy"] is True
+        restated = _form4_sale(price=30, **restated_fields)
+        sales = [converted, restated, *other_sales]
+        if competing_price is not None:
+            sales.append(dict(converted, price=competing_price))
+        amendment = {
+            "form": "4/A",
+            "accession": "0000000123-26-000002",
+            "filing_date": "2026-11-22",
+            "original_filing_date": "2026-11-21",
+            "footnotes": {"F1": note},
+            "footnote_refs": {"transactionCoding": ["F1"]},
+        }
+        gift = dict(converted, **amendment, transaction_code="G", price=None)
+        sell = dict(restated, **amendment)
+        native_gift = dict(restated, transaction_code="G", price=None)
+        for originals, amendments in (
+            (sales, (gift, sell)),
+            ([*sales, native_gift], (gift, sell, dict(native_gift, **amendment))),
+        ):
+            for ordered in permutations(amendments):
+                result = _screen_form4_cli(monkeypatch, [*originals, *ordered])
+                check = result["checks"]["insider_trades"]
+                assert check["sales_90d"] == len(sales) - 1, note
+                assert check["count_uncertain"] is False, note
+                assert result["veto_buy"] is True, note
 
 
 def test_form4_addition_declarations_keep_transaction_quantity(monkeypatch):
@@ -2877,13 +2894,20 @@ def test_form4_addition_declarations_keep_transaction_quantity(monkeypatch):
         "original_filing_date": "2026-11-21",
         "remarks": "This amendment reports one omitted sale of 100 shares.",
     }
-    for shared_shares, separate_evidence, expected, uncertain in (
-        (100, False, 2, False),
-        (200, False, 2, True),
-        (200, True, 3, False),
+    for shared_subject, separate_evidence, expected, uncertain in (
+        ("sale of 100 shares", False, 2, False),
+        ("sale of 200 shares", False, 2, True),
+        ("sale of 200 shares", True, 3, False),
+        ("sale of 200 shares at $20", False, 2, True),
+        ("200-share sale", False, 2, True),
+        ("second sale", False, 2, True),
     ):
         footnotes = {
-            "F1": f"This amendment adds one omitted sale of {shared_shares} shares.",
+            "F1": (
+                "This amendment reports the omitted second sale."
+                if shared_subject == "second sale"
+                else f"This amendment adds one omitted {shared_subject}."
+            ),
             "F2": "This sale was omitted from the original Form 4.",
             "F3": "This sale was omitted from the original Form 4.",
         }
@@ -2898,7 +2922,100 @@ def test_form4_addition_declarations_keep_transaction_quantity(monkeypatch):
         ]
         result = _screen_form4_cli(monkeypatch, [original, *rows])
         assert result["checks"]["insider_trades"]["sales_90d"] == expected
-        assert result["checks"]["insider_trades"]["count_uncertain"] is uncertain
+        assert result["checks"]["insider_trades"]["count_uncertain"] is uncertain, shared_subject
+
+
+def test_form4_addition_declarations_respect_filing_evidence(monkeypatch):
+    original = _form4_sale(200, security="Class B Common Stock")
+    amendment = {
+        "form": "4/A",
+        "accession": "0000000123-26-000002",
+        "filing_date": "2026-11-22",
+        "original_filing_date": "2026-11-21",
+    }
+    shared_refs = {"transactionDate/value": ["F1"]}
+    row_refs = {"transactionDate/value": ["F1", "F2"]}
+    for footnote_detail, remarks_detail, other_security, expected_uncertain in (
+        ("100 Class A shares", "100 Class B shares", "Class A Common Stock", True),
+        ("100 Class A shares", "100 Class B shares", "Class B Common Stock", False),
+        ("100 Class A shares", "100 shares", None, False),
+        ("100 shares", "100 shares at $30", None, True),
+        (
+            "100 shares omitted from the form 4 filed on November 21, 2026",
+            "100 shares omitted from the form 4 filed on Nov 21 2026",
+            None,
+            False,
+        ),
+        (
+            "100 shares omitted from the form 4 filed on November 21, 2026",
+            "100 shares omitted from the form 4 filed on November 20, 2026",
+            "Class A Common Stock",
+            True,
+        ),
+    ):
+        footnotes = {
+            "F1": f"This amendment adds one omitted sale of {footnote_detail}.",
+            "F2": "This sale was omitted from the original Form 4.",
+            "F3": "This sale was omitted from the original Form 4.",
+        }
+        remarks = f"This amendment reports one omitted sale of {remarks_detail}."
+        rows = [
+            _form4_sale(100, **amendment, security="Class A Common Stock", footnotes=footnotes, footnote_refs=row_refs),
+            dict(original, **amendment, footnotes=footnotes, footnote_refs=shared_refs),
+        ]
+        if other_security:
+            rows.append(
+                _form4_sale(
+                    100,
+                    **amendment,
+                    transaction_date="2026-11-19",
+                    security=other_security,
+                    footnotes=footnotes,
+                    footnote_refs={"transactionDate/value": ["F1", "F3"]},
+                )
+            )
+        result = _screen_form4_cli(monkeypatch, [original, *(dict(row, remarks=remarks) for row in rows)])
+        assert result["checks"]["insider_trades"]["sales_90d"] == 2 + bool(other_security)
+        assert result["checks"]["insider_trades"]["count_uncertain"] is expected_uncertain, remarks
+
+    scoped_notes = {
+        "F1": "This amendment reports one omitted sale of 100 shares.",
+        "F2": "This sale was omitted from the original Form 4.",
+    }
+    linked = {**amendment, "footnotes": scoped_notes, "footnote_refs": shared_refs}
+    scoped_rows = [
+        dict(original, **linked),
+        _form4_sale(100, **linked),
+        _form4_sale(100, **amendment, footnotes=scoped_notes, footnote_refs={"transactionDate/value": ["F2"]}),
+    ]
+    result = _screen_form4_cli(monkeypatch, [original, *scoped_rows])
+    assert result["checks"]["insider_trades"]["sales_90d"] == 2
+    assert result["checks"]["insider_trades"]["count_uncertain"] is True
+
+    for shares, declaration, expected_uncertain in (
+        (0.5, "one omitted sale of .5 shares", False),
+        (100, "one omitted sale of 100 Class B shares", True),
+    ):
+        row = _form4_sale(
+            shares, **amendment, security="Class A Common Stock", remarks=f"This amendment reports {declaration}."
+        )
+        result = _screen_form4_cli(monkeypatch, [original, row])
+        assert result["checks"]["insider_trades"]["sales_90d"] == (1 if expected_uncertain else 2)
+        assert result["checks"]["insider_trades"]["count_uncertain"] is expected_uncertain
+
+    mixed_originals = [original, _form4_sale(120, transaction_code="G", price=None)]
+    mixed_rows = [
+        dict(
+            tx,
+            **amendment,
+            footnote_refs=shared_refs,
+            footnotes={"F1": "This amendment reports one omitted transaction."},
+        )
+        for tx in mixed_originals
+    ]
+    result = _screen_form4_cli(monkeypatch, [*mixed_originals, *mixed_rows])
+    assert result["checks"]["insider_trades"]["sales_90d"] == 1
+    assert result["checks"]["insider_trades"]["count_uncertain"] is True
 
 
 def test_form4_gift_quantity_correction_preserves_unrelated_sale_and_veto(monkeypatch):

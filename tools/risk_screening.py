@@ -7,7 +7,6 @@ import math
 import os
 import re
 import sys
-from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple
@@ -378,13 +377,16 @@ _F4_COUNT_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven"
 _F4_SALE_COUNT = rf"(?:[1-9]\d{{0,3}}|an?|the|{'|'.join(_F4_COUNT_WORDS[1:])})"
 _F4_OMITTED = r"(?:(?:previously|inadvertently)\s+)?(?:omitted|unreported)"
 _F4_REMARKS_DATE = r"[a-z]+ \d{1,2},? \d{4}"
+_F4_DECLARED_NUMBER = r"(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
 _F4_COUNTED_SALE_ADDITION_RE = re.compile(
     r"(?:(?:this )?(?:form 4(?:/a)?(?: amendment)?|amendment)\s+"
     r"(?:(?:is (?:being )?filed|was filed|filed)\s+to\s+)?|amending to\s+)?"
     r"(?P<verb>add(?:s|ed|ing)?|report(?:s|ed|ing)?|includ(?:e[sd]?|ing))\s+"
     rf"(?P<count>{_F4_SALE_COUNT})\s+"
-    rf"(?:(?P<modifier>{_F4_OMITTED}|additional)\s+)?(?P<object>sale(?: transactions?|s)?|transactions?)"
-    r"(?:\s+of (?:(?P<shares>\d+(?:,\d{3})*(?:\.\d+)?)\s+)?(?:(?P<share_class>common|ordinary|class [a-z])\s+)?shares?)?"
+    rf"(?:(?P<modifier>{_F4_OMITTED}|additional)\s+)?(?:(?P<share_prefix>{_F4_DECLARED_NUMBER})-share\s+)?"
+    r"(?P<object>sale(?: transactions?|s)?|transactions?)"
+    rf"(?:\s+of (?:(?P<shares>{_F4_DECLARED_NUMBER})\s+)?(?:(?P<share_class>common|ordinary|class [a-z])\s+)?shares?)?"
+    rf"(?:\s+at\s+\$?\s*(?P<price>{_F4_DECLARED_NUMBER}))?"
     rf"(?:\s+(?P<clause>(?:(?:that\s+)?(?:was|were)\s+)?{_F4_OMITTED})"
     rf"(?:\s+from the (?:original )?(?:form 4|filing)(?: filed on (?P<original_date>{_F4_REMARKS_DATE}))?)?)?"
     r"(?:\s+by the reporting (?:person|owner))?",
@@ -455,15 +457,22 @@ _F4_SALE_TO_NONSELL_RE = re.compile(
     r"重分类|改为赠与|误报为卖出|并非卖出)",
     re.IGNORECASE,
 )
+_F4_SALE_AMOUNT = r"\d+(?:,\d{3})*(?:\.\d+)?"
 _F4_SALE_REFERENCE = (
-    r"(?:(?:the|a)\s+)?(?:(?:previously (?:misreported|reported(?: in error)?)|original)\s+)?(?:[\d,.]+-share\s+)?sale"
-    r"(?:\s+of\s+[\d,.]+\s+shares?)?(?:\s+at\s+\$?\s*[\d,.]+)?"
+    r"(?:(?:the|a)\s+)?(?:(?:previously (?:misreported|reported(?: in error)?)|original)\s+)?"
+    rf"(?:(?P<source_prefix_shares>{_F4_SALE_AMOUNT})-share\s+)?sale"
+    rf"(?:\s+of\s+(?P<source_shares>{_F4_SALE_AMOUNT})\s+shares?)?"
+    rf"(?:\s+at\s+\$?\s*(?P<source_price>{_F4_SALE_AMOUNT}))?"
 )
-_F4_CURRENT_CHANGE = r"(?:this amendment\s+)?(?:corrects?|reclassif(?:ies|y)|changes?)"
+_F4_CURRENT_CHANGE = (
+    r"(?:(?:this amendment\s+)?(?:corrects?|reclassif(?:ies|y)|changes?)|"
+    r"this amendment (?:is (?:being )?filed|was filed) to (?:correct|reclassify|change))"
+)
 _F4_EXPLICIT_SALE_RECLASS_RE = re.compile(
-    rf"^(?:{_F4_CURRENT_CHANGE}\s+"
-    rf"{_F4_SALE_REFERENCE}|{_F4_SALE_REFERENCE}\s+"
-    r"(?:was previously reported in error and\s+)?(?:is|should be)\s+reclassified)"
+    rf"^(?:(?P<active_change>{_F4_CURRENT_CHANGE})\s+)?{_F4_SALE_REFERENCE}"
+    # Without the active verb before the sale, require a passive reclassification verb.
+    r"(?(active_change)|\s+(?:was previously reported in error and\s+)?"
+    r"(?:(?:is|should be)\s+reclassified|should have been reported))"
     r"\s+(?:to|as)\s+(?:a\s+)?(?:(?:bona fide|(?P<target_shares>[\d,.]+)-share)\s+)?"
     r"(?P<target>gift|non-sale|transfer|disposition)\b"
     rf"|^{_F4_CURRENT_CHANGE}\s+(?:the\s+)?(?:gift\s+)?(?:transaction\s+)?code\s+(?:from\s+)?"
@@ -601,7 +610,21 @@ def _f4_correction_sentences(rtext: str) -> str:
     return ". ".join(corr_sents) if corr_sents else rtext
 
 
+def _f4_stated_sale_conversion_values(rtext: str, *fields: str) -> set[float]:
+    values: set[float] = set()
+    for sentence in _f4_statements(rtext):
+        match = _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence)
+        if match:
+            for field in fields:
+                value = _safe_float((match[field] or "").replace(",", ""))
+                if value is not None:
+                    values.add(value)
+    return values
+
+
 def _f4_stated_prior_prices(rtext: str, new_price) -> set[float]:
+    if conversion_values := _f4_stated_sale_conversion_values(rtext, "source_price"):
+        return conversion_values
     new_f = _safe_float(new_price)
     scoped = _f4_correction_sentences(rtext)
     explicit: set[float] = set()
@@ -622,6 +645,8 @@ def _f4_stated_prior_prices(rtext: str, new_price) -> set[float]:
 
 
 def _f4_stated_prior_shares(rtext: str, new_shares) -> set[float]:
+    if conversion_values := _f4_stated_sale_conversion_values(rtext, "source_shares", "source_prefix_shares"):
+        return conversion_values
     out: set[float] = set()
     new_f = _safe_float(new_shares)
     for m in _F4_PRIOR_SHARES_RE.finditer(_f4_correction_sentences(rtext)):
@@ -677,8 +702,25 @@ class _F4AdditionDeclaration(NamedTuple):
     count: int
     sales_only: bool
     shares: float | None
-    share_class: str
-    original_date: str
+    price: float | None
+    share_class: str | None
+    original_date: str | None
+
+    def matches(self, tx: dict) -> bool:
+        return (
+            (not self.sales_only or _f4_is_sell(tx))
+            and (self.shares is None or _f4_matches_num_set(tx.get("shares"), {self.shares}))
+            and (self.price is None or _f4_matches_num_set(tx.get("price"), {self.price}))
+            and (
+                self.share_class is None
+                or re.search(rf"\b{self.share_class}\b", str(tx.get("security") or ""), re.IGNORECASE) is not None
+            )
+            and (self.original_date is None or tx.get("original_filing_date") == self.original_date)
+        )
+
+    def refines(self, other: "_F4AdditionDeclaration") -> bool:
+        # Only fill in omitted details when the known details and count agree.
+        return self[:2] == other[:2] and all(b is None or a == b for a, b in zip(self[2:], other[2:]))
 
 
 def _f4_sale_addition_declaration(text: str) -> _F4AdditionDeclaration | None:
@@ -693,37 +735,97 @@ def _f4_sale_addition_declaration(text: str) -> _F4AdditionDeclaration | None:
         declared = int(not subject.endswith("s"))
     else:
         declared = _F4_COUNT_WORDS.index(count)
-    shares = _safe_float((match["shares"] or "").replace(",", ""))
+    shares = _safe_float((match["shares"] or match["share_prefix"] or "").replace(",", ""))
+    price = _safe_float((match["price"] or "").replace(",", ""))
+    original_date = match["original_date"]
+    if original_date:
+        for fmt in ("%B %d %Y", "%b %d %Y"):
+            try:
+                original_date = datetime.strptime(original_date.replace(",", ""), fmt).date().isoformat()
+                break
+            except ValueError:
+                continue
     return _F4AdditionDeclaration(
         declared,
         subject.startswith("sale"),
         shares,
-        (match["share_class"] or "").casefold(),
-        (match["original_date"] or "").replace(",", "").casefold(),
+        price,
+        match["share_class"].casefold() if match["share_class"] else None,
+        original_date,
     )
 
 
-def _f4_filing_additions_covered(declarations: Counter[_F4AdditionDeclaration], claimed: list[dict]) -> bool:
-    if not declarations:
-        return bool(claimed)
-    remaining = sorted(claimed, key=_f4_is_sell)
-    # Satisfy specific singular declarations first. Use non-sales first for generic declarations.
-    ordered = sorted(declarations, key=lambda d: (d.count != 1 or d.shares is None, not d.sales_only))
-    for declaration in ordered:
-        if not declaration.count:
-            return False
-        quantity = declaration.shares if declaration.count == 1 else None
-        count = declaration.count * declarations[declaration]
-        matches = [
+_F4AdditionClaim = tuple[_F4AdditionDeclaration | None, set[int]]
+
+
+def _f4_merge_addition_claims(
+    shared: list[_F4AdditionClaim], remarks: list[_F4AdditionDeclaration], all_rows: set[int]
+) -> list[_F4AdditionClaim]:
+    claims: list[_F4AdditionClaim] = []
+    unpaired: list[_F4AdditionClaim] = []
+    for declaration, refs in shared:
+        if declaration in remarks:
+            remarks.remove(declaration)
+            claims.append((declaration, refs))
+        else:
+            unpaired.append((declaration, refs))
+    # A remarks copy may omit details. Pair it only with a single compatible shared statement.
+    options = [
+        [
             i
-            for i, tx in enumerate(remaining)
-            if (not declaration.sales_only or _f4_is_sell(tx))
-            and (quantity is None or _safe_float(tx.get("shares")) == quantity)
+            for i, (shared_decl, _) in enumerate(unpaired)
+            if shared_decl is not None and (shared_decl.refines(declaration) or declaration.refines(shared_decl))
         ]
-        if len(matches) < count:
+        for declaration in remarks
+    ]
+    paired: set[int] = set()
+    for declaration, candidates in zip(remarks, options):
+        if len(candidates) == 1 and sum(candidates[0] in others for others in options) == 1:
+            i = candidates[0]
+            shared_decl, refs = unpaired[i]
+            assert shared_decl is not None
+            claims.append((shared_decl if shared_decl.refines(declaration) else declaration, refs))
+            paired.add(i)
+        else:
+            claims.append((declaration, all_rows))
+    return claims + [claim for i, claim in enumerate(unpaired) if i not in paired]
+
+
+def _f4_filing_additions_covered(claims: list[_F4AdditionClaim], rows: list[dict], additions: set[int]) -> bool:
+    if not claims:
+        return bool(additions)
+    options: list[set[int]] = []
+    for declaration, refs in claims:
+        count = declaration.count if declaration is not None else 1
+        eligible = {
+            i
+            for i in refs & additions
+            if (declaration.matches(rows[i]) if declaration is not None else _f4_is_sell(rows[i]))
+        }
+        if not count or len(eligible) < count or len(options) + count > len(additions):
             return False
-        used = set(matches[:count])
-        remaining = [tx for i, tx in enumerate(remaining) if i not in used]
+        options.extend([eligible] * count)
+    # Assign every declared transaction to a distinct row, reassigning earlier claims when needed.
+    options.sort(key=len)
+    assigned: dict[int, int] = {}
+    for claim in range(len(options)):
+        previous: dict[int, tuple[int, int] | None] = {claim: None}
+        pending = [claim]
+        for current in pending:
+            free = options[current] - assigned.keys()
+            if free:
+                assigned[free.pop()] = current
+                while (step := previous[current]) is not None:
+                    current, row = step
+                    assigned[row] = current
+                break
+            for row in options[current]:
+                owner = assigned[row]
+                if owner not in previous:
+                    previous[owner] = current, row
+                    pending.append(owner)
+        else:
+            return False
     return True
 
 
@@ -764,54 +866,45 @@ def _f4_shared_conversion_targets(
     return matched or candidates
 
 
-def _f4_accession_note_texts(acc_rows: list[dict], ledger: list[dict]) -> tuple[list[str], list[str], set[int]]:
-    row_refs = [_f4_extract_ref_ids(tx.get("footnote_refs")) for tx in acc_rows]
-    ref_rows: dict[str, list[int]] = {}
-    for i, refs in enumerate(row_refs):
-        for ref_id in refs:
-            ref_rows.setdefault(ref_id, []).append(i)
-    shared_additions: dict[tuple[str, str], str] = {}
-    shared_conversions: dict[tuple[str, str], re.Match[str]] = {}
-    texts_by_row: list[list[str]] = []
-    for tx, refs in zip(acc_rows, row_refs):
-        row_parts = []
+def _f4_accession_note_texts(
+    acc_rows: list[dict], ledger: list[dict]
+) -> tuple[list[str], list[_F4AdditionClaim], set[int]]:
+    note_rows: dict[tuple[str, str], tuple[str, set[int]]] = {}
+    texts_by_row: list[list[str]] = [[] for _ in acc_rows]
+    for i, tx in enumerate(acc_rows):
         footnotes = tx.get("footnotes")
         if isinstance(footnotes, dict):
-            for ref_id in refs:
-                if not footnotes.get(ref_id):
-                    continue
-                note = str(footnotes[ref_id])
-                if len(ref_rows[ref_id]) == 1:
-                    row_parts.append(note)
-                    continue
-                for sentence in _f4_statements(note):
+            for ref_id in _f4_extract_ref_ids(tx.get("footnote_refs")):
+                for sentence in _f4_statements(str(footnotes.get(ref_id) or "")):
                     key = (ref_id, sentence.casefold())
-                    if conversion := _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence):
-                        shared_conversions[key] = conversion
-                    elif _f4_is_sell(tx) and (
-                        _F4_ROW_SALE_ADDITION_RE.fullmatch(sentence)
-                        or _f4_sale_addition_declaration(sentence) is not None
-                    ):
-                        shared_additions[key] = sentence
-                    else:
-                        row_parts.append(sentence)
+                    note_rows.setdefault(key, (sentence, set()))[1].add(i)
         elif isinstance(footnotes, str) and footnotes:
-            row_parts.append(footnotes)
-        row_parts.extend(str(tx[key]) for key in ("amendment_reason", "note") if tx.get(key))
-        texts_by_row.append(row_parts)
+            texts_by_row[i].append(footnotes)
 
+    shared_additions: list[_F4AdditionClaim] = []
     unresolved_conversions: set[int] = set()
-    for (ref_id, _), conversion in shared_conversions.items():
-        refs = ref_rows[ref_id]
-        targets = _f4_shared_conversion_targets(acc_rows, refs, conversion, ledger)
-        if len(targets) == 1:
-            texts_by_row[targets[0]].append(conversion.string)
-        else:
-            unresolved_conversions.update(targets or refs)
+    for sentence, refs in note_rows.values():
+        if len(refs) > 1:
+            if conversion := _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence):
+                targets = _f4_shared_conversion_targets(acc_rows, sorted(refs), conversion, ledger)
+                if len(targets) == 1:
+                    texts_by_row[targets[0]].append(sentence)
+                else:
+                    unresolved_conversions.update(targets or refs)
+                continue
+            if any(_f4_is_sell(acc_rows[i]) for i in refs):
+                declaration = _f4_sale_addition_declaration(sentence)
+                if declaration is not None or _F4_ROW_SALE_ADDITION_RE.fullmatch(sentence):
+                    shared_additions.append((declaration, refs))
+                    continue
+        for i in refs:
+            texts_by_row[i].append(sentence)
+    for row_parts, tx in zip(texts_by_row, acc_rows):
+        row_parts.extend(str(tx[key]) for key in ("amendment_reason", "note") if tx.get(key))
     row_texts = [
         ". ".join(part.strip().rstrip(".") for part in row_parts if part.strip()) for row_parts in texts_by_row
     ]
-    return row_texts, list(shared_additions.values()), unresolved_conversions
+    return row_texts, shared_additions, unresolved_conversions
 
 
 def _f4_resolve_accession_intents(
@@ -840,15 +933,16 @@ def _f4_resolve_accession_intents(
                 for sentence in sentences
                 if (declaration := _f4_sale_addition_declaration(sentence)) is not None and declaration.count == 1
             ]
-            quantity = _safe_float(tx.get("shares"))
-            if any(d.shares is not None and d.shares != quantity for d in singular_declarations):
+            contradictory = any(not declaration.matches(tx) for declaration in singular_declarations)
+            if contradictory:
                 ambiguous[i] = True
             addition = (
                 not prior
                 and not denial
+                and not contradictory
                 and (
-                    any(_F4_ROW_SALE_ADDITION_RE.fullmatch(sentence) for sentence in sentences)
-                    or any(d.shares is None or d.shares == quantity for d in singular_declarations)
+                    bool(singular_declarations)
+                    or any(_F4_ROW_SALE_ADDITION_RE.fullmatch(sentence) for sentence in sentences)
                 )
             )
         else:
@@ -865,23 +959,18 @@ def _f4_resolve_accession_intents(
         return row_intents, ambiguous, row_texts
     rem_text = " ".join(remarks_parts)
     # shortcut: promote explicit English declarations, and expand for verified filing wording.
-    shared_counts = Counter(
-        declaration
-        for sentence in shared_additions
-        if (declaration := _f4_sale_addition_declaration(sentence)) is not None
-    )
-    remarks_counts = Counter()
-    mixed_filing_evidence = len(shared_additions) > shared_counts.total()
+    remarks_declarations = []
+    mixed_filing_evidence = False
     for sentence in _f4_statements(rem_text):
         declaration = _f4_sale_addition_declaration(sentence)
         if declaration is not None:
-            remarks_counts[declaration] += 1
+            remarks_declarations.append(declaration)
         elif not _F4_REMARKS_METADATA_RE.fullmatch(sentence) or _F4_OTHER_CHANGE_RE.search(sentence):
             mixed_filing_evidence = True
-    # Cross-source copies share a declaration only when their parsed transaction details agree.
-    declarations = shared_counts | remarks_counts
-    covering_declaration = next(iter(declarations)) if declarations.total() == 1 else None
-    filing_add = bool(shared_additions or declarations) or bool(_F4_ADDITION_RE.search(rem_text))
+    all_rows = set(range(len(acc_rows)))
+    claims = _f4_merge_addition_claims(shared_additions, remarks_declarations, all_rows)
+    covering_declaration = claims[0][0] if len(claims) == 1 and claims[0][1] == all_rows else None
+    filing_add = bool(claims) or bool(_F4_ADDITION_RE.search(rem_text))
     rem_corr = bool(_F4_CORRECTION_RE.search(rem_text))
     if not (filing_add or rem_corr):
         return row_intents, ambiguous, row_texts
@@ -890,10 +979,7 @@ def _f4_resolve_accession_intents(
         and covering_declaration is not None
         and covering_declaration.count == len(acc_rows)
         and (len(acc_rows) == 1 or covering_declaration.sales_only)
-        and (
-            covering_declaration.shares is None
-            or (len(acc_rows) == 1 and covering_declaration.shares == _safe_float(acc_rows[0].get("shares")))
-        )
+        and all(covering_declaration.matches(tx) for tx in acc_rows)
         and not mixed_filing_evidence
         and not any(ambiguous)
         and not rem_corr
@@ -915,12 +1001,8 @@ def _f4_resolve_accession_intents(
                 break
         else:
             return [(True, False)] * len(acc_rows), ambiguous, row_texts
-    claimed_additions = [
-        tx
-        for tx, (addition, correction) in zip(acc_rows, row_intents)
-        if addition and not correction and (not shared_additions or _f4_is_sell(tx))
-    ]
-    unclaimed_add = filing_add and not _f4_filing_additions_covered(declarations, claimed_additions)
+    claimed_additions = {i for i, (addition, correction) in enumerate(row_intents) if addition and not correction}
+    unclaimed_add = filing_add and not _f4_filing_additions_covered(claims, acc_rows, claimed_additions)
     unclaimed_corr = rem_corr and not any(rc for _, rc in row_intents)
     if not (unclaimed_add or unclaimed_corr):
         return row_intents, ambiguous, row_texts
@@ -1196,11 +1278,13 @@ def _f4_reconcile_non_sells(
         shares = tx.get("shares")
         orig_date = str(tx.get("original_filing_date") or "").strip()
         has_identity = base[0] != ("",) and bool(base[1]) and shares is not None
-        is_explicit_add = is_add and not is_corr
         pool, pool_unlinked = _f4_scoped_pool(ledger, tx, prior_len)
         sentences = _f4_statements(rtext)
+        explicit_sale_conversion = any(_F4_EXPLICIT_SALE_RECLASS_RE.match(sentence) for sentence in sentences)
+        is_corr = is_corr or explicit_sale_conversion
+        is_explicit_add = is_add and not is_corr
         gift_corrections = [sentence for sentence in sentences if _F4_GIFT_CORRECTION_RE.search(sentence)]
-        if gift_corrections and not any(_F4_EXPLICIT_SALE_RECLASS_RE.match(sentence) for sentence in sentences):
+        if gift_corrections and not explicit_sale_conversion:
             # The new quantity or price identifies the revision, not the transaction being corrected.
             correction_text = ". ".join(gift_corrections)
             prior_shares = _f4_stated_prior_shares(correction_text, shares)
@@ -1236,7 +1320,7 @@ def _f4_reconcile_non_sells(
             else:
                 mark_uncertain(tx)
             continue
-        is_sale_conversion = is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext))
+        is_sale_conversion = explicit_sale_conversion or (is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext)))
         if code == "G" and has_identity and not (is_explicit_add or is_ambig or is_sale_conversion):
             exact = _f4_exact_sig(tx)
             exact_native_gifts = [
