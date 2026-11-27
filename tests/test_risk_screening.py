@@ -1679,6 +1679,66 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         assert res_overlap["checks"]["insider_trades"]["sales_90d"] == 3
         assert res_overlap["checks"]["insider_trades"]["count_uncertain"] is False
 
+    # 28. Symmetric exact restatements and historical restatements preserve filing_date provenance for later amendments
+    prov_orig = [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000450",
+            filing_date="2026-08-05",
+            transaction_date="2026-08-04",
+            shares=100,
+            price=10.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000450",
+            filing_date="2026-08-05",
+            transaction_date="2026-08-04",
+            shares=100,
+            price=10.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000451",
+            filing_date="2026-08-06",
+            transaction_date="2026-08-05",
+            shares=50,
+            price=15.0,
+        ),
+    ]
+    prov_restate_1 = dict(prov_orig[0], form="4/A", accession="0000320193-26-000452", filing_date="2026-08-07")
+    prov_restate_2 = dict(prov_restate_1)
+    prov_gift_link = dict(
+        prov_orig[0],
+        form="4/A",
+        accession="0000320193-26-000453",
+        filing_date="2026-08-08",
+        original_filing_date="2026-08-07",
+        transaction_code="G",
+        direction="other",
+        footnotes={"F1": "Corrects previously misreported sale to a gift."},
+        footnote_refs={"transactionCoding/transactionCode": ["F1"]},
+    )
+    res_prov = _screen(prov_orig + [prov_restate_1, prov_restate_2, prov_gift_link], since_filing_date="2026-08-01")
+    assert res_prov["checks"]["insider_trades"]["sales_90d"] == 2
+    assert not any(f["category"] == "insider" for f in res_prov["flags"])
+
+    # Historical restatement on Aug 9 preserves Aug 9 provenance so an Aug 10 correction linked to Aug 9 still resolves
+    hist_link_followup = dict(
+        corr_date_to_jul31,
+        accession="0000320193-26-000432",
+        filing_date="2026-08-10",
+        original_filing_date="2026-08-09",
+        transaction_date="2026-08-04",
+        footnotes={"F1": "Corrects transaction date from 2026-07-31 to 2026-08-04."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    res_hist_prov = _screen(
+        aug_sales + [corr_date_to_jul31, hist_restate_aug3, hist_link_followup], since_filing_date="2026-08-01"
+    )
+    assert res_hist_prov["checks"]["insider_trades"]["sales_90d"] == 3
+    assert res_hist_prov["checks"]["insider_trades"]["count_uncertain"] is False
+
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
     base_inputs = {

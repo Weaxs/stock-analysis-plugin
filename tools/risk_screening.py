@@ -767,12 +767,14 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                 return [], True
         return pool, False
 
-    def _mark_reclassified(idx: int, tx: dict) -> None:
-        entry = ledger[idx]
-        entry["reclassified"] = True
+    def _record_filing_provenance(idx: int, tx: dict) -> None:
         fdate = str(tx.get("filing_date") or "").strip()
         if fdate:
-            entry["filing_dates"].add(fdate)
+            ledger[idx]["filing_dates"].add(fdate)
+
+    def _mark_reclassified(idx: int, tx: dict) -> None:
+        ledger[idx]["reclassified"] = True
+        _record_filing_provenance(idx, tx)
 
     def _update_entry(idx: int, tx: dict, *, restore_if_reclassified: bool = False) -> None:
         entry = ledger[idx]
@@ -783,9 +785,7 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
             entry["revisions"].append(rev)
         if tx.get("shares") is not None:
             entry["shares_set"].add(tx.get("shares"))
-        fdate = str(tx.get("filing_date") or "").strip()
-        if fdate:
-            entry["filing_dates"].add(fdate)
+        _record_filing_provenance(idx, tx)
         if restore_if_reclassified and entry["reclassified"]:
             entry["reclassified"] = False
 
@@ -1058,6 +1058,8 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
                         _mark_uncertain(tx)
                     elif do_update:
                         _update_entry(target, tx, restore_if_reclassified=do_restore)
+                    else:
+                        _record_filing_provenance(target, tx)
                     resolved.add(idx_s)
                 else:
                     for idx_s, tx, _do_restore, _mark_unc, _do_update in claimants:
@@ -1092,8 +1094,9 @@ def check_us_insider_trades(symbol: str, *, run=None) -> dict:
 
                 assigned_positions = set(slot_owner.values())
                 for slot, pos in slot_owner.items():
-                    idx_s, _tx, _avail = sym_items[pos]
+                    idx_s, tx, _avail = sym_items[pos]
                     matched.add(slot)
+                    _record_filing_provenance(slot, tx)
                     resolved.add(idx_s)
                 for pos, (idx_s, tx, avail) in enumerate(sym_items):
                     if pos in assigned_positions:
