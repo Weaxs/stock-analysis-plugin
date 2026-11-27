@@ -495,6 +495,19 @@ _F4_GIFT_CORRECTION_RE = re.compile(
     rf"^{_F4_GIFT_REFERENCE}\s+(?:was|were|is|are)\s+(?:corrected|revised|updated|changed)\b",
     re.IGNORECASE,
 )
+_F4_ROW_GIFT_ADDITION_RE = re.compile(
+    rf"(?:(?:this|the) gift (?:was|is) {_F4_OMITTED}|"
+    rf"(?:this (?:amendment|report) )?{_F4_ROW_REPORT_VERB}s? (?:a|an|one|the) {_F4_OMITTED} gift)"
+    rf"{_F4_ROW_REPORT_CONTEXT}",
+    re.IGNORECASE,
+)
+_F4_ROW_GIFT_ADDITION_DENIAL_RE = re.compile(
+    rf"(?:this|the) gift (?:was|is) (?:not|never) {_F4_OMITTED}\b|"
+    rf"(?:this (?:amendment|report) )?(?:does|did) not (?:add|{_F4_ROW_REPORT_VERB}) "
+    rf"(?:(?:a|an|any|one|the) )?(?:(?:new|additional|{_F4_OMITTED}) )?gifts?"
+    rf"{_F4_ROW_SALE_DENIAL_CONTEXT}(?=$|(?:\s*,\s*|\s+)(?:and|but)\s+)",
+    re.IGNORECASE,
+)
 _F4_RESTORE_SELL_RE = re.compile(
     r"(\breclassif(?:ied|y|ying)|\btransaction\s+code|\bcode\s+s\b|"
     r"\b(?:was|is|should\s+have\s+been)\s+(?:actually\s+)?(?:a\s+)?(?:[\w-]+\s+){0,2}sale\b|"
@@ -711,13 +724,15 @@ class _F4AdditionDeclaration(NamedTuple):
     original_date: str | None
 
     def matches(self, tx: dict) -> bool:
+        class_end = r"\b(?!-\w)" if (self.share_class or "").startswith("class ") else r"\b"
+        security = str(tx.get("security") or "")
         return (
             (not self.sales_only or _f4_is_sell(tx))
             and (self.shares is None or _f4_matches_num_set(tx.get("shares"), {self.shares}))
             and (self.price is None or _f4_matches_num_set(tx.get("price"), {self.price}))
             and (
                 self.share_class is None
-                or re.search(rf"\b{self.share_class}\b", str(tx.get("security") or ""), re.IGNORECASE) is not None
+                or re.search(rf"\b{self.share_class}{class_end}", security, re.IGNORECASE) is not None
             )
             and (self.original_date is None or tx.get("original_filing_date") == self.original_date)
         )
@@ -788,9 +803,20 @@ class _F4AdditionClaim(NamedTuple):
     counted: bool = True
     qualifier: str | None = None
 
+    def matching_rows(self, rows: list[dict], eligible: set[int], qualifiers_by_row: list[set[str]]) -> set[int]:
+        return {
+            i
+            for i in self.refs & eligible
+            if self.declaration.matches(rows[i]) and (self.qualifier is None or self.qualifier in qualifiers_by_row[i])
+        }
+
 
 def _f4_merge_addition_claims(
-    shared: list[_F4AdditionClaim], remarks: list[_F4AdditionClaim], rows: list[dict], additions: set[int]
+    shared: list[_F4AdditionClaim],
+    remarks: list[_F4AdditionClaim],
+    rows: list[dict],
+    additions: set[int],
+    qualifiers_by_row: list[set[str]],
 ) -> list[_F4AdditionClaim]:
     claims: list[_F4AdditionClaim] = []
     unpaired: list[_F4AdditionClaim] = []
@@ -804,22 +830,34 @@ def _f4_merge_addition_claims(
         else:
             unpaired.append(claim)
     # A restated row cannot corroborate a merge. A count that covers the whole accession can establish additions alone.
-    options: list[dict[int, _F4AdditionDeclaration]] = []
+    options: list[dict[int, _F4AdditionClaim]] = []
     for remark in remaining_remarks:
-        candidates: dict[int, _F4AdditionDeclaration] = {}
+        candidates: dict[int, _F4AdditionClaim] = {}
         for i, claim in enumerate(unpaired):
-            if not (remark.counted and claim.counted and (merged := claim.declaration.merged_with(remark.declaration))):
+            if not (remark.counted or claim.counted):
                 continue
-            eligible = all_rows if merged.count == len(rows) and claim.refs == all_rows else claim.refs & additions
-            if merged.count and sum(merged.matches(rows[j]) for j in eligible) >= merged.count:
-                candidates[i] = merged
+            declaration = claim.declaration.merged_with(remark.declaration)
+            if declaration is None or not declaration.count:
+                continue
+            merged = _F4AdditionClaim(
+                declaration, claim.refs, claim.counted and remark.counted, claim.qualifier or remark.qualifier
+            )
+            if merged.counted:
+                eligible = all_rows if declaration.count == len(rows) and claim.refs == all_rows else additions
+                if len(merged.matching_rows(rows, eligible, qualifiers_by_row)) >= declaration.count:
+                    candidates[i] = merged
+            else:
+                # The counted statement and row description must independently identify the same addition.
+                linked = claim.matching_rows(rows, additions, qualifiers_by_row)
+                if len(linked) == 1 and linked == remark.matching_rows(rows, additions, qualifiers_by_row):
+                    candidates[i] = merged
         options.append(candidates)
     paired: set[int] = set()
     for remark, candidates in zip(remaining_remarks, options):
         if len(candidates) == 1:
             i, merged = next(iter(candidates.items()))
             if sum(i in others for others in options) == 1:
-                claims.append(_F4AdditionClaim(merged, unpaired[i].refs))
+                claims.append(merged)
                 paired.add(i)
                 continue
         claims.append(remark)
@@ -834,12 +872,7 @@ def _f4_filing_additions_covered(
     options: list[set[int]] = []
     for claim in claims:
         count = claim.declaration.count
-        eligible = {
-            i
-            for i in claim.refs & additions
-            if claim.declaration.matches(rows[i])
-            and (claim.qualifier is None or claim.qualifier in qualifiers_by_row[i])
-        }
+        eligible = claim.matching_rows(rows, additions, qualifiers_by_row)
         if not count or len(eligible) < count or len(options) + count > len(additions):
             return False
         options.extend([eligible] * count)
@@ -874,6 +907,7 @@ def _f4_conversion_targets(
     ledger: list[dict],
     non_sell_histories: list[list[dict]],
     local_gift_corrections: dict[int, list[str]],
+    local_gift_additions: set[int],
 ) -> list[int]:
     code = conversion["target_code"] or ("G" if (conversion["target"] or "").casefold() == "gift" else None)
     quantity = _safe_float((conversion["target_shares"] or "").replace(",", ""))
@@ -885,7 +919,7 @@ def _f4_conversion_targets(
         and (quantity is None or _f4_matches_num_set(acc_rows[i].get("shares"), {quantity}))
     ]
     if len(candidates) <= 1:
-        return candidates
+        return candidates if len(refs) == 1 else [i for i in candidates if i not in local_gift_additions]
 
     # Multiple linked gifts can only be distinguished by the corrected transaction and its filing history.
     sentence = conversion.string
@@ -906,8 +940,12 @@ def _f4_conversion_targets(
             for j in pool
         ):
             matched.append(i)
+    if not matched:
+        return candidates
+    # Reject separately reported gifts without promoting an unmatched row by elimination.
+    matched = [i for i in matched if i not in local_gift_additions]
     if len(matched) <= 1:
-        return matched or candidates
+        return matched
 
     # A row-specific correction with its own prior native gift accounts for a separate transaction.
     independent_gifts = set()
@@ -954,17 +992,33 @@ def _f4_accession_note_texts(
         if statement not in linked_statements:
             note_rows[None, statement] = sentence, all_rows
 
-    local_gift_corrections: dict[int, list[str]] = {}
+    local_gift_notes: dict[int, list[str]] = {}
     for sentence, refs in note_rows.values():
-        if len(refs) == 1 and _F4_GIFT_CORRECTION_RE.search(sentence):
-            local_gift_corrections.setdefault(next(iter(refs)), []).append(sentence)
+        if len(refs) == 1:
+            i = next(iter(refs))
+            if _f4_tx_code(acc_rows[i]) == "G":
+                local_gift_notes.setdefault(i, []).append(sentence)
+    local_gift_corrections: dict[int, list[str]] = {}
+    local_gift_additions: set[int] = set()
+    for i, sentences in local_gift_notes.items():
+        corrections = [sentence for sentence in sentences if _F4_GIFT_CORRECTION_RE.search(sentence)]
+        if corrections:
+            local_gift_corrections[i] = corrections
+        elif any(_F4_ROW_GIFT_ADDITION_RE.fullmatch(sentence) for sentence in sentences) and not any(
+            _F4_ROW_GIFT_ADDITION_DENIAL_RE.match(sentence)
+            or _F4_CORRECTION_RE.search(sentence)
+            or _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence)
+            or any(not match["negated"] for match in _F4_PRIOR_DISCLOSURE_RE.finditer(sentence))
+            for sentence in sentences
+        ):
+            local_gift_additions.add(i)
 
     shared_additions: list[_F4AdditionClaim] = []
     unresolved_conversions: set[int] = set()
     for sentence, refs in note_rows.values():
         if conversion := _F4_EXPLICIT_SALE_RECLASS_RE.match(sentence):
             targets = _f4_conversion_targets(
-                acc_rows, refs, conversion, ledger, non_sell_histories, local_gift_corrections
+                acc_rows, refs, conversion, ledger, non_sell_histories, local_gift_corrections, local_gift_additions
             )
             if len(targets) == 1:
                 texts_by_row[targets[0]].append(sentence)
@@ -1058,7 +1112,7 @@ def _f4_resolve_accession_intents(
         elif not _F4_REMARKS_METADATA_RE.fullmatch(sentence) or _F4_OTHER_CHANGE_RE.search(sentence):
             mixed_filing_evidence = True
     claimed_additions = {i for i, (addition, correction) in enumerate(row_intents) if addition and not correction}
-    claims = _f4_merge_addition_claims(shared_additions, remarks_claims, acc_rows, claimed_additions)
+    claims = _f4_merge_addition_claims(shared_additions, remarks_claims, acc_rows, claimed_additions, qualifiers_by_row)
     covering_declaration = (
         claims[0].declaration if len(claims) == 1 and claims[0].counted and claims[0].refs == all_rows else None
     )

@@ -2895,6 +2895,17 @@ def test_form4_shared_conversion_note_is_scoped_to_the_gift(monkeypatch):
                 assert check["sales_90d"] == len(sales) - 1, note
                 assert check["count_uncertain"] is False, note
                 assert result["veto_buy"] is True, note
+                if competing_price is not None:
+                    followup = dict(
+                        gift,
+                        accession="0000000123-26-000003",
+                        filing_date="2026-11-23",
+                        footnotes={"F1": f"Corrects the sale of {shares} shares at ${competing_price} to a gift."},
+                    )
+                    result = _screen_form4_cli(monkeypatch, [*originals, *ordered, followup])
+                    check = result["checks"]["insider_trades"]
+                    assert check["sales_90d"] == len(sales) - 2, note
+                    assert check["count_uncertain"] is False, note
 
 
 def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypatch):
@@ -2949,6 +2960,47 @@ def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypa
     assert result["checks"]["insider_trades"]["sales_90d"] == 6
     assert result["checks"]["insider_trades"]["count_uncertain"] is False
     assert result["veto_buy"] is True
+
+
+@pytest.mark.parametrize(
+    "gift_note, shared_note, conversion_date, expected_sales",
+    [
+        ("This gift was previously unreported.", False, "2026-11-20", 6),
+        ("This amendment reports one omitted gift.", False, "2026-11-20", 6),
+        ("This gift was previously unreported.", True, "2026-11-20", 7),
+        ("This gift was previously unreported. This gift was not omitted.", False, "2026-11-20", 7),
+        ("This gift was previously unreported.", False, "2026-11-17", 7),
+    ],
+)
+def test_form4_shared_conversion_preserves_independently_added_gift(
+    monkeypatch, gift_note, shared_note, conversion_date, expected_sales
+):
+    sale = _form4_sale(200)
+    originals = [sale, *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 407))]
+    amendment = {
+        "form": "4/A",
+        "accession": "0000000123-26-000002",
+        "filing_date": "2026-11-22",
+        "original_filing_date": "2026-11-21",
+        "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift.", "F2": gift_note},
+    }
+    converted = _form4_sale(
+        200,
+        **amendment,
+        transaction_date=conversion_date,
+        transaction_code="G",
+        price=None,
+        footnote_refs={"transactionCoding": ["F1", "F2"] if shared_note else ["F1"]},
+    )
+    added = _form4_sale(
+        100, **amendment, transaction_code="G", price=None, footnote_refs={"transactionCoding": ["F1", "F2"]}
+    )
+    for amended_rows in ((converted, added), (added, converted)):
+        result = _screen_form4_cli(monkeypatch, [*originals, *amended_rows])
+        check = result["checks"]["insider_trades"]
+        assert check["sales_90d"] == expected_sales
+        assert check["count_uncertain"] is (expected_sales == 7)
+        assert result["veto_buy"] is (expected_sales == 6)
 
 
 @pytest.mark.parametrize(
@@ -3114,6 +3166,27 @@ def test_form4_addition_declarations_respect_filing_evidence(monkeypatch):
     assert result["checks"]["insider_trades"]["count_uncertain"] is True
 
 
+@pytest.mark.parametrize("security, class_matches", [("Class A Common Stock", True), ("Class A-1 Common Stock", False)])
+def test_form4_addition_matches_complete_share_class(monkeypatch, security, class_matches):
+    originals = [_form4_sale(shares, security="Class B Common Stock") for shares in (200, 250)]
+    amendment = _form4_sale(
+        100,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        security=security,
+        footnotes={"F1": "This amendment reports one omitted sale of 100 Class A shares."},
+        footnote_refs={"transactionCoding": ["F1"]},
+    )
+    result = _screen_form4_cli(monkeypatch, [*originals, amendment])
+    check = result["checks"]["insider_trades"]
+    assert check["sales_90d"] == (3 if class_matches else 2)
+    assert check["count_uncertain"] is (not class_matches)
+    has_medium_flag = any(flag["category"] == "insider" and flag["severity"] == "medium" for flag in result["flags"])
+    assert has_medium_flag is class_matches
+
+
 def test_form4_additions_match_compatible_statements_and_independent_row_details(monkeypatch):
     original = _form4_sale(200, price=30)
     amendment = {
@@ -3127,6 +3200,10 @@ def test_form4_additions_match_compatible_statements_and_independent_row_details
         ("one omitted sale", "one omitted sale of 200 shares", "the omitted first sale", 200, 3, False),
         ("the omitted second sale", "", "the omitted first sale", None, 2, True),
         ("the omitted second sale", "", "the omitted second sale", None, 2, False),
+        ("the omitted second sale", "one omitted sale of 100 shares", "the omitted second sale", None, 2, False),
+        ("one omitted sale of 100 shares", "the omitted second sale", "the omitted second sale", None, 2, False),
+        ("the omitted second sale", "one omitted sale of 200 shares", "the omitted second sale", 200, 3, False),
+        ("the omitted second sale", "one omitted sale of 100 shares", "the omitted first sale", None, 2, True),
         ("", "the omitted second sale", "the omitted first sale", None, 2, True),
         ("the omitted private sale", "", "the omitted open-market sale", None, 2, True),
         (
