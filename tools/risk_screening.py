@@ -1578,32 +1578,34 @@ def _f4_reconcile_non_sells(
             continue
         if independent_gift_addition and is_explicit_add:
             addition_notes = {sentence for sentence in sentences if _F4_ROW_GIFT_ADDITION_RE.fullmatch(sentence)}
+            omission_note = next(iter(addition_notes)) if len(addition_notes) == 1 else ""
+            date_ref = _F4_ROW_ADDITION_FILING_DATE_RE.search(omission_note)
+            omitted_from = _f4_declared_filing_date(date_ref[1]) if date_ref else None
+            omission_key = omission_note.casefold()
+            gift_revision = dict(tx, _f4_confirmed_gift_omission=omission_key) if omitted_from else tx
             # An unchanged omission claim can refer to an older filing than the linked amendment.
-            if has_identity and len(addition_notes) == 1 and orig_date:
-                date_ref = _F4_ROW_ADDITION_FILING_DATE_RE.search(next(iter(addition_notes)))
-                omitted_from = _f4_declared_filing_date(date_ref[1]) if date_ref else None
-                if omitted_from and omitted_from < orig_date:
-                    exact = _f4_exact_sig(tx)
-                    linked_gifts = [
-                        i
-                        for i, revisions in _f4_prior_native_gifts(non_sell_histories, tx, orig_date)
-                        if any(
-                            str(rev.get("form") or "").upper() == "4/A"
-                            and rev.get("filing_date") == orig_date
-                            and _f4_exact_sig(rev) == exact
-                            for rev in revisions
-                        )
-                    ]
-                    if len(linked_gifts) == 1:
-                        target = linked_gifts[0]
-                        native_gift_claims.setdefault(target, []).append(tx)
-                        acc_orig_ns_matched.add(target)
-                        continue
-                    if linked_gifts:
-                        mark_uncertain(tx)
-                        continue
+            if has_identity and orig_date and omitted_from and omitted_from < orig_date:
+                exact = _f4_exact_sig(tx)
+                linked_gifts = [
+                    i
+                    for i, revisions in _f4_prior_native_gifts(non_sell_histories, tx, orig_date)
+                    if any(
+                        rev.get("filing_date") == orig_date
+                        and rev.get("_f4_confirmed_gift_omission") == omission_key
+                        and _f4_exact_sig(rev) == exact
+                        for rev in revisions
+                    )
+                ]
+                if len(linked_gifts) == 1:
+                    target = linked_gifts[0]
+                    native_gift_claims.setdefault(target, []).append(gift_revision)
+                    acc_orig_ns_matched.add(target)
+                    continue
+                if linked_gifts:
+                    mark_uncertain(tx)
+                    continue
             # Row-local addition evidence takes precedence over an identical original gift.
-            acc_added_non_sells.append(tx)
+            acc_added_non_sells.append(gift_revision)
             continue
         is_sale_conversion = explicit_sale_conversion or (is_corr and bool(_F4_SALE_TO_NONSELL_RE.search(rtext)))
         if code == "G" and has_identity and not (is_explicit_add or is_ambig or is_sale_conversion):

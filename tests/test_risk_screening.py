@@ -3733,6 +3733,41 @@ def test_form4_repeated_dated_gift_omission_preserves_one_history(monkeypatch, r
     assert result["veto_buy"] is True
 
 
+def test_form4_dated_gift_addition_does_not_merge_with_a_plain_restatement(monkeypatch):
+    sales = [_form4_sale(shares) for shares in range(401, 407)]
+    original = _form4_sale(transaction_code="G", price=None)
+    restatement = dict(
+        original,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+    )
+    added = dict(
+        restatement,
+        accession="0000000123-26-000003",
+        filing_date="2026-11-23",
+        original_filing_date="2026-11-22",
+        footnotes={"F1": "This gift was omitted from the original Form 4 filed on November 21, 2026."},
+        footnote_refs={"transactionCoding": ["F1"]},
+    )
+    correction = dict(
+        added,
+        accession="0000000123-26-000004",
+        filing_date="2026-11-24",
+        shares=120,
+        footnotes={"F1": "Corrects this gift from 100 shares to 120 shares."},
+    )
+    for linked_filing in (None, "2026-11-21", "2026-11-23"):
+        result = _screen_form4_cli(
+            monkeypatch, [*sales, original, restatement, added, dict(correction, original_filing_date=linked_filing)]
+        )
+        check = result["checks"]["insider_trades"]
+        assert check["sales_90d"] == 6
+        assert check["count_uncertain"] is (linked_filing is None)
+        assert result["veto_buy"] is (linked_filing is not None)
+
+
 def test_form4_undated_sale_does_not_change_dated_sales_veto(monkeypatch):
     originals = [_form4_sale(shares) for shares in range(100, 106)]
     undated = _form4_sale(300, accession="0000000123-26-000002", transaction_date=None)
