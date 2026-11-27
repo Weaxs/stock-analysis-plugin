@@ -1377,7 +1377,9 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         filing_date="2026-08-08",
         original_filing_date="2026-08-06",
         transaction_date="2026-07-31",
-        footnotes={"F1": "Corrects 200 shares at $20 on 2026-08-03 to 2026-07-31."},
+        shares=300,
+        price=30.0,
+        footnotes={"F1": "Corrects 200 shares at $20 on 2026-08-03 to 2026-07-31 (300 shares at $30)."},
         footnote_refs={"transactionDate/value": ["F1"]},
     )
     res_two_acc_disambig = _screen(same_day_two_acc + [move_200_jul31], since_filing_date="2026-08-01")
@@ -1432,15 +1434,181 @@ def test_form4_amendment_remarks_scoping_and_chronological_ledger_chain(monkeypa
         filing_date="2026-08-08",
         original_filing_date="2026-08-05",
         transaction_date="2026-07-31",
-        price=11.0,
-        footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-07-31 at $11."},
+        price=13.0,
+        footnotes={"F1": "Corrects transaction date from 2026-08-03 (previously at $11) to 2026-07-31 at $13."},
         footnote_refs={"transactionDate/value": ["F1"]},
     )
     res_sym_ab = _screen(sym_orig + [sym_a11, sym_a12, sym_move_f1], since_filing_date="2026-08-01")
     res_sym_ba = _screen(sym_orig + [sym_a12, sym_a11, sym_move_f1], since_filing_date="2026-08-01")
-    assert res_sym_ab["checks"]["insider_trades"]["sales_90d"] == res_sym_ba["checks"]["insider_trades"]["sales_90d"]
+    assert res_sym_ab["checks"]["insider_trades"]["sales_90d"] == 2
+    assert res_sym_ba["checks"]["insider_trades"]["sales_90d"] == 2
     assert res_sym_ab["checks"]["insider_trades"]["count_uncertain"] is True
     assert res_sym_ba["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 21. Separate unchanged sale price mentioned in footnote ("executed at $1,250 is unchanged") must NOT confuse prior price
+    six_sep_px = [
+        dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=20.0),
+        dict(orig_rows[0], transaction_date="2026-10-12", shares=100, price=1250.0),
+    ] + [dict(orig_rows[0], transaction_date=f"2026-10-1{i}", shares=100, price=150.0) for i in range(3, 7)]
+    corr_sep_px = dict(
+        six_sep_px[0],
+        form="4/A",
+        accession="0000320193-26-000394",
+        filing_date="2026-10-18",
+        price=21.0,
+        footnotes={"F1": "Corrects sale price from $20 to $21. A separate sale executed at $1,250 is unchanged."},
+        footnote_refs={"transactionAmounts/transactionPricePerShare/value": ["F1"]},
+    )
+    res_sep_px = _screen(six_sep_px + [corr_sep_px])
+    assert res_sep_px["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_sep_px["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_sep_px["veto_buy"] is True
+
+    # 22. Competing exact matches with historical alias ($10 -> $11, then accession restating both $10 and $11 in either order)
+    six_alias = [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000400",
+            filing_date="2026-10-02",
+            transaction_date="2026-10-01",
+            shares=100,
+            price=10.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000401",
+            filing_date="2026-10-03",
+            transaction_date="2026-10-01",
+            shares=100,
+            price=10.0,
+        ),
+    ] + [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000402",
+            filing_date="2026-10-04",
+            transaction_date=f"2026-10-0{i}",
+            shares=100,
+            price=150.0,
+        )
+        for i in range(2, 6)
+    ]
+    corr_alias_11 = dict(
+        six_alias[0],
+        form="4/A",
+        accession="0000320193-26-000403",
+        filing_date="2026-10-06",
+        original_filing_date="2026-10-02",
+        price=11.0,
+        footnotes={"F1": "Corrects sale price from $10 to $11."},
+        footnote_refs={"transactionAmounts/transactionPricePerShare/value": ["F1"]},
+    )
+    restate_10 = dict(six_alias[1], form="4/A", accession="0000320193-26-000404", filing_date="2026-10-07", price=10.0)
+    restate_11 = dict(six_alias[0], form="4/A", accession="0000320193-26-000404", filing_date="2026-10-07", price=11.0)
+    for ordered in ([restate_10, restate_11], [restate_11, restate_10]):
+        res_alias = _screen(six_alias + [corr_alias_11] + ordered)
+        assert res_alias["checks"]["insider_trades"]["sales_90d"] == 6
+        assert res_alias["checks"]["insider_trades"]["count_uncertain"] is False
+        assert res_alias["veto_buy"] is True
+
+    # 23. Explicit date correction takes priority over unannotated share restatement in both row orders
+    prio_orig = [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000410",
+            filing_date="2026-08-05",
+            transaction_date="2026-08-03",
+            shares=100,
+            price=10.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000410",
+            filing_date="2026-08-05",
+            transaction_date="2026-08-03",
+            shares=200,
+            price=20.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000411",
+            filing_date="2026-08-06",
+            transaction_date="2026-08-05",
+            shares=50,
+            price=15.0,
+        ),
+    ]
+    prio_unannot = dict(
+        prio_orig[0], form="4/A", accession="0000320193-26-000412", filing_date="2026-08-07", price=15.0
+    )
+    prio_date_corr = dict(
+        prio_orig[0],
+        form="4/A",
+        accession="0000320193-26-000412",
+        filing_date="2026-08-07",
+        transaction_date="2026-07-31",
+        footnotes={"F1": "Corrects transaction date from 2026-08-03 to 2026-07-31."},
+        footnote_refs={"transactionDate/value": ["F1"]},
+    )
+    for ordered in ([prio_unannot, prio_date_corr], [prio_date_corr, prio_unannot]):
+        res_prio = _screen(prio_orig + ordered, since_filing_date="2026-08-01")
+        assert res_prio["checks"]["insider_trades"]["sales_90d"] == 2
+        assert res_prio["checks"]["insider_trades"]["count_uncertain"] is True
+
+    # 24. Match stated prior shares and price against the SAME transaction revision (never mix rev 1 shares + rev 2 price)
+    six_rev = [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000420",
+            filing_date="2026-10-02",
+            transaction_date="2026-10-01",
+            shares=200,
+            price=20.0,
+        ),
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000421",
+            filing_date="2026-10-03",
+            transaction_date="2026-10-01",
+            shares=200,
+            price=30.0,
+        ),
+    ] + [
+        dict(
+            orig_rows[0],
+            accession="0000320193-26-000422",
+            filing_date="2026-10-04",
+            transaction_date=f"2026-10-0{i}",
+            shares=100,
+            price=150.0,
+        )
+        for i in range(2, 6)
+    ]
+    rev_first = dict(
+        six_rev[0],
+        form="4/A",
+        accession="0000320193-26-000423",
+        filing_date="2026-10-06",
+        original_filing_date="2026-10-02",
+        shares=100,
+        price=30.0,
+        footnotes={"F1": "Corrects previously reported 200 shares at $20 to 100 shares at $30."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1"]},
+    )
+    rev_second = dict(
+        six_rev[1],
+        form="4/A",
+        accession="0000320193-26-000424",
+        filing_date="2026-10-07",
+        shares=300,
+        price=40.0,
+        footnotes={"F1": "Corrects previously reported 200 shares at $30 to 300 shares at $40."},
+        footnote_refs={"transactionAmounts/transactionShares/value": ["F1"]},
+    )
+    res_same_rev = _screen(six_rev + [rev_first, rev_second])
+    assert res_same_rev["checks"]["insider_trades"]["sales_90d"] == 6
+    assert res_same_rev["checks"]["insider_trades"]["count_uncertain"] is False
+    assert res_same_rev["veto_buy"] is True
 
 
 def test_hk_disclosures_resumption_notice_no_veto_and_incomplete_provider_marks_unavailable():
