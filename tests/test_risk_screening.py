@@ -2906,6 +2906,7 @@ def test_form4_shared_conversion_note_is_scoped_to_the_gift(monkeypatch):
                     check = result["checks"]["insider_trades"]
                     assert check["sales_90d"] == len(sales) - 2, note
                     assert check["count_uncertain"] is False, note
+                    assert result["veto_buy"] is True, note
 
 
 def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypatch):
@@ -2963,44 +2964,109 @@ def test_form4_shared_conversion_preserves_independently_corrected_gift(monkeypa
 
 
 @pytest.mark.parametrize(
-    "gift_note, shared_note, conversion_date, expected_sales",
+    "gift_note, shared_note, conversion_date, denial_source, expected_sales",
     [
-        ("This gift was previously unreported.", False, "2026-11-20", 6),
-        ("This amendment reports one omitted gift.", False, "2026-11-20", 6),
-        ("This gift was previously unreported.", True, "2026-11-20", 7),
-        ("This gift was previously unreported. This gift was not omitted.", False, "2026-11-20", 7),
-        ("This gift was previously unreported.", False, "2026-11-17", 7),
+        ("This gift was previously unreported.", False, "2026-11-20", None, 6),
+        ("This gift was unreported.", False, "2026-11-20", None, 6),
+        ("This amendment reports one omitted gift.", False, "2026-11-20", None, 6),
+        ("This amendment reports one unreported gift.", False, "2026-11-20", None, 6),
+        ("This gift was previously unreported.", True, "2026-11-20", None, 7),
+        ("This gift was previously unreported. This gift was not omitted.", False, "2026-11-20", None, 7),
+        ("This gift was previously unreported.", False, "2026-11-20", "remarks", 7),
+        ("This gift was previously unreported.", False, "2026-11-20", "shared_ref", 7),
+        ("This gift was previously unreported.", False, "2026-11-20", "note", 7),
+        ("This gift was previously unreported.", False, "2026-11-20", "amendment_reason", 7),
+        ("This gift was previously unreported.", False, "2026-11-17", None, 7),
     ],
 )
 def test_form4_shared_conversion_preserves_independently_added_gift(
-    monkeypatch, gift_note, shared_note, conversion_date, expected_sales
+    monkeypatch, gift_note, shared_note, conversion_date, denial_source, expected_sales
 ):
     sale = _form4_sale(200)
-    originals = [sale, *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 407))]
+    originals = [sale, _form4_sale(100), *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 406))]
+    denial = "This amendment does not add any gifts."
     amendment = {
         "form": "4/A",
         "accession": "0000000123-26-000002",
         "filing_date": "2026-11-22",
         "original_filing_date": "2026-11-21",
-        "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift.", "F2": gift_note},
+        "footnotes": {"F1": "Corrects the sale of 200 shares at $20 to a gift.", "F2": gift_note, "F3": denial},
     }
+    if denial_source == "remarks":
+        amendment["remarks"] = denial
+    references = ["F1", "F3"] if denial_source == "shared_ref" else ["F1"]
     converted = _form4_sale(
         200,
         **amendment,
         transaction_date=conversion_date,
         transaction_code="G",
         price=None,
-        footnote_refs={"transactionCoding": ["F1", "F2"] if shared_note else ["F1"]},
+        footnote_refs={"transactionCoding": [*references, "F2"] if shared_note else references},
     )
     added = _form4_sale(
-        100, **amendment, transaction_code="G", price=None, footnote_refs={"transactionCoding": ["F1", "F2"]}
+        100, **amendment, transaction_code="G", price=None, footnote_refs={"transactionCoding": [*references, "F2"]}
     )
+    if denial_source in ("note", "amendment_reason"):
+        added[denial_source] = denial
     for amended_rows in ((converted, added), (added, converted)):
         result = _screen_form4_cli(monkeypatch, [*originals, *amended_rows])
         check = result["checks"]["insider_trades"]
         assert check["sales_90d"] == expected_sales
         assert check["count_uncertain"] is (expected_sales == 7)
         assert result["veto_buy"] is (expected_sales == 6)
+
+
+@pytest.mark.parametrize("conversion_date, expected_sales", [("2026-11-20", 6), ("2026-11-17", 7)])
+def test_form4_shared_conversion_respects_independent_gift_addition_and_correction(
+    monkeypatch, conversion_date, expected_sales
+):
+    from itertools import permutations
+
+    sale = _form4_sale(200)
+    originals = [sale, *(_form4_sale(n, transaction_date="2026-11-19") for n in range(401, 407))]
+    native = _form4_sale(90, transaction_code="G", price=None)
+    amendment = {
+        "form": "4/A",
+        "accession": "0000000123-26-000002",
+        "filing_date": "2026-11-22",
+        "original_filing_date": "2026-11-21",
+        "transaction_code": "G",
+        "price": None,
+        "footnotes": {
+            "F1": "Corrects the sale of 200 shares at $20 to a gift.",
+            "F2": "This gift was previously unreported.",
+            "F3": "Corrects this gift from 90 shares to 100 shares.",
+        },
+    }
+    converted = _form4_sale(
+        200, **amendment, transaction_date=conversion_date, footnote_refs={"transactionCoding": ["F1"]}
+    )
+    added = _form4_sale(110, **amendment, footnote_refs={"transactionCoding": ["F1", "F2"]})
+    corrected = _form4_sale(100, **amendment, footnote_refs={"transactionCoding": ["F1", "F3"]})
+    for amended_rows in permutations((converted, added, corrected)):
+        result = _screen_form4_cli(monkeypatch, [*originals, native, *amended_rows])
+        check = result["checks"]["insider_trades"]
+        assert check["sales_90d"] == expected_sales
+        assert check["count_uncertain"] is (expected_sales == 7)
+        assert result["veto_buy"] is (expected_sales == 6)
+
+
+def test_form4_conflicting_gift_addition_does_not_remove_a_matching_sale(monkeypatch):
+    sale = _form4_sale()
+    amendment = dict(
+        sale,
+        form="4/A",
+        accession="0000000123-26-000002",
+        filing_date="2026-11-22",
+        original_filing_date="2026-11-21",
+        transaction_code="G",
+        price=None,
+        footnotes={"F1": "This gift was previously unreported. This gift was not omitted."},
+        footnote_refs={"transactionCoding": ["F1"]},
+    )
+    check = _screen_form4_cli(monkeypatch, [sale, amendment])["checks"]["insider_trades"]
+    assert check["sales_90d"] == 1
+    assert check["count_uncertain"] is True
 
 
 @pytest.mark.parametrize(
@@ -3166,8 +3232,17 @@ def test_form4_addition_declarations_respect_filing_evidence(monkeypatch):
     assert result["checks"]["insider_trades"]["count_uncertain"] is True
 
 
-@pytest.mark.parametrize("security, class_matches", [("Class A Common Stock", True), ("Class A-1 Common Stock", False)])
-def test_form4_addition_matches_complete_share_class(monkeypatch, security, class_matches):
+@pytest.mark.parametrize(
+    "declared_class, security, class_matches",
+    [
+        ("Class A", "Class A Common Stock", True),
+        ("Class A", "Class A-1 Common Stock", False),
+        ("Class A", "Class A‑1 Common Stock", False),
+        ("Class A-1", "Class A‑1 Common Stock", True),
+        ("Class A-1", "Class A Common Stock", False),
+    ],
+)
+def test_form4_addition_matches_complete_share_class(monkeypatch, declared_class, security, class_matches):
     originals = [_form4_sale(shares, security="Class B Common Stock") for shares in (200, 250)]
     amendment = _form4_sale(
         100,
@@ -3176,7 +3251,7 @@ def test_form4_addition_matches_complete_share_class(monkeypatch, security, clas
         filing_date="2026-11-22",
         original_filing_date="2026-11-21",
         security=security,
-        footnotes={"F1": "This amendment reports one omitted sale of 100 Class A shares."},
+        footnotes={"F1": f"This amendment reports one omitted sale of 100 {declared_class} shares."},
         footnote_refs={"transactionCoding": ["F1"]},
     )
     result = _screen_form4_cli(monkeypatch, [*originals, amendment])
@@ -3201,9 +3276,26 @@ def test_form4_additions_match_compatible_statements_and_independent_row_details
         ("the omitted second sale", "", "the omitted first sale", None, 2, True),
         ("the omitted second sale", "", "the omitted second sale", None, 2, False),
         ("the omitted second sale", "one omitted sale of 100 shares", "the omitted second sale", None, 2, False),
+        ("the omitted second sale", "one omitted transaction of 100 shares", "the omitted second sale", None, 2, False),
         ("one omitted sale of 100 shares", "the omitted second sale", "the omitted second sale", None, 2, False),
         ("the omitted second sale", "one omitted sale of 200 shares", "the omitted second sale", 200, 3, False),
         ("the omitted second sale", "one omitted sale of 100 shares", "the omitted first sale", None, 2, True),
+        (
+            "the omitted second sale",
+            "one omitted sale of 100 shares",
+            "the omitted second sale. This amendment reports the omitted first sale",
+            None,
+            2,
+            True,
+        ),
+        (
+            "the omitted second sale",
+            "one omitted sale of 100 shares",
+            "the omitted second sale. This amendment reports an omitted private sale",
+            None,
+            2,
+            False,
+        ),
         ("", "the omitted second sale", "the omitted first sale", None, 2, True),
         ("the omitted private sale", "", "the omitted open-market sale", None, 2, True),
         (
