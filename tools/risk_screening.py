@@ -993,7 +993,7 @@ def _f4_conversion_targets(
 
 
 def _f4_disclosed_gift_matches(
-    tx: dict, shares: float, reported_filing: str | None, non_sell_histories: list[list[dict]]
+    tx: dict, shares: float, reported_filing: str | None, non_sell_histories: list[list[dict]], ledger: list[dict]
 ) -> bool:
     if not _f4_matches_num_set(tx.get("shares"), {shares}):
         return False
@@ -1009,6 +1009,15 @@ def _f4_disclosed_gift_matches(
         for rev in _f4_non_sell_revisions(history, reported_filing, amend_date, amend_ts)
         if rev.get("filing_date") == reported_filing and _f4_matches_num_set(rev.get("shares"), {shares})
     }
+    reported_gifts.update(
+        (owner, transaction_date, security, derivative)
+        for entry in ledger
+        for filing_date, (owner, transaction_date, security, derivative, gift_shares, _), code in entry["gift_sigs"]
+        if code == "G"
+        and filing_date == reported_filing
+        and (owner, security, derivative) == owner_security
+        and _f4_matches_num_set(gift_shares, {shares})
+    )
     # Only narrow a dated disclosure when the cited filing identifies a known gift.
     return not reported_gifts or _f4_base_sig(tx) in reported_gifts
 
@@ -1059,7 +1068,7 @@ def _f4_accession_note_texts(
                     i
                     for i in refs
                     if i in local_gift_notes
-                    and _f4_disclosed_gift_matches(acc_rows[i], shares, reported_filing, non_sell_histories)
+                    and _f4_disclosed_gift_matches(acc_rows[i], shares, reported_filing, non_sell_histories, ledger)
                 )
     for sentence, refs in note_rows.values():
         if len(refs) == 1:
@@ -1321,7 +1330,7 @@ def _f4_mark_reclassified(ledger: list[dict], idx: int, tx: dict) -> None:
     entry = ledger[idx]
     entry["reclassified"] = True
     gfdate = str(tx.get("filing_date") or "").strip()
-    entry["gift_sigs"].add((gfdate, _f4_exact_sig(tx)))
+    entry["gift_sigs"].add((gfdate, _f4_exact_sig(tx), _f4_tx_code(tx)))
     grev = (gfdate, *_f4_rev_tuple(tx))
     if grev not in entry["gift_revisions"]:
         entry["gift_revisions"].append(grev)
@@ -1581,6 +1590,8 @@ def _f4_reconcile_non_sells(
             omission_note = next(iter(addition_notes)) if len(addition_notes) == 1 else ""
             date_ref = _F4_ROW_ADDITION_FILING_DATE_RE.search(omission_note)
             omitted_from = _f4_declared_filing_date(date_ref[1]) if date_ref else None
+            if date_ref and omitted_from:
+                omission_note = omission_note[: date_ref.start(1)] + omitted_from + omission_note[date_ref.end(1) :]
             omission_key = omission_note.casefold()
             gift_revision = dict(tx, _f4_confirmed_gift_omission=omission_key) if omitted_from else tx
             # An unchanged omission claim can refer to an older filing than the linked amendment.
@@ -1922,10 +1933,10 @@ def _f4_reconcile_sells(
                 if not entry["gift_sigs"]:
                     return False
                 if gfd:
-                    on_date = [gsig for fd, gsig in entry["gift_sigs"] if fd == gfd]
+                    on_date = [gsig for fd, gsig, _code in entry["gift_sigs"] if fd == gfd]
                     if on_date:
                         return sig in on_date
-                return any(gsig == sig for _fd, gsig in entry["gift_sigs"])
+                return any(gsig == sig for _fd, gsig, _code in entry["gift_sigs"])
 
             if use_history:
                 cands = [
