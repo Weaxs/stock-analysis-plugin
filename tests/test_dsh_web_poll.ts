@@ -30,7 +30,7 @@ function element() {
     },
     append(...nodes: unknown[]) { this.children.push(...nodes); },
     appendChild(node: unknown) { this.children.push(node); },
-    replaceChildren() { this.children.length = 0; },
+    replaceChildren(...nodes: unknown[]) { this.children.length = 0; this.children.push(...nodes); },
     remove() {},
     setAttribute() {}, focus() {}, scrollBy() {}, scrollIntoView() {},
     querySelector() { return element(); },
@@ -58,9 +58,12 @@ const document = {
   addEventListener() {},
 };
 const windowListeners = new Map<string, Array<(event: unknown) => void>>();
+const postedMessages: unknown[] = [];
 const window = {
   innerWidth: 1024,
   parent: null as unknown,
+  prompt: undefined as ((msg?: string, def?: string) => string | null) | undefined,
+  postMessage(msg: unknown) { postedMessages.push(msg); },
   addEventListener(type: string, fn: (event: unknown) => void) {
     windowListeners.set(type, [...(windowListeners.get(type) ?? []), fn]);
   },
@@ -71,6 +74,19 @@ let resolveFirst!: (value: unknown) => void;
 const firstSnapshot = new Promise(resolve => { resolveFirst = resolve; });
 const snapshotCalls: string[] = [];
 const writeCalls: unknown[] = [];
+const searchCalls: string[] = [];
+const pendingSearch: { resolve?: (value: unknown) => void } = {};
+let holdNextSearch = false;
+const copiedTexts: string[] = [];
+let clipboardShouldReject = false;
+const navigatorMock = {
+  clipboard: {
+    writeText: async (text: string) => {
+      if (clipboardShouldReject) throw new Error("clipboard denied");
+      copiedTexts.push(text);
+    },
+  },
+};
 const fundAndAdvisor = [
   {
     symbol: "018147", region: "fund",
@@ -102,6 +118,21 @@ async function fetch(path: string, options: { method?: string; body?: string } =
     writeCalls.push(JSON.parse(options.body ?? "{}"));
     return { ok: true, status: 200, json: async () => ({ symbols: ["AAPL"] }) };
   }
+  if (path.startsWith("./api/search")) {
+    searchCalls.push(path);
+    const body = { query: path, results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] };
+    if (holdNextSearch) {
+      holdNextSearch = false;
+      const deferred = new Promise(resolve => { pendingSearch.resolve = resolve; });
+      const value = await deferred;
+      return { ok: true, status: 200, json: async () => value };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => body,
+    };
+  }
   throw new Error("unexpected fetch: " + path);
 }
 
@@ -110,6 +141,7 @@ let nextTimer = 1;
 const sandbox = {
   document,
   window,
+  navigator: navigatorMock,
   location: { search: "", origin: "http://dashboard.local" },
   localStorage: {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -180,4 +212,103 @@ for (const listener of windowListeners.get("message") ?? []) {
 }
 assert.equal(document.documentElement.style.props.has("--bg"), false, "omitted theme token is removed");
 
-console.log("dsh web: watchlist polling, fund NAV, advisor rows, undo and theme cleanup passed");
+// Quick analyze copies prompt to clipboard into #watch-toast WITHOUT clobbering an active #watch-undo bar.
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-remove]" ? removeBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.equal(byId("watch-undo").hidden, false, "undo bar visible before toast");
+
+const analyzeBtn = { dataset: { analyze: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.equal(postedMessages.some(m => (m as { type?: string }).type === "stock-analysis:ask-agent"), false);
+assert.equal(copiedTexts.length, 1);
+assert(copiedTexts[0].includes("018147"));
+assert.equal(byId("watch-toast").hidden, false, "toast renders in dedicated #watch-toast");
+assert(JSON.stringify(byId("watch-toast").children).includes("已复制"));
+assert.equal(byId("watch-undo").hidden, false, "toast must not hide active undo bar");
+assert(JSON.stringify(byId("watch-undo").children).includes("撤销"), "undo button preserved while toast is shown");
+
+clipboardShouldReject = true;
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-analyze]" ? analyzeBtn : null) } });
+}
+await new Promise(resolve => setTimeout(resolve, 10));
+assert(JSON.stringify(byId("watch-toast").children).includes("剪贴板不可用"));
+clipboardShouldReject = false;
+
+// Group & price alert thresholds: whitespace like '>= 1.5' parses cleanly, invalid non-empty input preserves existing alert.
+window.prompt = () => "核心";
+const groupBtn = { dataset: { group: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-group]" ? groupBtn : null) } });
+}
+window.prompt = () => ">= 1.5";
+const alertBtn = { dataset: { alert: "018147", label: "建信新兴市场混合(QDII)C" } };
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-alert]" ? alertBtn : null) } });
+}
+const updatedRows = JSON.stringify(byId("rows").children);
+assert(updatedRows.includes("#核心"), "custom group badge rendered");
+assert(updatedRows.includes("触达 ≥ 1.5"), "triggered price alert badge rendered with whitespace in input");
+
+window.prompt = () => "not-a-valid-alert";
+for (const listener of byId("rows").listeners.get("click") ?? []) {
+  listener({ target: { closest: (sel: string) => (sel === "button[data-alert]" ? alertBtn : null) } });
+}
+assert(JSON.stringify(byId("watch-toast").children).includes("提醒格式无效"), "invalid alert format notifies user in toast");
+assert(JSON.stringify(byId("watch-undo").children).includes("撤销"), "invalid alert toast preserves undo bar");
+assert(JSON.stringify(byId("rows").children).includes("触达 ≥ 1.5"), "existing alert preserved after invalid input");
+
+// Full pinyin search reaches /api/search, switching to another valid query clears stale suggestions immediately.
+byId("symbol-input").value = "guizhoumaotai";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+const pinyinTimer = [...timers.values()].at(-1) as (() => void) | undefined;
+if (typeof pinyinTimer === "function") pinyinTimer();
+await new Promise(resolve => setTimeout(resolve, 10));
+assert(searchCalls.some(p => p.includes("guizhoumaotai")), "full pinyin reaches /api/search");
+assert(JSON.stringify(byId("search-results").children).includes("贵州茅台"));
+
+// Switching query to "腾讯" clears the previous "贵州茅台" suggestions during the 250ms debounce window.
+byId("symbol-input").value = "腾讯";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+assert.equal(byId("search-results").hidden, true, "switching valid query immediately hides stale suggestions");
+assert.equal(byId("search-results").children.length, 0, "switching valid query clears stale suggestion buttons");
+
+const beforeCodeCount = searchCalls.length;
+byId("symbol-input").value = "600519";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+assert.equal(byId("search-results").hidden, true, "exact code hides search results immediately");
+assert.equal(searchCalls.length, beforeCodeCount, "exact code does not trigger /api/search");
+
+const beforeDelayedCount = searchCalls.length;
+holdNextSearch = true;
+byId("symbol-input").value = "茅台";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+const delayedTimer = [...timers.values()].at(-1) as (() => void) | undefined;
+if (typeof delayedTimer === "function") delayedTimer();
+await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(searchCalls.length, beforeDelayedCount + 1, "delayed search request must start before clearing input");
+assert.equal(typeof pendingSearch.resolve, "function", "delayed search promise resolver must be registered");
+// Clear input before the in-flight search finishes.
+byId("symbol-input").value = "";
+for (const listener of byId("symbol-input").listeners.get("input") ?? []) {
+  listener({});
+}
+assert.equal(byId("search-results").hidden, true);
+pendingSearch.resolve!({ query: "茅台", results: [{ symbol: "600519", name: "贵州茅台", region: "cn", score: 1 }] });
+await new Promise(resolve => setTimeout(resolve, 10));
+assert.equal(byId("search-results").hidden, true, "stale search response must not reopen cleared dropdown");
+
+console.log("dsh web: watchlist polling, fund NAV, advisor rows, search, groups, alerts, analyze, undo and theme cleanup passed");

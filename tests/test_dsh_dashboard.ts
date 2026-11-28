@@ -568,6 +568,37 @@ try {
   }
   await handler.settle();
 
+  // ---------- name/pinyin fuzzy search endpoint ----------
+  {
+    const searchFile = join(temp, "search", "watchlist.json");
+    writeWatchlist(searchFile, []);
+    const searchHandler = createDashboardHandler({
+      runPy: async (script, args) => {
+        if (script === "name_resolver.py" && args[0] == "resolve") {
+          return JSON.stringify([
+            { code: "600519", name: "贵州茅台", score: 1.0 },
+            { code: "00700.HK", name: "腾讯控股", score: 0.9 },
+          ]);
+        }
+        return "{}";
+      },
+      watchlistFile: searchFile,
+      webDir,
+    });
+    const emptyRes = await call(searchHandler, get("/stock-analysis/api/search?q="));
+    assert.equal(emptyRes.status(), 200);
+    assert.deepEqual(emptyRes.json().results, []);
+    const hitRes = await call(searchHandler, get("/stock-analysis/api/search?q=%E8%8C%85%E5%8F%B0"));
+    assert.equal(hitRes.status(), 200);
+    assert.deepEqual(hitRes.json().results, [
+      { symbol: "600519", name: "贵州茅台", region: "cn", score: 1 },
+      { symbol: "00700.HK", name: "腾讯控股", region: "hk", score: 0.9 },
+    ]);
+    const tooLong = await call(searchHandler, get(`/stock-analysis/api/search?q=${"a".repeat(65)}`));
+    assert.equal(tooLong.status(), 400);
+    searchHandler.dispose();
+  }
+
   // ---------- resident warmer lifecycle ----------
   {
     const warmFile = join(temp, "warm", "watchlist.json");

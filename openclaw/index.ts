@@ -62,6 +62,8 @@ function typeboxSchema({ type, properties, required = [], items, anyOf, enum: va
       return Type.Array(items ? typeboxSchema(items) : Type.Unknown(), options);
     case "number":
       return Type.Number(options);
+    case "integer":
+      return Type.Integer(options);
     case "boolean":
       return Type.Boolean(options);
     case "null":

@@ -41,6 +41,7 @@ declare module "typebox" {
     Object(props: Record<string, unknown>, opts?: Options): unknown;
     String(opts?: Options): unknown;
     Number(opts?: Options): unknown;
+    Integer(opts?: Options): unknown;
     Null(opts?: Options): unknown;
     Unknown(opts?: Options): unknown;
     Boolean(opts?: Options): unknown;

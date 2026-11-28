@@ -144,6 +144,93 @@ class TestDiagnose:
         providers = {p["name"] for p in diagnostics.diagnose("A")["markets"][0]["providers"]}
         assert "baostock" in providers
 
+    def test_services_and_summary_cover_search_sec_sentiment_and_tradingview(self, monkeypatch):
+        for env_key in ("TAVILY_API_KEY", "BRAVE_API_KEY", "SERPAPI_KEY", "BOCHA_API_KEY", "SEARXNG_BASE_URLS"):
+            monkeypatch.delenv(env_key, raising=False)
+        monkeypatch.setenv("TAVILY_API_KEY", "fake-key")
+        monkeypatch.setenv("SEC_USER_AGENT", "app user@example.com")
+        monkeypatch.delenv("SENTIMENT_API_KEY", raising=False)
+        res = diagnostics.diagnose("HK")
+        hk_providers = {p["name"] for p in res["markets"][0]["providers"]}
+        assert "tradingview" in hk_providers
+        svc = {s["name"]: s for s in res["services"]}
+        assert svc["tavily"]["available"] is True
+        assert svc["sec_edgar"]["available"] is True
+        assert svc["adanos_sentiment"]["available"] is False
+        assert svc["cninfo"]["available"] is True
+        assert svc["hkexnews"]["available"] is True
+        assert res["summary"]["search_engines_ready"] == ["tavily"]
+        assert res["summary"]["sec_edgar_ready"] is True
+        assert res["summary"]["sentiment_api_ready"] is False
+        assert res["meta"]["probed"] is False
+
+    def test_sec_user_agent_without_email_is_reported_invalid(self, monkeypatch):
+        monkeypatch.setenv("SEC_USER_AGENT", "stock-analysis-plugin")
+        res = diagnostics.diagnose("US")
+        sec = next(s for s in res["services"] if s["name"] == "sec_edgar")
+        assert sec["available"] is False
+        assert "invalid SEC_USER_AGENT" in (sec["reason"] or "")
+        assert res["summary"]["sec_edgar_ready"] is False
+        assert any("invalid SEC_USER_AGENT" in w for w in res["meta"]["warnings"])
+        assert not any("SEC_USER_AGENT not set" in w for w in res["meta"]["warnings"])
+
+    def test_probe_flag_populates_reachability_without_hitting_live_network(self, monkeypatch):
+        probed = []
+
+        def fake_probe(name, timeout=4.0):
+            probed.append(name)
+            return (True, 12, None) if name != "sina" else (False, None, "connection refused")
+
+        monkeypatch.setattr(diagnostics, "_probe_url", fake_probe)
+        res = diagnostics.diagnose("A", probe=True)
+        assert res["meta"]["probed"] is True
+        assert "tencent" in probed and "sina" in probed
+        providers = {p["name"]: p for p in res["markets"][0]["providers"]}
+        assert providers["tencent"]["reachable"] is True
+        assert providers["tencent"]["latency_ms"] == 12
+        assert providers["sina"]["reachable"] is False
+        assert providers["sina"]["probe_error"] == "connection refused"
+
+    def test_cli_returns_structured_json_when_requests_is_unavailable(self):
+        import json
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[1] / "tools" / "diagnostics.py"
+        # python -S disables site-packages (including requests), verifying diagnostics never crashes on import
+        proc = subprocess.run(
+            [sys.executable, "-S", str(script), "check", "--market", "US"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout)
+        sec = next(s for s in payload["services"] if s["name"] == "sec_edgar")
+        assert sec["available"] is False
+        assert "requests" in (sec["reason"] or "")
+
+    def test_sec_lazy_import_failure_returns_unavailable_without_traceback(self, monkeypatch):
+        import builtins
+        import sys
+
+        monkeypatch.setenv("SEC_USER_AGENT", "app user@example.com")
+        monkeypatch.delitem(sys.modules, "sec_edgar", raising=False)
+        real_import = builtins.__import__
+
+        def fail_sec_import(name, *args, **kwargs):
+            if name == "sec_edgar":
+                raise ImportError("missing transitive dependency urllib3")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fail_sec_import)
+        res = diagnostics.diagnose("US")
+        sec = next(s for s in res["services"] if s["name"] == "sec_edgar")
+        assert sec["available"] is False
+        assert "sec_edgar import failed" in (sec["reason"] or "")
+        assert any("sec_edgar import failed" in w for w in res["meta"]["warnings"])
+
 
 if __name__ == "__main__":
     import subprocess

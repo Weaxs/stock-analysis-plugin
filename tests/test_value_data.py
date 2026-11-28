@@ -1380,3 +1380,63 @@ def test_us_valuation_history_uses_filed_facts_and_split_adjusted_shares(monkeyp
     assert result["source"] == "sec_companyfacts+yfinance"
     assert result["history"] == [{"date": "2026-03-06", "pe_ttm": 10.0, "pb": 2.0}]
     assert result["share_basis"] == "cover_shares_outstanding"
+
+
+def test_us_dividends_splits_checked_requires_verified_history_and_no_cache(monkeypatch):
+    from tools import value_data
+
+    # 1. Single action-bearing history derives cash, splits, and provider coverage (NOT today's date)
+    hist_calls = []
+
+    def ok_history(**kwargs):
+        hist_calls.append(kwargs)
+        return pd.DataFrame(
+            {"Close": [100.0, 102.0], "Dividends": [0.25, 0.0], "Stock Splits": [0.0, 0.0]},
+            index=pd.DatetimeIndex(["2026-08-01", "2026-09-12"], tz="America/New_York", name="Date"),
+        )
+
+    ticker_ok = Namespace(
+        history=ok_history,
+        info={"currentPrice": 100.0, "currency": "USD"},
+        calendar={},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: ticker_ok)
+    monkeypatch.setattr(value_data, "cached", _fail)  # --no-cache must bypass cache completely
+    res = value_data.dividends(Namespace(symbol="AAPL", mode="history", report_date="", top=20, years=2, no_cache=True))
+    assert res["splits_checked"] is True
+    assert res["splits"] == []
+    assert len(res["history"]) == 1 and res["history"][0]["ex_date"] == "2026-08-01"
+    assert res["cache_bypassed"] is True
+    assert res["history_covered_from"] == "2026-08-01"
+    # Provider history ended on 2026-09-12 — must NOT fabricate request-day as_of
+    assert res["history_current_through"] == "2026-09-12"
+    assert hist_calls == [{"period": "max", "actions": True, "raise_errors": True}]
+
+    # 2. Empty DataFrame returned by failed history request must NOT set splits_checked=True or history_current_through
+    ticker_empty = Namespace(
+        history=lambda **kw: pd.DataFrame(),
+        info=ticker_ok.info,
+        calendar={"Ex-Dividend Date": date(2026, 12, 1)},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: ticker_empty)
+    res_empty = value_data.dividends(
+        Namespace(symbol="AAPL", mode="history", report_date="", top=20, years=2, no_cache=True)
+    )
+    assert res_empty["splits_checked"] is False
+    assert res_empty["history_current_through"] is None
+
+    # 3. Exception raised by history must NOT set splits_checked=True or history_current_through
+    def boom(**kw):
+        raise RuntimeError("network error")
+
+    ticker_err = Namespace(
+        history=boom,
+        info=ticker_ok.info,
+        calendar={"Ex-Dividend Date": date(2026, 12, 1)},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: ticker_err)
+    res_err = value_data.dividends(
+        Namespace(symbol="AAPL", mode="history", report_date="", top=20, years=2, no_cache=True)
+    )
+    assert res_err["splits_checked"] is False
+    assert res_err["history_current_through"] is None

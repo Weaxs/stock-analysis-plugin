@@ -131,17 +131,22 @@ class TestRecord:
         assert not store.exists()
 
 
+@pytest.fixture
+def freeze_now(monkeypatch):
+    """Pin datetime.now so elapsed-days and dividend lookback computations are deterministic."""
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 18)
+
+    monkeypatch.setattr(st, "datetime", _FrozenDateTime)
+
+
 class TestEvaluate:
     @pytest.fixture(autouse=True)
-    def _freeze_now(self, monkeypatch):
-        """Pin datetime.now so _kline_count's elapsed-days computation is deterministic."""
-
-        class _FrozenDateTime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return cls(2026, 9, 18)
-
-        monkeypatch.setattr(st, "datetime", _FrozenDateTime)
+    def _freeze_now(self, freeze_now):
+        pass
 
     def _record(self, store, mock_run_tool, **over):
         return st.cmd_record(_rec_args(store, **over))
@@ -587,6 +592,303 @@ def test_unverified_price_basis_never_closes_original_price_signal(store, mock_r
         st.cmd_summary(Namespace(source=None, symbol=None, status="all", store=str(store)))["records"][0]["status"]
         == "open"
     )
+
+
+def test_keyless_qfq_settles_when_no_corporate_action_and_price_consistent(store, mock_run_tool, freeze_now):
+    st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
+    bars = [
+        {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+    div_calls = []
+
+    def fake_run(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            div_calls.append(args)
+            return {
+                "source": "eastmoney",
+                "as_of": "2026-09-18",
+                "cache_bypassed": True,
+                "history_current_through": "2026-09-18",
+                "history_years_requested": 2,
+                "splits_checked": True,
+                "splits": [],
+                "capital_gains_checked": True,
+                "capital_gains": [],
+                "corporate_actions_complete": True,
+                "history": [{"ex_date": "2026-06-15", "cash_per_share": 1.2, "status": "实施分配"}],
+                "calendar": [],
+                "warnings": [],
+            }
+        return None
+
+    mock_run_tool.side_effect = fake_run
+    result = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert result["closed"] == 1
+    assert result["results"][0]["outcome"] == "target_hit"
+    assert result["results"][0]["return_pct"] == 20.0
+    assert "--market" not in div_calls[0]
+    assert "--no-cache" in div_calls[0]
+    saved = st._load_records(store)[0]
+    assert saved["evaluation_price_basis"] == {
+        "adjusted": "qfq",
+        "factor": 1.0,
+        "verification": "no_corporate_action_verified",
+    }
+
+
+def test_keyless_qfq_skips_when_ex_dividend_or_split_or_empty_history_or_price_outside_anchor(
+    store, mock_run_tool, freeze_now
+):
+    # Case 1: ex-dividend inside window, empty history, split, unchecked splits, short window, or cached/stale history
+    st.cmd_record(_rec_args(store, date="2026-09-01", entry_price=100, stop_price=90, target_price=120, horizon_days=2))
+    bars = [
+        {"date": "2026-09-01", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+    base_div = {
+        "source": "eastmoney",
+        "as_of": "2026-09-18",
+        "cache_bypassed": True,
+        "history_current_through": "2026-09-18",
+        "history_years_requested": 2,
+        "splits_checked": True,
+        "splits": [],
+        "capital_gains_checked": True,
+        "capital_gains": [],
+        "corporate_actions_complete": True,
+        "history": [{"ex_date": "2026-06-15", "cash_per_share": 1.2, "status": "实施分配"}],
+        "calendar": [],
+        "warnings": [],
+    }
+    cases = [
+        {**base_div, "history": [{"ex_date": "2026-09-02", "cash_per_share": 2.0, "status": "实施分配"}]},
+        {**base_div, "history": [], "warnings": ["no dividend history returned; absence is not interpreted as zero"]},
+        {**base_div, "splits": [{"ex_date": "2026-09-02", "ratio": 2.0}]},
+        {**base_div, "splits_checked": False},
+        {**base_div, "capital_gains": [{"ex_date": "2026-09-02", "amount": 1.5}]},
+        {**base_div, "capital_gains_checked": False},
+        {**base_div, "corporate_actions_complete": False},
+        {**base_div, "history_years_requested": 1},
+        {**base_div, "cache_bypassed": False},
+        {**base_div, "history_current_through": None},
+        {**base_div, "history_current_through": "2026-09-01"},
+    ]
+    for payload in cases:
+        mock_run_tool.side_effect = lambda script, args, p=payload, **kw: bars if script == "stock_data.py" else p
+        res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+        assert res["closed"] == 0
+        assert res["results"][0]["outcome"] == "skipped_price_basis"
+
+    # Case 2: entry price outside anchor bar [low, high] (e.g. entry=105 vs high=100) must skip
+    store2 = store.with_name("signals2.jsonl")
+    st.cmd_record(
+        _rec_args(store2, date="2026-09-01", entry_price=105, stop_price=90, target_price=120, horizon_days=2)
+    )
+    tight_bars = [
+        {"date": "2026-09-01", "open": 99, "high": 100, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-09-02", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+    mock_run_tool.side_effect = lambda script, args, **kw: tight_bars if script == "stock_data.py" else base_div
+    res2 = st.cmd_evaluate(Namespace(symbol=None, store=str(store2)))
+    assert res2["closed"] == 0
+    assert res2["results"][0]["outcome"] == "skipped_price_basis"
+
+
+def test_keyless_us_total_return_uses_cli_without_market_flag(store, mock_run_tool, freeze_now):
+    st.cmd_record(
+        _rec_args(
+            store, symbol="AAPL", date="2026-09-01", entry_price=200, stop_price=180, target_price=220, horizon_days=2
+        )
+    )
+    bars = [
+        {"date": "2026-09-01", "open": 199, "high": 202, "low": 198, "close": 200, "adjusted": "total_return"},
+        {"date": "2026-09-02", "open": 201, "high": 225, "low": 200, "close": 222, "adjusted": "total_return"},
+    ]
+    seen_div_args = []
+
+    def fake_run(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            seen_div_args.append(args)
+            return {
+                "source": "yfinance",
+                "as_of": "2026-09-18",
+                "cache_bypassed": True,
+                "history_current_through": "2026-09-18",
+                "history_years_requested": 2,
+                "splits_checked": True,
+                "splits": [],
+                "capital_gains_checked": True,
+                "capital_gains": [],
+                "corporate_actions_complete": True,
+                "history": [{"ex_date": "2026-08-10", "cash_per_share": 0.25, "status": "paid"}],
+                "calendar": [],
+                "warnings": [],
+            }
+        return None
+
+    mock_run_tool.side_effect = fake_run
+    res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res["closed"] == 1
+    assert seen_div_args == [["dividends", "--symbol", "AAPL", "--mode", "history", "--years", "2", "--no-cache"]]
+
+
+def test_keyless_us_dividends_provider_coverage_stops_before_last_bar_stays_unverified(
+    store, mock_run_tool, monkeypatch
+):
+    import pandas as pd
+
+    from tools import value_data
+
+    class _NovNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 26)
+
+    monkeypatch.setattr(st, "datetime", _NovNow)
+    monkeypatch.setattr(value_data, "market_now", lambda market: datetime(2026, 11, 26))
+    st.cmd_record(
+        _rec_args(
+            store, symbol="AAPL", date="2026-11-23", entry_price=200, stop_price=180, target_price=220, horizon_days=2
+        )
+    )
+    bars = [
+        {"date": "2026-11-23", "open": 199, "high": 202, "low": 198, "close": 200, "adjusted": "total_return"},
+        {"date": "2026-11-24", "open": 201, "high": 225, "low": 200, "close": 222, "adjusted": "total_return"},
+    ]
+
+    # Yahoo action-bearing daily history ends on 2026-09-12 -> must NOT verify 2026-11-23..11-24
+    stale_ticker = Namespace(
+        history=lambda **kw: pd.DataFrame(
+            {"Close": [190.0, 195.0], "Dividends": [0.25, 0.0], "Stock Splits": [0.0, 0.0]},
+            index=pd.DatetimeIndex(["2026-08-10", "2026-09-12"], tz="America/New_York", name="Date"),
+        ),
+        info={"currentPrice": 200.0, "currency": "USD"},
+        calendar={},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: stale_ticker)
+
+    def bridge(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            years = int(args[args.index("--years") + 1])
+            return value_data.dividends(
+                Namespace(
+                    symbol=args[args.index("--symbol") + 1],
+                    mode="history",
+                    report_date="",
+                    top=20,
+                    years=years,
+                    no_cache="--no-cache" in args,
+                )
+            )
+        return None
+
+    mock_run_tool.side_effect = bridge
+    res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res["closed"] == 0
+    assert res["results"][0]["outcome"] == "skipped_price_basis"
+
+    # Intervening ETF Capital Gains distribution must also reject factor-one verification
+    capgain_ticker = Namespace(
+        history=lambda **kw: pd.DataFrame(
+            {
+                "Close": [190.0, 222.0],
+                "Dividends": [0.25, 0.0],
+                "Stock Splits": [0.0, 0.0],
+                "Capital Gains": [0.0, 1.5],
+            },
+            index=pd.DatetimeIndex(["2026-08-10", "2026-11-24"], tz="America/New_York", name="Date"),
+        ),
+        info={"currentPrice": 222.0, "currency": "USD"},
+        calendar={},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: capgain_ticker)
+    res_cg = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res_cg["closed"] == 0
+    assert res_cg["results"][0]["outcome"] == "skipped_price_basis"
+
+    # Once Yahoo's action-bearing history actually covers through 2026-11-24 with no intervening events, verification succeeds
+    fresh_ticker = Namespace(
+        history=lambda **kw: pd.DataFrame(
+            {"Close": [190.0, 222.0], "Dividends": [0.25, 0.0], "Stock Splits": [0.0, 0.0]},
+            index=pd.DatetimeIndex(["2026-08-10", "2026-11-24"], tz="America/New_York", name="Date"),
+        ),
+        info={"currentPrice": 222.0, "currency": "USD"},
+        calendar={},
+    )
+    monkeypatch.setattr("yfinance.Ticker", lambda s: fresh_ticker)
+    res_ok = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res_ok["closed"] == 1
+    assert res_ok["results"][0]["outcome"] == "target_hit"
+
+
+def test_keyless_a_share_eastmoney_dividends_stays_unverified_without_allotment_coverage(
+    store, mock_run_tool, monkeypatch
+):
+    import akshare as ak
+    import pandas as pd
+
+    from tools import value_data
+
+    class _NovNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 26)
+
+    monkeypatch.setattr(st, "datetime", _NovNow)
+    monkeypatch.setattr(value_data, "market_now", lambda market: datetime(2026, 11, 26))
+    monkeypatch.setattr(
+        ak,
+        "stock_fhps_detail_em",
+        lambda **kw: pd.DataFrame(
+            {
+                "报告期": ["2026-06-30"],
+                "除权除息日": ["2026-08-28"],
+                "现金分红-现金分红比例": [10.0],
+                "送转股份-送转总比例": [0.0],
+                "方案进度": ["实施分配"],
+            }
+        ),
+    )
+    monkeypatch.setattr("_subproc.run_tool", lambda *a, **kw: {"price": 100.0, "as_of": "2026-11-26"})
+
+    st.cmd_record(
+        _rec_args(
+            store, symbol="600519", date="2026-11-23", entry_price=100, stop_price=90, target_price=120, horizon_days=2
+        )
+    )
+    bars = [
+        {"date": "2026-11-23", "open": 99, "high": 102, "low": 98, "close": 100, "adjusted": "qfq"},
+        {"date": "2026-11-24", "open": 101, "high": 122, "low": 100, "close": 121, "adjusted": "qfq"},
+    ]
+
+    def bridge(script, args, **kwargs):
+        if script == "stock_data.py":
+            return bars
+        if script == "value_data.py" and args[0] == "dividends":
+            years = int(args[args.index("--years") + 1])
+            return value_data.dividends(
+                Namespace(
+                    symbol=args[args.index("--symbol") + 1],
+                    mode="history",
+                    report_date="",
+                    top=20,
+                    years=years,
+                    no_cache="--no-cache" in args,
+                )
+            )
+        return None
+
+    mock_run_tool.side_effect = bridge
+    res = st.cmd_evaluate(Namespace(symbol=None, store=str(store)))
+    assert res["closed"] == 0
+    assert res["results"][0]["outcome"] == "skipped_price_basis"
 
 
 def test_verified_adjustment_factor_keeps_split_return_correct(store, mock_run_tool):

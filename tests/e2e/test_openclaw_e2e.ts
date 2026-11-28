@@ -33,6 +33,7 @@ const fakeTypebox = {
     Object: (props: unknown) => ({ __t: "object", props }),
     String: () => ({ __t: "string" }),
     Number: () => ({ __t: "number" }),
+    Integer: () => ({ __t: "integer" }),
     Null: () => ({ __t: "null" }),
     Boolean: () => ({ __t: "boolean" }),
     Optional: (s: unknown) => ({ __t: "optional", s }),

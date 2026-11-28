@@ -113,20 +113,39 @@ const INDEX_NAMES: Record<string, string> = {
 };
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SORT_KEYS = new Set<SortKey>(["order", "price", "change_pct", "change", "turnover", "trend"]);
+const EXACT_CODE_RE = /^(?:(?:sh|sz|bj)?\d{6}|\d{4,5}\.HK|\d{4}\.(?:T|TW|TWO)|\d{6}\.(?:KS|KQ)|TIAA\d{6})$/i;
+
+interface SearchHit {
+  symbol: string;
+  name: string;
+  region: WatchRegion;
+  score?: number | null;
+}
+
+interface PriceAlert {
+  above?: number;
+  below?: number;
+}
 
 const isRegion = (value: unknown): value is Region => typeof value === "string" && value in REGION_NAMES;
 const isWatchRegion = (value: unknown): value is WatchRegion => value === "fund" || value === "advisor" || isRegion(value);
+const isGroupFilter = (value: unknown): value is string => typeof value === "string" && value.startsWith("group:") && value.length > 6;
 
 const state = {
   snap: null as Snapshot | null,
   region: "cn" as Region,
   sort: { key: "order" as SortKey, dir: -1 },
-  filter: "all" as WatchRegion | "all",
+  filter: "all" as WatchRegion | "all" | string,
+  groups: {} as Record<string, string>,
+  alerts: {} as Record<string, PriceAlert>,
   prices: new Map<string, number | null>(),
   marketCache: new Map<Region, Snapshot["market"]>(),
   sectionSigs: { ribbon: "", pulse: "", filters: "", rows: "", market: "" },
   pollTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   undoTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+  toastTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+  searchTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+  searchSeq: 0,
   inflight: false,
   // A poll requested while one is in flight (e.g. right after a watchlist edit) runs once that one ends.
   dirty: false,
@@ -368,7 +387,13 @@ function writeJson(key: string, value: unknown) {
 }
 
 function savePrefs() {
-  writeJson(PREF_KEY, { region: state.region, sort: state.sort, filter: state.filter });
+  writeJson(PREF_KEY, {
+    region: state.region,
+    sort: state.sort,
+    filter: state.filter,
+    groups: state.groups,
+    alerts: state.alerts,
+  });
 }
 
 // ---------- API ----------
@@ -564,28 +589,51 @@ function renderPulse() {
   }
 }
 
+function alertHit(symbol: string, price: number | null): string | null {
+  if (price === null) return null;
+  const rule = state.alerts[symbol];
+  if (!rule) return null;
+  if (typeof rule.above === "number" && Number.isFinite(rule.above) && price >= rule.above) return `触达 ≥ ${rule.above}`;
+  if (typeof rule.below === "number" && Number.isFinite(rule.below) && price <= rule.below) return `触达 ≤ ${rule.below}`;
+  return null;
+}
+
 function renderFilters() {
   const node = $("filters");
   const items = state.snap?.watchlist || [];
   const counts = new Map<WatchRegion, number>();
-  for (const item of items) counts.set(item.region, (counts.get(item.region) || 0) + 1);
-  if (counts.size < 2) {
+  const groupCounts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item.region, (counts.get(item.region) || 0) + 1);
+    const grp = state.groups[item.symbol];
+    if (grp) groupCounts.set(grp, (groupCounts.get(grp) || 0) + 1);
+  }
+  if (counts.size < 2 && groupCounts.size === 0) {
     node.hidden = true;
     state.filter = "all";
     state.sectionSigs.filters = "hidden";
     return;
   }
-  if (state.filter !== "all" && !counts.has(state.filter)) state.filter = "all";
-  const sig = `${state.filter}:${items.length}:${[...counts.entries()].map(([k, v]) => `${k}=${v}`).join(",")}`;
+  if (state.filter !== "all") {
+    if (isGroupFilter(state.filter)) {
+      if (!groupCounts.has(state.filter.slice(6))) state.filter = "all";
+    } else if (!isWatchRegion(state.filter) || !counts.has(state.filter)) {
+      state.filter = "all";
+    }
+  }
+  const sig = `${state.filter}:${items.length}:${[...counts.entries()].map(([k, v]) => `${k}=${v}`).join(",")}:${[...groupCounts.entries()].map(([k, v]) => `${k}=${v}`).join(",")}`;
   if (sig === state.sectionSigs.filters) return;
   state.sectionSigs.filters = sig;
   node.hidden = false;
   node.replaceChildren();
-  const chips: Array<[WatchRegion | "all", string, number]> = [
+  const chips: Array<[string, string, number]> = [
     ["all", "全部", items.length],
   ];
   for (const [region, label] of Object.entries(WATCH_REGION_NAMES)) {
     if (isWatchRegion(region) && counts.has(region)) chips.push([region, label, counts.get(region)!]);
+  }
+  for (const [grp, count] of groupCounts.entries()) {
+    chips.push([`group:${grp}`, `#${grp}`, count]);
   }
   for (const [key, label, count] of chips) {
     const chip = el("button", "chip", `${label} ${count}`);
@@ -607,7 +655,11 @@ function sortValue(item: WatchItem, key: Exclude<SortKey, "order">): number | nu
 }
 
 function visibleItems(): WatchItem[] {
-  const items = (state.snap?.watchlist || []).filter(item => state.filter === "all" || item.region === state.filter);
+  const items = (state.snap?.watchlist || []).filter(item => {
+    if (state.filter === "all") return true;
+    if (isGroupFilter(state.filter)) return state.groups[item.symbol] === state.filter.slice(6);
+    return item.region === state.filter;
+  });
   const { key, dir: direction } = state.sort;
   if (key === "order") return items;
   return items
@@ -670,6 +722,8 @@ function renderRows(flash: Map<string, Direction>) {
     empty: !state.snap?.watchlist.length,
     sort: state.sort,
     filter: state.filter,
+    groups: state.groups,
+    alerts: state.alerts,
     items,
   });
   if (flash.size === 0 && sig === state.sectionSigs.rows) return;
@@ -699,11 +753,16 @@ function renderRows(flash: Map<string, Direction>) {
     const change = dir(quote?.change_pct);
     const row = el("tr");
     row.dataset.symbol = item.symbol;
+    const hitAlert = alertHit(item.symbol, price);
+    if (hitAlert) row.classList.add("is-alert");
 
     const nameCell = el("td", "c-name");
     nameCell.append(el("span", "name", quote?.name || item.symbol));
     const meta = el("div", "meta");
     meta.append(el("span", "code", item.symbol), el("span", "tag", WATCH_REGION_NAMES[item.region]));
+    const grp = state.groups[item.symbol];
+    if (grp) meta.append(el("span", "tag group-tag", `#${grp}`));
+    if (hitAlert) meta.append(el("span", "tag alert-badge", hitAlert));
     if (item.region === "fund" && quote?.nav_date) meta.append(el("span", "", `净值日 ${quote.nav_date}`));
     if (item.region === "advisor" && quote?.advisor_org) meta.append(el("span", "", quote.advisor_org));
     if (item.region !== "fund" && quote?.stale) meta.append(el("span", "stale", "报价可能不是最新"));
@@ -735,6 +794,32 @@ function renderRows(flash: Map<string, Direction>) {
     } else {
       trendCell.append(skeleton(108));
     }
+    const actions = el("div", "row-actions");
+    const analyze = el("button", "row-btn");
+    analyze.type = "button";
+    analyze.dataset.analyze = item.symbol;
+    analyze.dataset.label = quote?.name || item.symbol;
+    analyze.title = "复制 Agent 分析提示词";
+    analyze.setAttribute("aria-label", `复制 ${quote?.name || item.symbol} 分析提示词`);
+    analyze.append(icon(["M4 15l4-4 3 3 5-7", "M13 7h3v3"], 13));
+
+    const hasAlert = Boolean(state.alerts[item.symbol]?.above || state.alerts[item.symbol]?.below);
+    const alertBtn = el("button", `row-btn${hasAlert ? " is-set" : ""}`);
+    alertBtn.type = "button";
+    alertBtn.dataset.alert = item.symbol;
+    alertBtn.dataset.label = quote?.name || item.symbol;
+    alertBtn.title = hasAlert ? "修改或清除价格提醒" : "设置价格阈值提醒";
+    alertBtn.setAttribute("aria-label", `设置 ${quote?.name || item.symbol} 价格提醒`);
+    alertBtn.append(icon(["M10 3a4.5 4.5 0 0 1 4.5 4.5V12l1.5 2H4l1.5-2V7.5A4.5 4.5 0 0 1 10 3z", "M8.5 16a1.5 1.5 0 0 0 3 0"], 13));
+
+    const groupBtn = el("button", `row-btn${grp ? " is-set" : ""}`);
+    groupBtn.type = "button";
+    groupBtn.dataset.group = item.symbol;
+    groupBtn.dataset.label = quote?.name || item.symbol;
+    groupBtn.title = grp ? `分组：#${grp}（点击修改）` : "设置自选分组标签";
+    groupBtn.setAttribute("aria-label", `设置 ${quote?.name || item.symbol} 分组`);
+    groupBtn.append(icon(["M4 6h12", "M4 10h8", "M4 14h6"], 13));
+
     const remove = el("button", "remove");
     remove.type = "button";
     remove.dataset.remove = item.symbol;
@@ -742,6 +827,7 @@ function renderRows(flash: Map<string, Direction>) {
     remove.setAttribute("aria-label", `从自选中删除 ${quote?.name || item.symbol}`);
     remove.title = "删除";
     remove.append(icon(["M5.5 5.5l9 9", "M14.5 5.5l-9 9"]));
+    actions.append(analyze, alertBtn, groupBtn, remove);
 
     row.append(
       nameCell,
@@ -751,7 +837,7 @@ function renderRows(flash: Map<string, Direction>) {
       cell("c-range", loadingQuote ? skeleton(96) : rangeCell(quote, digits)),
       cell("c-num c-amount", loadingQuote ? skeleton(52) : el("span", "amount", fmtAmount(quote?.turnover))),
       cell("c-trend", trendCell),
-      cell("c-act", remove),
+      cell("c-act", actions),
     );
     body.append(row);
   }
@@ -1022,9 +1108,63 @@ function post<T>(path: string, body?: unknown): Promise<T> {
 
 // ---------- interactions ----------
 
+function hideSearchResults() {
+  state.searchSeq++;
+  clearTimeout(state.searchTimer);
+  const box = document.getElementById("search-results");
+  if (box) {
+    box.hidden = true;
+    box.replaceChildren();
+  }
+}
+
+function showToast(text: string) {
+  clearTimeout(state.toastTimer);
+  const bar = $("watch-toast");
+  bar.replaceChildren(el("span", "", text));
+  bar.hidden = false;
+  state.toastTimer = setTimeout(() => {
+    bar.hidden = true;
+  }, 4500);
+}
+
+async function runNameSearch(raw: string) {
+  const q = raw.trim();
+  const box = document.getElementById("search-results");
+  if (!box) return;
+  if (!q || /[\s,，、;；]/.test(q) || EXACT_CODE_RE.test(q)) {
+    hideSearchResults();
+    return;
+  }
+  const seq = ++state.searchSeq;
+  try {
+    const res = await api<{ query: string; results: SearchHit[] }>(`./api/search?q=${encodeURIComponent(q)}`);
+    if (seq !== state.searchSeq) return;
+    if (!res.results.length) {
+      hideSearchResults();
+      return;
+    }
+    box.replaceChildren();
+    for (const hit of res.results) {
+      const btn = el("button", "search-item");
+      btn.type = "button";
+      btn.setAttribute("role", "option");
+      btn.dataset.pick = hit.symbol;
+      const left = el("span", "sname", hit.name);
+      const right = el("span", "scode", `${hit.symbol} · ${WATCH_REGION_NAMES[hit.region] || hit.region}`);
+      btn.append(left, right);
+      box.append(btn);
+    }
+    box.hidden = false;
+  } catch {
+    if (seq === state.searchSeq) hideSearchResults();
+  }
+}
+
 function setAddForm(open: boolean) {
   $("add-form").hidden = !open;
   $("add-toggle").setAttribute("aria-expanded", String(open));
+  if (!open) hideSearchResults();
   if (open) $<HTMLInputElement>("symbol-input").focus();
 }
 
@@ -1110,6 +1250,21 @@ $("add-form").addEventListener("submit", event => {
   const symbols = $<HTMLInputElement>("symbol-input").value.split(/[\s,，、;；]+/).map(value => value.trim()).filter(Boolean);
   if (symbols.length) void changeWatchlist("add", symbols);
 });
+$("symbol-input").addEventListener("input", () => {
+  hideSearchResults();
+  const value = $<HTMLInputElement>("symbol-input").value;
+  const q = value.trim();
+  if (!q || /[\s,，、;；]/.test(q) || EXACT_CODE_RE.test(q)) {
+    return;
+  }
+  state.searchTimer = setTimeout(() => { void runNameSearch(value); }, 250);
+});
+document.getElementById("search-results")?.addEventListener("click", event => {
+  const btn = closest<HTMLButtonElement>(event, "button[data-pick]");
+  if (!btn?.dataset.pick) return;
+  hideSearchResults();
+  void changeWatchlist("add", [btn.dataset.pick]);
+});
 $("symbol-input").addEventListener("keydown", event => {
   if (event.key === "Escape") setAddForm(false);
 });
@@ -1133,6 +1288,81 @@ $("refresh").addEventListener("click", async () => {
   }
 });
 $("rows").addEventListener("click", event => {
+  const analyze = closest<HTMLButtonElement>(event, "button[data-analyze]");
+  if (analyze?.dataset.analyze) {
+    const sym = analyze.dataset.analyze;
+    const item = state.snap?.watchlist.find(w => w.symbol === sym);
+    const label = analyze.dataset.label || sym;
+    const px = item ? watchPrice(item) : null;
+    const pct = item?.quote?.change_pct;
+    const pricePart = px !== null ? `，当前参考价 ${px}${num(pct) !== null ? `（${fmtPct(pct)}）` : ""}` : "";
+    const prompt = `请用 stock-analysis 全面分析 ${label}（${sym}）${pricePart}。`;
+    if (typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function") {
+      void navigator.clipboard.writeText(prompt).then(
+        () => showToast(`已复制 ${label} 分析提示词`),
+        () => showToast(`剪贴板不可用，请手动复制：${prompt}`),
+      );
+    } else {
+      showToast(`剪贴板不可用，请手动复制：${prompt}`);
+    }
+    return;
+  }
+  const alertBtn = closest<HTMLButtonElement>(event, "button[data-alert]");
+  if (alertBtn?.dataset.alert && typeof window.prompt === "function") {
+    const sym = alertBtn.dataset.alert;
+    const cur = state.alerts[sym] || {};
+    const curStr = [cur.above !== undefined ? `>=${cur.above}` : "", cur.below !== undefined ? `<=${cur.below}` : ""].filter(Boolean).join(", ");
+    const input = window.prompt(`设置 ${alertBtn.dataset.label || sym} 价格提醒（格式：>=1800 或 <=1500，可逗号同填，留空清除）`, curStr);
+    if (input !== null) {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        delete state.alerts[sym];
+        savePrefs();
+        renderRows(new Map());
+      } else {
+        const next: PriceAlert = {};
+        let invalid = false;
+        const parts = trimmed.split(/[,，;；]+/).map(s => s.trim()).filter(Boolean);
+        for (const part of parts) {
+          const up = /^>=?\s*(\d+(?:\.\d+)?)$/.exec(part);
+          const dn = /^<=?\s*(\d+(?:\.\d+)?)$/.exec(part);
+          if (up) {
+            const val = Number(up[1]);
+            if (!Number.isFinite(val) || val <= 0) invalid = true;
+            else next.above = val;
+          } else if (dn) {
+            const val = Number(dn[1]);
+            if (!Number.isFinite(val) || val <= 0) invalid = true;
+            else next.below = val;
+          } else {
+            invalid = true;
+          }
+        }
+        if (invalid || (next.above === undefined && next.below === undefined)) {
+          showToast("提醒格式无效，示例：>= 1800, <= 1500（已保留原设置）");
+        } else {
+          state.alerts[sym] = next;
+          savePrefs();
+          renderRows(new Map());
+        }
+      }
+    }
+    return;
+  }
+  const groupBtn = closest<HTMLButtonElement>(event, "button[data-group]");
+  if (groupBtn?.dataset.group && typeof window.prompt === "function") {
+    const sym = groupBtn.dataset.group;
+    const input = window.prompt(`设置 ${groupBtn.dataset.label || sym} 自选分组（如 持仓 / 观察 / 核心，留空清除）`, state.groups[sym] || "");
+    if (input !== null) {
+      const trimmed = input.trim().slice(0, 16);
+      if (trimmed) state.groups[sym] = trimmed;
+      else delete state.groups[sym];
+      savePrefs();
+      renderFilters();
+      renderRows(new Map());
+    }
+    return;
+  }
   const remove = closest<HTMLButtonElement>(event, "button[data-remove]");
   if (remove?.dataset.remove) {
     void changeWatchlist("remove", [remove.dataset.remove], remove.dataset.label);
@@ -1149,7 +1379,7 @@ $("watch-undo").addEventListener("click", event => {
 $("filters").addEventListener("click", event => {
   const chip = closest<HTMLButtonElement>(event, "button[data-filter]");
   const filter = chip?.dataset.filter;
-  if (!filter || (filter !== "all" && !isWatchRegion(filter))) return;
+  if (!filter || (filter !== "all" && !isWatchRegion(filter) && !isGroupFilter(filter))) return;
   state.filter = filter;
   savePrefs();
   renderFilters();
@@ -1217,11 +1447,13 @@ document.addEventListener("visibilitychange", () => {
   else clearTimeout(state.pollTimer);
 });
 
-const prefs = readJson<{ region?: unknown; sort?: { key?: unknown; dir?: unknown }; filter?: unknown }>(PREF_KEY);
+const prefs = readJson<{ region?: unknown; sort?: { key?: unknown; dir?: unknown }; filter?: unknown; groups?: Record<string, string>; alerts?: Record<string, PriceAlert> }>(PREF_KEY);
 if (prefs) {
   if (isRegion(prefs.region)) state.region = prefs.region;
   if (SORT_KEYS.has(prefs.sort?.key as SortKey) && (prefs.sort?.dir === 1 || prefs.sort?.dir === -1)) state.sort = { key: prefs.sort.key as SortKey, dir: prefs.sort.dir };
-  if (prefs.filter === "all" || isWatchRegion(prefs.filter)) state.filter = prefs.filter;
+  if (prefs.filter === "all" || isWatchRegion(prefs.filter) || isGroupFilter(prefs.filter)) state.filter = prefs.filter;
+  if (prefs.groups && typeof prefs.groups === "object") state.groups = prefs.groups;
+  if (prefs.alerts && typeof prefs.alerts === "object") state.alerts = prefs.alerts;
 }
 const cached = readJson<{ savedAt: number; snap: Snapshot }>(CACHE_KEY);
 if (cached?.snap && Date.now() - cached.savedAt < CACHE_TTL && cached.snap.market?.region === state.region) applySnapshot(cached.snap, true);

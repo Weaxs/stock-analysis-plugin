@@ -33,13 +33,16 @@
     </header>
 
     <form id="add-form" class="add" hidden>
-      <label class="sr-only" for="symbol-input">证券、基金或投顾组合代码，多个用逗号分隔</label>
-      <input id="symbol-input" type="text" placeholder="600519, 00700.HK, AAPL, 7203.T" autocomplete="off" spellcheck="false" maxlength="512" required>
+      <label class="sr-only" for="symbol-input">输入代码、名称或拼音搜索，多个代码用逗号分隔</label>
+      <div class="add-input-wrap">
+        <input id="symbol-input" type="text" placeholder="输入名称、拼音或代码，如 茅台 / 600519 / 00700.HK / AAPL" autocomplete="off" spellcheck="false" maxlength="512" required>
+        <div id="search-results" class="search-results" role="listbox" aria-label="证券搜索结果" hidden></div>
+      </div>
       <div class="add-actions">
         <button id="add-submit" class="btn primary" type="submit">加入自选</button>
         <button id="add-cancel" class="btn ghost" type="button">取消</button>
       </div>
-      <p class="add-hint">A 股和场外基金填 6 位代码，投顾组合填 TIAA 代码。港股 .HK、日股 .T、韩股 .KS/.KQ、台股 .TW，美股直接填代码。最多 30 项。</p>
+      <p class="add-hint">支持中文名、全拼或拼音首字母模糊搜索，或逗号批量输入代码（A股/基金 6 位代码，投顾 TIAA 代码，港股 .HK，日 .T，韩 .KS/.KQ，台 .TW，美股代码）。最多 30 项。</p>
       <p id="add-message" class="add-message" role="status" aria-live="polite"></p>
     </form>
 
@@ -66,6 +69,7 @@
       </div>
       <div id="watch-error" class="notice" role="alert" hidden></div>
       <div id="watch-undo" class="undo-bar" role="status" aria-live="polite" hidden></div>
+      <div id="watch-toast" class="undo-bar" role="status" aria-live="polite" hidden></div>
       <div class="table-wrap">
         <table class="quotes">
           <thead>

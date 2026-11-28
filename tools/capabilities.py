@@ -43,6 +43,7 @@ TOOL_MATRIX = {
     "get_valuation_history": {"markets": ["A", "HK", "US"], "reason": "A/HK providers; US derived from SEC filings"},
     "get_index_valuation": {"markets": ["A"], "reason": "Chinese index valuation only"},
     "get_cds_index": {"markets": ["A", "US"], "reason": "Market-level CN onshore CDS indices / CDX-iTraxx only"},
+    "get_macro_anchors": {"markets": ALL_MARKETS, "reason": None},
     "get_earnings_calendar": {
         "markets": ["A", "HK", "US", "JP"],
         "reason": "A-share disclosed calendar / HK/US/JP single-symbol provider schedule",
@@ -67,7 +68,10 @@ TOOL_MATRIX = {
     # A-share only
     "get_capital_flow": {"markets": ["A"], "reason": "A-share only (akshare data)"},
     "get_chip_distribution": {"markets": ["A"], "reason": "A-share only"},
-    "get_sector_rankings": {"markets": ["A", "US"], "reason": "A-share boards; US sector ETF proxies"},
+    "get_sector_rankings": {
+        "markets": ["A", "HK", "US"],
+        "reason": "A-share boards; HK TradingView/ETF proxies; US sector ETF proxies",
+    },
     "get_sector_constituents": {"markets": ["A"], "reason": "A-share only"},
     "get_market_stats": {"markets": ["A", "HK", "US"], "reason": "full-market snapshot breadth; limits A-share only"},
     "get_fundamental_context": {"markets": ["A"], "reason": "A-share only"},
@@ -89,7 +93,7 @@ TOOL_MATRIX = {
     "search_stock_news": {"markets": ALL_MARKETS, "reason": None},
     "search_comprehensive_intel": {"markets": ALL_MARKETS, "reason": None},
     "extract_article": {"markets": ALL_MARKETS, "reason": None},
-    "screen_risk": {"markets": ["A"], "reason": "A-share only"},
+    "screen_risk": {"markets": ["A", "HK", "US"], "reason": "A-share, HK, and US risk checks only"},
     # trading phase (session tables) + signal tracking (local JSONL store)
     "get_trading_phase": {"markets": ALL_MARKETS, "reason": None},
     "record_signal": {"markets": ALL_MARKETS, "reason": None},

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Data source diagnostics — report which providers are usable per market.
+"""Data source diagnostics — report which providers and services are usable per market.
 
 Checks: (1) python package importable, (2) required env vars present.
-Does NOT hit the network — this is a cheap capability probe, not a health check.
-`available` therefore means "package + credentials ready"; actual reachability
-is reported as `reachable: null` (unknown) rather than guessed (issue #25).
+By default does NOT hit the network — `reachable: null` (unknown) rather than guessed
+(issue #25). Pass `--probe` to opt into lightweight bounded HTTP reachability probes.
 """
 
 import argparse
@@ -13,11 +12,13 @@ import importlib.util
 import json
 import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _subproc import utf8_stdio  # noqa: E402
+from _subproc import error_message, json_safe, utf8_stdio  # noqa: E402
 from capabilities import ALL_MARKETS  # noqa: E402
 
 # provider -> (import_name, required_env_vars, markets, note)
@@ -44,6 +45,7 @@ PROVIDERS = {
     "xueqiu": ("akshare", ["XUEQIU_TOKEN"], ["A"], "industry board fallback via akshare"),
     "baostock": ("baostock", [], ["A"], None),
     "yfinance": ("yfinance", [], ["HK", "US", "JP", "KR", "TW"], "quote may be delayed 15-20min"),
+    "tradingview": ("requests", [], ["HK", "US"], "scanner.tradingview.com HK/US snapshots & HK sectors, no auth"),
     "finnhub": ("finnhub", ["FINNHUB_API_KEY"], ["HK", "US"], None),
     "longbridge": (
         "longport.openapi",
@@ -54,10 +56,71 @@ PROVIDERS = {
     "alphavantage": ("requests", ["ALPHAVANTAGE_API_KEY"], ["US"], None),
 }
 
+# Non-quote auxiliary services: search engines, filings, sentiment, credit/macro
+# service -> (category, import_name, required_env_vars, note)
+SERVICES = {
+    "tavily": ("search", "requests", ["TAVILY_API_KEY"], "Tavily web search"),
+    "brave": ("search", "requests", ["BRAVE_API_KEY"], "Brave web search"),
+    "serpapi": ("search", "requests", ["SERPAPI_KEY"], "SerpAPI Google search"),
+    "bocha": ("search", "requests", ["BOCHA_API_KEY"], "Bocha AI search"),
+    "searxng": ("search", "requests", ["SEARXNG_BASE_URLS"], "Self-hosted SearXNG fallback (comma-separated URLs)"),
+    "sec_edgar": ("filings", "requests", ["SEC_USER_AGENT"], "SEC EDGAR 13F / Form 4 / US DCF & valuation"),
+    "cninfo": ("filings", "requests", [], "CNINFO A-share official announcements, no auth"),
+    "hkexnews": ("filings", "requests", [], "HKEXnews HK announcements & board meetings, no auth"),
+    "adanos_sentiment": (
+        "sentiment",
+        "requests",
+        ["SENTIMENT_API_KEY"],
+        "HK/US social sentiment (Reddit/X/Polymarket); URL via SENTIMENT_API_URL",
+    ),
+    "chinamoney_cds": ("credit", "requests", [], "CFETS-SHCH onshore CN CDS indices, no auth"),
+    "dtcc_cds": ("credit", "requests", [], "DTCC public CDX/iTraxx daily files, no auth"),
+    "fred_macro": ("macro", "requests", [], "FRED public CSV fallback for US Treasury yields, no auth"),
+}
 
-def _check_provider(name: str) -> dict:
-    import_name, env_vars, markets, note = PROVIDERS[name]
+# Lightweight public probe endpoints (never send credentials or secrets in probe requests)
+_PROBE_URLS = {
+    "tencent": "https://qt.gtimg.cn/q=sh000001",
+    "sina": "https://hq.sinajs.cn/list=sh000001",
+    "tradingview": "https://scanner.tradingview.com/hongkong/scan",
+    "yfinance": "https://query1.finance.yahoo.com/v1/test/getcrumb",
+    "cninfo": "https://www.cninfo.com.cn/new/data/szse_stock.json",
+    "hkexnews": "https://www1.hkexnews.hk",
+    "sec_edgar": "https://data.sec.gov/submissions/",
+    "chinamoney_cds": "https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/bond/CDSIndex.json",
+    "dtcc_cds": "https://kgc0418-tdw-data-0.s3.amazonaws.com/dashboard/Cumulative.json",
+    "fred_macro": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10",
+}
 
+
+def _probe_url(name: str, timeout: float = 4.0) -> tuple[bool | None, int | None, str | None]:
+    url = _PROBE_URLS.get(name)
+    if not url:
+        return None, None, None
+    import requests
+
+    headers = {
+        "User-Agent": os.environ.get("SEC_USER_AGENT", "stock-analysis-plugin")
+        if name == "sec_edgar"
+        else "Mozilla/5.0"
+    }
+    if name == "sina":
+        headers["Referer"] = "https://finance.sina.com.cn"
+    t0 = time.monotonic()
+    try:
+        resp = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        # Some endpoints reject HEAD with 405/403 while accepting GET/POST — treat HTTP response < 500 as reachable.
+        if resp.status_code == 405:
+            resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+            resp.close()
+        latency = round((time.monotonic() - t0) * 1000)
+        ok = resp.status_code < 500
+        return ok, latency, (None if ok else f"HTTP {resp.status_code}")
+    except Exception as exc:
+        return False, None, error_message(exc, 120)
+
+
+def _check_entry(name: str, import_name: str, env_vars: list[str], extra: dict, note: str | None) -> dict:
     # find_spec avoids executing the package's top-level code — cheaper and
     # side-effect-free vs import_module. This is a capability probe, not a call.
     try:
@@ -80,8 +143,8 @@ def _check_provider(name: str) -> dict:
     entry = {
         "name": name,
         "available": available,
-        "reachable": None,  # not probed — available only means package + env ready
-        "markets": markets,
+        "reachable": None,  # not probed unless --probe is explicitly passed
+        **extra,
         "reason": "; ".join(reasons) if reasons else None,
     }
     if note:
@@ -89,21 +152,79 @@ def _check_provider(name: str) -> dict:
     return entry
 
 
-def diagnose(market: str = "all") -> dict:
+def _check_provider(name: str) -> dict:
+    import_name, env_vars, markets, note = PROVIDERS[name]
+    return _check_entry(name, import_name, env_vars, {"markets": markets}, note)
+
+
+def _check_service(name: str) -> dict:
+    category, import_name, env_vars, note = SERVICES[name]
+    entry = _check_entry(name, import_name, env_vars, {"category": category}, note)
+    if name == "sec_edgar" and entry["available"]:
+        try:
+            from sec_edgar import identity as _sec_identity
+
+            _sec_identity()
+        except ValueError as exc:
+            entry["available"] = False
+            entry["reason"] = f"invalid SEC_USER_AGENT: {exc}"
+        except Exception as exc:
+            entry["available"] = False
+            entry["reason"] = f"sec_edgar import failed: {error_message(exc, 120)}"
+    return entry
+
+
+def _apply_probes(entries: list[dict]) -> None:
+    targets = [e for e in entries if e["available"] and e["name"] in _PROBE_URLS]
+    if not targets:
+        return
+    with ThreadPoolExecutor(max_workers=min(len(targets), 6)) as pool:
+        futures = {pool.submit(_probe_url, e["name"]): e for e in targets}
+        for future, entry in futures.items():
+            reachable, latency_ms, err = future.result()
+            entry["reachable"] = reachable
+            if latency_ms is not None:
+                entry["latency_ms"] = latency_ms
+            if err:
+                entry["probe_error"] = err
+
+
+def diagnose(market: str = "all", probe: bool = False) -> dict:
     market = (market or "all").upper()
     all_providers = [_check_provider(p) for p in PROVIDERS]
+    all_services = [_check_service(s) for s in SERVICES]
+    if probe:
+        _apply_probes(all_providers + all_services)
 
     markets_to_report = ALL_MARKETS if market == "ALL" else [market]
+
+    search_ready = [s["name"] for s in all_services if s["category"] == "search" and s["available"]]
+    top_warnings = []
+    if not search_ready:
+        top_warnings.append(
+            "No search engine configured (TAVILY/BRAVE/SERPAPI/BOCHA/SEARXNG); news search tools unavailable"
+        )
+    sec_entry = next((s for s in all_services if s["name"] == "sec_edgar"), None)
+    if sec_entry and not sec_entry["available"]:
+        sec_reason = sec_entry.get("reason") or "SEC_USER_AGENT not set"
+        top_warnings.append(f"SEC EDGAR unavailable ({sec_reason}) — US 13F / Form 4 / SEC filings unavailable")
 
     result = {
         "meta": {
             "provider": "diagnostics",
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "freshness": "instant",
+            "freshness": "probed" if probe else "instant",
+            "probed": bool(probe),
             "fallback_used": False,
-            "warnings": [],
+            "warnings": top_warnings,
         },
         "markets": [],
+        "services": all_services,
+        "summary": {
+            "search_engines_ready": search_ready,
+            "sec_edgar_ready": any(s["name"] == "sec_edgar" and s["available"] for s in all_services),
+            "sentiment_api_ready": any(s["name"] == "adanos_sentiment" and s["available"] for s in all_services),
+        },
     }
 
     for m in markets_to_report:
@@ -148,13 +269,18 @@ def main():
         choices=ALL_MARKETS + ["ALL"],
         help="Market to diagnose (default: ALL)",
     )
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help="Opt into lightweight HTTP reachability probes for public endpoints",
+    )
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
         sys.exit(1)
 
-    result = diagnose(args.market)
-    json.dump(result, sys.stdout, ensure_ascii=False, indent=2, default=str)
+    result = diagnose(args.market, probe=args.probe)
+    json.dump(json_safe(result), sys.stdout, ensure_ascii=False, indent=2, default=str, allow_nan=False)
     print()
 
 

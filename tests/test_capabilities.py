@@ -13,7 +13,8 @@ class TestGetCapabilities:
         unsupported_tools = {u["tool"] for u in result["unsupported"]}
         assert "get_chip_distribution" in unsupported_tools
         assert "get_capital_flow" in unsupported_tools
-        assert "screen_risk" in unsupported_tools
+        assert "screen_risk" in result["supported"]
+        assert "get_sector_rankings" in result["supported"]
         # kline is universal
         assert "get_kline" in result["supported"]
         assert "get_social_sentiment" in result["supported"]

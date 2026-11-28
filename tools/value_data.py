@@ -11,7 +11,6 @@ from html import unescape
 from io import BytesIO, StringIO
 from pathlib import Path
 from urllib.parse import unquote
-from xml.etree import ElementTree
 
 import numpy as np
 import pandas as pd
@@ -944,14 +943,27 @@ def dividends(args):
     from _subproc import run_tool
 
     today = market_now(market).date()
+    no_cache = bool(getattr(args, "no_cache", False))
+
+    def load_dataset(key, fetch):
+        if no_cache:
+            return records(fetch())
+        return dataset(key, fetch)
+
     result = {
         "symbol": args.symbol,
         "market": market,
         "as_of": today.isoformat(),
+        "cache_bypassed": no_cache,
+        "history_covered_from": None,
+        "history_current_through": None,
+        "capital_gains": [],
+        "capital_gains_checked": False,
+        "corporate_actions_complete": False,
         "yield_basis": "cash paid per share in trailing 365 days / latest price, before tax; nominal source cash amounts",
     }
     if market == "A":
-        rows = dataset(f"dividends:{symbol}", lambda: ak.stock_fhps_detail_em(symbol=symbol))
+        rows = load_dataset(f"dividends:{symbol}", lambda: ak.stock_fhps_detail_em(symbol=symbol))
         events = [
             {
                 "report_date": iso(r.get("报告期")),
@@ -961,10 +973,17 @@ def dividends(args):
                 "cash_per_share": number(r.get("现金分红-现金分红比例")) / 10
                 if number(r.get("现金分红-现金分红比例")) is not None
                 else None,
+                "bonus_ratio": number(r.get("送转股份-送转总比例")),
                 "status": r.get("方案进度"),
             }
             for r in rows
         ]
+        splits = [
+            {"ex_date": ev["ex_date"], "bonus_ratio": ev["bonus_ratio"], "status": ev["status"]}
+            for ev in events
+            if ev.get("bonus_ratio") and ev["bonus_ratio"] > 0
+        ]
+        splits_checked = True
         if args.mode == "calendar":
             return {
                 "symbol": args.symbol,
@@ -975,7 +994,18 @@ def dividends(args):
             }
         quote = run_tool("stock_data.py", ["quote", symbol]) or {}
         price = number(quote.get("price"))
-        result.update(source="eastmoney", currency="CNY", price=price, price_as_of=quote.get("as_of"))
+        # Eastmoney RPT_SHAREBONUS_DET covers dividends and bonus/transfer shares, not rights issues (配股 /
+        # RPT_IPO_ALLOTMENT), and emits no provider-verified coverage cutoff date -> keep coverage unverified.
+        result.update(
+            source="eastmoney",
+            currency="CNY",
+            price=price,
+            price_as_of=quote.get("as_of"),
+            splits=splits,
+            splits_checked=splits_checked,
+            history_current_through=None,
+            corporate_actions_complete=False,
+        )
     else:
         import yfinance as yf
 
@@ -984,7 +1014,7 @@ def dividends(args):
             capture(
                 sources,
                 "calendar",
-                lambda: dataset(
+                lambda: load_dataset(
                     f"hk-dividend-calendar:{symbol}", lambda: ak.stock_hk_dividend_payout_em(symbol=symbol)
                 ),
             )
@@ -1022,6 +1052,41 @@ def dividends(args):
                 "calendar": [r for r in calendar if r.get("ex_date") and r["ex_date"] > today.isoformat()],
             }
 
+        def _series_to_rows(series, value_col):
+            nonzero = series[series.notna() & (series != 0)]
+            frame = nonzero.to_frame(value_col).reset_index()
+            if len(frame.columns) >= 1 and frame.columns[0] != "Date":
+                frame = frame.rename(columns={frame.columns[0]: "Date"})
+            return records(frame)
+
+        def verified_actions_bundle():
+            # Make one maximum-history request with actions and errors enabled, deriving cash dividends,
+            # splits, and the provider's actual covered date range from that single verified frame.
+            hist = ticker.history(period="max", actions=True, raise_errors=True)
+            if (
+                not isinstance(hist, pd.DataFrame)
+                or hist.empty
+                or "Stock Splits" not in hist.columns
+                or "Dividends" not in hist.columns
+            ):
+                raise RuntimeError("yfinance history returned no action-bearing price frame")
+            covered_from = market_date(hist.index.min(), market)
+            covered_through = market_date(hist.index.max(), market)
+            if not covered_from or not covered_through:
+                raise RuntimeError("yfinance history returned invalid bar dates")
+            cash_rows = _series_to_rows(hist["Dividends"], "cash_per_share")
+            split_rows = _series_to_rows(hist["Stock Splits"], "ratio")
+            capital_gains_rows = (
+                _series_to_rows(hist["Capital Gains"], "amount") if "Capital Gains" in hist.columns else []
+            )
+            return {
+                "cash": cash_rows,
+                "splits": split_rows,
+                "capital_gains": capital_gains_rows,
+                "covered_from": covered_from,
+                "covered_through": covered_through,
+            }
+
         def cash_history():
             raw = ticker.dividends
             frame = (
@@ -1031,9 +1096,40 @@ def dividends(args):
             )
             return frame.reset_index()
 
-        capture(sources, "cash", lambda: dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
+        splits_ok = False
+        capital_gains_ok = False
+        splits_rows = []
+        capital_gains_rows = []
+        covered_from = None
+        covered_through = None
+        paid = []
+        used_actions_bundle = False
+        if callable(getattr(ticker, "history", None)):
+            bundle_key = f"{market.lower()}-actions-v2:{symbol}"
+            try:
+                bundle = verified_actions_bundle() if no_cache else cached(bundle_key, DAY, verified_actions_bundle)
+            except Exception as exc:
+                bundle = None
+                if no_cache:
+                    sources.setdefault("warnings", []).append(f"actions: unavailable ({type(exc).__name__})")
+            if (
+                isinstance(bundle, dict)
+                and isinstance(bundle.get("splits"), list)
+                and isinstance(bundle.get("cash"), list)
+                and isinstance(bundle.get("capital_gains"), list)
+            ):
+                paid = bundle["cash"]
+                splits_rows = bundle["splits"]
+                capital_gains_rows = bundle["capital_gains"]
+                splits_ok = True
+                capital_gains_ok = True
+                covered_from = bundle.get("covered_from")
+                covered_through = bundle.get("covered_through") if no_cache else None
+                used_actions_bundle = True
+        if not used_actions_bundle and not no_cache:
+            capture(sources, "cash", lambda: load_dataset(f"{market.lower()}-dividend-cash:{symbol}", cash_history))
+            paid = sources.get("cash", [])
         capture(sources, "quote", lambda: ticker.info)
-        paid = sources.get("cash", [])
         info = sources.get("quote") or {}
         if sources.get("warnings"):
             result["warnings"] = sources["warnings"]
@@ -1048,11 +1144,28 @@ def dividends(args):
             }
             for r in paid
         ]
+        splits = [
+            {"ex_date": market_date(r.get("Date"), market), "ratio": number(r.get("ratio"))}
+            for r in splits_rows
+            if number(r.get("ratio")) not in (None, 0)
+        ]
+        capital_gains = [
+            {"ex_date": market_date(r.get("Date"), market), "amount": number(r.get("amount"))}
+            for r in capital_gains_rows
+            if number(r.get("amount")) not in (None, 0)
+        ]
         price = number(info.get("currentPrice") or info.get("regularMarketPrice"))
         result.update(
             source="yfinance cash / eastmoney calendar" if market == "HK" else "yfinance",
             currency=info.get("currency"),
             price=price,
+            splits=splits,
+            splits_checked=splits_ok,
+            capital_gains=capital_gains,
+            capital_gains_checked=capital_gains_ok,
+            corporate_actions_complete=used_actions_bundle,
+            history_covered_from=covered_from,
+            history_current_through=covered_through,
         )
         result["calendar"] = [r for r in calendar if r["ex_date"] and r["ex_date"] > today.isoformat()]
     cutoff = (today - timedelta(days=365.25 * args.years)).isoformat()
@@ -1117,261 +1230,22 @@ def dividends(args):
     return result
 
 
-def tracking_error(nav, benchmark):
-    if not nav or not benchmark:
-        return {
-            "annualized_tracking_error_pct": None,
-            "observations": 0,
-            "note": "fund NAV or benchmark history unavailable",
-        }
-    fund = pd.DataFrame(nav).drop_duplicates("date").set_index("date").sort_index()
-    index = pd.DataFrame(benchmark).drop_duplicates("date").set_index("date").sort_index()
-    fund_returns = pd.to_numeric(fund["daily_return_pct"], errors="coerce") / 100
-    close = pd.to_numeric(index["close"], errors="coerce")
-    index_returns = close.pct_change(fill_method=None)
-    try:
-        import exchange_calendars as xcals
-
-        calendar = xcals.get_calendar("XSHG")
-        previous = {
-            stamp: calendar.previous_session(stamp).date().isoformat()
-            for stamp in fund.index.union(index.index)
-            if calendar.is_session(stamp)
-        }
-    except Exception:
-        return {"annualized_tracking_error_pct": None, "observations": 0, "note": "ETF trading calendar unavailable"}
-    matched = (
-        pd.concat(
-            [
-                fund_returns.rename("fund"),
-                index_returns.rename("benchmark"),
-                fund.index.to_series().shift().rename("fund_previous"),
-                index.index.to_series().shift().rename("benchmark_previous"),
-                pd.Series(previous).rename("session_previous"),
-            ],
-            axis=1,
-        )
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna()
-    )
-    matched = matched[
-        (matched["fund_previous"] == matched["session_previous"])
-        & (matched["benchmark_previous"] == matched["session_previous"])
-    ]
-    active = matched["fund"] - matched["benchmark"]
-    return {
-        "annualized_tracking_error_pct": round(float(active.std(ddof=1) * np.sqrt(252) * 100), 4)
-        if len(active) >= 2
-        else None,
-        "observations": len(active),
-        "window_start": matched.index[0] if len(active) else None,
-        "window_end": matched.index[-1] if len(active) else None,
-        "basis": "daily published NAV growth minus benchmark close return; sample std, 252 trading days; only matching consecutive ETF trading-session intervals, no missing-date fill",
-    }
+from _etf_data import etf_basket as _etf_basket_impl  # noqa: E402
+from _etf_data import fund_disclosed_equities as _fund_disclosed_equities_impl  # noqa: E402
+from _etf_data import fund_size_history as _fund_size_history_impl  # noqa: E402
+from _etf_data import tracking_error  # noqa: E402
 
 
 def fund_size_history(symbol):
-    def fetch():
-        match = re.search(r"\bData_fluctuationScale\s*=\s*(.*?);", fund_pingzhong_js(symbol), re.S)
-        if not match:
-            raise ValueError("fund scale history unavailable")
-        data = json.loads(match.group(1))
-        if len(data["categories"]) != len(data["series"]):
-            raise ValueError("fund scale dates and observations do not match")
-        return [
-            {"date": iso(stamp), "aum_cny": number(row.get("y")) * 1e8}
-            for stamp, row in zip(data["categories"], data["series"], strict=True)
-            if iso(stamp) and number(row.get("y")) is not None
-        ]
-
-    return cached(f"etf-size:{symbol}", DAY, fetch)
+    return _fund_size_history_impl(symbol, fetch_js=fund_pingzhong_js, cache_fn=cached)
 
 
 def etf_basket(symbol):
-    import requests
-
-    def fetch():
-        if symbol.startswith("5"):
-            response = requests.get(
-                "https://query.sse.com.cn/etfDownload/downloadETF2Bulletin.do",
-                params={"fundCode": symbol},
-                headers={"Referer": "https://www.sse.com.cn/"},
-                timeout=20,
-            )
-            source = "SSE PCF"
-        else:
-            response = requests.get(
-                "https://www.szse.cn/api/report/ShowReport/data",
-                params={
-                    "SHOWTYPE": "JSON",
-                    "CATALOGID": "sgshqd",
-                    "txtJCorDH": symbol,
-                    "txtStart": (_cn_now().date() - timedelta(days=30)).isoformat(),
-                    "txtEnd": _cn_now().date().isoformat(),
-                },
-                headers={"Referer": "https://www.szse.cn/"},
-                timeout=20,
-            )
-            response.raise_for_status()
-            dates = re.findall(rf"pcf_{re.escape(symbol)}_(\d{{8}})", json.dumps(response.json()))
-            dates = [d for d in dates if iso(d) and iso(d) <= _cn_now().date().isoformat()]
-            if not dates:
-                raise ValueError("no published SZSE PCF found")
-            response = requests.get(
-                f"https://reportdocs.static.szse.cn/files/text/ETFDown/pcf_{symbol}_{max(dates)}.xml", timeout=20
-            )
-            source = "SZSE PCF"
-        response.raise_for_status()
-        if b"<!DOCTYPE" in response.content.upper() or b"<!ENTITY" in response.content.upper():
-            raise ValueError("unexpected PCF XML declarations")
-        root = ElementTree.fromstring(response.content)
-        for node in root.iter():
-            node.tag = node.tag.split("}")[-1]
-        if root.tag not in ("SSEPortfolioCompositionFile", "PCFFile"):
-            raise ValueError("unexpected PCF document")
-        fund_code = root.findtext("FundInstrumentID") or root.findtext("SecurityID")
-        stamp = iso(root.findtext("TradingDay"))
-        unit = number(root.findtext("CreationRedemptionUnit"))
-        components = root.findall(".//Component")
-        count = number(root.findtext("TotalRecordNum") or root.findtext("RecordNumber") or root.findtext("RecordNum"))
-        if (
-            fund_code != symbol
-            or not stamp
-            or stamp > _cn_now().date().isoformat()
-            or not unit
-            or unit <= 0
-            or count != len(components)
-            or not components
-        ):
-            raise ValueError("incomplete or mismatched PCF document")
-        rows = []
-        for node in components:
-            code = node.findtext("InstrumentID") or node.findtext("UnderlyingSecurityID")
-            quantity = number(node.findtext("Quantity") or node.findtext("ComponentShare"))
-            if not code or quantity is None or quantity < 0:
-                raise ValueError("invalid PCF component")
-            rows.append(
-                {
-                    "code": code,
-                    "name": node.findtext("InstrumentName") or node.findtext("UnderlyingSymbol"),
-                    "quantity_per_unit": quantity,
-                    "exchange_code": node.findtext("UnderlyingSecurityID")
-                    if root.tag == "SSEPortfolioCompositionFile"
-                    else node.findtext("UnderlyingSecurityIDSource"),
-                    "cash_substitution_flag": node.findtext("SubstitutionFlag") or node.findtext("SubstituteFlag"),
-                    "creation_premium_rate": number(
-                        node.findtext("CreationPremiumRate") or node.findtext("PremiumRatio")
-                    ),
-                    "redemption_discount_rate": number(
-                        node.findtext("RedemptionDiscountRate") or node.findtext("DiscountRatio")
-                    ),
-                    "substitution_cash_amount": number(node.findtext("SubstitutionCashAmount")),
-                    "creation_cash_substitute": number(node.findtext("CreationCashSubstitute")),
-                    "redemption_cash_substitute": number(node.findtext("RedemptionCashSubstitute")),
-                }
-            )
-        return {
-            "source": source,
-            "as_of": stamp,
-            "previous_trading_day": iso(root.findtext("PreTradingDay")),
-            "creation_redemption_unit": unit,
-            "previous_nav": {
-                "as_of": iso(root.findtext("PreTradingDay")),
-                "nav_per_unit": number(root.findtext("NAV")),
-                "nav_per_creation_unit": number(root.findtext("NAVperCU")),
-            },
-            "previous_cash_component": number(root.findtext("PreCashComponent") or root.findtext("CashComponent")),
-            "estimated_cash_component": number(
-                root.findtext("EstimatedCashComponent") or root.findtext("EstimateCashComponent")
-            ),
-            "cash_unit": "CNY per creation/redemption unit",
-            "max_cash_substitution_ratio": number(root.findtext("MaxCashRatio")),
-            "creation_redemption_switch": root.findtext("CreationRedemptionSwitch"),
-            "creation_flag": root.findtext("Creation"),
-            "redemption_flag": root.findtext("Redemption"),
-            "record_count": len(rows),
-            "complete": True,
-            "components": rows,
-            "basis": "complete published creation/redemption basket, not actual fund holdings; quantities per creation unit, rates are fractions",
-        }
-
-    return cached(f"etf-basket:{symbol}", DAY, fetch)
+    return _etf_basket_impl(symbol, cache_fn=cached, now_fn=_cn_now)
 
 
 def fund_disclosed_equities(symbol):
-    import requests
-
-    try:
-        from akshare.utils.jsonish import loads as decode
-    except ImportError:
-        from akshare.utils.demjson import decode
-    from bs4 import BeautifulSoup
-
-    limit = 10000
-
-    def fetch(stamp):
-        response = requests.get(
-            "https://fundf10.eastmoney.com/FundArchivesDatas.aspx",
-            params={"type": "jjcc", "code": symbol, "topline": limit, "year": stamp[:4], "month": str(int(stamp[5:7]))},
-            headers={"Referer": f"https://fundf10.eastmoney.com/ccmx_{symbol}.html"},
-            timeout=20,
-        )
-        response.raise_for_status()
-        text = response.text
-        payload = decode(text[text.index("{") : text.rindex("}") + 1])
-        soup = BeautifulSoup(payload["content"], "lxml")
-        for block in soup.select("div.boxitem"):
-            heading = block.find("h4")
-            link = heading.find("a", href=True) if heading else None
-            if not heading or not link or not link["href"].endswith(f"/{symbol}.html"):
-                continue
-            match = re.search(r"\d{4}-\d{2}-\d{2}", heading.get_text())
-            if not match or match.group() != stamp:
-                continue
-            table = block.find("table")
-            if table is None:
-                raise ValueError("disclosed equity table unavailable")
-            frame = pd.read_html(StringIO(str(table)), converters={"股票代码": str})[0]
-            frame.columns = [re.sub(r"\s+", "", str(c)) for c in frame.columns]
-            value_column = next((c for c in frame.columns if c in ("持仓市值（万元）", "持仓市值（万元人民币）")), None)
-            if not {"股票代码", "股票名称", "占净值比例", "持股数（万股）"}.issubset(frame.columns) or not value_column:
-                raise ValueError("unknown disclosed equity units/schema")
-            if frame.empty or len(frame) >= limit:
-                raise ValueError("empty or potentially truncated disclosed equity table")
-            positions = []
-            for row in frame.to_dict("records"):
-                quantity = number(str(row["持股数（万股）"]).replace(",", ""))
-                value = number(str(row[value_column]).replace(",", ""))
-                positions.append(
-                    {
-                        "code": str(row["股票代码"]),
-                        "name": str(row["股票名称"]) if pd.notna(row["股票名称"]) else None,
-                        "weight_pct": number(str(row["占净值比例"]).replace("%", "")),
-                        "quantity_shares": quantity * 10000 if quantity is not None else None,
-                        "market_value_cny": value * 10000 if value is not None else None,
-                    }
-                )
-            return {
-                "source": "eastmoney periodic equity report",
-                "as_of": stamp,
-                "is_realtime": False,
-                "position_count": len(positions),
-                "equity_positions": positions,
-                "coverage": "all received source-table equity rows, not total fund assets; source completeness is not independently verified",
-                "source_url": f"https://fundf10.eastmoney.com/ccmx_{symbol}.html",
-            }
-        raise ValueError("requested semiannual/annual equity report not available")
-
-    end = date(_cn_now().date().year, ((_cn_now().date().month - 1) // 6) * 6 + 1, 1) - timedelta(days=1)
-    requested = end.isoformat()
-    for _ in range(2):
-        stamp = end.isoformat()
-        try:
-            result = cached(f"fund-equity-report:{symbol}:{stamp}", DAY, lambda stamp=stamp: fetch(stamp))
-            return {**result, "requested_report_date": requested}
-        except Exception:
-            end = date(end.year, end.month - 5, 1) - timedelta(days=1)
-    raise ValueError("latest disclosed semiannual/annual equity report unavailable")
+    return _fund_disclosed_equities_impl(symbol, cache_fn=cached, now_fn=_cn_now)
 
 
 def etf_details(args):
@@ -1787,6 +1661,11 @@ def main():
     p.add_argument("--report-date", default="")
     p.add_argument("--years", type=int, default=10)
     p.add_argument("--top", type=int, default=20)
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the 24-hour dataset cache so corporate-action history is fetched fresh",
+    )
     try:
         args = parser.parse_args()
         handlers = {

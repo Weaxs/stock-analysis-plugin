@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -70,6 +70,23 @@ def filing_rows(data):
     ]
 
 
+def _acceptance_sort_key(row):
+    raw = str(row.get("acceptanceDateTime") or "").strip()
+    norm = ""
+    if raw:
+        try:
+            if re.fullmatch(r"\d{14}", raw):
+                dt = datetime.strptime(raw, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            else:
+                iso = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+                dt = datetime.fromisoformat(iso)
+                dt = dt.astimezone(timezone.utc) if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+            norm = dt.isoformat(timespec="microseconds")
+        except ValueError:
+            norm = ""
+    return (row.get("filingDate", ""), norm, row.get("accessionNumber", ""))
+
+
 def submissions(cik, forms, cutoff=None):
     data = cached(f"sec-submissions:{cik}", DAY, lambda: sec_get(f"https://data.sec.gov/submissions/CIK{cik}.json"))
     if not isinstance(data.get("filings", {}).get("recent"), dict):
@@ -97,7 +114,7 @@ def submissions(cik, forms, cutoff=None):
         rows.extend(filing_rows(extra))
         loaded += 1
     result = [r for r in rows if r.get("form") in forms and (not cutoff or r.get("filingDate", "") >= cutoff)]
-    result.sort(key=lambda r: (r.get("filingDate", ""), r.get("accessionNumber", "")), reverse=True)
+    result.sort(key=_acceptance_sort_key, reverse=True)
     earliest_unsearched = cutoff or max((r.get("reportDate") or "" for r in result), default="")
     incomplete = any(f.get("filingTo", "") >= earliest_unsearched for f in relevant[loaded:])
     return data.get("name"), result, incomplete
@@ -252,6 +269,8 @@ def form4(cik, filing):
         for r in root.findall("reportingOwner")
     ]
     footnotes = {r.get("id"): "".join(r.itertext()) for r in root.findall("footnotes/footnote")}
+    remarks = (root.findtext("remarks") or "").strip() or None
+    original_filing_date = (root.findtext("dateOfOriginalSubmission") or "").strip() or None
     rows = []
     for table, tag, derivative in [
         ("nonDerivativeTable", "nonDerivativeTransaction", False),
@@ -274,7 +293,10 @@ def form4(cik, filing):
                     "ownership": row.findtext("ownershipNature/directOrIndirectOwnership/value"),
                     "footnotes": footnotes,
                     "footnote_refs": footnote_refs(row),
+                    "remarks": remarks,
+                    "original_filing_date": original_filing_date,
                     "filing_date": filing["filingDate"],
+                    "acceptance_datetime": (filing.get("acceptanceDateTime") or "").strip() or None,
                     "form": filing["form"],
                     "accession": filing["accessionNumber"],
                     "filing_url": f"{base}/{document}",
@@ -569,7 +591,7 @@ def insider_trades(args):
     for filing in filings[: args.top]:
         try:
             rows = cached(
-                f"sec-form4:{cik}:{filing['accessionNumber']}", WEEK, lambda filing=filing: form4(cik, filing)
+                f"sec-form4-v4:{cik}:{filing['accessionNumber']}", WEEK, lambda filing=filing: form4(cik, filing)
             )
             result["transactions"].extend(rows)
             result["filings_scanned"] += 1

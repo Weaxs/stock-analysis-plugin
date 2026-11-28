@@ -100,12 +100,10 @@ class TestGatherAnalysis:
 
     @patch("tools.gather._run")
     def test_error_json_from_new_legs_passes_through(self, mock_run):
-        """chip_distribution is A-share-only and sentiment degrades without API keys —
-        their {"error": ...}/note payloads are normal data, relayed untouched."""
+        """chip_distribution and capital_flow are A-share-only so non-A skips spawning them;
+        sentiment degrades without API keys and its payload is relayed untouched."""
 
         def side_effect(script, args, **kwargs):
-            if "chip_distribution" in args:
-                return '{"error": "chip_distribution only available for A-shares"}'
             if "sentiment" in args:
                 return '{"symbol": "AAPL", "sources": {}, "note": "No sentiment data available."}'
             return None
@@ -113,7 +111,20 @@ class TestGatherAnalysis:
         mock_run.side_effect = side_effect
         result = gather_analysis("AAPL")
         assert result["chip_distribution"] == {"error": "chip_distribution only available for A-shares"}
+        assert result["capital_flow"] == {"error": "capital_flow only available for A-shares"}
         assert result["social_sentiment"]["sources"] == {}
+        spawned = [c.args[1][0] for c in mock_run.call_args_list if c.args[0] == "stock_data.py"]
+        assert "chip_distribution" not in spawned
+        assert "capital_flow" not in spawned
+
+    @patch("tools.gather._run")
+    def test_jp_skips_a_share_and_risk_subprocesses(self, mock_run):
+        mock_run.return_value = None
+        result = gather_analysis("7203.T")
+        assert "error" in result["capital_flow"]
+        assert "error" in result["chip_distribution"]
+        assert "error" in result["risk"]
+        assert not any(c.args[0] == "risk_screening.py" for c in mock_run.call_args_list)
 
     @patch("tools.gather._run")
     def test_correct_args_for_quote(self, mock_run):
@@ -312,13 +323,23 @@ class TestMain:
 
 
 class TestGatherFundamental:
-    @pytest.mark.parametrize("symbol", ["AAPL", "00700.HK", "7203.T"])
+    @pytest.mark.parametrize("symbol", ["7203.T", "005930.KS", "2330.TW"])
     @patch("tools.gather._run")
     def test_non_a_market_does_not_receive_chinese_sectors(self, mock_run, symbol):
         mock_run.return_value = None
         result = gather_fundamental(symbol)
         assert "error" in result["sector_rankings"]
         assert not any(c.args[1][0] == "sector_rankings" for c in mock_run.call_args_list)
+
+    @pytest.mark.parametrize("symbol,market", [("AAPL", "US"), ("00700.HK", "HK")])
+    @patch("tools.gather._run")
+    def test_hk_us_fundamental_requests_own_market_sectors(self, mock_run, symbol, market):
+        mock_run.return_value = '{"top": [], "bottom": []}'
+        gather_fundamental(symbol)
+        sector_calls = [c.args for c in mock_run.call_args_list if c.args[1][0] == "sector_rankings"]
+        assert sector_calls == [
+            ("stock_data.py", ["sector_rankings", "--market", market, "--top", "5", "--direction", "both"])
+        ]
 
     @patch("tools.gather._run")
     def test_returns_all_keys(self, mock_run):

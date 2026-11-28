@@ -1,0 +1,14 @@
+name: "Equal-Weight Monthly Rebalance"
+version: "1.0"
+description: "多标的等权月度再平衡组合策略（配合逗号分隔同市场标的运行，如 510300,510500,518880）"
+
+portfolio:
+  rebalance: "monthly"
+  weighting: "equal"
+  drift_threshold: 0.05
+
+simulation:
+  execution: "next_open"
+  slippage: 0.001
+  commission: 0.0005
+  stamp_tax: 0.0

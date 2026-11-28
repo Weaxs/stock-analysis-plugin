@@ -122,6 +122,7 @@ EXPECTED_TOOLS = sorted(
         "get_valuation_history",
         "get_index_valuation",
         "get_cds_index",
+        "get_macro_anchors",
         "get_earnings_calendar",
         "get_shareholder_structure",
         "get_etf_details",
