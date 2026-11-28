@@ -3058,6 +3058,24 @@ def test_form4_prior_gift_disclosure_with_filing_reference(monkeypatch, remark, 
         assert result["veto_buy"] is (expected_sales == 6)
 
 
+def _assert_form4_gift_addition_correctable(monkeypatch, rows, added):
+    correction = dict(
+        added,
+        accession="0000000123-26-000003",
+        filing_date="2026-11-23",
+        original_filing_date=added["filing_date"],
+        shares=120,
+        remarks=None,
+        footnotes={"F1": "Corrects this gift from 100 shares to 120 shares."},
+        footnote_refs={"transactionCoding": ["F1"]},
+    )
+    result = _screen_form4_cli(monkeypatch, [*rows, correction])
+    check = result["checks"]["insider_trades"]
+    assert check["sales_90d"] == 6
+    assert check["count_uncertain"] is False
+    assert result["veto_buy"] is True
+
+
 @pytest.mark.parametrize(
     "prior_transaction_date, restate_prior_gift, expected_sales, count_uncertain",
     [
@@ -3101,6 +3119,8 @@ def test_form4_dated_disclosure_identifies_the_reported_gift(
         assert check["sales_90d"] == expected_sales
         assert check["count_uncertain"] is count_uncertain
         assert result["veto_buy"] is (not count_uncertain)
+    if not count_uncertain:
+        _assert_form4_gift_addition_correctable(monkeypatch, [*originals, prior, *rows], added)
 
 
 @pytest.mark.parametrize("cited_day, prior_code, expected_sales", [(19, "G", 6), (18, "G", 7), (19, "F", 7)])
@@ -3149,6 +3169,10 @@ def test_form4_dated_disclosure_identifies_a_reclassified_gift(monkeypatch, cite
         assert check["sales_90d"] == expected_sales
         assert check["count_uncertain"] is (expected_sales == 7)
         assert result["veto_buy"] is (expected_sales == 6)
+    if expected_sales == 6:
+        _assert_form4_gift_addition_correctable(
+            monkeypatch, [sale, *other_sales, prior_reclassification, prior_sale, converted, added], added
+        )
 
 
 @pytest.mark.parametrize("conversion_date, expected_sales", [("2026-11-20", 6), ("2026-11-17", 7)])
@@ -3836,6 +3860,12 @@ def test_form4_same_day_omissions_of_identical_gifts_remain_uncertain(monkeypatc
         footnote_refs={"transactionCoding": ["F1"]},
     )
     second = dict(first, accession="0000000123-26-000003", acceptance_datetime="2026-11-21T15:00:00Z")
+    before_correction = _screen_form4_cli(monkeypatch, [*sales, second, first])
+    check = before_correction["checks"]["insider_trades"]
+    assert check["sales_90d"] == 6
+    assert check["count_uncertain"] is False
+    assert before_correction["veto_buy"] is True
+
     correction = dict(
         first,
         accession="0000000123-26-000004",
